@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import {
   DynamicCollectionSchemaService,
@@ -243,7 +244,18 @@ describe.each(DIALECTS)(
           })
         );
 
-      expect(add).toThrow(/already has entries/);
+      // Refused as a required column with nothing to fill it, as before a default was read here.
+      let codes: string[] = [];
+      try {
+        add();
+      } catch (error) {
+        if (!(error instanceof NextlyError)) throw error;
+        const data = error.publicData as
+          | { errors?: { code?: string }[] }
+          | undefined;
+        codes = (data?.errors ?? []).map(e => String(e.code));
+      }
+      expect(codes).toEqual(["REQUIRED_COLUMN_NEEDS_BACKFILL"]);
     });
 
     it("fills the row for a contributed type with its type's own value, not the stated one", () => {

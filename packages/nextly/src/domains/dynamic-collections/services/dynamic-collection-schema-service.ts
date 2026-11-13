@@ -1143,55 +1143,67 @@ export class DynamicCollectionSchemaService {
    * application's to work out per document. None of these are taken.
    */
   private singleRowFill(field: FieldDefinition): string | null {
-    const typeEmpty = this.requiredColumnBackfill({
-      ...field,
-      default: undefined,
-    });
     const stated =
       field.default !== undefined
         ? field.default
         : (field as { defaultValue?: unknown }).defaultValue;
-    if (stated === undefined || stated === null) return typeEmpty;
-    const holdsList = (field as { hasMany?: unknown }).hasMany === true;
+    const literal =
+      stated === undefined || stated === null
+        ? null
+        : this.statedFillLiteral(field, stated);
+    return (
+      literal ?? this.requiredColumnBackfill({ ...field, default: undefined })
+    );
+  }
+
+  /** `stated` as the SQL literal `singleRowFill` takes, or null where it is not taken. */
+  private statedFillLiteral(
+    field: FieldDefinition,
+    stated: unknown
+  ): string | null {
+    if (STATED_TEXT_FILL_TYPES.has(field.type)) {
+      const holdsList = (field as { hasMany?: unknown }).hasMany === true;
+      return typeof stated === "string" && !holdsList
+        ? quoteExpressionSqlDefault(stated, this.dialect)
+        : null;
+    }
     switch (field.type) {
-      case "text":
-      case "textarea":
-      case "email":
-      case "code":
-      case "select":
-      case "radio":
-        return typeof stated === "string" && !holdsList
-          ? quoteExpressionSqlDefault(stated, this.dialect)
-          : typeEmpty;
       case "number":
         return typeof stated === "number" && Number.isFinite(stated)
           ? String(stated)
-          : typeEmpty;
+          : null;
       case "checkbox":
         return typeof stated === "boolean"
           ? this.formatDefaultValue(stated, "checkbox")
-          : typeEmpty;
+          : null;
       case "json":
         return typeof stated === "function"
-          ? typeEmpty
+          ? null
           : this.formatDefaultValue(stated, "json");
-      case "date": {
-        const at =
-          stated instanceof Date
-            ? stated
-            : typeof stated === "string"
-              ? new Date(stated)
-              : null;
-        if (at === null || Number.isNaN(at.getTime())) return typeEmpty;
-        const stored = storedDateValue(at, this.dialect);
-        // An ISO moment holds no quote, so it quotes plainly on every dialect.
-        return typeof stored === "number"
-          ? String(stored)
-          : quotedSqlString(stored);
-      }
+      case "date":
+        return this.statedDateLiteral(stated);
       default:
-        return typeEmpty;
+        return null;
     }
+  }
+
+  /**
+   * A stated date as the moment it names, in the form the dialect stores it (`storedDateValue`):
+   * epoch seconds on SQLite, an ISO moment elsewhere, which holds no quote. Null for anything that
+   * names no moment.
+   */
+  private statedDateLiteral(stated: unknown): string | null {
+    const at =
+      stated instanceof Date
+        ? stated
+        : typeof stated === "string"
+          ? new Date(stated)
+          : null;
+    if (at === null || Number.isNaN(at.getTime())) return null;
+    const stored = storedDateValue(at, this.dialect);
+    return typeof stored === "number"
+      ? String(stored)
+      : quotedSqlString(stored);
   }
 
   private requiredColumnBackfill(field: FieldDefinition): string | null {
@@ -4100,6 +4112,16 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
     return actionMap[action.toLowerCase()] || "NO ACTION";
   }
 }
+
+/** The text kinds whose stated default a Single's existing row is filled with (`singleRowFill`). */
+const STATED_TEXT_FILL_TYPES: ReadonlySet<string> = new Set([
+  "text",
+  "textarea",
+  "email",
+  "code",
+  "select",
+  "radio",
+]);
 
 /**
  * A value as an SQL string literal: in single quotes, each quote inside doubled, which every
