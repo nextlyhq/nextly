@@ -192,13 +192,19 @@ export type RememberedBranding = z.infer<typeof rememberedBrandingSchema>;
 const layoutPart = z.string().check(z.minLength(1), z.maxLength(200));
 
 /**
+ * The most parts the `layout` entry keeps. A write past it lets the parts
+ * written longest ago go first (`rememberLayout`), so it never fails.
+ */
+const MAX_LAYOUT_PARTS = 500;
+
+/**
  * How the admin's parts were last drawn: a whole number per part, and
  * nothing else. A part is named by where it is drawn (`list-rows:posts`),
  * never by what it shows, and holds a size, never a value read from it.
  */
 const rememberedLayoutSchema = z
   .record(layoutPart, z.int().check(z.gte(0), z.lte(100_000)))
-  .check(z.refine(parts => Object.keys(parts).length <= 500));
+  .check(z.refine(parts => Object.keys(parts).length <= MAX_LAYOUT_PARTS));
 
 type RememberedLayout = z.infer<typeof rememberedLayoutSchema>;
 
@@ -551,7 +557,37 @@ export function rememberLayout(part: string, size: number): boolean {
   if (!layoutPart.safeParse(part).success) return false;
   const kept = (recall("layout", "") as RememberedLayout | undefined) ?? {};
   if (kept[part] === size) return true;
-  return remember("layout", "", { ...kept, [part]: size });
+  // Kept in the order written, the newest last, so past the cap the parts
+  // written longest ago give way rather than the new one being refused.
+  const others = Object.entries(kept).filter(([name]) => name !== part);
+  const next: RememberedLayout = Object.fromEntries(
+    others.slice(Math.max(0, others.length - (MAX_LAYOUT_PARTS - 1)))
+  );
+  next[part] = size;
+  return remember("layout", "", next);
+}
+
+/** Every part kept under a name starting with `prefix`, in the order written. */
+export function recallLayoutParts(prefix: string): Record<string, number> {
+  const kept = (recall("layout", "") as RememberedLayout | undefined) ?? {};
+  const parts: Record<string, number> = {};
+  for (const [name, size] of Object.entries(kept)) {
+    if (name.startsWith(prefix)) parts[name] = size;
+  }
+  return parts;
+}
+
+/** Forget the parts `forgotten` says, keeping every other. */
+export function forgetLayoutParts(forgotten: (part: string) => boolean): void {
+  const kept = recall("layout", "") as RememberedLayout | undefined;
+  if (kept === undefined) return;
+  const next: RememberedLayout = {};
+  for (const [name, size] of Object.entries(kept)) {
+    if (!forgotten(name)) next[name] = size;
+  }
+  if (Object.keys(next).length !== Object.keys(kept).length) {
+    remember("layout", "", next);
+  }
 }
 
 /** The remembered public branding; empty when none is kept. */
