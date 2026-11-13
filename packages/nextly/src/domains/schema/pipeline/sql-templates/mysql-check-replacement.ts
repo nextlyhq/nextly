@@ -122,7 +122,7 @@ function findMatchingAdd(
  * Replaces a table's MySQL CHECK constraints in one `ALTER TABLE`: every drop
  * first, then every add, so a name an old check held is free for its new one.
  */
-export function replaceMysqlChecksSql(
+function replaceMysqlChecksSql(
   tableName: string,
   dropCheckNames: readonly string[],
   addChecks: readonly CheckSpec[]

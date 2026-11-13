@@ -35,10 +35,7 @@ export {
 export type { ForeignKeyActionDialect } from "./foreign-key-action";
 export { quoteIdent } from "./identifier-quoting";
 export { MysqlUnsupportedOperationError } from "./mysql";
-export {
-  mysqlCheckReplacements,
-  replaceMysqlChecksSql,
-} from "./mysql-check-replacement";
+export { mysqlCheckReplacements } from "./mysql-check-replacement";
 export { SqliteUnsupportedOperationError } from "./sqlite";
 export { sqliteTableRebuildStatements } from "./sqlite-rebuild";
 
