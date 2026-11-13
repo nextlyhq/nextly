@@ -64,13 +64,13 @@ const BASE = `http://localhost:${PORT}`;
 const SECRET = "admin-speed-check-secret-not-for-production-0123456789";
 const USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 
-const STATEMENT_SLACK = 0.05;
 /**
- * A screen's statements are held to this rather than `STATEMENT_SLACK`, since
- * repeated runs of one commit have moved them by about a tenth. It tightens
- * to `STATEMENT_SLACK` once runs show each screen's count holding still.
+ * How far a start's or a screen's statements may move from their pin. What
+ * still moves between runs of one commit is reads on a timer (the stored
+ * schema version, the permissions epoch, the cache tags, a session check)
+ * landing inside a load or not, a few statements on any screen.
  */
-const SCREEN_STATEMENT_SLACK = 0.15;
+const STATEMENT_SLACK = 0.05;
 /** The least a growth pin allows either way, as two starts differ by a few. */
 const GROWTH_SLACK_MIN = 5;
 const ROUND_SLACK = 1;
@@ -780,7 +780,7 @@ function screenProblems(label, values, pin, racy) {
       `${label} statements`,
       values.statements,
       pin.statements,
-      slackOf(pin.statements, SCREEN_STATEMENT_SLACK)
+      slackOf(pin.statements)
     ),
   ];
 }

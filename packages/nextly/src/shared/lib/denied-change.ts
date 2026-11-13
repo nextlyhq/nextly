@@ -255,6 +255,84 @@ export async function keepDeniedAtStored(input: {
 }
 
 /**
+ * A save held as a pending change, made over a change another writer already holds: each value the
+ * field rules kept at the live row's because this writer may not write it is the pending change's
+ * instead, and a value this writer sent there that neither of them holds is refused.
+ *
+ * A group is held whole, so the held save replaces the pending change's group with its own, and
+ * the rules ({@link keepDeniedAtStored}) put a denied child back at the LIVE value: the save would
+ * revert the other writer's pending edit of a field this writer may not touch. The pending value
+ * stands instead, which is what an update means for a field the writer may not write: it keeps
+ * its value. A value sent there counts as a change only when it is neither the live value nor the
+ * pending one; sending either is what a writer who loaded the entry before or after the pending
+ * save holds, and is no change. A change is refused, naming every field, so nothing is written.
+ *
+ * Only a path through named fields, a group's child at any depth, is read: a repeater row's path
+ * is its position, and a pending change's rows need not sit where the live row's do. A denied path
+ * the pending change does not hold keeps the live value.
+ *
+ * @param input.document The pending change as this save leaves it, written in place.
+ * @param input.pending The pending change before this save.
+ * @param input.kept What the rules kept: each path, its live value, and the save as sent.
+ */
+export function keepPendingWhereDenied(input: {
+  slug: string;
+  document: Record<string, unknown>;
+  pending: Record<string, unknown>;
+  kept: {
+    paths: ReadonlySet<string>;
+    values: ReadonlyMap<string, unknown>;
+    sent: Record<string, unknown>;
+  };
+}): void {
+  const refused: string[] = [];
+  for (const path of input.kept.paths) {
+    if (path.includes("[")) continue;
+    if (!pathExists(input.pending, path)) continue;
+    const pendingValue = valueAt(input.pending, path);
+    if (pathExists(input.kept.sent, path)) {
+      const sentValue = valueAt(input.kept.sent, path);
+      const liveValue = input.kept.values.get(path);
+      if (
+        !sameStoredValue(sentValue, liveValue) &&
+        !sameStoredValue(sentValue, pendingValue)
+      ) {
+        refused.push(path);
+        continue;
+      }
+    }
+    setRecordPath(input.document, path, detachData(pendingValue));
+  }
+  if (refused.length === 0) return;
+  const fields = [...new Set(refused)].sort();
+  throw NextlyError.validation({
+    errors: fields.map(path => ({
+      path,
+      code: "FORBIDDEN",
+      message:
+        "You do not have permission to change this field. A pending change holds its value, and a save keeps it.",
+    })),
+    logContext: { cause: "held-save-denied-field", slug: input.slug, fields },
+  });
+}
+
+/** Set a dotted path of named fields in place, creating no container: one absent is left alone. */
+function setRecordPath(
+  root: Record<string, unknown>,
+  path: string,
+  value: unknown
+): void {
+  const steps = path.split(".");
+  let current: Record<string, unknown> = root;
+  for (const step of steps.slice(0, -1)) {
+    const next = current[step];
+    if (!isRecord(next)) return;
+    current = next;
+  }
+  assign(current, steps[steps.length - 1], value);
+}
+
+/**
  * The paths of the restored document that hold the row's own value — what
  * {@link keepDeniedAtStored} put back because a rule denies it to this
  * writer — with the value each path holds.
