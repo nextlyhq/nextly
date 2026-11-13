@@ -91,6 +91,12 @@ export interface BuilderPendingChanges {
   redo: () => string | null;
   /** Put back the saved fields and settings, with nothing left to undo. */
   discardAll: () => void;
+  /**
+   * Discard all also leaves the editor: the entity itself was never saved, so
+   * discarding its changes discards it and returns to the list. That leave
+   * answers the leave guard's question, so it is not asked.
+   */
+  discardLeaves?: boolean;
 }
 
 export interface BuilderEntityState {

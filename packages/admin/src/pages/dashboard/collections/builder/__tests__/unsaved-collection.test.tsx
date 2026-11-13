@@ -40,13 +40,21 @@ vi.mock("@admin/services/schemaFileApi", () => ({
   },
 }));
 
+// Watched, and still made: the leave guard sees the navigation as it would.
 const navigate = vi.fn();
-vi.mock("@admin/lib/navigation", async importOriginal => ({
-  ...(await importOriginal<typeof import("@admin/lib/navigation")>()),
-  navigateTo: (...args: unknown[]) => navigate(...args),
-}));
+vi.mock("@admin/lib/navigation", async importOriginal => {
+  const actual = await importOriginal<typeof import("@admin/lib/navigation")>();
+  return {
+    ...actual,
+    navigateTo: (path: string) => {
+      navigate(path);
+      actual.navigateTo(path);
+    },
+  };
+});
 
 import { parseApiError } from "@admin/lib/api/parseApiError";
+import { navigateTo } from "@admin/lib/navigation";
 import {
   addUnsavedEntity,
   removeUnsavedEntity,
@@ -79,6 +87,7 @@ async function saveAndConfirm(user: ReturnType<typeof userEvent.setup>) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.history.replaceState(null, "", "/admin/builder/collections/products");
   check.mockResolvedValue({
     kind: "collection",
     address: "products",
@@ -195,5 +204,26 @@ describe("the collection editor on a collection not saved yet", () => {
 
     expect(unsavedEntity("collection", "products")).toBeUndefined();
     expect(navigate).toHaveBeenCalledWith("/admin/builder/collections");
+    // Discarding was the answer to the guard's question, so it is not asked.
+    expect(window.location.pathname).toBe("/admin/builder/collections");
+    expect(
+      screen.queryByRole("alertdialog", { name: "Unsaved Changes" })
+    ).toBeNull();
+  });
+
+  it("lets it go when the editor is left and its changes discarded", async () => {
+    const user = renderEditor();
+    await screen.findByTestId("field-row-headline");
+    navigateTo("/admin/builder/singles");
+    const guard = await screen.findByRole("alertdialog", {
+      name: "Unsaved Changes",
+    });
+    await user.click(
+      within(guard).getByRole("button", { name: "Discard Changes" })
+    );
+
+    await waitFor(() =>
+      expect(unsavedEntity("collection", "products")).toBeUndefined()
+    );
   });
 });

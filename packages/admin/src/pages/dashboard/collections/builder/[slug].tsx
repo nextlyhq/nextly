@@ -432,6 +432,7 @@ export default function CollectionBuilderEditPage({
       unsaved
         ? {
             ...pending,
+            discardLeaves: true,
             discardAll: () => {
               removeUnsavedEntity("collection", entitySlug);
               navigateTo(ROUTES.BUILDER_COLLECTIONS);
@@ -476,6 +477,11 @@ export default function CollectionBuilderEditPage({
       configPath={collection?.configPath}
       unsavedCount={unsavedCount}
       pending={pendingChanges}
+      onDiscard={
+        unsaved
+          ? () => removeUnsavedEntity("collection", entitySlug)
+          : undefined
+      }
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}

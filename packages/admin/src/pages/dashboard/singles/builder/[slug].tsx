@@ -381,6 +381,7 @@ export default function SingleBuilderEditPage({
       unsaved
         ? {
             ...pending,
+            discardLeaves: true,
             discardAll: () => {
               removeUnsavedEntity("single", entitySlug);
               navigateTo(ROUTES.BUILDER_SINGLES);
@@ -421,6 +422,9 @@ export default function SingleBuilderEditPage({
       configPath={single?.configPath}
       unsavedCount={unsavedCount}
       pending={pendingChanges}
+      onDiscard={
+        unsaved ? () => removeUnsavedEntity("single", entitySlug) : undefined
+      }
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}

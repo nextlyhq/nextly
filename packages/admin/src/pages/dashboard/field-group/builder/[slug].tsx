@@ -363,6 +363,7 @@ export default function FieldGroupBuilderEditPage({
       unsaved
         ? {
             ...pending,
+            discardLeaves: true,
             discardAll: () => {
               removeUnsavedEntity("field-group", entitySlug);
               navigateTo(ROUTES.BUILDER_FIELD_GROUPS);
@@ -403,6 +404,11 @@ export default function FieldGroupBuilderEditPage({
       configPath={fieldGroup?.configPath}
       unsavedCount={unsavedCount}
       pending={pendingChanges}
+      onDiscard={
+        unsaved
+          ? () => removeUnsavedEntity("field-group", entitySlug)
+          : undefined
+      }
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
