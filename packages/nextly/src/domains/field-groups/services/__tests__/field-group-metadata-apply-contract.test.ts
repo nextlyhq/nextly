@@ -148,6 +148,12 @@ function adapterDouble(
   const executeQuery = vi.fn(async (_sql: string) => []);
   return withMigrationLockSurface({
     getCapabilities: () => ({ dialect }),
+    // The catalog reads a translation toggle asks of each column (`readColumnExtras`) find no
+    // definition of its own: no comment, character set or collation for a move to lose.
+    getDrizzle: () => ({
+      execute: async () => ({ rows: [] }),
+      all: () => [],
+    }),
     executeQuery,
     // Recorded so a refusal can be shown to have dropped nothing.
     dropTable: vi.fn(async (_table: string) => {}),

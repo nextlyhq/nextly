@@ -235,4 +235,25 @@ describe("buildLocalizationDownStatements — the restored column's width", () =
       "ADD COLUMN `code` VARCHAR(32)"
     );
   });
+
+  // A column carrying a wider type than the field's own (`carriedDefinition`) is restored with it,
+  // so the values copied back from the companion fit.
+  it("restores the type a column carries over the field's narrower one", () => {
+    const carried: CompanionMigrationSpec = {
+      ...spec,
+      dialect: "postgresql",
+      columns: [
+        {
+          name: "price",
+          kind: "decimal",
+          precision: 10,
+          scale: 2,
+          carried: { type: "numeric(12,2)" },
+        },
+      ],
+    };
+    const [add] = buildLocalizationDownStatements(carried);
+    expect(add).toContain(`ADD COLUMN "price" numeric(12,2)`);
+    expect(add).not.toMatch(/NUMERIC\(10, ?2\)/);
+  });
 });

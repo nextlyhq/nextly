@@ -51,6 +51,19 @@ export interface LocalizedColumnSpec {
   /** precision/scale for the `decimal` kind (DECIMAL/NUMERIC); ignored otherwise. */
   precision?: number;
   scale?: number;
+  /**
+   * What the column the values come from carries into this one as translation is turned on or
+   * off (`carriedDefinition`); absent, the column is the field's own (`ddlType`).
+   */
+  carried?: CarriedDefinition;
+}
+
+/** A receiving column's type and default, taken from the column its values come from. */
+export interface CarriedDefinition {
+  /** The source's type, where it holds every value the field's own type holds and more. */
+  type?: string;
+  /** The source's default, as DDL. */
+  default?: string;
 }
 
 /**

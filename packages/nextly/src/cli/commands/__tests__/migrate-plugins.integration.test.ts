@@ -34,6 +34,7 @@ import {
   afterEach,
 } from "vitest";
 
+import { formatLocalizationIntent } from "../../../domains/i18n/migration/migration-intent";
 import { buildExtensionSchema } from "../../../domains/schema/extension/build-extension-schema";
 import { col, defineTable } from "../../../domains/schema/extension/dsl";
 import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
@@ -1119,6 +1120,100 @@ describe("--step across plugin modules and app files (sqlite)", () => {
       const third = await run();
       expect([third.pluginModulesApplied, third.applied]).toEqual([0, 1]);
       expect(await adapter.listTables()).toContain("step_app");
+    } finally {
+      rmSync(migrationsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("judges a file turning translation on only once the step reaches it", async () => {
+    // The app's main table with a column naming a collation, which a move into the translations
+    // table would lose, so the file turning translation on is refused when the run reaches it.
+    sqlite.exec(
+      'CREATE TABLE "dc_docs" ("id" text PRIMARY KEY, "heading" text, "note" text COLLATE NOCASE)'
+    );
+    const migrationsDir = mkdtempSync(join(tmpdir(), "nx-step-"));
+    writeFileSync(
+      join(migrationsDir, "20260101_000000_enable_localization_docs.sql"),
+      `${formatLocalizationIntent({
+        kind: "enable",
+        entity: "collection",
+        spec: {
+          dialect: DIALECT,
+          collection: "docs",
+          kind: "collection",
+          mainTable: "dc_docs",
+          companionTable: "dc_docs_locales",
+          defaultLocale: "en",
+          parentIdType: "TEXT",
+          columns: [{ name: "heading", kind: "longText" }],
+        },
+      })}\nSELECT 1;\n`
+    );
+    const steps = defineTable("rows", { id: col.id() });
+    const extensionSchema = await buildExtensionSchema({
+      dialect: DIALECT,
+      coreTableNames: CORE_TABLE_NAMES,
+      entities: [],
+      pluginPrefixes: new Map([["stepper", "stepper"]]),
+      plugins: [{ owner: { kind: "plugin", id: "stepper" }, tables: [steps] }],
+    });
+    const module = buildPluginMigration({
+      pluginName: "stepper",
+      schemaVersion: 1,
+      name: "v1",
+      now: new Date(Date.UTC(2026, 8, 26, 10, 0, 0)),
+      tablesByDialect: await tablesByDialect("stepper", "stepper", [steps]),
+      existing: [],
+    })!.module;
+    const adapter = {
+      ...adapterFor(sqlite),
+      tableExists: async (name: string) =>
+        (await adapterFor(sqlite).listTables()).includes(name),
+    };
+    const run = (step?: number) =>
+      migrateCore({
+        extensionSchema,
+        dialect: DIALECT,
+        db,
+        adapter,
+        migrationsDir,
+        logger: createLogger({ quiet: true }),
+        lockMode: "fail-fast",
+        withLock: async (
+          _adapter: unknown,
+          _dialect: unknown,
+          fn: () => Promise<unknown>
+        ) => ({
+          ran: true as const,
+          value: await fn(),
+        }),
+        pluginMigrationSets: [
+          {
+            pluginName: "stepper",
+            pluginVersion: "1.0.0",
+            migrations: [module],
+          },
+        ],
+        pluginsWithMigrations: new Set(["stepper"]),
+        ...(step === undefined ? {} : { step }),
+      } as never);
+
+    try {
+      // The module takes the one step: the app file is not this run's, so it is not judged.
+      const first = await run(1);
+      expect([first.pluginModulesApplied, first.applied]).toEqual([1, 0]);
+      expect(await adapter.listTables()).toContain("stepper__rows");
+
+      // The next run reaches it, and refuses it before it runs.
+      await expect(run()).rejects.toMatchObject({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              code: "TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION",
+            }),
+          ],
+        },
+      });
     } finally {
       rmSync(migrationsDir, { recursive: true, force: true });
     }
