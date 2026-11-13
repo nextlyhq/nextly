@@ -27,9 +27,14 @@ The public surface is kept **deliberately small** (D40). Everything not listed a
 
 ## Where the admin parts come from
 
-`@nextlyhq/plugin-sdk/admin` re-exports the admin's parts from `@nextlyhq/admin/kit`.
-That subpath is **internal and unstable**: it exists for this SDK alone, its exports
-change in any release, and nothing else should import it. The names a plugin uses, and
+`@nextlyhq/plugin-sdk/admin` re-exports the admin's parts from the kit's areas,
+`@nextlyhq/admin/kit/<area>` (`core`, `media`, `field-ui`, `table`, `document`, `widgets`,
+`plugin-parts`; `@nextlyhq/admin/kit` is all of them at once). Those subpaths are
+**internal and unstable**: they exist for this SDK alone, their exports change in any
+release, and nothing else should import them. The SDK's admin entry is pure re-exports and
+declared free of side effects, so an application's bundler follows only the areas a
+plugin's imports name: a plugin that draws a stepper does not bring the media library
+into the admin's first load. The names a plugin uses, and
 their tags in the tables below, are the SDK's. `@nextlyhq/admin`'s root is what an
 application mounts (`RootLayout`, the providers, `ErrorBoundary`, `CommandPalette`, the
 component registration calls) and the hooks and primitives its README lists; it is not a

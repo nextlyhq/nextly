@@ -188,6 +188,21 @@ const nextConfig: NextConfig = {
       // The SDK's admin entry re-exports this one. Aliased with the root, so
       // a plugin page and the admin share one instance of every module.
       "@nextlyhq/admin/kit": ["../../packages/admin/src/kit.ts"],
+      "@nextlyhq/admin/kit/core": ["../../packages/admin/src/kit/core.ts"],
+      "@nextlyhq/admin/kit/document": [
+        "../../packages/admin/src/kit/document.ts",
+      ],
+      "@nextlyhq/admin/kit/field-ui": [
+        "../../packages/admin/src/kit/field-ui.ts",
+      ],
+      "@nextlyhq/admin/kit/media": ["../../packages/admin/src/kit/media.ts"],
+      "@nextlyhq/admin/kit/plugin-parts": [
+        "../../packages/admin/src/kit/plugin-parts.ts",
+      ],
+      "@nextlyhq/admin/kit/table": ["../../packages/admin/src/kit/table.ts"],
+      "@nextlyhq/admin/kit/widgets": [
+        "../../packages/admin/src/kit/widgets.ts",
+      ],
       "@nextlyhq/admin/lib/component-registry": [
         "../../packages/admin/src/lib/plugins/component-registry.ts",
       ],
