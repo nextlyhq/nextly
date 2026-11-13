@@ -297,13 +297,15 @@ export async function runUnitInTries(
 ): Promise<number> {
   const dialect = adapter.getCapabilities().dialect;
   const keeping = keepingOf(unit, dialect);
-  const triggers = await triggerTables(adapter, dialect);
+  // Read again after each try that ended (below): a statement a try kept may have made a trigger.
+  let triggers = await triggerTables(adapter, dialect);
   // Where the next try starts: past every statement an earlier try kept.
   let from = 0;
   return withBusyTableTries(
     {
       bounds: run.bounds,
       change: unit.source,
+      ...(unit.direction === undefined ? {} : { direction: unit.direction }),
       appliedBefore: run.appliedBefore(),
       notify: run.notify,
       notice: tryNotice,
@@ -362,6 +364,13 @@ export async function runUnitInTries(
         const { fired } = await watchdog.stop();
         if (!endedWaiting(error, dialect, fired)) throw error;
         const started = from;
+        // A statement this try or an earlier one kept may have made a trigger: outside a
+        // transaction each statement committed as it ran, and on MySQL a trigger's CREATE commits
+        // on its own. The list is read again, after the try let go of its session, before judging
+        // what the next try sends; a read that fails counts every table as having one.
+        triggers = await triggerTables(adapter, dialect).catch(
+          (): TriggerTables => "unseen"
+        );
         // Nothing of this try's own was sent where no index was told: a setting sent again first
         // waited, and the try kept nothing.
         const toldNone = reached < 0;

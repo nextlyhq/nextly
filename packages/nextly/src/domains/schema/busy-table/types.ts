@@ -86,4 +86,9 @@ export interface BusyTableStop {
   readonly cause: "table-busy";
   /** On SQLite, whether the tries ended early because the schema lock could not be renewed. */
   readonly endedAtLease: boolean;
+  /**
+   * Which way the change ran: a file's DOWN (`migrate:down`) is resolved the other way round from
+   * its UP, so the report's next step follows it. Absent, the change ran UP.
+   */
+  readonly direction?: "up" | "down";
 }
