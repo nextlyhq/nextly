@@ -16,7 +16,7 @@ import {
   type BusyTableWait,
 } from "../../schema/services/apply-migration-statements";
 
-import { ensureI18nArchive } from "./ensure-archive";
+import { ensureI18nArchive, runI18nSchemaStatements } from "./ensure-archive";
 import type { CompanionTransitionPlan } from "./reconcile-companion";
 import type { I18nTransitionKind } from "./transition-state";
 
@@ -103,9 +103,13 @@ export async function applyCompanionStatements(
     return;
   }
   // One at a time: `executeQuery` runs a single statement on some drivers, SQLite's among them.
-  for (const statement of plan.statements) {
-    await adapter.executeQuery(statement);
-  }
+  // Each waits for a table another database session holds in short tries, then stops with
+  // `NEXTLY_TABLE_BUSY` naming it and its holder, rather than holding the save without bound.
+  await runI18nSchemaStatements(
+    adapter,
+    plan.statements,
+    "the localization change"
+  );
 }
 
 /**
@@ -122,6 +126,34 @@ export async function dropHeldLeavingFields(
 ): Promise<void> {
   const drops = plan.leavingDrops ?? [];
   if (drops.length === 0) return;
+  // Run as one unit in short tries for a table another database session holds: a try that waited
+  // is rolled back whole on PostgreSQL and SQLite and the next runs the drops again from the first,
+  // and the tries stop with `NEXTLY_TABLE_BUSY` naming the table and its holder rather than holding
+  // the save without bound (`runUnitInTries`). Inside an open transaction, where a unit of its own
+  // is refused, they run once, whole, as before.
+  if (!adapter.inTransaction()) {
+    const [{ runUnitInTries }, { busyTableBounds }, { consoleLogger }] =
+      await Promise.all([
+        import("../../schema/busy-table/run-unit"),
+        import("../../schema/busy-table/bounds"),
+        import("../../../shared/types"),
+      ]);
+    await runUnitInTries(
+      adapter,
+      drops,
+      {
+        source: `the drop of the ${entity}'s columns leaving translation`,
+        transaction: true,
+      },
+      () => Promise.resolve(),
+      {
+        bounds: busyTableBounds({ env: process.env }),
+        notify: line => consoleLogger.warn(line),
+        appliedBefore: () => [],
+      }
+    );
+    return;
+  }
   await applyMigrationWhole({
     db: adapter.getDrizzle(),
     dialect: adapter.getCapabilities().dialect,

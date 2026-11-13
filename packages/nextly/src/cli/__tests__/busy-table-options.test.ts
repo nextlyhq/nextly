@@ -2,25 +2,47 @@
  * `--lock-timeout` and `--lock-timeout-total` on every command this release gives them, with help
  * that says they bound the wait for a busy table and not the wait for the schema lock.
  */
+import { join } from "node:path";
+
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 
 import { registerMigrateCommand } from "../commands/migrate.command";
 import { registerMigrateDownCommand } from "../commands/migrate-down.command";
+import {
+  runPluginInstall,
+  runPluginInstallAll,
+  runPluginUninstall,
+} from "../commands/plugin-lifecycle-runner";
+import { registerPluginsCommand } from "../commands/plugins.command";
+import { createContext } from "../context";
 
-/** The help `register` gives its one command, on a program of its own. */
-function helpOf(register: (program: Command) => void): string {
+/**
+ * The help of the command `path` names (`["plugins", "install"]` for a subcommand), registered by
+ * `register` on a program of its own.
+ */
+function helpOf(
+  register: (program: Command) => void,
+  path: readonly string[]
+): string {
   const program = new Command();
   register(program);
-  const [command] = program.commands;
+  let command: Command = program;
+  for (const name of path) {
+    const found = command.commands.find(candidate => candidate.name() === name);
+    if (found === undefined) throw new Error(`no command ${name}`);
+    command = found;
+  }
   return command.helpInformation();
 }
 
 describe.each([
-  ["migrate", registerMigrateCommand],
-  ["migrate:down", registerMigrateDownCommand],
-])("nextly %s", (_, register) => {
-  const help = helpOf(register).replace(/\s+/g, " ");
+  ["migrate", registerMigrateCommand, ["migrate"]],
+  ["migrate:down", registerMigrateDownCommand, ["migrate:down"]],
+  ["plugins install", registerPluginsCommand, ["plugins", "install"]],
+  ["plugins uninstall", registerPluginsCommand, ["plugins", "uninstall"]],
+])("nextly %s", (_, register, path) => {
+  const help = helpOf(register, path).replace(/\s+/g, " ");
 
   it("offers --lock-timeout for one try, with its range, default and variable", () => {
     expect(help).toContain("--lock-timeout <seconds>");
@@ -46,4 +68,45 @@ describe.each([
       "set longer than the default total, with no total given, the total rises to match"
     );
   });
+});
+
+describe("the plugins commands' bounds", () => {
+  // A project that does not exist: a bound checked after the config is read would be refused for
+  // the missing config instead, so the refusal below shows it was checked before anything was read.
+  const missing = join(__dirname, "no-such-project");
+  const context = createContext({ quiet: true, cwd: missing });
+  const options = {
+    cwd: missing,
+    config: join(missing, "nextly.config.ts"),
+    lockTimeout: "0",
+  };
+
+  it.each([
+    ["install", () => runPluginInstall("seo", options, context)],
+    ["install --all", () => runPluginInstallAll(options, context)],
+    [
+      "uninstall",
+      () =>
+        runPluginUninstall(
+          "seo",
+          { ...options, keepData: false, yes: false },
+          context
+        ),
+    ],
+    [
+      "install --dry-run",
+      () => runPluginInstall("seo", { ...options, dryRun: true }, context),
+    ],
+  ])(
+    "refuses a --lock-timeout out of range before reading anything (%s)",
+    async (_, run) => {
+      await expect(run()).rejects.toMatchObject({
+        code: "INVALID_INPUT",
+        logContext: {
+          reason: "busy-table-bound-invalid",
+          setting: "--lock-timeout",
+        },
+      });
+    }
+  );
 });

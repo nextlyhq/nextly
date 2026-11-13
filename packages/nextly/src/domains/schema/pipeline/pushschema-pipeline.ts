@@ -21,9 +21,10 @@
 // auto-committed; F15 will add pre-flight validation. SQLite uses PRAGMA
 // foreign_keys = OFF/ON wrapping per F3 PR-4.
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import { getDialectTablesForPush } from "../../../database/index";
 import { NextlyError } from "../../../errors";
@@ -40,6 +41,21 @@ import { FieldGroupSchemaService } from "../../field-groups/services/field-group
 import { resolveRegistryNameFromCatalog } from "../../field-groups/storage/resolve-storage-names";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { hasRetiredSizesColumn } from "../../media/retired-image-sizes-store";
+import { busyTableBounds, type BusyTableBounds } from "../busy-table/bounds";
+import {
+  endedWaiting,
+  ownSessionId,
+  sessionIdOfRows,
+} from "../busy-table/ended-waiting";
+import { readHolders } from "../busy-table/holder";
+import { tableBusyError, tryNotice } from "../busy-table/report";
+import {
+  withBusyTableTries,
+  type BusyTableTriesOptions,
+  type TryResult,
+} from "../busy-table/tries";
+import type { HolderReport } from "../busy-table/types";
+import { prepareTryWatchdog } from "../busy-table/watchdog";
 import { getActiveExtensionSchema } from "../extension/build-extension-schema";
 import {
   refusingNewDanglingReferences,
@@ -57,6 +73,7 @@ import {
   countLongerThan as countLongerThanHelper,
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
+  querySqlRows,
 } from "./classifier/count-helpers";
 import { relationSwitches } from "./companion-shape-switches";
 import { withoutCopyOnlyRebuilds, type LiveTable } from "./copy-only-rebuilds";
@@ -133,6 +150,7 @@ import type {
   PreCleanupExecutor,
   PreCleanupField,
   PreRenameExecutor,
+  PromptDispatchResult,
   PromptDispatcher,
   RenameCandidate,
   RenameDetector,
@@ -142,7 +160,7 @@ import { builtByFor } from "./registered-collections";
 import { refuseNotNullOverNulls } from "./required-column-gate";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
 import { withRetainedSizesColumn } from "./retained-core-columns";
-import { assertSchemaLockHeld } from "./schema-lock";
+import { assertSchemaLockHeld, schemaLockConfirmedUntil } from "./schema-lock";
 import {
   refuseSeveralReferencesForOne,
   refuseSwitchesWithRename,
@@ -444,13 +462,44 @@ export interface PushSchemaPipelineTestHooks {
     txOrDb: unknown,
     ops: Operation[],
     dialect: SupportedDialect,
-    leadingStatements?: readonly string[]
+    leadingStatements?: readonly string[],
+    onFinished?: () => void
   ) => Promise<number>;
   // Test seam: inject a pre-built resolvedOps array to bypass the diff +
   // resolution pipeline. Lets unit tests exercise the scope-reduction and
   // routing logic with hand-crafted op types (e.g. rename_table) that the
   // normal diff path cannot produce today.
   _resolvedOpsOverride?: Operation[];
+}
+
+/**
+ * How an apply waits for a table another database session is using: in bounded tries, then a stop
+ * with `NEXTLY_TABLE_BUSY` (`busy-table/tries`).
+ */
+export interface PipelineBusyTable {
+  /** One try's bound and the total (`busyTableBounds`). */
+  readonly bounds: BusyTableBounds;
+  /** Prints the one line each try after the first gives. */
+  readonly notify: (line: string) => void;
+  /** The change as the report names it: the entity a save changes, or the sync. */
+  readonly change: string;
+}
+
+/** One try's bound on the transaction it runs in, and what the try is told as it goes. */
+interface TransactionTryBound {
+  readonly tryMs: number;
+  /** Told the transaction's session id once it is read, so the try's watch can follow it. */
+  readonly onSession: (session: string) => void;
+  /** Awaited once the apply's work has run, before the commit: the watch stops here. */
+  readonly settle: () => Promise<void>;
+}
+
+/** What one plan-and-apply of the pipeline leaves for the result and the journal. */
+interface PlannedApply {
+  readonly statementsExecuted: number;
+  readonly resolvedOps: Operation[];
+  readonly renamesApplied: number;
+  readonly moved: NonNullable<PipelineResult["movedToCompanion"]>;
 }
 
 // F10 PR 2: derive the per-change-kind counts from the pipeline's
@@ -683,13 +732,15 @@ export class PushSchemaPipeline {
      * about as any other.
      */
     defaultLocale?: string;
+    /**
+     * How the apply waits for a table another database session is using (`PipelineBusyTable`).
+     * Absent, the bounds come from the environment (`NEXTLY_LOCK_TIMEOUT`,
+     * `NEXTLY_LOCK_TIMEOUT_TOTAL`, else the defaults) and each notice goes to the logger, so every
+     * caller of the pipeline waits in bounded tries without passing anything.
+     */
+    busyTable?: PipelineBusyTable;
   }): Promise<PipelineResult> {
     const { db, dialect, source, promptChannel, databaseName } = args;
-    // Resolved once, before anything reads it. A desired schema is consumed by TWO builders — the
-    // snapshot the diff compares and the Drizzle tables drizzle-kit turns into DDL — and resolving
-    // inside either leaves the other on the raw fields, so a table would converge and then report a
-    // type change against itself on every following diff.
-    let desired = args.desired;
     // Merged HERE rather than at each call site. `apply` has many callers —
     // HMR, the collection/single/component dispatchers, the dev server, the
     // DI registration — and adding extensions at each would miss some: a UI
@@ -738,7 +789,7 @@ export class PushSchemaPipeline {
     // switched on again, or its plugin removed, leaves `desired` as it was
     // while its kept column is no longer kept (`kept-scope-fields.ts`).
     const cacheKey = {
-      desired,
+      desired: args.desired,
       extensions: extensions?.fingerprint ?? null,
       withheld: currentWithheldScopeFields(),
     };
@@ -763,6 +814,21 @@ export class PushSchemaPipeline {
       };
     }
 
+    // How this apply waits for a busy table, read before anything is recorded or changed: a bound
+    // outside its range refuses the apply here, with nothing changed.
+    let busyTable: PipelineBusyTable | undefined;
+    try {
+      busyTable = this.busyTableFor(args);
+    } catch (err) {
+      if (!(err instanceof NextlyError)) throw err;
+      return {
+        success: false,
+        statementsExecuted: 0,
+        renamesApplied: 0,
+        error: { code: err.code, message: err.message },
+      };
+    }
+
     // Phase 5: pass `batch: -1` for HMR/dev pushes so audit queries
     // can filter them out (`WHERE batch >= 0` shows production
     // migrations only). UI-driven pushes count as "intentional"
@@ -776,1011 +842,1144 @@ export class PushSchemaPipeline {
     });
 
     try {
-      // The entities' tables and the extension's: the set the desired
-      // snapshot below is built over, shared with the schema preview.
-      const managedTableNames = desiredSchemaTableNames(desired, extensions);
+      // Each question Phase B asks is asked once for the whole apply: a try that re-plans after one
+      // that waited out its bound reads the answers given to the first.
+      const promptDispatcher = askingOnce(this.deps.promptDispatcher);
+      // The statements a try sent and saw finish, counted where the apply hands its statements to
+      // the executor and as the pre-resolution phase reports them; on MySQL and SQLite each has
+      // committed, and stays when the try ends waiting. MySQL's are handed over one at a time
+      // while the tries are on, since each commits as it runs and a batch that waits part-way
+      // would not say how many before it did; elsewhere a batch is handed over whole, as always.
+      let finishedThisTry = 0;
+      let finishedEarlier = 0;
+      const oneByOne = busyTable !== undefined && dialect === "mysql";
+      const executor: DrizzleStatementExecutor = {
+        executeStatements: async (tx, statements) => {
+          for (const batch of oneByOne
+            ? statements.map(statement => [statement])
+            : [statements]) {
+            await this.deps.executor.executeStatements(tx, batch);
+            finishedThisTry += batch.length;
+          }
+        },
+      };
+      // The table a try waits for, where the plan changes exactly one; null, "a table", otherwise.
+      let waitedTable: string | null = null;
+      // Watches and holder reads ask on the apply's own handle: the pool, another connection than
+      // the transaction the try waits in.
+      const reader = statementReader(db, dialect);
 
-      // Phase A: our diff. Reuse the cached live snapshot when the outer
-      // caller (reload-config.ts) already introspected the exact same
-      // managed-table set within this apply boundary. We do NOT self-fill
-      // the cache on a miss: the Builder UI apply path never calls
-      // clearLiveSnapshots(), so a self-fill here would cause subsequent
-      // Builder applies to serve stale snapshots. The cache exists only
-      // to dedupe the reload-config → pipeline.apply call chain.
-      let liveSnapshot: NextlySchemaSnapshot;
-      if (this.testHooks._introspectSnapshotOverride) {
-        liveSnapshot = await this.testHooks._introspectSnapshotOverride(
+      /**
+       * Plans the apply from the live database (Phases A and B) and runs it (Phases C, D′ and D).
+       * `tryBound` bounds the transaction of a MySQL try; `laterTry` says an earlier try of this
+       * apply ended waiting, so the live database is read afresh rather than from a cached read
+       * that predates what that try committed.
+       */
+      const planAndApply = async (
+        tryBound: TransactionTryBound | undefined,
+        laterTry: boolean
+      ): Promise<PlannedApply> => {
+        finishedThisTry = 0;
+        // Resolved once per plan, before anything reads it. A desired schema is consumed by TWO
+        // builders — the snapshot the diff compares and the Drizzle tables drizzle-kit turns into
+        // DDL — and resolving inside either leaves the other on the raw fields, so a table would
+        // converge and then report a type change against itself on every following diff.
+        let desired = args.desired;
+        // The entities' tables and the extension's: the set the desired
+        // snapshot below is built over, shared with the schema preview.
+        const managedTableNames = desiredSchemaTableNames(desired, extensions);
+
+        // Phase A: our diff. Reuse the cached live snapshot when the outer
+        // caller (reload-config.ts) already introspected the exact same
+        // managed-table set within this apply boundary. We do NOT self-fill
+        // the cache on a miss: the Builder UI apply path never calls
+        // clearLiveSnapshots(), so a self-fill here would cause subsequent
+        // Builder applies to serve stale snapshots. The cache exists only
+        // to dedupe the reload-config → pipeline.apply call chain.
+        let liveSnapshot: NextlySchemaSnapshot;
+        if (this.testHooks._introspectSnapshotOverride) {
+          liveSnapshot = await this.testHooks._introspectSnapshotOverride(
+            db,
+            dialect,
+            managedTableNames
+          );
+        } else {
+          const cached = laterTry
+            ? undefined
+            : getLiveSnapshot(managedTableNames);
+          liveSnapshot =
+            cached !== undefined
+              ? (cached as NextlySchemaSnapshot)
+              : await introspectLiveSnapshot(db, dialect, managedTableNames);
+        }
+        // A field a plugin's scope holds back from a type switched off keeps
+        // its column while the database has it: added back here, before
+        // anything reads the desired state, so neither the diff nor the tables
+        // handed to drizzle-kit plans its drop (`kept-scope-fields.ts`).
+        // A translated one keeps its column in the type's translations table,
+        // read here for the types something is held back from only: turning
+        // translation off then brings the column back to the main table.
+        const companions = companionsHoldingBack(desired);
+        const keptFrom =
+          companions.length === 0
+            ? liveSnapshot
+            : {
+                tables: [
+                  ...liveSnapshot.tables,
+                  ...(
+                    await (
+                      this.testHooks._introspectSnapshotOverride ??
+                      introspectLiveSnapshot
+                    )(db, dialect, companions)
+                  ).tables,
+                ],
+              };
+        desired = withKeptScopeFieldsIn(desired, keptFrom, dialect);
+
+        // 🔴 Contained, and its failure means "declare NEITHER registry".
+        //
+        // The desired schema is what drizzle-kit creates from, so naming the
+        // wrong registry creates an empty one — and on MySQL and SQLite the full
+        // schema is always handed over, because scope reduction below is
+        // PostgreSQL-only. Guessing is therefore the one thing this must not do.
+        // Omitting it instead leaves drizzle-kit free to propose a DROP, which
+        // `filterUnsafeStatements` blocks and reports; a wrong CREATE is additive
+        // and nothing stops it.
+        const fieldGroupRegistryTable = await resolveRegistryNameFromCatalog({
+          dialect,
+          getDrizzle: <T>() => db as T,
+        }).catch(() => undefined);
+
+        // The entities' tables with what hooks contributed to them, then the
+        // extension's own tables: built by the one function the schema preview
+        // also builds from, so the preview shows what this apply will do.
+        const { snapshot: snapshotBeforeRenames, fieldGroupTypeColumns } =
+          buildDesiredSnapshot({ desired, dialect, liveSnapshot, extensions });
+
+        // The live columns given the shape each relation's recorded field stored: a switch the
+        // column's type does not show is planned from it (`withRecordedShapes`).
+        //
+        // A translated relation's switch, planned on its companion from the same rule, joins the
+        // operations here, so the confirmation, the refusals and the apply read one set, as the
+        // preview does (`relationSwitches`).
+        const liveWithShapes = withRecordedShapes(liveSnapshot, desired);
+        const diffed = diffSnapshots(liveWithShapes, snapshotBeforeRenames);
+        const switches = await relationSwitches({
           db,
           dialect,
-          managedTableNames
-        );
-      } else {
-        const cached = getLiveSnapshot(managedTableNames);
-        liveSnapshot =
-          cached !== undefined
-            ? (cached as NextlySchemaSnapshot)
-            : await introspectLiveSnapshot(db, dialect, managedTableNames);
-      }
-      // A field a plugin's scope holds back from a type switched off keeps
-      // its column while the database has it: added back here, before
-      // anything reads the desired state, so neither the diff nor the tables
-      // handed to drizzle-kit plans its drop (`kept-scope-fields.ts`).
-      // A translated one keeps its column in the type's translations table,
-      // read here for the types something is held back from only: turning
-      // translation off then brings the column back to the main table.
-      const companions = companionsHoldingBack(desired);
-      const keptFrom =
-        companions.length === 0
-          ? liveSnapshot
-          : {
-              tables: [
-                ...liveSnapshot.tables,
-                ...(
-                  await (
-                    this.testHooks._introspectSnapshotOverride ??
-                    introspectLiveSnapshot
-                  )(db, dialect, companions)
-                ).tables,
-              ],
-            };
-      desired = withKeptScopeFieldsIn(desired, keptFrom, dialect);
+          desired,
+          live: liveSnapshot,
+          desiredSnapshot: snapshotBeforeRenames,
+          planned: diffed,
+        });
+        const allOperations = [...diffed, ...switches.ops];
 
-      // 🔴 Contained, and its failure means "declare NEITHER registry".
-      //
-      // The desired schema is what drizzle-kit creates from, so naming the
-      // wrong registry creates an empty one — and on MySQL and SQLite the full
-      // schema is always handed over, because scope reduction below is
-      // PostgreSQL-only. Guessing is therefore the one thing this must not do.
-      // Omitting it instead leaves drizzle-kit free to propose a DROP, which
-      // `filterUnsafeStatements` blocks and reports; a wrong CREATE is additive
-      // and nothing stops it.
-      const fieldGroupRegistryTable = await resolveRegistryNameFromCatalog({
-        dialect,
-        getDrizzle: <T>() => db as T,
-      }).catch(() => undefined);
+        // A UI save owns only the entity being edited. An operation targeting a code-first or
+        // plugin-owned table is dropped here, BEFORE anything reads the operation set, because those
+        // tables belong to `nextly.config.ts` and reconciling their drift is db:sync's job.
+        //
+        // 🔴 Dropped before rename detection rather than after prompting, which is where this used to
+        // happen. An operation on a locked table still reached the rename detector and the prompt gate
+        // on the way, and an unresolved candidate fails closed — so unapplied drift on a table the
+        // save was never going to touch could refuse the entire save, over an operation the very next
+        // step discards. Code-first applies keep the full set: they ARE the authority for those tables.
+        const { kept: operations, skipped: skippedLockedOps } =
+          source === "ui"
+            ? excludeLockedTableOps(allOperations, desired)
+            : { kept: allOperations, skipped: [] as Operation[] };
+        logSkippedLockedOps(skippedLockedOps);
 
-      // The entities' tables with what hooks contributed to them, then the
-      // extension's own tables: built by the one function the schema preview
-      // also builds from, so the preview shows what this apply will do.
-      const { snapshot: snapshotBeforeRenames, fieldGroupTypeColumns } =
-        buildDesiredSnapshot({ desired, dialect, liveSnapshot, extensions });
-
-      // The live columns given the shape each relation's recorded field stored: a switch the
-      // column's type does not show is planned from it (`withRecordedShapes`).
-      //
-      // A translated relation's switch, planned on its companion from the same rule, joins the
-      // operations here, so the confirmation, the refusals and the apply read one set, as the
-      // preview does (`relationSwitches`).
-      const liveWithShapes = withRecordedShapes(liveSnapshot, desired);
-      const diffed = diffSnapshots(liveWithShapes, snapshotBeforeRenames);
-      const switches = await relationSwitches({
-        db,
-        dialect,
-        desired,
-        live: liveSnapshot,
-        desiredSnapshot: snapshotBeforeRenames,
-        planned: diffed,
-      });
-      const allOperations = [...diffed, ...switches.ops];
-
-      // A UI save owns only the entity being edited. An operation targeting a code-first or
-      // plugin-owned table is dropped here, BEFORE anything reads the operation set, because those
-      // tables belong to `nextly.config.ts` and reconciling their drift is db:sync's job.
-      //
-      // 🔴 Dropped before rename detection rather than after prompting, which is where this used to
-      // happen. An operation on a locked table still reached the rename detector and the prompt gate
-      // on the way, and an unresolved candidate fails closed — so unapplied drift on a table the
-      // save was never going to touch could refuse the entire save, over an operation the very next
-      // step discards. Code-first applies keep the full set: they ARE the authority for those tables.
-      const { kept: operations, skipped: skippedLockedOps } =
-        source === "ui"
-          ? excludeLockedTableOps(allOperations, desired)
-          : { kept: allOperations, skipped: [] as Operation[] };
-      logSkippedLockedOps(skippedLockedOps);
-
-      // A field this apply makes translated still has its value on the main table, which the diff
-      // drops: the value moves to the default language's companion row first. Planned here, from
-      // the live tables, so every caller of the apply moves it the same way; only a column whose
-      // move is planned leaves the drop unjudged, so one that cannot be moved stays a drop to ask
-      // about. The moves run in Phase C, after every refusal and before the first drop.
-      const moves = await planCompanionMoves(
-        desired,
-        operations,
-        db,
-        dialect,
-        args.defaultLocale
-      );
-
-      // Phase B: rename detection + prompt + resolution application. A column moved to the
-      // companion is dropped without being judged: its value is moved before the drop.
-      const judged = operationsToJudge(operations, moves.moved);
-      const candidates = this.deps.renameDetector.detect(judged, dialect);
-
-      // F5 PR 5: count callbacks bound to the live DB. RealClassifier uses
-      // them to populate add_not_null_with_nulls events with the actual
-      // NULL row count + table size; noopClassifier ignores them. The
-      // orchestrator owns DB access here so the classifier itself stays
-      // pure (DI surface).
-      const classificationResult = await this.deps.classifier.classify({
-        operations: judged,
-        countNulls: (table, column) =>
-          countNullsHelper(db, dialect, table, column),
-        countRows: table => countRowsHelper(db, dialect, table),
-        countLongerThan: (table, column, length) =>
-          countLongerThanHelper(db, dialect, table, column, length),
-        // "Fill with one value" is not offered for a column the schema makes unique.
-        isUnique: uniqueColumnLookup(snapshotBeforeRenames, desired),
-        dialect,
-      });
-
-      // Drops that have a rename candidate are resolved by the
-      // dispatcher's shrinking-pool prompt — its "drop_and_add" option
-      // already implies user consent to data loss. Filter their
-      // destructive_drop events here so the user isn't asked the same
-      // question twice (once for the rename pair, once for the drop).
-      const dropsCoveredByCandidates = new Set<string>();
-      for (const c of candidates) {
-        dropsCoveredByCandidates.add(`${c.tableName}::${c.fromColumn}`);
-      }
-      const dispatchEvents = classificationResult.events.filter(
-        e =>
-          e.kind !== "destructive_drop" ||
-          !dropsCoveredByCandidates.has(`${e.tableName}::${e.columnName}`)
-      );
-
-      const needsPrompt = candidates.length > 0 || dispatchEvents.length > 0;
-      const dispatchResult = needsPrompt
-        ? await this.deps.promptDispatcher.dispatch({
-            candidates,
-            events: dispatchEvents,
-            classification: classificationResult.level,
-            channel: promptChannel,
-          })
-        : {
-            confirmedRenames: [] as RenameCandidate[],
-            resolutions: [],
-            proceed: true,
-          };
-
-      // Honor abort: short-circuit before any DDL fires.
-      if (!dispatchResult.proceed) {
-        throw new PromptCancelledError();
-      }
-
-      // F5 PR 4: patch desired.collections inline for make_optional
-      // resolutions BEFORE building drizzleSchema, so pushSchema sees the
-      // column as still-nullable and never emits SET NOT NULL. We patch
-      // `desired` rather than the snapshot because drizzleSchema is built
-      // from desired.collections; patching the snapshot only would have no
-      // effect on the SQL pushSchema generates.
-      const patchedDesired = applyMakeOptionalToDesired(
-        desired,
-        dispatchResult.resolutions,
-        classificationResult.events
-      );
-
-      const renameResolvedOps =
-        this.testHooks._resolvedOpsOverride ??
-        applyResolutionsToOperations(
+        // A field this apply makes translated still has its value on the main table, which the diff
+        // drops: the value moves to the default language's companion row first. Planned here, from
+        // the live tables, so every caller of the apply moves it the same way; only a column whose
+        // move is planned leaves the drop unjudged, so one that cannot be moved stays a drop to ask
+        // about. The moves run in Phase C, after every refusal and before the first drop.
+        const moves = await planCompanionMoves(
+          desired,
           operations,
-          toRenameResolutions(dispatchResult.confirmedRenames, candidates)
+          db,
+          dialect,
+          args.defaultLocale
         );
-      // make_optional must reach the OPERATIONS too, not only `desired`: the
-      // fast-path emitters (and the kit-path table pre-creation) generate
-      // their SQL from these ops, so an unpatched add_column would still say
-      // NOT NULL despite the admin's resolution — failing the apply on a
-      // populated table or landing the column as required.
-      //
-      // A NEW required column answered with a value (or with deleting the rows
-      // it leaves empty) is added, nullable, by pre-cleanup ahead of its fill,
-      // so every later phase plans only its NOT NULL instead of adding it
-      // again — read once here so routing, rebuild approval and the emitted
-      // DDL all see the same operations.
-      const allResolvedOps = withAddedColumnsLeftToTighten(
-        applyMakeOptionalToOperations(
-          renameResolvedOps,
+
+        // Phase B: rename detection + prompt + resolution application. A column moved to the
+        // companion is dropped without being judged: its value is moved before the drop.
+        const judged = operationsToJudge(operations, moves.moved);
+        const candidates = this.deps.renameDetector.detect(judged, dialect);
+
+        // F5 PR 5: count callbacks bound to the live DB. RealClassifier uses
+        // them to populate add_not_null_with_nulls events with the actual
+        // NULL row count + table size; noopClassifier ignores them. The
+        // orchestrator owns DB access here so the classifier itself stays
+        // pure (DI surface).
+        const classificationResult = await this.deps.classifier.classify({
+          operations: judged,
+          countNulls: (table, column) =>
+            countNullsHelper(db, dialect, table, column),
+          countRows: table => countRowsHelper(db, dialect, table),
+          countLongerThan: (table, column, length) =>
+            countLongerThanHelper(db, dialect, table, column, length),
+          // "Fill with one value" is not offered for a column the schema makes unique.
+          isUnique: uniqueColumnLookup(snapshotBeforeRenames, desired),
+          dialect,
+        });
+
+        // Drops that have a rename candidate are resolved by the
+        // dispatcher's shrinking-pool prompt — its "drop_and_add" option
+        // already implies user consent to data loss. Filter their
+        // destructive_drop events here so the user isn't asked the same
+        // question twice (once for the rename pair, once for the drop).
+        const dropsCoveredByCandidates = new Set<string>();
+        for (const c of candidates) {
+          dropsCoveredByCandidates.add(`${c.tableName}::${c.fromColumn}`);
+        }
+        const dispatchEvents = classificationResult.events.filter(
+          e =>
+            e.kind !== "destructive_drop" ||
+            !dropsCoveredByCandidates.has(`${e.tableName}::${e.columnName}`)
+        );
+
+        const needsPrompt = candidates.length > 0 || dispatchEvents.length > 0;
+        const dispatchResult = needsPrompt
+          ? await promptDispatcher.dispatch({
+              candidates,
+              events: dispatchEvents,
+              classification: classificationResult.level,
+              channel: promptChannel,
+            })
+          : {
+              confirmedRenames: [] as RenameCandidate[],
+              resolutions: [],
+              proceed: true,
+            };
+
+        // Honor abort: short-circuit before any DDL fires.
+        if (!dispatchResult.proceed) {
+          throw new PromptCancelledError();
+        }
+
+        // F5 PR 4: patch desired.collections inline for make_optional
+        // resolutions BEFORE building drizzleSchema, so pushSchema sees the
+        // column as still-nullable and never emits SET NOT NULL. We patch
+        // `desired` rather than the snapshot because drizzleSchema is built
+        // from desired.collections; patching the snapshot only would have no
+        // effect on the SQL pushSchema generates.
+        const patchedDesired = applyMakeOptionalToDesired(
+          desired,
           dispatchResult.resolutions,
           classificationResult.events
-        ),
-        dispatchResult.resolutions,
-        classificationResult.events
-      );
-
-      // Already excluded above, before the operation set was read. Resolutions are keyed to the
-      // candidates and events that set produced, so none of them can reintroduce a locked table.
-      // A Schema Builder relationship this save renames keeps what its old column had: the keys
-      // were planned before the renames were answered, so one its old column never had is taken
-      // back from both the operations and the snapshot the rest of the apply builds from.
-      const { operations: resolvedOps, desired: desiredSnapshot } =
-        withoutKeysOnKeylessRenames(
-          allResolvedOps,
-          snapshotBeforeRenames,
-          liveSnapshot,
-          new Set(
-            Object.values(desired.collections)
-              .filter(c => c.builderOwned === true)
-              .map(c => c.tableName.toLowerCase())
-          )
         );
 
-      // A column made NOT NULL over rows no answer fills is refused here, before anything runs:
-      // every column the answered plan makes NOT NULL, not only those the classifier raised.
-      await refuseNotNullOverNulls(
-        args,
-        classificationResult,
-        dispatchResult,
-        resolvedOps
-      );
-      // A relationship switched to or from naming several target collections, while a row holds a
-      // value no conversion can carry across; then one switched from many related entries to one,
-      // while a row holds several.
-      // A translated relation's companion is among these (`relationSwitches`), its rows counted
-      // with the main tables'.
-      // A relation renamed and switched at once: the rename carries its values to the new name as
-      // they are, which the switch's conversion, planned for one name, never reaches.
-      refuseSwitchesWithRename({
-        desired: args.desired,
-        operations: resolvedOps,
-        previous: liveWithShapes,
-        next: snapshotBeforeRenames,
-      });
-      await refuseTargetSwitchesOverValues({
-        db: args.db,
-        dialect: args.dialect,
-        desired: args.desired,
-        operations: resolvedOps,
-      });
-      await refuseSeveralReferencesForOne({
-        db: args.db,
-        dialect: args.dialect,
-        desired: args.desired,
-        live: { tables: [...liveSnapshot.tables, ...switches.tables] },
-        operations: resolvedOps,
-      });
-      // A key added over a column that already holds values (a relationship pointed at another
-      // collection, or one an earlier apply left without its key), while a row holds a value its
-      // new target does not have: refused before anything runs, naming the field and its rows.
-      await refuseKeysRowsWouldBreak({
-        db: args.db,
-        dialect: args.dialect,
-        desired: args.desired,
-        live: liveSnapshot,
-        operations: resolvedOps,
-      });
-      // An enum's values narrowed while a row still holds one of them: the
-      // database would refuse the check's re-add after its drop had run, so
-      // the rows are counted and the narrowing named before anything does.
-      await refuseEnumNarrowingsOverRows({
-        db: args.db,
-        dialect: args.dialect,
-        desired: args.desired,
-        operations: resolvedOps,
-      });
-
-      // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
-      //
-      // What a drizzle-kit rebuild of a SQLite table would lose that the
-      // desired snapshot does not describe: its UNIQUE constraints, which the
-      // runtime tables then declare, and its triggers, which refuse the
-      // rebuild in `runApply`. Read once, before anything writes, and only on
-      // the route that rebuilds a table from its runtime definition.
-      const renames = renamesOf(resolvedOps);
-      const desiredUnique = desiredUniqueColumns(patchedDesired);
-      // Every table drizzle-kit may rebuild here, the one set the destructive
-      // scan below allows a rebuild for and the trigger refusal reads.
-      const approvedRebuilds = approvedRebuildTables(resolvedOps, dialect);
-      const rebuildLosses: RebuildLosses =
-        dialect === "sqlite" && !canEmitWithoutDrizzleKit(resolvedOps, dialect)
-          ? await rebuildLossesOf(db, renames, [
-              ...Object.values(patchedDesired.collections).map(
-                c => c.tableName
-              ),
-              ...Object.values(patchedDesired.singles).map(s => s.tableName),
-              ...approvedRebuilds,
-            ])
-          : new Map();
-      const drizzleSchema = this.testHooks._buildDrizzleSchemaOverride
-        ? this.testHooks._buildDrizzleSchemaOverride(patchedDesired, dialect)
-        : this.buildDrizzleSchema(
-            patchedDesired,
-            dialect,
-            fieldGroupTypeColumns,
-            fieldGroupRegistryTable,
-            desiredSnapshot,
-            tableName =>
-              uniqueColumnsToKeep(
-                tableName,
-                rebuildLosses.get(tableName.toLowerCase())?.unique ?? [],
-                renames,
-                desiredUnique
-              ),
-            // Asked only where drizzle-kit may run and the runtime tables are
-            // built here: the fast path emits from this apply's own operations
-            // and never reads the media table. A catalogue read, which cannot
-            // abort the PostgreSQL transaction it may be in.
-            canEmitWithoutDrizzleKit(resolvedOps, dialect)
-              ? false
-              : await hasRetiredSizesColumn(db, dialect)
+        const renameResolvedOps =
+          this.testHooks._resolvedOpsOverride ??
+          applyResolutionsToOperations(
+            operations,
+            toRenameResolutions(dispatchResult.confirmedRenames, candidates)
           );
+        // make_optional must reach the OPERATIONS too, not only `desired`: the
+        // fast-path emitters (and the kit-path table pre-creation) generate
+        // their SQL from these ops, so an unpatched add_column would still say
+        // NOT NULL despite the admin's resolution — failing the apply on a
+        // populated table or landing the column as required.
+        //
+        // A NEW required column answered with a value (or with deleting the rows
+        // it leaves empty) is added, nullable, by pre-cleanup ahead of its fill,
+        // so every later phase plans only its NOT NULL instead of adding it
+        // again — read once here so routing, rebuild approval and the emitted
+        // DDL all see the same operations.
+        const allResolvedOps = withAddedColumnsLeftToTighten(
+          applyMakeOptionalToOperations(
+            renameResolvedOps,
+            dispatchResult.resolutions,
+            classificationResult.events
+          ),
+          dispatchResult.resolutions,
+          classificationResult.events
+        );
 
-      // Scope drizzleSchema down to the table(s) actually touched by
-      // resolvedOps. Without this, a Builder save that touches one
-      // collection still forces drizzle-kit to introspect every managed
-      // table inside the pinned transaction (~14 pg_catalog queries per
-      // table per call, which dominates wall-time on a high-RTT pooled
-      // connection like Neon).
-      //
-      // Single-table assumption: we don't walk FK closure today because
-      // Builder operations are effectively single-table — if a future
-      // change ever crosses managed-table FKs the safety net below falls
-      // back to the full schema and drizzle-kit will resolve as before.
-      const affectedTableNames = new Set<string>();
-      for (const op of resolvedOps) {
-        switch (op.type) {
-          case "add_table":
-            affectedTableNames.add(op.table.name);
-            break;
-          case "rename_table":
-            // After pre-resolution the live DB and desired snapshot both
-            // carry the new name — scope by `toName`.
-            affectedTableNames.add(op.toName);
-            break;
-          case "drop_table":
-            // Already applied by pre-resolution; not in drizzleSchema.
-            break;
-          case "add_column":
-          case "drop_column":
-          case "rename_column":
-          case "change_column_type":
-          case "change_column_nullable":
-          case "change_column_default":
-          case "change_foreign_key_action":
-          case "add_index":
-          case "drop_index":
-          case "add_check":
-          case "drop_check":
-          case "add_foreign_key":
-          case "drop_foreign_key":
-            affectedTableNames.add(op.tableName);
-            break;
-          default: {
-            // Exhaustiveness check: adding a new Operation kind without
-            // handling it here is a compile-time error. The empty-schema
-            // safety net below catches the runtime fallthrough case.
-            const _exhaustive: never = op;
-            void _exhaustive;
-          }
-        }
-      }
-
-      // Scope-reduction is PostgreSQL-only. drizzle-kit honours
-      // `tablesFilter` on PG so its catalog introspection is limited to
-      // the affected tables, which is where the perf win comes from. On
-      // SQLite/MySQL drizzle-kit ignores `tablesFilter` and walks the
-      // full live DB; handing it a scoped schema makes it flag every
-      // un-scoped system table (users, roles, accounts, sessions, ...)
-      // as a drop and fire its rename-detection TUI, crashing non-TTY
-      // boots. The long-term direction (see DrizzleKitLike comment) is
-      // `generateMigration(prev, cur)` which would let us drop this
-      // gating entirely.
-      const scopedSchema: Record<string, unknown> = {};
-      for (const [tableName, tableObj] of Object.entries(drizzleSchema)) {
-        if (affectedTableNames.has(tableName)) {
-          scopedSchema[tableName] = tableObj;
-        }
-      }
-      const effectiveDrizzleSchema =
-        dialect === "postgresql" && Object.keys(scopedSchema).length > 0
-          ? scopedSchema
-          : drizzleSchema;
-
-      // Deferred until the route decision needs it: importing eagerly made
-      // MySQL fail its databaseName precondition even for applies that never
-      // reach drizzle-kit (empty or purely-additive op sets on an adapter
-      // wired without a parseable DATABASE_URL).
-      const getKit = async (): Promise<DrizzleKitLike> =>
-        this.testHooks._kitOverride
-          ? this.testHooks._kitOverride
-          : this.importDrizzleKit(dialect, databaseName);
-
-      const isSqlite = dialect === "sqlite";
-
-      // The lifted foreign keys a failed MySQL apply has to add back (`kitRouteConstraintStatements`).
-      let liftedKeysOwed: string[] = [];
-      const runApply = async (tx: unknown): Promise<number> => {
-        // Route: fast in-memory DDL emission for the common Builder op set
-        // on PostgreSQL (skips drizzle-kit's ~10s catalog re-introspection),
-        // or fall back to drizzle-kit's pushSchema for anything outside
-        // that set. Decided here, from the resolved operations alone, because
-        // the kit route's constraint drops run ahead of every other statement.
-        const useFastPath = canEmitWithoutDrizzleKit(resolvedOps, dialect);
-        logApplyRoute(useFastPath, resolvedOps);
-        // The kit route's checks and foreign keys, which the kit never
-        // applies on PostgreSQL and MySQL. The fast path plans none — its op
-        // set excludes them, and a new table's own come from the emitter.
-        const constraints = useFastPath
-          ? { before: [], after: [], liftRestores: [] }
-          : kitRouteConstraintStatements(
-              resolvedOps,
-              liveSnapshot.tables,
-              dialect
-            );
-        // Resolved BEFORE anything below writes. The import carries MySQL's
-        // `databaseName` precondition, and a refusal after the first DDL would
-        // leave that DDL behind on a dialect that commits it as it runs. The
-        // fast path never needs the kit, so a kit-free apply still never
-        // evaluates the precondition at all.
-        const kit = useFastPath ? undefined : await getKit();
-
-        // A SQLite rebuild on the kit route is made from the runtime tables,
-        // which declare only what the schema tracks. Refused here, before
-        // anything writes, when a table it would rebuild holds a foreign key
-        // or check the schema does not describe — the same question, asked
-        // by the same expressions, that guards a migration's rebuild.
-        if (kit !== undefined && dialect === "sqlite") {
-          await refuseKitRebuildsLosingConstraints(
-            sqliteSessionOf(tx),
-            resolvedOps,
-            desiredSnapshot.tables
-          );
-          refuseRebuildsDroppingTriggers(
-            approvedRebuilds,
-            rebuildLosses,
-            desiredSnapshot.tables
-          );
-        }
-
-        // Pre-cleanup's refusals, asked before the first statement below: on
-        // MySQL every rename, drop and lifted foreign key commits as it runs,
-        // so a resolution refused after them would leave them behind a failed
-        // apply. Snapshot patching for make_optional was already applied above
-        // by patching `desired` before drizzleSchema was built. Aggregate
-        // fields across all collections so a provide_default value is
-        // validated against its field's type.
-        // FieldConfig.name is typed string|undefined (some field types like
-        // row containers have no name); filter to only named fields, which
-        // are the only ones the classifier could have emitted events for.
-        // Aggregate symmetrically with applyMakeOptionalToDesired which
-        // patches collections + singles + components — keeping the two in
-        // sync so a future classifier-on-singles event has field metadata
-        // to validate provide_default values against.
-        // Each tagged with its entity's table, so a fill is judged by the field on the event's own
-        // table.
-        const aggregatedFields: PreCleanupField[] = [
-          ...Object.values(desired.collections),
-          ...Object.values(desired.singles),
-          ...Object.values(desired.components),
-        ].flatMap(c =>
-          c.fields
-            .filter(
-              (f): f is typeof f & { name: string } =>
-                typeof f.name === "string"
+        // Already excluded above, before the operation set was read. Resolutions are keyed to the
+        // candidates and events that set produced, so none of them can reintroduce a locked table.
+        // A Schema Builder relationship this save renames keeps what its old column had: the keys
+        // were planned before the renames were answered, so one its old column never had is taken
+        // back from both the operations and the snapshot the rest of the apply builds from.
+        const { operations: resolvedOps, desired: desiredSnapshot } =
+          withoutKeysOnKeylessRenames(
+            allResolvedOps,
+            snapshotBeforeRenames,
+            liveSnapshot,
+            new Set(
+              Object.values(desired.collections)
+                .filter(c => c.builderOwned === true)
+                .map(c => c.tableName.toLowerCase())
             )
-            .map(f => ({
-              tableName: c.tableName,
-              name: f.name,
-              type: f.type,
-            }))
+          );
+
+        // A column made NOT NULL over rows no answer fills is refused here, before anything runs:
+        // every column the answered plan makes NOT NULL, not only those the classifier raised.
+        await refuseNotNullOverNulls(
+          args,
+          classificationResult,
+          dispatchResult,
+          resolvedOps
         );
-        try {
-          assertPreCleanupAccepted({
-            resolutions: dispatchResult.resolutions,
-            events: classificationResult.events,
-            fields: aggregatedFields,
-            desiredSnapshot,
-            dialect,
-          });
-          // Judged again on the rows as they stand after the prompt, inside this transaction and
-          // before Phase C: on MySQL its renames and drops commit as they run.
-          await assertLiveCounts({
-            tx,
-            resolutions: dispatchResult.resolutions,
-            events: classificationResult.events,
-            operations: resolvedOps,
-            dialect,
-          });
-        } catch (err) {
-          throw preCleanupFailure(err);
-        }
+        // A relationship switched to or from naming several target collections, while a row holds a
+        // value no conversion can carry across; then one switched from many related entries to one,
+        // while a row holds several.
+        // A translated relation's companion is among these (`relationSwitches`), its rows counted
+        // with the main tables'.
+        // A relation renamed and switched at once: the rename carries its values to the new name as
+        // they are, which the switch's conversion, planned for one name, never reaches.
+        refuseSwitchesWithRename({
+          desired: args.desired,
+          operations: resolvedOps,
+          previous: liveWithShapes,
+          next: snapshotBeforeRenames,
+        });
+        await refuseTargetSwitchesOverValues({
+          db: args.db,
+          dialect: args.dialect,
+          desired: args.desired,
+          operations: resolvedOps,
+        });
+        await refuseSeveralReferencesForOne({
+          db: args.db,
+          dialect: args.dialect,
+          desired: args.desired,
+          live: { tables: [...liveSnapshot.tables, ...switches.tables] },
+          operations: resolvedOps,
+        });
+        // A key added over a column that already holds values (a relationship pointed at another
+        // collection, or one an earlier apply left without its key), while a row holds a value its
+        // new target does not have: refused before anything runs, naming the field and its rows.
+        await refuseKeysRowsWouldBreak({
+          db: args.db,
+          dialect: args.dialect,
+          desired: args.desired,
+          live: liveSnapshot,
+          operations: resolvedOps,
+        });
+        // An enum's values narrowed while a row still holds one of them: the
+        // database would refuse the check's re-add after its drop had run, so
+        // the rows are counted and the narrowing named before anything does.
+        await refuseEnumNarrowingsOverRows({
+          db: args.db,
+          dialect: args.dialect,
+          desired: args.desired,
+          operations: resolvedOps,
+        });
 
-        // Phase C: pre-resolution executor runs renames + drops, led by the
-        // kit route's check and foreign-key drops: a constraint still in
-        // place blocks dropping, or on MySQL retyping, a column it names. The
-        // executor runs them after its own refusals, so a refused apply has
-        // changed nothing.
-        const preResExecutor =
-          this.testHooks._executePreResolutionOverride ??
-          executePreResolutionOps;
-        // From here until the batch that adds them back, the keys lifted for a MySQL type change may
-        // be dropped, and MySQL commits the drop as it runs.
-        liftedKeysOwed = constraints.liftRestores;
-        try {
-          await preResExecutor(
-            tx,
-            withoutSqliteDropsLeftToRebuild(resolvedOps, dialect),
-            dialect,
-            [...constraints.before, ...moves.statements]
-          );
-        } catch (err) {
-          // A refusal is not a failed statement. The pre-resolution phase can decline to start —
-          // when the stored values would not survive a conversion, for instance — and that answer
-          // carries the column, the reason and what to do about it. Wrapping it as a DDL failure
-          // replaces all of that with a generic message about a statement that never ran.
-          if (NextlyError.isValidation(err)) throw err;
-          throw new DdlExecutionError(
-            err instanceof Error ? err.message : String(err),
-            err
-          );
-        }
-
-        // Phase D' (F5 PR 4): pre-cleanup executor runs UPDATE/DELETE for
-        // provide_default + delete_nonconforming resolutions, every one of
-        // them already accepted before the first statement above.
-        try {
-          await this.deps.preCleanupExecutor.execute({
-            tx,
-            desiredSnapshot,
-            resolutions: dispatchResult.resolutions,
-            events: classificationResult.events,
-            operations: resolvedOps,
-            fields: aggregatedFields,
-            dialect,
-          });
-        } catch (err) {
-          // PromptCancelledError from abort is not a DDL failure — let it
-          // propagate with its original type so the outer error mapper
-          // classifies it as CONFIRMATION_DECLINED.
-          throw preCleanupFailure(err);
-        }
-
-        // Phase D: pushSchema for purely-additive remainder.
-        // After pre-resolution, the live DB has had its renames + drops
-        // applied INSIDE this transaction. On PostgreSQL we pass `tx` (not
-        // the outer `db`) so drizzle-kit's introspection runs within the
-        // same transaction and SEES the uncommitted pre-resolution changes.
-        // Without this, drizzle-kit's introspection would still see the
-        // old DROP+ADD ambiguity and fire its TTY prompt.
+        // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
         //
-        // SQLite skips db.transaction() per F3 PR-4, so `tx === db` for
-        // SQLite (it's the same handle).
-        //
-        // MySQL must receive the OUTER db: the v1 kit derives its raw
-        // client from `db.$client`, which only exists on the top-level
-        // drizzle instance — MySql2Transaction objects have no $client, so
-        // passing `tx` crashes the shim. That is semantically safe because
-        // MySQL DDL auto-commits: the pre-resolution statements are already
-        // visible to any connection by the time Phase D introspects.
-        //
-        // Phase C (2026-05-01): pass desired-table names to PG drizzle-kit
-        // as `tablesFilter` so its introspection is scoped to just our
-        // managed tables. SQLite/MySQL discard this; their data-loss
-        // safety relies entirely on `filterUnsafeStatements` below.
-        //
-        const desiredTableNames = Object.keys(effectiveDrizzleSchema);
-
-        // Stations 1-7 (diff, rename detect, classifier, prompt,
-        // pre-resolution) are upstream of the route and unaffected by it;
-        // filterUnsafeStatements still runs on the result.
-
-        let emittedStatements: string[];
-        let pushResult: PushSchemaPassResult | undefined;
-        // Statements this apply executed BEFORE drizzle-kit ran (kit-path
-        // add_table pre-creation below) — counted into the journal's
-        // executed total alongside the post-filter batch.
-        let preCreatedStatements = 0;
-        if (kit === undefined) {
-          emittedStatements = emitDdl(resolvedOps, dialect);
-        } else {
-          // v1 kit crash guard (SQLite/MySQL only — PG scopes the kit's
-          // introspection with a tables filter): drizzle-kit v1's differ
-          // sees the WHOLE live DB on these dialects, so any live table
-          // absent from the desired schema (UI-created entities during a
-          // code-first apply, `_locales` companions, the i18n archive)
-          // reads as "deleted". Paired against a "created" table from this
-          // apply, its rename resolver throws `Internal error:
-          // resolver(table) was called without a HintsHandler` before
-          // emitting anything, failing the apply and leaving the new table
-          // uncreated. Creating the planned tables OURSELVES first empties
-          // the differ's created set — nothing to pair, no resolver call —
-          // and the kit then handles only the column-level remainder (it
-          // re-introspects and sees these tables live AND declared).
-          //
-          // On SQLite these CREATEs are not rolled back when the kit pass
-          // then fails: the pipeline runs SQLite outside `db.transaction()`
-          // by design, so `tx === db` here. That is the intended outcome
-          // rather than a gap — the retry's diff re-introspects, no longer
-          // plans `add_table` for them, and the table it finds is the one
-          // this emitter built, which carries the tracked indexes the kit's
-          // own CREATE would have omitted. The journal records the failed
-          // apply without these statements in `statements_executed`, which
-          // counts only a successful pass.
-          if (dialect !== "postgresql") {
-            // A SQLite table rebuilt for a constraint change keeps its dropped
-            // columns for the kit to remove, so its added columns are created
-            // here too: a table the kit sees both lose and gain a column sends
-            // its rename resolver down the same crash as a lost-and-gained
-            // table.
-            const rebuiltForConstraints = sqliteConstraintRebuilds(
-              resolvedOps,
-              dialect
+        // What a drizzle-kit rebuild of a SQLite table would lose that the
+        // desired snapshot does not describe: its UNIQUE constraints, which the
+        // runtime tables then declare, and its triggers, which refuse the
+        // rebuild in `runApply`. Read once, before anything writes, and only on
+        // the route that rebuilds a table from its runtime definition.
+        const renames = renamesOf(resolvedOps);
+        const desiredUnique = desiredUniqueColumns(patchedDesired);
+        // Every table drizzle-kit may rebuild here, the one set the destructive
+        // scan below allows a rebuild for and the trigger refusal reads.
+        const approvedRebuilds = approvedRebuildTables(resolvedOps, dialect);
+        const rebuildLosses: RebuildLosses =
+          dialect === "sqlite" &&
+          !canEmitWithoutDrizzleKit(resolvedOps, dialect)
+            ? await rebuildLossesOf(db, renames, [
+                ...Object.values(patchedDesired.collections).map(
+                  c => c.tableName
+                ),
+                ...Object.values(patchedDesired.singles).map(s => s.tableName),
+                ...approvedRebuilds,
+              ])
+            : new Map();
+        const drizzleSchema = this.testHooks._buildDrizzleSchemaOverride
+          ? this.testHooks._buildDrizzleSchemaOverride(patchedDesired, dialect)
+          : this.buildDrizzleSchema(
+              patchedDesired,
+              dialect,
+              fieldGroupTypeColumns,
+              fieldGroupRegistryTable,
+              desiredSnapshot,
+              tableName =>
+                uniqueColumnsToKeep(
+                  tableName,
+                  rebuildLosses.get(tableName.toLowerCase())?.unique ?? [],
+                  renames,
+                  desiredUnique
+                ),
+              // Asked only where drizzle-kit may run and the runtime tables are
+              // built here: the fast path emits from this apply's own operations
+              // and never reads the media table. A catalogue read, which cannot
+              // abort the PostgreSQL transaction it may be in.
+              canEmitWithoutDrizzleKit(resolvedOps, dialect)
+                ? false
+                : await hasRetiredSizesColumn(db, dialect)
             );
-            const preCreateOps = resolvedOps.filter(
-              op =>
-                op.type === "add_table" ||
-                (op.type === "add_column" &&
-                  rebuiltForConstraints.has(op.tableName.toLowerCase()))
-            );
-            if (preCreateOps.length > 0) {
-              // This branch runs for tables the routing decision may have
-              // REJECTED, so it cannot emit them verbatim: a MySQL UNIQUE
-              // index over a TEXT/BLOB column is exactly what sent such an
-              // apply here, and emitting it would reinstate the prefix
-              // uniqueness that decision existed to avoid. The table body is
-              // still pre-created (that is the crash guard); drizzle-kit adds
-              // the stripped index from its own introspection.
-              const createStatements = emitDdl(
-                preCreateOps.map(op => withoutUnemittableIndexes(op, dialect)),
-                dialect
-              );
-              try {
-                await this.deps.executor.executeStatements(
-                  tx,
-                  createStatements
-                );
-              } catch (err) {
-                throw new DdlExecutionError(
-                  err instanceof Error ? err.message : String(err),
-                  err
-                );
-              }
-              preCreatedStatements = createStatements.length;
+
+        // Scope drizzleSchema down to the table(s) actually touched by
+        // resolvedOps. Without this, a Builder save that touches one
+        // collection still forces drizzle-kit to introspect every managed
+        // table inside the pinned transaction (~14 pg_catalog queries per
+        // table per call, which dominates wall-time on a high-RTT pooled
+        // connection like Neon).
+        //
+        // Single-table assumption: we don't walk FK closure today because
+        // Builder operations are effectively single-table — if a future
+        // change ever crosses managed-table FKs the safety net below falls
+        // back to the full schema and drizzle-kit will resolve as before.
+        const affectedTableNames = new Set<string>();
+        for (const op of resolvedOps) {
+          switch (op.type) {
+            case "add_table":
+              affectedTableNames.add(op.table.name);
+              break;
+            case "rename_table":
+              // After pre-resolution the live DB and desired snapshot both
+              // carry the new name — scope by `toName`.
+              affectedTableNames.add(op.toName);
+              break;
+            case "drop_table":
+              // Already applied by pre-resolution; not in drizzleSchema.
+              break;
+            case "add_column":
+            case "drop_column":
+            case "rename_column":
+            case "change_column_type":
+            case "change_column_nullable":
+            case "change_column_default":
+            case "change_foreign_key_action":
+            case "add_index":
+            case "drop_index":
+            case "add_check":
+            case "drop_check":
+            case "add_foreign_key":
+            case "drop_foreign_key":
+              affectedTableNames.add(op.tableName);
+              break;
+            default: {
+              // Exhaustiveness check: adding a new Operation kind without
+              // handling it here is a compile-time error. The empty-schema
+              // safety net below catches the runtime fallthrough case.
+              const _exhaustive: never = op;
+              void _exhaustive;
             }
           }
-          try {
-            // withCapturedStdout reroutes any chatter drizzle-kit writes to
-            // process.stdout/stderr so it doesn't leak into the dev console.
-            // The sink only forwards when DEBUG_SCHEMA=1 — see
-            // stdout-capture.ts for the scope-caveat (sync-return path).
-            //
-            // v1 note: if the kit's differ manufactures a drop+add rename
-            // ambiguity (partial schema, scope mismatch), its resolver throws
-            // `Internal error: resolver(...) without a HintsHandler` — the
-            // catch below converts that into a journaled PushSchemaError
-            // instead of the pre-v1 unanswerable TTY prompt.
-            pushResult = await withCapturedStdout(
-              () =>
-                kit.pushSchema(
-                  effectiveDrizzleSchema,
-                  dialect === "mysql" ? db : tx,
-                  desiredTableNames
-                ),
-              process.env.DEBUG_SCHEMA === "1"
-                ? { debug: (msg: string) => consoleLogger.debug(msg) }
-                : undefined
+        }
+        // What a busy-table report names as the table waited for: the one this plan changes, where
+        // it changes one.
+        waitedTable =
+          affectedTableNames.size === 1 ? [...affectedTableNames][0] : null;
+
+        // Scope-reduction is PostgreSQL-only. drizzle-kit honours
+        // `tablesFilter` on PG so its catalog introspection is limited to
+        // the affected tables, which is where the perf win comes from. On
+        // SQLite/MySQL drizzle-kit ignores `tablesFilter` and walks the
+        // full live DB; handing it a scoped schema makes it flag every
+        // un-scoped system table (users, roles, accounts, sessions, ...)
+        // as a drop and fire its rename-detection TUI, crashing non-TTY
+        // boots. The long-term direction (see DrizzleKitLike comment) is
+        // `generateMigration(prev, cur)` which would let us drop this
+        // gating entirely.
+        const scopedSchema: Record<string, unknown> = {};
+        for (const [tableName, tableObj] of Object.entries(drizzleSchema)) {
+          if (affectedTableNames.has(tableName)) {
+            scopedSchema[tableName] = tableObj;
+          }
+        }
+        const effectiveDrizzleSchema =
+          dialect === "postgresql" && Object.keys(scopedSchema).length > 0
+            ? scopedSchema
+            : drizzleSchema;
+
+        // Deferred until the route decision needs it: importing eagerly made
+        // MySQL fail its databaseName precondition even for applies that never
+        // reach drizzle-kit (empty or purely-additive op sets on an adapter
+        // wired without a parseable DATABASE_URL).
+        const getKit = async (): Promise<DrizzleKitLike> =>
+          this.testHooks._kitOverride
+            ? this.testHooks._kitOverride
+            : this.importDrizzleKit(dialect, databaseName);
+
+        const isSqlite = dialect === "sqlite";
+
+        // The lifted foreign keys a failed MySQL apply has to add back (`kitRouteConstraintStatements`).
+        let liftedKeysOwed: string[] = [];
+        const runApply = async (tx: unknown): Promise<number> => {
+          // Route: fast in-memory DDL emission for the common Builder op set
+          // on PostgreSQL (skips drizzle-kit's ~10s catalog re-introspection),
+          // or fall back to drizzle-kit's pushSchema for anything outside
+          // that set. Decided here, from the resolved operations alone, because
+          // the kit route's constraint drops run ahead of every other statement.
+          const useFastPath = canEmitWithoutDrizzleKit(resolvedOps, dialect);
+          logApplyRoute(useFastPath, resolvedOps);
+          // The kit route's checks and foreign keys, which the kit never
+          // applies on PostgreSQL and MySQL. The fast path plans none — its op
+          // set excludes them, and a new table's own come from the emitter.
+          const constraints = useFastPath
+            ? { before: [], after: [], liftRestores: [] }
+            : kitRouteConstraintStatements(
+                resolvedOps,
+                liveSnapshot.tables,
+                dialect
+              );
+          // Resolved BEFORE anything below writes. The import carries MySQL's
+          // `databaseName` precondition, and a refusal after the first DDL would
+          // leave that DDL behind on a dialect that commits it as it runs. The
+          // fast path never needs the kit, so a kit-free apply still never
+          // evaluates the precondition at all.
+          const kit = useFastPath ? undefined : await getKit();
+
+          // A SQLite rebuild on the kit route is made from the runtime tables,
+          // which declare only what the schema tracks. Refused here, before
+          // anything writes, when a table it would rebuild holds a foreign key
+          // or check the schema does not describe — the same question, asked
+          // by the same expressions, that guards a migration's rebuild.
+          if (kit !== undefined && dialect === "sqlite") {
+            await refuseKitRebuildsLosingConstraints(
+              sqliteSessionOf(tx),
+              resolvedOps,
+              desiredSnapshot.tables
             );
+            refuseRebuildsDroppingTriggers(
+              approvedRebuilds,
+              rebuildLosses,
+              desiredSnapshot.tables
+            );
+          }
+
+          // Pre-cleanup's refusals, asked before the first statement below: on
+          // MySQL every rename, drop and lifted foreign key commits as it runs,
+          // so a resolution refused after them would leave them behind a failed
+          // apply. Snapshot patching for make_optional was already applied above
+          // by patching `desired` before drizzleSchema was built. Aggregate
+          // fields across all collections so a provide_default value is
+          // validated against its field's type.
+          // FieldConfig.name is typed string|undefined (some field types like
+          // row containers have no name); filter to only named fields, which
+          // are the only ones the classifier could have emitted events for.
+          // Aggregate symmetrically with applyMakeOptionalToDesired which
+          // patches collections + singles + components — keeping the two in
+          // sync so a future classifier-on-singles event has field metadata
+          // to validate provide_default values against.
+          // Each tagged with its entity's table, so a fill is judged by the field on the event's own
+          // table.
+          const aggregatedFields: PreCleanupField[] = [
+            ...Object.values(desired.collections),
+            ...Object.values(desired.singles),
+            ...Object.values(desired.components),
+          ].flatMap(c =>
+            c.fields
+              .filter(
+                (f): f is typeof f & { name: string } =>
+                  typeof f.name === "string"
+              )
+              .map(f => ({
+                tableName: c.tableName,
+                name: f.name,
+                type: f.type,
+              }))
+          );
+          try {
+            assertPreCleanupAccepted({
+              resolutions: dispatchResult.resolutions,
+              events: classificationResult.events,
+              fields: aggregatedFields,
+              desiredSnapshot,
+              dialect,
+            });
+            // Judged again on the rows as they stand after the prompt, inside this transaction and
+            // before Phase C: on MySQL its renames and drops commit as they run.
+            await assertLiveCounts({
+              tx,
+              resolutions: dispatchResult.resolutions,
+              events: classificationResult.events,
+              operations: resolvedOps,
+              dialect,
+            });
           } catch (err) {
-            throw new PushSchemaError(
+            throw preCleanupFailure(err);
+          }
+
+          // Phase C: pre-resolution executor runs renames + drops, led by the
+          // kit route's check and foreign-key drops: a constraint still in
+          // place blocks dropping, or on MySQL retyping, a column it names. The
+          // executor runs them after its own refusals, so a refused apply has
+          // changed nothing.
+          const preResExecutor =
+            this.testHooks._executePreResolutionOverride ??
+            executePreResolutionOps;
+          // From here until the batch that adds them back, the keys lifted for a MySQL type change may
+          // be dropped, and MySQL commits the drop as it runs.
+          liftedKeysOwed = constraints.liftRestores;
+          try {
+            const leading = [...constraints.before, ...moves.statements];
+            // Counted as each statement finishes: on MySQL and SQLite each commits as it runs, so a
+            // try that ends waiting part-way names the ones that stay applied.
+            let told = 0;
+            const preResolved = await preResExecutor(
+              tx,
+              withoutSqliteDropsLeftToRebuild(resolvedOps, dialect),
+              dialect,
+              leading,
+              () => {
+                told += 1;
+                finishedThisTry += 1;
+              }
+            );
+            // An executor that does not tell each one (a stand-in) is counted once it returns, as
+            // it reports itself: each rename or drop once.
+            finishedThisTry += Math.max(0, leading.length + preResolved - told);
+          } catch (err) {
+            // A refusal is not a failed statement. The pre-resolution phase can decline to start —
+            // when the stored values would not survive a conversion, for instance — and that answer
+            // carries the column, the reason and what to do about it. Wrapping it as a DDL failure
+            // replaces all of that with a generic message about a statement that never ran.
+            if (NextlyError.isValidation(err)) throw err;
+            throw new DdlExecutionError(
               err instanceof Error ? err.message : String(err),
               err
             );
           }
-          // The kit reads every live index on a declared table as
-          // undeclared (its runtime schemas carry none) and emits DROP
-          // INDEX for it even on a no-op. An index the desired snapshot
-          // TRACKS is only ever dropped by our own diff's drop_index op,
-          // so the kit's drops of tracked indexes are stripped here —
-          // otherwise a kit-path apply would shed the canonical indexes
-          // of every managed table it did not rebuild.
-          const stripped = stripKitDropsOfDeclaredIndexes(
-            pushResult.sqlStatements,
-            desiredSnapshot,
-            liveIndexesStandingInForDeclared(
-              desiredSnapshot.tables,
-              liveSnapshot.tables
-            )
-          );
-          // Likewise the declared checks and foreign keys, which the kit's
-          // runtime tables do not carry on PostgreSQL and MySQL either.
-          // And a key this apply drops itself once its replacement is added (`afterReplacement`):
-          // the kit, reading it live and undeclared, would drop it ahead of that replacement.
-          const keptConstraints = stripKitDropsOfDeclaredConstraints(
-            stripped.kept,
-            {
-              tables: [
-                ...desiredSnapshot.tables,
-                ...resolvedOps.flatMap(op =>
-                  op.type === "drop_foreign_key" && op.afterReplacement === true
-                    ? [{ name: op.tableName, foreignKeys: [op.foreignKey] }]
-                    : []
-                ),
-              ],
+
+          // Phase D' (F5 PR 4): pre-cleanup executor runs UPDATE/DELETE for
+          // provide_default + delete_nonconforming resolutions, every one of
+          // them already accepted before the first statement above.
+          try {
+            await this.deps.preCleanupExecutor.execute({
+              tx,
+              desiredSnapshot,
+              resolutions: dispatchResult.resolutions,
+              events: classificationResult.events,
+              operations: resolvedOps,
+              fields: aggregatedFields,
+              dialect,
+            });
+          } catch (err) {
+            // PromptCancelledError from abort is not a DDL failure — let it
+            // propagate with its original type so the outer error mapper
+            // classifies it as CONFIRMATION_DECLINED.
+            throw preCleanupFailure(err);
+          }
+
+          // Phase D: pushSchema for purely-additive remainder.
+          // After pre-resolution, the live DB has had its renames + drops
+          // applied INSIDE this transaction. On PostgreSQL we pass `tx` (not
+          // the outer `db`) so drizzle-kit's introspection runs within the
+          // same transaction and SEES the uncommitted pre-resolution changes.
+          // Without this, drizzle-kit's introspection would still see the
+          // old DROP+ADD ambiguity and fire its TTY prompt.
+          //
+          // SQLite skips db.transaction() per F3 PR-4, so `tx === db` for
+          // SQLite (it's the same handle).
+          //
+          // MySQL must receive the OUTER db: the v1 kit derives its raw
+          // client from `db.$client`, which only exists on the top-level
+          // drizzle instance — MySql2Transaction objects have no $client, so
+          // passing `tx` crashes the shim. That is semantically safe because
+          // MySQL DDL auto-commits: the pre-resolution statements are already
+          // visible to any connection by the time Phase D introspects.
+          //
+          // Phase C (2026-05-01): pass desired-table names to PG drizzle-kit
+          // as `tablesFilter` so its introspection is scoped to just our
+          // managed tables. SQLite/MySQL discard this; their data-loss
+          // safety relies entirely on `filterUnsafeStatements` below.
+          //
+          const desiredTableNames = Object.keys(effectiveDrizzleSchema);
+
+          // Stations 1-7 (diff, rename detect, classifier, prompt,
+          // pre-resolution) are upstream of the route and unaffected by it;
+          // filterUnsafeStatements still runs on the result.
+
+          let emittedStatements: string[];
+          let pushResult: PushSchemaPassResult | undefined;
+          // Statements this apply executed BEFORE drizzle-kit ran (kit-path
+          // add_table pre-creation below) — counted into the journal's
+          // executed total alongside the post-filter batch.
+          let preCreatedStatements = 0;
+          if (kit === undefined) {
+            emittedStatements = emitDdl(resolvedOps, dialect);
+          } else {
+            // v1 kit crash guard (SQLite/MySQL only — PG scopes the kit's
+            // introspection with a tables filter): drizzle-kit v1's differ
+            // sees the WHOLE live DB on these dialects, so any live table
+            // absent from the desired schema (UI-created entities during a
+            // code-first apply, `_locales` companions, the i18n archive)
+            // reads as "deleted". Paired against a "created" table from this
+            // apply, its rename resolver throws `Internal error:
+            // resolver(table) was called without a HintsHandler` before
+            // emitting anything, failing the apply and leaving the new table
+            // uncreated. Creating the planned tables OURSELVES first empties
+            // the differ's created set — nothing to pair, no resolver call —
+            // and the kit then handles only the column-level remainder (it
+            // re-introspects and sees these tables live AND declared).
+            //
+            // On SQLite these CREATEs are not rolled back when the kit pass
+            // then fails: the pipeline runs SQLite outside `db.transaction()`
+            // by design, so `tx === db` here. That is the intended outcome
+            // rather than a gap — the retry's diff re-introspects, no longer
+            // plans `add_table` for them, and the table it finds is the one
+            // this emitter built, which carries the tracked indexes the kit's
+            // own CREATE would have omitted. The journal records the failed
+            // apply without these statements in `statements_executed`, which
+            // counts only a successful pass.
+            if (dialect !== "postgresql") {
+              // A SQLite table rebuilt for a constraint change keeps its dropped
+              // columns for the kit to remove, so its added columns are created
+              // here too: a table the kit sees both lose and gain a column sends
+              // its rename resolver down the same crash as a lost-and-gained
+              // table.
+              const rebuiltForConstraints = sqliteConstraintRebuilds(
+                resolvedOps,
+                dialect
+              );
+              const preCreateOps = resolvedOps.filter(
+                op =>
+                  op.type === "add_table" ||
+                  (op.type === "add_column" &&
+                    rebuiltForConstraints.has(op.tableName.toLowerCase()))
+              );
+              if (preCreateOps.length > 0) {
+                // This branch runs for tables the routing decision may have
+                // REJECTED, so it cannot emit them verbatim: a MySQL UNIQUE
+                // index over a TEXT/BLOB column is exactly what sent such an
+                // apply here, and emitting it would reinstate the prefix
+                // uniqueness that decision existed to avoid. The table body is
+                // still pre-created (that is the crash guard); drizzle-kit adds
+                // the stripped index from its own introspection.
+                const createStatements = emitDdl(
+                  preCreateOps.map(op =>
+                    withoutUnemittableIndexes(op, dialect)
+                  ),
+                  dialect
+                );
+                try {
+                  await executor.executeStatements(tx, createStatements);
+                } catch (err) {
+                  throw new DdlExecutionError(
+                    err instanceof Error ? err.message : String(err),
+                    err
+                  );
+                }
+                preCreatedStatements = createStatements.length;
+              }
             }
-          );
-          // And the live UNIQUE constraints no spec describes, which only
-          // this apply's own drop_index removes (a Builder one-to-one's).
-          const keptUniques = stripKitDropsOfLiveUniqueConstraints(
-            keptConstraints.kept,
-            liveUniqueConstraintsToKeep(
-              liveSnapshot,
-              resolvedOps,
-              renames,
-              desiredUnique
-            )
-          );
-          // A SQLite rebuild this apply never asked for that only copies a
-          // table onto itself (a column DEFAULT an earlier release did not
-          // write, say) is left out rather than refusing the whole apply.
-          // Every other unapproved rebuild stays for the destructive scan
-          // below, which still refuses it.
-          const copyOnly =
-            dialect === "sqlite"
-              ? withoutCopyOnlyRebuilds(
-                  keptUniques.kept,
-                  approvedRebuilds,
-                  table => liveTableForCopyRule(liveSnapshot, table)
-                )
-              : { kept: keptUniques.kept, skipped: [] };
-          for (const table of copyOnly.skipped) {
-            consoleLogger.warn(
-              `[Nextly schema] Left out drizzle-kit's rebuild of "${table}": ` +
-                `it copies every column and row onto the same columns and this ` +
-                `apply changes nothing on that table, so the table stays as it is.`
-            );
-          }
-          emittedStatements = copyOnly.kept;
-          if (keptUniques.strippedCount > 0) {
-            consoleLogger.debug(
-              `[Nextly schema] Kept ${keptUniques.strippedCount} live unique ` +
-                `constraint(s) drizzle-kit emitted a drop for (only a ` +
-                `drop_index operation removes one).`
-            );
-          }
-          if (stripped.strippedCount > 0) {
-            // Once per apply, not per statement: enough to see the guard
-            // acted without turning a routine emission into log noise.
-            consoleLogger.debug(
-              `[Nextly schema] Kept ${stripped.strippedCount} tracked index(es) ` +
-                `drizzle-kit emitted a DROP INDEX for (they are declared in the ` +
-                `desired schema; only a drop_index operation removes one).`
-            );
-          }
-          if (keptConstraints.strippedCount > 0) {
-            consoleLogger.debug(
-              `[Nextly schema] Kept ${keptConstraints.strippedCount} declared ` +
-                `check or foreign-key element(s) drizzle-kit emitted a drop for ` +
-                `(only a drop_check or drop_foreign_key operation removes one).`
-            );
-          }
-        }
-        // Safety net, v1 semantics (observed on all three dialects,
-        // 2026-07): drizzle-kit now INCLUDES destructive statements in
-        // sqlStatements with EMPTY hints — the pre-v1 "omit + warn"
-        // contract is gone (that omission caused three false-success
-        // applies on a live site: rext-site-v2 / `dc_case_studies`,
-        // May 2026). Every user-approved destructive op has already run
-        // in the pre-resolution phase, so anything destructive emitted
-        // here means the emitter disagrees with our differ — never
-        // execute it; fail the apply so the journal records failure.
-        //
-        // Properties of this scan:
-        //   - It runs on BOTH routes (fast path and kit path), so the
-        //     guarantee never depends on FAST_PATH_OP_TYPES staying
-        //     drop-free forever.
-        //   - It scans the RAW kit output (`emittedStatements`) BEFORE
-        //     filterUnsafeStatements, restricted to MANAGED tables (the
-        //     desired schema). Scanning the post-filter remainder would make
-        //     the guarantee depend on the filter having correctly stripped
-        //     every orphan drop first; a filter bug that mis-classified a
-        //     managed-table drop as an orphan would then hide it from the
-        //     scan. Identifying orphans here by table membership instead —
-        //     drops of tables outside the desired schema are the EXPECTED
-        //     emission the filter handles separately — keeps the
-        //     destructive-on-managed guard independent of the filter. `safe`
-        //     is still what actually executes.
-        //   - On a UI save, locked tables are removed from the managed set
-        //     rather than the scan being moved after the lock filter. Keeping
-        //     the scan on the raw output preserves the independence above; the
-        //     narrowing is sound because a locked table's statements are
-        //     dropped unconditionally and can never execute, so this apply is
-        //     not the thing that would be destroying them.
-        // Rebuild blocks are only trusted for tables where OUR diff
-        // approved a rebuild-justifying change — a rebuild on any other
-        // table is the kit encoding a column drop we never approved
-        // (rc.4 emits exactly that shape; probe-verified).
-        const allowedRebuildTables = approvedRebuilds;
-        // Tables this apply is answerable for. On a UI save the locked ones are
-        // excluded: their statements are dropped below and never execute, so
-        // holding the apply to account for destructive DDL on them would let
-        // pre-existing drift in a code-first table block saving an unrelated
-        // builder-owned entity. Everything still executed stays in scope.
-        const lockedForThisApply =
-          source === "ui" ? lockedTableNames(desired) : new Set<string>();
-        const managedTables = new Set(
-          desiredTableNames
-            .map(t => t.toLowerCase())
-            .filter(t => !lockedForThisApply.has(t))
-        );
-        // Only drizzle-kit's output goes through the orphan filter. That
-        // filter answers "did the kit propose dropping something we never
-        // asked about?", and it identifies an index's owner from the
-        // suffix-style names the kit produces (`<table>_<col>_idx`). Nextly's
-        // own indexes are named `idx_<table>_<col>` / `uq_<table>_<col>`, for
-        // which that inference finds no owner and the drop is blocked — so
-        // running it over the fast path's statements would silently discard a
-        // `drop_index` this pipeline's own diff planned and the apply would
-        // report success with the index still in place. Fast-path SQL is
-        // emitted from those approved operations, so there is no orphan to
-        // find; the destructive scan and the lock filter below still apply to
-        // both routes.
-        // Plugin-migrated tables are never dropped by dev push, whatever the
-        // desired set says: their removal is a decision for the plugin's
-        // migrations or `nextly plugins uninstall`, not a reload's side
-        // effect. The kit route enforces this inside
-        // filterUnsafeStatements; the fast path bypasses that filter (its
-        // statements come from approved operations), so it gets the same
-        // refusal applied directly to its drops.
-        //
-        // Read through `tx`, the handle this apply runs on. On PostgreSQL and
-        // MySQL that is the apply's own transaction, so the registry read
-        // stays on its connection instead of taking a second one from the
-        // pool while the transaction is open. On SQLite, which applies with
-        // no transaction, `tx` is the database handle itself.
-        const pluginMigrated = await pluginMigratedTableSet(tx, dialect);
-        const unlocked = useFastPath
-          ? pluginMigrated
-            ? emittedStatements.filter(
-                statement =>
-                  !dropsPluginMigratedTable(statement, pluginMigrated, dialect)
-              )
-            : emittedStatements
-          : filterUnsafeStatements(
-              emittedStatements,
-              desiredTableNames,
-              pluginMigrated,
-              dialect
-            );
-        // Op-level lock filtering covers what this pipeline decided to do, but
-        // drizzle-kit re-derives drift from the full desired schema, so on the
-        // kit path it can still emit DDL for a locked table. Scope reduction
-        // only narrows that on PostgreSQL — SQLite and MySQL ignore
-        // tablesFilter entirely — so the guarantee is enforced here, on the
-        // statements themselves, where it holds for every dialect.
-        const { kept: safe, skipped: skippedLockedStatements } =
-          excludeLockedTableStatements(unlocked, lockedForThisApply);
-        logSkippedLockedStatements(skippedLockedStatements);
-        const unexpectedDestructive = findUnexpectedDestructiveStatements(
-          emittedStatements,
-          allowedRebuildTables,
-          managedTables
-        );
-        if (unexpectedDestructive.length > 0) {
-          throw new PushSchemaError(
-            `schema emitter produced ${unexpectedDestructive.length} ` +
-              `destructive statement(s) on the purely-additive ` +
-              `remainder. The schema was NOT applied. Statements: ` +
-              unexpectedDestructive.join("; ")
-          );
-        }
-
-        if (pushResult) {
-          // Secondary tripwire: hints were empty in every observed rc.4
-          // scenario. If one ever appears here, the kit's semantics
-          // changed underneath us — fail loudly rather than ignore an
-          // uninterpreted signal.
-          if (pushResult.hints.length > 0) {
-            throw new PushSchemaError(
-              `drizzle-kit returned ${pushResult.hints.length} hint(s) on ` +
-                `the purely-additive remainder — uninterpreted signal, ` +
-                `refusing to apply: ` +
-                pushResult.hints
-                  .map(h => h.hint + (h.statement ? ` [${h.statement}]` : ""))
-                  .join("; ")
-            );
-          }
-        }
-
-        // Appended to the same batch so they run after the table changes they
-        // index. On PG and MySQL that batch is transactional; SQLite runs
-        // without a transaction by design, so a failing restore there is
-        // reported but the rebuild it followed has already landed.
-        //
-        // The ops are handed over ONLY on the kit route: the restore's
-        // ops-replay exists because drizzle-kit never creates dynamic-table
-        // indexes, but the fast path emits every add_index itself, so
-        // replaying them would issue the same CREATE INDEX twice — fatal on
-        // MySQL, which has no IF NOT EXISTS for indexes.
-        const restore = indexRestoreStatements(
-          desiredSnapshot,
-          dialect,
-          safe,
-          useFastPath ? [] : resolvedOps
-        );
-        try {
-          await this.deps.executor.executeStatements(tx, [
-            ...safe,
-            ...restore,
-            ...constraints.after,
-          ]);
-          liftedKeysOwed = [];
-        } catch (err) {
-          throw new DdlExecutionError(
-            err instanceof Error ? err.message : String(err),
-            err
-          );
-        }
-
-        // `safe.length` plus the kit-path pre-created statements, not the
-        // executed length: this number is the journal's
-        // `statements_executed`, read against `statements_planned` from the
-        // diff. The restore statements were never planned, so counting them
-        // would report a mismatch on every apply that had to put an index
-        // back; the pre-created CREATEs WERE planned (add_table ops) and
-        // executed, so they count.
-        //
-        // On PostgreSQL the commit is what lands the apply: refused, and the
-        // transaction undone, as a statement is, so a run that lost the schema
-        // lock while its last statement ran changes nothing. MySQL's DDL has
-        // committed as it ran, and SQLite runs without a transaction, so there
-        // a refusal here would report an apply that already landed.
-        if (dialect === "postgresql") await assertSchemaLockHeld();
-        return (
-          safe.length +
-          preCreatedStatements +
-          constraints.before.length +
-          constraints.after.length
-        );
-      };
-
-      let statementsExecuted: number;
-
-      if (isSqlite) {
-        // SQLite: skip db.transaction() per F3 PR-4 (PRAGMA-vs-tx
-        // compatibility), and apply under SQLite's schema-change contract —
-        // the same one a migration runs under: foreign keys off for the
-        // whole apply, so a table rebuild cannot cascade into the rows of
-        // tables that reference it, then `PRAGMA foreign_key_check` once
-        // every statement has run, and the previous setting restored.
-        //
-        // With no transaction there is nothing to roll back: a refusal here
-        // reports an apply that has already landed, so the operator learns
-        // which references are dangling instead of the push reading as clean.
-        const session = sqliteSessionOf(db);
-        statementsExecuted = await withSqliteForeignKeysOff(
-          session,
-          async () => {
             try {
-              return await refusingNewDanglingReferences(
-                session,
-                () => runApply(db),
-                (count, pairs) =>
-                  `This schema change left ${String(count)} row(s) referencing rows that do not exist (${pairs}). SQLite applies a dev push without a transaction, so the change is in place: remove or repair those rows.`
+              // withCapturedStdout reroutes any chatter drizzle-kit writes to
+              // process.stdout/stderr so it doesn't leak into the dev console.
+              // The sink only forwards when DEBUG_SCHEMA=1 — see
+              // stdout-capture.ts for the scope-caveat (sync-return path).
+              //
+              // v1 note: if the kit's differ manufactures a drop+add rename
+              // ambiguity (partial schema, scope mismatch), its resolver throws
+              // `Internal error: resolver(...) without a HintsHandler` — the
+              // catch below converts that into a journaled PushSchemaError
+              // instead of the pre-v1 unanswerable TTY prompt.
+              pushResult = await withCapturedStdout(
+                () =>
+                  kit.pushSchema(
+                    effectiveDrizzleSchema,
+                    dialect === "mysql" ? db : tx,
+                    desiredTableNames
+                  ),
+                process.env.DEBUG_SCHEMA === "1"
+                  ? { debug: (msg: string) => consoleLogger.debug(msg) }
+                  : undefined
               );
             } catch (err) {
-              // Only the reference check's own refusal is re-classified;
-              // anything `runApply` threw keeps the type it was thrown with.
-              if (
-                err instanceof NextlyError &&
-                err.code === "NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION"
-              ) {
-                throw new DdlExecutionError(err.message, err);
+              throw new PushSchemaError(
+                err instanceof Error ? err.message : String(err),
+                err
+              );
+            }
+            // The kit reads every live index on a declared table as
+            // undeclared (its runtime schemas carry none) and emits DROP
+            // INDEX for it even on a no-op. An index the desired snapshot
+            // TRACKS is only ever dropped by our own diff's drop_index op,
+            // so the kit's drops of tracked indexes are stripped here —
+            // otherwise a kit-path apply would shed the canonical indexes
+            // of every managed table it did not rebuild.
+            const stripped = stripKitDropsOfDeclaredIndexes(
+              pushResult.sqlStatements,
+              desiredSnapshot,
+              liveIndexesStandingInForDeclared(
+                desiredSnapshot.tables,
+                liveSnapshot.tables
+              )
+            );
+            // Likewise the declared checks and foreign keys, which the kit's
+            // runtime tables do not carry on PostgreSQL and MySQL either.
+            // And a key this apply drops itself once its replacement is added (`afterReplacement`):
+            // the kit, reading it live and undeclared, would drop it ahead of that replacement.
+            const keptConstraints = stripKitDropsOfDeclaredConstraints(
+              stripped.kept,
+              {
+                tables: [
+                  ...desiredSnapshot.tables,
+                  ...resolvedOps.flatMap(op =>
+                    op.type === "drop_foreign_key" &&
+                    op.afterReplacement === true
+                      ? [{ name: op.tableName, foreignKeys: [op.foreignKey] }]
+                      : []
+                  ),
+                ],
               }
-              throw err;
+            );
+            // And the live UNIQUE constraints no spec describes, which only
+            // this apply's own drop_index removes (a Builder one-to-one's).
+            const keptUniques = stripKitDropsOfLiveUniqueConstraints(
+              keptConstraints.kept,
+              liveUniqueConstraintsToKeep(
+                liveSnapshot,
+                resolvedOps,
+                renames,
+                desiredUnique
+              )
+            );
+            // A SQLite rebuild this apply never asked for that only copies a
+            // table onto itself (a column DEFAULT an earlier release did not
+            // write, say) is left out rather than refusing the whole apply.
+            // Every other unapproved rebuild stays for the destructive scan
+            // below, which still refuses it.
+            const copyOnly =
+              dialect === "sqlite"
+                ? withoutCopyOnlyRebuilds(
+                    keptUniques.kept,
+                    approvedRebuilds,
+                    table => liveTableForCopyRule(liveSnapshot, table)
+                  )
+                : { kept: keptUniques.kept, skipped: [] };
+            for (const table of copyOnly.skipped) {
+              consoleLogger.warn(
+                `[Nextly schema] Left out drizzle-kit's rebuild of "${table}": ` +
+                  `it copies every column and row onto the same columns and this ` +
+                  `apply changes nothing on that table, so the table stays as it is.`
+              );
+            }
+            emittedStatements = copyOnly.kept;
+            if (keptUniques.strippedCount > 0) {
+              consoleLogger.debug(
+                `[Nextly schema] Kept ${keptUniques.strippedCount} live unique ` +
+                  `constraint(s) drizzle-kit emitted a drop for (only a ` +
+                  `drop_index operation removes one).`
+              );
+            }
+            if (stripped.strippedCount > 0) {
+              // Once per apply, not per statement: enough to see the guard
+              // acted without turning a routine emission into log noise.
+              consoleLogger.debug(
+                `[Nextly schema] Kept ${stripped.strippedCount} tracked index(es) ` +
+                  `drizzle-kit emitted a DROP INDEX for (they are declared in the ` +
+                  `desired schema; only a drop_index operation removes one).`
+              );
+            }
+            if (keptConstraints.strippedCount > 0) {
+              consoleLogger.debug(
+                `[Nextly schema] Kept ${keptConstraints.strippedCount} declared ` +
+                  `check or foreign-key element(s) drizzle-kit emitted a drop for ` +
+                  `(only a drop_check or drop_foreign_key operation removes one).`
+              );
             }
           }
-        );
-      } else {
-        // PG / MySQL: db.transaction() for atomicity (PG only; MySQL DDL
-        // is auto-committed regardless. F15 adds MySQL pre-flight).
-        const txFn: DbTransactionRunner = this.testHooks._txOverride
-          ? this.testHooks._txOverride
-          : this.makeTransactionRunner(db);
-        try {
-          statementsExecuted = await txFn(runApply);
-        } catch (err) {
-          await this.restoreLiftedKeys(db, liftedKeysOwed);
-          throw err;
+          // Safety net, v1 semantics (observed on all three dialects,
+          // 2026-07): drizzle-kit now INCLUDES destructive statements in
+          // sqlStatements with EMPTY hints — the pre-v1 "omit + warn"
+          // contract is gone (that omission caused three false-success
+          // applies on a live site: rext-site-v2 / `dc_case_studies`,
+          // May 2026). Every user-approved destructive op has already run
+          // in the pre-resolution phase, so anything destructive emitted
+          // here means the emitter disagrees with our differ — never
+          // execute it; fail the apply so the journal records failure.
+          //
+          // Properties of this scan:
+          //   - It runs on BOTH routes (fast path and kit path), so the
+          //     guarantee never depends on FAST_PATH_OP_TYPES staying
+          //     drop-free forever.
+          //   - It scans the RAW kit output (`emittedStatements`) BEFORE
+          //     filterUnsafeStatements, restricted to MANAGED tables (the
+          //     desired schema). Scanning the post-filter remainder would make
+          //     the guarantee depend on the filter having correctly stripped
+          //     every orphan drop first; a filter bug that mis-classified a
+          //     managed-table drop as an orphan would then hide it from the
+          //     scan. Identifying orphans here by table membership instead —
+          //     drops of tables outside the desired schema are the EXPECTED
+          //     emission the filter handles separately — keeps the
+          //     destructive-on-managed guard independent of the filter. `safe`
+          //     is still what actually executes.
+          //   - On a UI save, locked tables are removed from the managed set
+          //     rather than the scan being moved after the lock filter. Keeping
+          //     the scan on the raw output preserves the independence above; the
+          //     narrowing is sound because a locked table's statements are
+          //     dropped unconditionally and can never execute, so this apply is
+          //     not the thing that would be destroying them.
+          // Rebuild blocks are only trusted for tables where OUR diff
+          // approved a rebuild-justifying change — a rebuild on any other
+          // table is the kit encoding a column drop we never approved
+          // (rc.4 emits exactly that shape; probe-verified).
+          const allowedRebuildTables = approvedRebuilds;
+          // Tables this apply is answerable for. On a UI save the locked ones are
+          // excluded: their statements are dropped below and never execute, so
+          // holding the apply to account for destructive DDL on them would let
+          // pre-existing drift in a code-first table block saving an unrelated
+          // builder-owned entity. Everything still executed stays in scope.
+          const lockedForThisApply =
+            source === "ui" ? lockedTableNames(desired) : new Set<string>();
+          const managedTables = new Set(
+            desiredTableNames
+              .map(t => t.toLowerCase())
+              .filter(t => !lockedForThisApply.has(t))
+          );
+          // Only drizzle-kit's output goes through the orphan filter. That
+          // filter answers "did the kit propose dropping something we never
+          // asked about?", and it identifies an index's owner from the
+          // suffix-style names the kit produces (`<table>_<col>_idx`). Nextly's
+          // own indexes are named `idx_<table>_<col>` / `uq_<table>_<col>`, for
+          // which that inference finds no owner and the drop is blocked — so
+          // running it over the fast path's statements would silently discard a
+          // `drop_index` this pipeline's own diff planned and the apply would
+          // report success with the index still in place. Fast-path SQL is
+          // emitted from those approved operations, so there is no orphan to
+          // find; the destructive scan and the lock filter below still apply to
+          // both routes.
+          // Plugin-migrated tables are never dropped by dev push, whatever the
+          // desired set says: their removal is a decision for the plugin's
+          // migrations or `nextly plugins uninstall`, not a reload's side
+          // effect. The kit route enforces this inside
+          // filterUnsafeStatements; the fast path bypasses that filter (its
+          // statements come from approved operations), so it gets the same
+          // refusal applied directly to its drops.
+          //
+          // Read through `tx`, the handle this apply runs on. On PostgreSQL and
+          // MySQL that is the apply's own transaction, so the registry read
+          // stays on its connection instead of taking a second one from the
+          // pool while the transaction is open. On SQLite, which applies with
+          // no transaction, `tx` is the database handle itself.
+          const pluginMigrated = await pluginMigratedTableSet(tx, dialect);
+          const unlocked = useFastPath
+            ? pluginMigrated
+              ? emittedStatements.filter(
+                  statement =>
+                    !dropsPluginMigratedTable(
+                      statement,
+                      pluginMigrated,
+                      dialect
+                    )
+                )
+              : emittedStatements
+            : filterUnsafeStatements(
+                emittedStatements,
+                desiredTableNames,
+                pluginMigrated,
+                dialect
+              );
+          // Op-level lock filtering covers what this pipeline decided to do, but
+          // drizzle-kit re-derives drift from the full desired schema, so on the
+          // kit path it can still emit DDL for a locked table. Scope reduction
+          // only narrows that on PostgreSQL — SQLite and MySQL ignore
+          // tablesFilter entirely — so the guarantee is enforced here, on the
+          // statements themselves, where it holds for every dialect.
+          const { kept: safe, skipped: skippedLockedStatements } =
+            excludeLockedTableStatements(unlocked, lockedForThisApply);
+          logSkippedLockedStatements(skippedLockedStatements);
+          const unexpectedDestructive = findUnexpectedDestructiveStatements(
+            emittedStatements,
+            allowedRebuildTables,
+            managedTables
+          );
+          if (unexpectedDestructive.length > 0) {
+            throw new PushSchemaError(
+              `schema emitter produced ${unexpectedDestructive.length} ` +
+                `destructive statement(s) on the purely-additive ` +
+                `remainder. The schema was NOT applied. Statements: ` +
+                unexpectedDestructive.join("; ")
+            );
+          }
+
+          if (pushResult) {
+            // Secondary tripwire: hints were empty in every observed rc.4
+            // scenario. If one ever appears here, the kit's semantics
+            // changed underneath us — fail loudly rather than ignore an
+            // uninterpreted signal.
+            if (pushResult.hints.length > 0) {
+              throw new PushSchemaError(
+                `drizzle-kit returned ${pushResult.hints.length} hint(s) on ` +
+                  `the purely-additive remainder — uninterpreted signal, ` +
+                  `refusing to apply: ` +
+                  pushResult.hints
+                    .map(h => h.hint + (h.statement ? ` [${h.statement}]` : ""))
+                    .join("; ")
+              );
+            }
+          }
+
+          // Appended to the same batch so they run after the table changes they
+          // index. On PG and MySQL that batch is transactional; SQLite runs
+          // without a transaction by design, so a failing restore there is
+          // reported but the rebuild it followed has already landed.
+          //
+          // The ops are handed over ONLY on the kit route: the restore's
+          // ops-replay exists because drizzle-kit never creates dynamic-table
+          // indexes, but the fast path emits every add_index itself, so
+          // replaying them would issue the same CREATE INDEX twice — fatal on
+          // MySQL, which has no IF NOT EXISTS for indexes.
+          const restore = indexRestoreStatements(
+            desiredSnapshot,
+            dialect,
+            safe,
+            useFastPath ? [] : resolvedOps
+          );
+          try {
+            await executor.executeStatements(tx, [
+              ...safe,
+              ...restore,
+              ...constraints.after,
+            ]);
+            liftedKeysOwed = [];
+          } catch (err) {
+            throw new DdlExecutionError(
+              err instanceof Error ? err.message : String(err),
+              err
+            );
+          }
+
+          // `safe.length` plus the kit-path pre-created statements, not the
+          // executed length: this number is the journal's
+          // `statements_executed`, read against `statements_planned` from the
+          // diff. The restore statements were never planned, so counting them
+          // would report a mismatch on every apply that had to put an index
+          // back; the pre-created CREATEs WERE planned (add_table ops) and
+          // executed, so they count.
+          //
+          // On PostgreSQL the commit is what lands the apply: refused, and the
+          // transaction undone, as a statement is, so a run that lost the schema
+          // lock while its last statement ran changes nothing. MySQL's DDL has
+          // committed as it ran, and SQLite runs without a transaction, so there
+          // a refusal here would report an apply that already landed.
+          if (dialect === "postgresql") await assertSchemaLockHeld();
+          return (
+            safe.length +
+            preCreatedStatements +
+            constraints.before.length +
+            constraints.after.length
+          );
+        };
+
+        let statementsExecuted: number;
+
+        if (isSqlite) {
+          // SQLite: skip db.transaction() per F3 PR-4 (PRAGMA-vs-tx
+          // compatibility), and apply under SQLite's schema-change contract —
+          // the same one a migration runs under: foreign keys off for the
+          // whole apply, so a table rebuild cannot cascade into the rows of
+          // tables that reference it, then `PRAGMA foreign_key_check` once
+          // every statement has run, and the previous setting restored.
+          //
+          // With no transaction there is nothing to roll back: a refusal here
+          // reports an apply that has already landed, so the operator learns
+          // which references are dangling instead of the push reading as clean.
+          const session = sqliteSessionOf(db);
+          statementsExecuted = await withSqliteForeignKeysOff(
+            session,
+            async () => {
+              try {
+                return await refusingNewDanglingReferences(
+                  session,
+                  () => runApply(db),
+                  (count, pairs) =>
+                    `This schema change left ${String(count)} row(s) referencing rows that do not exist (${pairs}). SQLite applies a dev push without a transaction, so the change is in place: remove or repair those rows.`
+                );
+              } catch (err) {
+                // Only the reference check's own refusal is re-classified;
+                // anything `runApply` threw keeps the type it was thrown with.
+                if (
+                  err instanceof NextlyError &&
+                  err.code === "NEXTLY_MIGRATION_FOREIGN_KEY_VIOLATION"
+                ) {
+                  throw new DdlExecutionError(err.message, err);
+                }
+                throw err;
+              }
+            }
+          );
+        } else {
+          // PG / MySQL: db.transaction() for atomicity (PG only; MySQL DDL
+          // is auto-committed regardless. F15 adds MySQL pre-flight).
+          const txFn: DbTransactionRunner = this.testHooks._txOverride
+            ? this.testHooks._txOverride
+            : this.makeTransactionRunner(db);
+          // One transaction of the apply, bounded as one try for a busy table where `bound` is given.
+          const inTransaction = (
+            bound: TransactionTryBound | undefined
+          ): Promise<number> =>
+            bound === undefined
+              ? txFn(runApply)
+              : txFn(tx => runBoundedTry(tx, dialect, bound, runApply));
+          try {
+            // On PostgreSQL each try is one transaction of the apply as planned above: a try that
+            // ended waiting rolled back whole, so the next runs the same plan again (Phase D
+            // re-plans inside its own transaction) and asks nothing again. MySQL's try is the whole
+            // plan, bounded by its caller (`tryBound`).
+            statementsExecuted =
+              busyTable !== undefined && dialect === "postgresql"
+                ? await withBusyTableTries(
+                    busyTableTries(busyTable, dialect),
+                    (_tryNumber, tryMs) =>
+                      watchedTry(reader, dialect, tryMs, inTransaction, () => ({
+                        table: waitedTable,
+                        undone: true,
+                        committed: [],
+                      }))
+                  )
+                : await inTransaction(tryBound);
+          } catch (err) {
+            await this.restoreLiftedKeys(db, liftedKeysOwed);
+            throw err;
+          }
         }
-      }
+
+        return {
+          statementsExecuted,
+          resolvedOps,
+          renamesApplied: dispatchResult.confirmedRenames.length,
+          moved: moves.moved,
+        };
+      };
+
+      // MySQL and SQLite keep what a try committed, so each try plans the apply again from the
+      // live database, which shows it; Phase B's answers are read from the first try's
+      // (`askingOnce`). On SQLite a try's every wait is bounded by the connection's busy timeout,
+      // set for the try and put back after it.
+      const { statementsExecuted, resolvedOps, renamesApplied, moved } =
+        busyTable === undefined || dialect === "postgresql"
+          ? await planAndApply(undefined, false)
+          : await withBusyTableTries(
+              busyTableTries(busyTable, dialect),
+              (tryNumber, tryMs) =>
+                watchedTry(
+                  reader,
+                  dialect,
+                  tryMs,
+                  async bound => {
+                    const restore =
+                      dialect === "sqlite"
+                        ? await boundSqliteWait(db, tryMs)
+                        : undefined;
+                    try {
+                      return await planAndApply(bound, tryNumber > 1);
+                    } finally {
+                      await restore?.();
+                    }
+                  },
+                  () => {
+                    // Numbered across the apply's tries, so a statement a later try finished is
+                    // not named by the number of one an earlier try did.
+                    const committed = Array.from(
+                      { length: finishedThisTry },
+                      (_, index) => finishedEarlier + index + 1
+                    );
+                    finishedEarlier += finishedThisTry;
+                    return { table: waitedTable, undone: false, committed };
+                  }
+                )
+            );
 
       // F10 PR 2: derive the per-change-kind summary from the
       // post-resolution ops so the journal row carries audit-friendly
@@ -1817,8 +2016,8 @@ export class PushSchemaPipeline {
       return {
         success: true,
         statementsExecuted,
-        renamesApplied: dispatchResult.confirmedRenames.length,
-        ...(moves.moved.length > 0 ? { movedToCompanion: moves.moved } : {}),
+        renamesApplied,
+        ...(moved.length > 0 ? { movedToCompanion: moved } : {}),
         // F10 PR 6: surface the diff counts so the dispatcher can
         // render an admin toast like "1 field added, 1 renamed".
         summary,
@@ -2121,7 +2320,33 @@ export class PushSchemaPipeline {
     return fn => dbTyped.transaction(fn);
   }
 
+  /**
+   * How an apply waits for a busy table: the caller's `busyTable`, else the environment's bounds
+   * with each notice sent to the logger. A pipeline whose transaction runner a test replaced
+   * (`_txOverride`) runs no real transaction to bound, so it gets none unless it asks.
+   */
+  private busyTableFor(args: {
+    source: "ui" | "code";
+    uiTargetSlug?: string;
+    uiTargetKind?: "collection" | "single" | "component";
+    busyTable?: PipelineBusyTable;
+  }): PipelineBusyTable | undefined {
+    if (args.busyTable !== undefined) return args.busyTable;
+    if (this.testHooks._txOverride !== undefined) return undefined;
+    return {
+      bounds: busyTableBounds({ env: process.env }),
+      notify: line => consoleLogger.warn(line),
+      // The entity a Builder save changes, or the sync a config change runs.
+      change:
+        args.source === "ui" && args.uiTargetSlug !== undefined
+          ? `${args.uiTargetKind ?? "collection"} ${args.uiTargetSlug}`
+          : "schema sync",
+    };
+  }
+
   private classifyErrorCode(err: unknown): string {
+    // The tries for a busy table ran out: its own code, which callers and the journal read.
+    if (NextlyError.isCode(err, "NEXTLY_TABLE_BUSY")) return err.code;
     // Before the DDL branch: nothing ran, and saying so is the whole value of the distinction.
     if (NextlyError.isValidation(err)) return "PRECONDITION_FAILED";
     if (err instanceof PushSchemaError) return "PUSHSCHEMA_FAILED";
@@ -2325,4 +2550,239 @@ async function refuseKitRebuildsLosingConstraints(
       logContext: { table: spec.name, lost },
     });
   }
+}
+
+/** A rename candidate as a question: its table and its pair of columns. */
+function candidateKey(candidate: RenameCandidate): string {
+  return `${candidate.tableName}::${candidate.fromColumn}::${candidate.toColumn}`;
+}
+
+/**
+ * `inner`, asking each question once for an apply however often its plan is made: a rename
+ * candidate by its table and columns, a classifier event by its id (`formatEventId`: its kind,
+ * table and column). A later plan that raises a question asked before is answered from the answer
+ * given; one it raises for the first time is asked, alone. The first plan's call reaches `inner`
+ * as it is, and its answer comes back as it is.
+ */
+function askingOnce(inner: PromptDispatcher): PromptDispatcher {
+  const askedCandidates = new Set<string>();
+  const askedEvents = new Set<string>();
+  const confirmed = new Map<string, RenameCandidate>();
+  const resolutions = new Map<string, Resolution>();
+  const remember = (
+    asked: Parameters<PromptDispatcher["dispatch"]>[0],
+    answer: PromptDispatchResult
+  ): void => {
+    for (const candidate of asked.candidates) {
+      askedCandidates.add(candidateKey(candidate));
+    }
+    for (const event of asked.events) askedEvents.add(event.id);
+    for (const candidate of answer.confirmedRenames) {
+      confirmed.set(candidateKey(candidate), candidate);
+    }
+    for (const resolution of answer.resolutions) {
+      resolutions.set(resolution.eventId, resolution);
+    }
+  };
+  return {
+    async dispatch(args) {
+      const newCandidates = args.candidates.filter(
+        candidate => !askedCandidates.has(candidateKey(candidate))
+      );
+      const newEvents = args.events.filter(event => !askedEvents.has(event.id));
+      const nothingAskedYet =
+        askedCandidates.size === 0 && askedEvents.size === 0;
+      if (nothingAskedYet) {
+        const answer = await inner.dispatch(args);
+        if (answer.proceed) remember(args, answer);
+        return answer;
+      }
+      if (newCandidates.length > 0 || newEvents.length > 0) {
+        const fresh = { ...args, candidates: newCandidates, events: newEvents };
+        const answer = await inner.dispatch(fresh);
+        if (!answer.proceed) return answer;
+        remember(fresh, answer);
+      }
+      return {
+        proceed: true,
+        confirmedRenames: args.candidates.flatMap(candidate => {
+          const answered = confirmed.get(candidateKey(candidate));
+          return answered === undefined ? [] : [answered];
+        }),
+        resolutions: args.events.flatMap(event => {
+          const answered = resolutions.get(event.id);
+          return answered === undefined ? [] : [answered];
+        }),
+      };
+    },
+  };
+}
+
+/**
+ * What a try's watch and its holder report ask through: `querySqlRows` on the apply's own handle,
+ * the pool, never the transaction the try waits in. They read rows of a Drizzle `sql` statement
+ * and nothing else of an adapter, which the pipeline is not handed.
+ */
+function statementReader(
+  db: unknown,
+  dialect: SupportedDialect
+): DrizzleAdapter {
+  const reader: Pick<DrizzleAdapter, "queryStatement"> = {
+    queryStatement: <T = Record<string, unknown>>(statement: SQL) =>
+      querySqlRows<T>(db, dialect, statement),
+  };
+  return reader as unknown as DrizzleAdapter;
+}
+
+/** Sends fixed text on a PostgreSQL or MySQL transaction's own connection. */
+async function runOnTransaction(tx: unknown, text: string): Promise<void> {
+  await (tx as { execute(query: SQL): Promise<unknown> }).execute(
+    sql.raw(text)
+  );
+}
+
+/**
+ * Runs `work` in `tx` as one try for a busy table. Each lock the transaction waits for is bounded
+ * by the database half a second past the try, as a backstop for a watch that could not ask:
+ * PostgreSQL's `SET LOCAL lock_timeout`, which ends with the transaction; MySQL's session
+ * `lock_wait_timeout`, which would outlive it on its pooled connection, so it is set back to the
+ * server's default before the transaction ends, whatever its outcome. The transaction's session
+ * id goes to the try's watch, which stops before the commit (`bound.settle`).
+ */
+async function runBoundedTry<T>(
+  tx: unknown,
+  dialect: SupportedDialect,
+  bound: TransactionTryBound,
+  work: (tx: unknown) => Promise<T>
+): Promise<T> {
+  // Fixed text with a whole number of milliseconds or seconds, never caller input.
+  if (dialect === "postgresql") {
+    await runOnTransaction(
+      tx,
+      `SET LOCAL lock_timeout = '${String(Math.round(bound.tryMs) + 500)}ms'`
+    );
+  } else if (dialect === "mysql") {
+    await runOnTransaction(
+      tx,
+      `SET SESSION lock_wait_timeout = ${String(Math.ceil((bound.tryMs + 500) / 1000))}`
+    );
+  }
+  try {
+    const query = ownSessionId(dialect);
+    if (query !== undefined) {
+      const session = sessionIdOfRows(
+        await querySqlRows<Record<string, unknown>>(tx, dialect, query)
+      );
+      if (session !== undefined) bound.onSession(session);
+    }
+    const value = await work(tx);
+    await bound.settle();
+    return value;
+  } finally {
+    if (dialect === "mysql") {
+      await runOnTransaction(
+        tx,
+        "SET SESSION lock_wait_timeout = DEFAULT"
+      ).catch(() => undefined);
+    }
+  }
+}
+
+/**
+ * One try for a busy table: `run` with a watch made before its transaction opens, given the
+ * session once it is read, reading what holds the table before it ends the try. A try that ended
+ * waiting comes back as `ended`, with what `endedAs` says it left; every other error goes through
+ * as it is.
+ */
+async function watchedTry<T>(
+  reader: DrizzleAdapter,
+  dialect: SupportedDialect,
+  tryMs: number,
+  run: (bound: TransactionTryBound) => Promise<T>,
+  endedAs: () => {
+    table: string | null;
+    undone: boolean;
+    committed: readonly number[];
+  }
+): Promise<TryResult<T>> {
+  let session: string | undefined;
+  // Read by the watch just before it ends the try, while the session still waits; after the
+  // rollback it waits for nothing and the database names no holder.
+  let holder: HolderReport | undefined;
+  const watchdog = prepareTryWatchdog(reader, dialect, tryMs, {
+    beforeCancel: async waiting => {
+      holder = await readHolders(reader, dialect, waiting);
+    },
+  });
+  try {
+    const value = await run({
+      tryMs,
+      onSession: id => {
+        session = id;
+        watchdog.watch(id);
+      },
+      settle: async () => {
+        await watchdog.stop();
+      },
+    });
+    await watchdog.stop();
+    return { kind: "done", value };
+  } catch (error) {
+    const { fired } = await watchdog.stop();
+    if (!endedWaiting(error, dialect, fired)) throw error;
+    const left = endedAs();
+    return {
+      kind: "ended",
+      ended: {
+        table: left.table,
+        holder: holder ?? (await readHolders(reader, dialect, session)),
+      },
+      undone: left.undone,
+      committed: left.committed,
+    };
+  }
+}
+
+/** The tries' options for an apply: no change applied before it, the schema lock held between. */
+function busyTableTries(
+  busyTable: PipelineBusyTable,
+  dialect: SupportedDialect
+): BusyTableTriesOptions {
+  return {
+    bounds: busyTable.bounds,
+    change: busyTable.change,
+    appliedBefore: [],
+    notify: busyTable.notify,
+    notice: tryNotice,
+    assertHeld: assertSchemaLockHeld,
+    stopped: tableBusyError,
+    // On SQLite the holder's write lock keeps the schema lock from renewing while the tries wait,
+    // so they end where the lock can still be shown held, and say why.
+    ...(dialect === "sqlite"
+      ? { leaseDeadline: schemaLockConfirmedUntil }
+      : {}),
+  };
+}
+
+/**
+ * Sets SQLite's busy timeout, which bounds each wait for the one write lock, to `tryMs`, and
+ * returns what puts the connection's own back. Putting it back is best effort: the try has
+ * already ended, and a failure here must not change how.
+ */
+async function boundSqliteWait(
+  db: unknown,
+  tryMs: number
+): Promise<() => Promise<void>> {
+  const session = sqliteSessionOf(db);
+  const [row] = await session.read<Record<string, unknown>>(
+    "PRAGMA busy_timeout"
+  );
+  const previous = Number(Object.values(row ?? {})[0] ?? 0);
+  await session.run(`PRAGMA busy_timeout = ${String(Math.round(tryMs))}`);
+  return () =>
+    session
+      .run(
+        `PRAGMA busy_timeout = ${String(Number.isFinite(previous) ? previous : 0)}`
+      )
+      .catch(() => undefined);
 }

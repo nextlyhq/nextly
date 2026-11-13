@@ -1577,16 +1577,12 @@ export async function runMigrateDown(
         plugin: pluginModules(configResult.config.plugins, plugin),
         migrationsDir,
         declared,
-        // An app's down sections wait for a busy table in tries, each try's notice on standard
-        // error. A plugin's modules keep their own single try here.
-        ...(plugin === undefined
-          ? {
-              busyTable: {
-                bounds,
-                notify: (line: string) => process.stderr.write(`${line}\n`),
-              },
-            }
-          : {}),
+        // An app's down sections and a plugin's modules wait for a busy table in tries, each
+        // try's notice on standard error.
+        busyTable: {
+          bounds,
+          notify: (line: string) => process.stderr.write(`${line}\n`),
+        },
       })),
       nodeEnv: process.env.NODE_ENV,
       logger,

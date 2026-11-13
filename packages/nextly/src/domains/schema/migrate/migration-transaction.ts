@@ -350,7 +350,7 @@ export async function runMigrationStatements(
  * Sets SQLite's busy timeout to `tryMs` and returns what puts the connection's own back. Putting
  * it back is best effort: the unit has already ended, and a failure here must not change how.
  */
-async function boundSqliteWait(
+export async function boundSqliteWait(
   adapter: DrizzleAdapter,
   tryMs: number
 ): Promise<() => Promise<void>> {
@@ -495,7 +495,7 @@ export function isConnectionSetting(
  * so the setting ends with it; on PostgreSQL it is put back all the same, best effort, before the
  * session runs anything else.
  */
-async function boundSessionTry<T>(
+export async function boundSessionTry<T>(
   session: StatementSession,
   dialect: "postgresql" | "mysql",
   bound: StatementTryBound,
