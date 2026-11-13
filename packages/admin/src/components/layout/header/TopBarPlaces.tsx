@@ -139,7 +139,23 @@ export function useTopBarWidth(): number | null {
 }
 
 /**
- * `element`'s width, again whenever it changes. Measured in a layout effect,
+ * `element`'s content width: its box without its padding and border, the
+ * width its observer reports (`contentRect`) and a container query reads, so
+ * the first measurement and every later one agree.
+ */
+function contentWidth(element: Element): number {
+  const style = window.getComputedStyle(element);
+  const sides = [
+    style.paddingLeft,
+    style.paddingRight,
+    style.borderLeftWidth,
+    style.borderRightWidth,
+  ].reduce((sum, side) => sum + (Number.parseFloat(side) || 0), 0);
+  return element.getBoundingClientRect().width - sides;
+}
+
+/**
+ * `element`'s content width, again whenever it changes. Measured in a layout effect,
  * before the browser paints, so what a page decides from it is already decided
  * in the first frame drawn, never one frame late.
  */
@@ -152,7 +168,7 @@ function useMeasuredWidth(element: Element | null): number | null {
     }
     // A width of 0 is an element not laid out yet, not a narrow one.
     const measured = (width: number) => (width > 0 ? width : null);
-    setWidth(measured(element.getBoundingClientRect().width));
+    setWidth(measured(contentWidth(element)));
     const observer = new ResizeObserver(entries => {
       const entry = entries.at(-1);
       if (entry) setWidth(measured(entry.contentRect.width));

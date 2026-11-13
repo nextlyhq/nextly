@@ -973,10 +973,11 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
 
 /**
  * The widths an editor is held to: 1366, where the editor docks its side panel
- * with the menu panel open, either side of it, and 1024, where the bar folds
- * its controls into More.
+ * with the menu panel open, either side of it, 1024, where the bar folds its
+ * controls into More, and 1048, whose bar is 720 px wide with the menu open:
+ * just past the fold by its outer box, inside it by its content.
  */
-const EDITOR_WIDTHS = [1024, 1280, 1366, 1440] as const;
+const EDITOR_WIDTHS = [1024, 1048, 1280, 1366, 1440] as const;
 
 /** A post of the test's own, which no other test opens or holds. */
 async function ownPost(page: Page, made: string[]): Promise<string> {

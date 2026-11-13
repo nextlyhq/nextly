@@ -29,6 +29,7 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 
 import { DashboardHeader } from "./DashboardHeader";
 import { HeaderTrailProvider } from "./HeaderTrail";
+import { barFolds } from "./bar-fold";
 import {
   TopBarPlace,
   TopBarPlacesProvider,
@@ -252,6 +253,59 @@ describe("the bar's width, as a page reads it", () => {
       root.unmount();
       container.remove();
       acting.IS_REACT_ACT_ENVIRONMENT = wasActing;
+      rect.mockRestore();
+    }
+  });
+});
+
+describe("the bar's width, measured as its container query measures it", () => {
+  it("takes the first measurement inside the bar's padding, so a 720 px bar with 24 px padding folds from the start", () => {
+    // The bar's box is 720 px with 24 px of padding either side: its content,
+    // which the observer and the outline's container query both read, is
+    // 672 px, below the fold. An observer that never answers leaves the
+    // first measurement standing alone.
+    const rect = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockReturnValue(
+        DOMRect.fromRect({ x: 0, y: 0, width: 720, height: 52 })
+      );
+    const style = vi.spyOn(window, "getComputedStyle").mockImplementation(
+      element =>
+        ({
+          paddingLeft: element.tagName === "HEADER" ? "24px" : "0px",
+          paddingRight: element.tagName === "HEADER" ? "24px" : "0px",
+          borderLeftWidth: "0px",
+          borderRightWidth: "0px",
+        }) as CSSStyleDeclaration
+    );
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+    function Reader() {
+      const width = useTopBarWidth();
+      return (
+        <span data-testid="bar-width">
+          {width === null
+            ? "none"
+            : `${width} ${barFolds(width) ? "folded" : "open"}`}
+        </span>
+      );
+    }
+    try {
+      render(
+        <Shell>
+          <Reader />
+        </Shell>
+      );
+      expect(screen.getByTestId("bar-width").textContent).toBe("672 folded");
+    } finally {
+      vi.unstubAllGlobals();
+      style.mockRestore();
       rect.mockRestore();
     }
   });
