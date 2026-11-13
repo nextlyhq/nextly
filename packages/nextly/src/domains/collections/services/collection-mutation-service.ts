@@ -310,6 +310,7 @@ import {
   mergeComponentPatches,
 } from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { storeDraftSave } from "../../versions/draft-save";
 import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
 import {
@@ -6497,8 +6498,10 @@ export class CollectionMutationService extends BaseService {
         f =>
           f.type === "relationship" && f.options?.relationType === "manyToMany"
       );
+      // Looked up among the fields stored at the document's top level, a
+      // field inside an unnamed layout group included.
       const field = assertRewritableField(
-        fields,
+        addressableFields(fields) as unknown as FieldDefinition[],
         request.field,
         f => isFieldGroupField(f) || manyToManyFields.includes(f)
       );
@@ -6717,6 +6720,16 @@ export class CollectionMutationService extends BaseService {
       translatedIn
     );
     const decided = await this.decideRewriteValues(tx, args, ref, translatedIn);
+    // Only copies whose value moves are written: a live value the rewrite
+    // leaves as it was keeps the live copy, its date and its events as they
+    // were, and a draft whose value stays is not saved again.
+    const liveChanges = !sameSharedValue(
+      decided.liveValue,
+      decided.liveBefore.value
+    );
+    const drafts = decided.drafts.filter(
+      d => !sameSharedValue(d.value, d.slot.snapshot[args.field])
+    );
     // Whether each language's pending change was already behind the live
     // shared values on a field other than this one, read before the live
     // copy moves: such a change keeps its base (`moveRewrittenDraftBases`).
@@ -6725,75 +6738,94 @@ export class CollectionMutationService extends BaseService {
       args,
       ref,
       decided.liveBefore,
-      decided.drafts.map(d => d.slot),
+      drafts.map(d => d.slot),
       translatedIn
     );
 
-    // The live copy: its row, or its language's row for a translated field,
-    // with the entry's counter moved once.
-    await this.writeRewrittenLiveValue(tx, args, {
-      value: decided.liveValue,
-      stored: decided.liveBefore.main,
-      translatedIn,
-      at: new Date(),
-    });
-    // The rewritten row may not move the entry out of a filter that judged
-    // the rewrite: refused, the whole rewrite rolls back.
-    const [firstFilter] = filteredWrites;
-    const movedOut =
-      firstFilter &&
-      (await this.refusalMovedOutOfWriteFilters(
+    if (liveChanges) {
+      // The live copy: its row, or its language's row for a translated
+      // field, with the entry's counter moved once.
+      await this.writeRewrittenLiveValue(tx, args, {
+        value: decided.liveValue,
+        stored: decided.liveBefore.main,
+        translatedIn,
+        at: new Date(),
+      });
+      // The rewritten row may not move the entry out of a filter that
+      // judged the rewrite: refused, the whole rewrite rolls back.
+      const [firstFilter] = filteredWrites;
+      const movedOut =
+        firstFilter &&
+        (await this.refusalMovedOutOfWriteFilters(
+          tx,
+          firstFilter.schema,
+          params.entryId,
+          filteredWrites
+        ));
+      if (movedOut) throw errorFromServiceEnvelope(movedOut);
+    } else if (drafts.length > 0) {
+      // Only drafts move: the entry's version still does, as a draft save's
+      // does, so a later save from an older read is refused.
+      await bumpDocumentRevision(
         tx,
-        firstFilter.schema,
-        params.entryId,
-        filteredWrites
-      ));
-    if (movedOut) throw errorFromServiceEnvelope(movedOut);
+        tableName,
+        { id: params.entryId },
+        args.actor
+      );
+    }
     const liveAfter = await this.rewriteLiveDocument(tx, args, translatedIn);
-    const captured = await this.captureRewrittenLive(
-      tx,
-      args,
-      liveAfter.main,
-      translatedIn
-    );
+    const captured = liveChanges
+      ? await this.captureRewrittenLive(tx, args, liveAfter.main, translatedIn)
+      : null;
 
-    // Each draft that held the field, saved as a save of it is, each still a
+    // Each draft whose value moved, saved as a save of it is, each still a
     // draft.
     const draftsKept = draftsKeptByPart();
-    for (const { slot, value } of decided.drafts) {
+    const maxPerDoc = (
+      args.collection as { versions?: ResolvedVersionsConfig | null }
+    ).versions?.maxPerDoc;
+    for (const { slot, value } of drafts) {
       await this.saveRewrittenDraft(tx, args, {
         ref,
         slot,
         value,
         liveAfter: liveAfter.document,
         draftsKept,
-        maxPerDoc: captured.maxPerDoc,
+        maxPerDoc,
       });
     }
     if (args.localized && !draftsKept && translatedIn === null) {
       await this.moveRewrittenDraftBases(
         tx,
         ref,
-        decided.drafts.map(d => d.slot),
+        drafts.map(d => d.slot),
         behindBefore,
         liveAfter
       );
     }
 
     const copies: FieldRewriteCopy[] = [
-      decided.liveCopy,
-      ...decided.drafts.map(({ slot }) => ({
+      ...(liveChanges ? [decided.liveCopy] : []),
+      ...drafts.map(({ slot }) => ({
         form: "draft" as const,
         locale: slot.locale,
       })),
     ];
-    const eventRecorded = await this.recordRewriteEvents(tx, args, {
-      copies,
-      translatedIn,
-      versionNo: captured.versionNo,
-      document: captured.document,
-      previous: decided.liveBefore.document,
-    });
+    // A rewrite that changed nothing records nothing.
+    const eventRecorded =
+      copies.length === 0
+        ? false
+        : await this.recordRewriteEvents(tx, args, {
+            copies,
+            translatedIn,
+            versionNo: captured?.versionNo ?? null,
+            live: captured
+              ? {
+                  document: captured.document,
+                  previous: decided.liveBefore.document,
+                }
+              : null,
+          });
     const version = await documentVersionOn(tx, {
       dialect: this.dialect,
       table: tableName,
@@ -6805,7 +6837,7 @@ export class CollectionMutationService extends BaseService {
     return {
       version: version ?? "",
       copies,
-      liveRow: captured.document,
+      liveRow: captured?.document ?? null,
       eventRecorded,
       translatedIn,
     };
@@ -7051,8 +7083,11 @@ export class CollectionMutationService extends BaseService {
       copies: readonly FieldRewriteCopy[];
       translatedIn: string | null;
       versionNo: number | null;
-      document: Record<string, unknown>;
-      previous: Record<string, unknown>;
+      /** The live copy before and after, where the rewrite changed it. */
+      live: {
+        document: Record<string, unknown>;
+        previous: Record<string, unknown>;
+      } | null;
     }
   ): Promise<boolean> {
     const { call, params, fields, tableName, field, actor } = args;
@@ -7079,6 +7114,9 @@ export class CollectionMutationService extends BaseService {
         ...(byPlugin && actor.type !== "system" ? { plugin: call.plugin } : {}),
       },
     });
+    // A change to drafts alone changes nothing a visitor sees: no media
+    // usage to refresh and no public event, as a draft save records none.
+    if (rewrite.live === null) return false;
     // Which media items the entry uses now, from what the live copy stores.
     await this.recordEntryMediaUsage(tx, {
       collectionName: params.collectionName,
@@ -7094,8 +7132,8 @@ export class CollectionMutationService extends BaseService {
         id: params.entryId,
         ...(translatedIn === null ? {} : { locale: translatedIn }),
       },
-      data: rewrite.document,
-      previous: rewrite.previous,
+      data: rewrite.live.document,
+      previous: rewrite.live.previous,
       fields: await this.webhookFieldTreeIfRecording(
         params.collectionName,
         fields,

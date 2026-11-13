@@ -287,6 +287,35 @@ describe.each(getConfiguredTestDialects())("a field rewrite (%s)", dialect => {
     expect((await read(t, PAGES, id)).layout).toBe("narrow");
   });
 
+  it("leaves the live copy, its date and its events alone where only a draft's value moves", async () => {
+    const t = await boot(dialect);
+    const id = await create(t, PAGES, { layout: "wide", status: "published" });
+    await save(t, PAGES, id, { layout: "retired" });
+    const before = await read(t, PAGES, id);
+    const result = await entries(t).rewriteField({
+      request: {
+        collection: PAGES,
+        id,
+        field: "layout",
+        expectedVersion: before._rev as string,
+        set: { from: current => (current === "retired" ? "narrow" : current) },
+        reason: REASON,
+      },
+      overrideAccess: true,
+    });
+    expect(result.success, JSON.stringify(result)).toBe(true);
+    expect(result.data?.copies).toEqual([{ form: "draft", locale: null }]);
+    // No public event and no revalidation: the live copy did not change.
+    expect(result.eventRecorded).toBe(false);
+    expect(result.revalidationIntent).toBeUndefined();
+    const live = await read(t, PAGES, id);
+    expect(live.layout).toBe("wide");
+    expect(live.updatedAt).toEqual(before.updatedAt);
+    expect((await read(t, PAGES, id, { draft: true })).layout).toBe("narrow");
+    // The version still moved, so a save from the older read is refused.
+    expect(live._rev).not.toBe(before._rev);
+  });
+
   it("changes the live copy of a collection that keeps no drafts", async () => {
     const t = await boot(dialect);
     const id = await create(t, PLAIN, { layout: "wide", status: "published" });
