@@ -45,15 +45,23 @@ afterEach(async () => {
   current = undefined;
 });
 
-async function boot(dialect: TestDialect) {
+/**
+ * The site with the plugin, naming its types, or, with `everyType`, naming
+ * none, so SEO is on every type it defines.
+ */
+async function boot(dialect: TestDialect, { everyType = false } = {}) {
   current = await createTestNextly({
     dialect,
     plugins: [
-      seoPlugin({
-        collections: [PAGES, POSTS],
-        singles: ["seocd_home"],
-        baseUrl: SITE,
-      }),
+      seoPlugin(
+        everyType
+          ? { baseUrl: SITE }
+          : {
+              collections: [PAGES, POSTS],
+              singles: ["seocd_home"],
+              baseUrl: SITE,
+            }
+      ),
     ],
     collections: [
       defineCollection({
@@ -187,6 +195,38 @@ describe.each(getConfiguredTestDialects())(
       const moved = Date.parse(String(await lastmodOf(loc)));
       expect(moved).toBeGreaterThan(Date.parse(String(first)));
       expect(Math.abs(moved - savedAt)).toBeLessThan(5_000);
+    });
+
+    it("keeps the dates where SEO is on every type, the site naming none", async () => {
+      const { t } = await boot(dialect, { everyType: true });
+      const post = await create(t, POSTS, {
+        title: "Hello",
+        slug: "hello",
+        body: "First words.",
+        status: "published",
+      });
+      const loc = `${SITE}/blog/hello`;
+      const first = await lastmodOf(loc);
+      expect(second(first)).toBe(second(post.updatedAt));
+
+      await nextSecond();
+      // An SEO-only change leaves the date, which only a kept date can do.
+      await t.nextly.update({
+        collection: POSTS,
+        id: post.id,
+        data: { seo: { metaTitle: "Hello, world" }, _overwrite: true },
+      });
+      expect(await lastmodOf(loc)).toBe(first);
+
+      await nextSecond();
+      await t.nextly.update({
+        collection: POSTS,
+        id: post.id,
+        data: { body: "Rewritten.", _overwrite: true },
+      });
+      expect(Date.parse(String(await lastmodOf(loc)))).toBeGreaterThan(
+        Date.parse(String(first))
+      );
     });
 
     it("leaves the date while a change is a draft, and moves it when the change is published", async () => {

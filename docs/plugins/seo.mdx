@@ -1,15 +1,15 @@
 ---
 title: SEO
-description: An SEO tab and field group on the collections and Singles you name, every page's head, and the site's sitemap and robots.txt.
+description: An SEO tab and field group on every collection and Single, every page's head, and the site's sitemap and robots.txt.
 ---
 
 > **Alpha (`0.x`): pin your versions.**
 >
 > The stability boundary is `@nextlyhq/plugin-sdk` (see [API stability](/docs/plugins/stability)). This package's own exports, `seoPlugin`, its option types and the sitemap generators below, are **not** covered by that guarantee and are alpha. Pin your versions and read the release notes before upgrading.
 
-The SEO plugin adds one field group to the collections and Singles you name, an SEO tab
-that edits it on their pages in the admin, answers every page's head, and serves the
-site's sitemap and robots.txt.
+The SEO plugin adds one field group to every collection and Single the site defines (or to the
+ones you name), an SEO tab that edits it on their pages in the admin, answers every page's head,
+and serves the site's sitemap and robots.txt.
 
 It is framework-agnostic and has no `next` dependency, so it works the same in an
 integrated site, a headless project and an admin-only install.
@@ -48,12 +48,47 @@ import { defineConfig } from "nextly";
 import { seoPlugin } from "@nextlyhq/plugin-seo";
 
 export default defineConfig({
-  plugins: [seoPlugin({ collections: ["pages", "posts"] })],
+  plugins: [seoPlugin({ baseUrl: "https://example.com" })],
 });
 ```
 
-`collections` is the whole of the required configuration. Collections you do not name are
-untouched.
+With no list, SEO reaches every collection and Single the site defines, in code or in the
+Schema Builder, including types made after the plugin was added (each gets the group when the
+site next starts), and Page Builder's `pages`. Users, media and other plugins' collections never
+get it. After adding the plugin, run `nextly migrate:create` and `nextly migrate`, so each type
+gains its `seo` column.
+
+### Leaving a type out
+
+Name types that are not web pages, such as an internal log, in `exclude` (experimental):
+
+```ts
+seoPlugin({ exclude: ["audit-log"] });
+```
+
+A type left out before its first migration never gets the column. One left out later keeps its
+column and values, unused, until `nextly prune` drops them, and gets them back if you take it out
+of `exclude` again.
+
+A type that already has a field of its own named `seo` is left as it is, with a warning at start,
+and gets no SEO tab: rename its field (for example to `legacySeo`), then import its values from
+Pages.
+
+A plugin's collection that holds public pages but is not marked as the site's content can be
+added by name with `include` (experimental): `seoPlugin({ include: ["listings"] })`.
+
+### Naming the types instead
+
+A site can name exactly the types that get SEO, as every site did before this release:
+
+```ts
+seoPlugin({ collections: ["pages", "posts"], singles: ["home"] });
+```
+
+A site that names `collections` or `singles` keeps exactly that list after upgrading; no other
+type gains SEO. Remove the list to move to every type, then run `nextly migrate:create` and
+`nextly migrate`. `include` and `exclude` apply only where no list is named, and are refused
+beside one.
 
 ## What lands on an entry
 
@@ -254,8 +289,10 @@ in `optionalDependsOn`.
 
 | Option            | Type                                                             | Default            | What it does                                                                                                     |
 | ----------------- | ---------------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------- |
-| `collections`     | `string[]`                                                       | required           | The collections that get the `seo` group                                                                         |
-| `singles`         | `string[]`                                                       | none               | The Singles that get the `seo` group, such as a homepage                                                         |
+| `collections`     | `string[]`                                                       | every type         | The collections that get the `seo` group, where the site names its types                                         |
+| `singles`         | `string[]`                                                       | none               | The Singles that get the `seo` group, such as a homepage, where the site names its types                         |
+| `exclude`         | `string[]`                                                       | none               | Experimental. Types left without SEO, where no list is named                                                     |
+| `include`         | `string[]`                                                       | none               | Experimental. Plugin collections given SEO as well, where no list is named                                       |
 | `fields`          | `FieldConfig[]`                                                  | the nine above     | The fields placed inside the group                                                                               |
 | `baseUrl`         | `string`                                                         | the request origin | The site's production origin, for every address the sitemap and robots.txt name                                  |
 | `sitemap`         | `boolean`, or `{ collections, maxUrlsPerFile, maxBytesPerFile }` | `true`             | Controls the sitemap at `/sitemap.xml`                                                                           |
@@ -1420,9 +1457,11 @@ The **SEO issues** card draws the list by kind, one bar for each kind of problem
 **Needs attention** card has one **SEO problems** line counting the errors and warnings on the
 list, linked to it, the same number the Problems item in the SEO menu shows. Both
 read the list the person looking may read, from the same kept results, so their numbers are the
-list's. The card is offered to someone who may read every collection the plugin extends, the line
-to someone who may read one of them. A dashboard card can't ask for `manage-seo`, so neither counts
-a redirect that takes more than one hop: those are on the list itself.
+list's. Where the site names its types, the card is offered to someone who may read every
+collection the plugin extends, the line to someone who may read one of them. Where SEO is on every
+type, which types those are is known only once the site starts, so both are offered to someone
+holding `manage-seo` instead. Neither counts a redirect that takes more than one hop: a card's
+read can't ask for `manage-seo`, so those are on the list itself.
 
 ### When the list is checked
 
@@ -1628,7 +1667,9 @@ To let someone edit a type's pages but not their SEO, turn `pagePermissions` on:
 seoPlugin({ collections: ["posts"], pagePermissions: true });
 ```
 
-Each content type the plugin extends then has its own `edit-seo-<type>` permission. A role that
+Each content type the plugin extends then has its own `edit-seo-<type>` permission. Each is
+declared when the site starts, so `pagePermissions` needs the types named in `collections` and
+`singles`. A role that
 may update a page and lacks it saves everything else on the page, while the page's SEO stays as it
 was, and the SEO tab shows it read-only. Reading a page's SEO stays part of reading the page.
 

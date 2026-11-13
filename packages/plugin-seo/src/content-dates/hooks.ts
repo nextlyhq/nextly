@@ -93,28 +93,44 @@ function afterSave(
 /** Keep the content dates of the pages of `collections` and `singles`. */
 export function watchContentDates(
   ctx: PluginContext,
-  types: { collections: readonly string[]; singles: readonly string[] }
+  types: {
+    readonly collections: readonly string[];
+    readonly singles: readonly string[];
+  }
 ): void {
-  const saved = (collection: string) => (context: SavedContext) => {
+  // Heard on every type and kept to the ones with SEO as each save is made,
+  // as the problem list's hooks are, so a type that gets SEO after the plugin
+  // started is followed too. A collection's pages are held under its slug, a
+  // Single's under its hook key (`single:<slug>`), the key its save names.
+  const collectionOf = (context: SavedContext) => {
+    const key = context.collection;
+    return key !== undefined && types.collections.includes(key)
+      ? key
+      : undefined;
+  };
+  const keyOf = (context: SavedContext) =>
+    collectionOf(context) ??
+    (types.singles.some(slug => singleKey(slug) === context.collection)
+      ? context.collection
+      : undefined);
+  const saved = (context: SavedContext) => {
+    const collection = keyOf(context);
     const id = idOf(context);
-    if (id === undefined || isDraft(context)) return;
+    if (collection === undefined || id === undefined || isDraft(context)) {
+      return;
+    }
     const before = unchangedSince(context);
     const holder = { collection, id };
     afterSave(ctx, context, holder, () => recordSaved(ctx, holder, before));
   };
-  for (const slug of types.collections) {
-    ctx.hooks.on("afterCreate", slug, saved(slug));
-    ctx.hooks.on("afterUpdate", slug, saved(slug));
-    ctx.hooks.on("afterDelete", slug, (context: SavedContext) => {
-      const id = idOf(context);
-      if (id === undefined) return;
-      const holder = { collection: slug, id };
-      afterSave(ctx, context, holder, () => forgetContentDates(ctx, holder));
-    });
-  }
-  // A Single's save is an update, its hooks named by its key; its pages are
-  // held under the same key.
-  for (const slug of types.singles) {
-    ctx.hooks.on("afterUpdate", singleKey(slug), saved(singleKey(slug)));
-  }
+  // A Single is never created or deleted by a person: its save is an update.
+  ctx.hooks.on("afterCreate", "*", saved);
+  ctx.hooks.on("afterUpdate", "*", saved);
+  ctx.hooks.on("afterDelete", "*", (context: SavedContext) => {
+    const collection = collectionOf(context);
+    const id = idOf(context);
+    if (collection === undefined || id === undefined) return;
+    const holder = { collection, id };
+    afterSave(ctx, context, holder, () => forgetContentDates(ctx, holder));
+  });
 }
