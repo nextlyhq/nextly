@@ -1,7 +1,9 @@
 /**
- * `db:sync --remove-orphaned` drops an orphaned field group's table through the busy-table tries:
- * a table another session keeps busy is tried again within the bounds, and then the sync stops with
- * `NEXTLY_TABLE_BUSY` naming the table, instead of logging one more failed deletion and moving on.
+ * `db:sync --remove-orphaned` drops an orphaned field group's or collection's table through the
+ * busy-table tries: a table another session keeps busy is tried again within the bounds, and then
+ * the sync stops with `NEXTLY_TABLE_BUSY` naming the table, instead of logging one more failed
+ * deletion and moving on. The table is dropped before the registry entry is deleted, so an orphan
+ * whose drop stopped is still in the registry, and the next sync finds it again.
  *
  * The database is a SQLite stand-in whose drop of the orphan's table reports the busy timeout every
  * time it is sent. The exclusion and the dependent-data teardown are faked; they are not what is
@@ -28,9 +30,13 @@ vi.mock("../../../domains/field-groups/storage/resolve-storage-names", () => ({
   resolveTypeColumns: async () => new Map(),
 }));
 
+import { CollectionSyncService } from "../../../domains/collections/services/collection-sync-service";
 import { handleRemovedComponents } from "../dev-build";
 
 const DROP = 'DROP TABLE IF EXISTS "comp_hero"';
+const DROP_POSTS = 'DROP TABLE IF EXISTS "dc_posts"';
+/** Each registry delete, by what it was sent through. */
+const registryDeletes: string[] = [];
 
 /** SQLite's busy timeout running out, as its driver reports it. */
 function sqliteBusy(): Error {
@@ -44,7 +50,14 @@ const sent: string[] = [];
 
 const adapter = {
   getCapabilities: () => ({ dialect: "sqlite" as const }),
-  delete: async () => undefined,
+  delete: async () => {
+    registryDeletes.push("delete");
+  },
+  transaction: async () => {
+    registryDeletes.push("transaction");
+    return { expire: [] };
+  },
+  tableExists: async () => false,
   executeQuery: (statement: string): Promise<unknown[]> => {
     if (statement === "PRAGMA busy_timeout") {
       return Promise.resolve([{ timeout: 0 }]);
@@ -53,7 +66,7 @@ const adapter = {
       return Promise.resolve([]);
     }
     sent.push(statement);
-    return statement === DROP
+    return statement === DROP || statement === DROP_POSTS
       ? Promise.reject(sqliteBusy())
       : Promise.resolve([]);
   },
@@ -77,6 +90,7 @@ const logger = {
 
 beforeEach(() => {
   sent.length = 0;
+  registryDeletes.length = 0;
   warnings.length = 0;
   // One try of a second, three in all: tries at 0 and about 1 second, then a stop.
   vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
@@ -106,9 +120,7 @@ describe("dropping an orphaned field group's busy table", () => {
             'the removal of orphaned field groups: the drop of table "comp_hero"',
           ended: { table: "comp_hero" },
           tries: 2,
-          appliedBefore: [
-            'the removal of orphaned field groups: the registry entry of field group "hero"',
-          ],
+          appliedBefore: [],
           outcome: { kind: "nothing-changed" },
         },
       },
@@ -117,5 +129,50 @@ describe("dropping an orphaned field group's busy table", () => {
     expect(sent.filter(statement => statement === DROP)).toHaveLength(2);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('table "comp_hero" is busy');
+    // The registry entry stays, so the next sync finds the orphan again.
+    expect(registryDeletes).toEqual([]);
+  });
+});
+
+describe("dropping an orphaned collection's busy table", () => {
+  it("stops with NEXTLY_TABLE_BUSY and keeps the registry entry, so the next sync finds it", async () => {
+    const service = new CollectionSyncService(adapter, {
+      info: () => {},
+      warn: (line: string) => {
+        warnings.push(line);
+      },
+      error: () => {},
+      debug: () => {},
+    } as never);
+    const removeOrphans = (
+      service as unknown as {
+        handleRemovedCollections(
+          removed: Array<{ slug: string; tableName: string }>,
+          action: "delete",
+          warnings: string[]
+        ): Promise<Set<string>>;
+      }
+    ).handleRemovedCollections.bind(service);
+
+    const stopped = await removeOrphans(
+      [{ slug: "posts", tableName: "dc_posts" }],
+      "delete",
+      []
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(stopped).toMatchObject({
+      code: "NEXTLY_TABLE_BUSY",
+      logContext: {
+        stop: {
+          ended: { table: "dc_posts" },
+          appliedBefore: [],
+          outcome: { kind: "nothing-changed" },
+        },
+      },
+    });
+    expect(registryDeletes).toEqual([]);
   });
 });

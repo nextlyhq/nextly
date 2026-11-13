@@ -988,7 +988,8 @@ export class CollectionSyncService extends BaseService {
             // companion holds an FK to `<main>.id` — so the main drop below cascades
             // nothing onto the former and is rejected by the latter on MySQL. Doing this
             // first also means a failure leaves the registry row intact, so the orphan is
-            // detected again on the next sync instead of being silently lost.
+            // detected again on the next sync instead of being silently lost; the table's own
+            // drop comes before the registry delete for the same reason.
             await teardownEntityComponentData({
               adapter: this.adapter,
               parentTable: tableName,
@@ -1000,34 +1001,10 @@ export class CollectionSyncService extends BaseService {
               tableName,
             });
 
-            // Delete from registry directly via raw query to avoid
-            // re-fetch issues with getCollection/updateCollection. The
-            // collection's autosaves and version pins go after it in the same
-            // transaction, as the registry's own delete does: see
-            // `deleteEntityRegistryRow`.
-            // Asked before the transaction opens: see `DashboardTables`.
-            const tables = {
-              dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
-              mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
-            };
-            const { expire } = await this.adapter.transaction(tx =>
-              deleteEntityRegistryRow(tx, "collection", slug, tables)
-            );
-            // Its cached reads describe a collection that is gone from the
-            // registry: expired once that is durable, before the table drop,
-            // which can fail and would otherwise leave them live.
-            await this.afterCommit(() =>
-              flushContentChange(
-                expire,
-                this.logger,
-                "an orphaned collection was deleted"
-              )
-            );
-
-            applied.push(
-              `${change}: the registry entry of collection ${JSON.stringify(slug)}`
-            );
-
+            // The table is dropped before the registry entry is deleted: a drop that stops (a
+            // busy table whose tries ran out, say) leaves the entry, so the next sync still finds
+            // the orphan and drops it then. Deleted first, the entry would be gone and the table
+            // with it out of every later sync's sight.
             const capabilities = this.adapter.getCapabilities();
             const q = capabilities.dialect === "mysql" ? "`" : '"';
             const sql =
@@ -1046,6 +1023,33 @@ export class CollectionSyncService extends BaseService {
                 appliedBefore: applied,
                 name: () => `the drop of table ${JSON.stringify(tableName)}`,
               }))
+            );
+
+            // Delete from registry directly via raw query to avoid
+            // re-fetch issues with getCollection/updateCollection. The
+            // collection's autosaves and version pins go after it in the same
+            // transaction, as the registry's own delete does: see
+            // `deleteEntityRegistryRow`.
+            // Asked before the transaction opens: see `DashboardTables`.
+            const tables = {
+              dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
+              mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
+            };
+            const { expire } = await this.adapter.transaction(tx =>
+              deleteEntityRegistryRow(tx, "collection", slug, tables)
+            );
+            // Its cached reads describe a collection that is gone from the
+            // registry: expired once that is durable.
+            await this.afterCommit(() =>
+              flushContentChange(
+                expire,
+                this.logger,
+                "an orphaned collection was deleted"
+              )
+            );
+
+            applied.push(
+              `${change}: the registry entry of collection ${JSON.stringify(slug)}`
             );
 
             deletedSlugs.add(slug);
