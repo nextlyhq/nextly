@@ -252,7 +252,10 @@ function SnippetRow(props: AdvancedProps): ReactNode {
           writable={writable}
           onType={next => {
             setText(next);
-            write(limitOf(next), false);
+            // Only a limit is kept: what is not one stays in the field with
+            // its reason, and the stored limit stays until a valid one, or
+            // Any length, replaces it.
+            if (snippetProblem(next) === undefined) write(limitOf(next), false);
           }}
         />
       ) : null}

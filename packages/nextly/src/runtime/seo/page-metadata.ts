@@ -611,6 +611,65 @@ const pageMetadataAnswerSchema = z.object({
 });
 
 /**
+ * An ISO 8601 date and time with its zone, as `unavailable_after` is written:
+ * `2026-12-31T23:59:00Z` or `2026-12-31T23:59:00+05:00`, seconds and a
+ * fraction optional.
+ */
+const ISO_DATE_TIME =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(Z|[+-](\d{2}):(\d{2}))$/;
+
+/**
+ * Whether `value` is a date and time Google can read: the form above, on a
+ * day the calendar has and at a time the clock has. `Date.parse` alone
+ * accepts other forms and rolls an impossible day, such as 30 February, into
+ * the next month.
+ */
+function isReadableDateTime(value: string): boolean {
+  const parts = ISO_DATE_TIME.exec(value);
+  if (parts === null) return false;
+  const [year, month, day, hour, minute, second] = parts
+    .slice(1, 7)
+    .map(part => (part === undefined ? 0 : Number(part)));
+  const zoneHours = parts[8] === undefined ? 0 : Number(parts[8]);
+  const zoneMinutes = parts[9] === undefined ? 0 : Number(parts[9]);
+  const onCalendar = new Date(Date.UTC(year, month - 1, day));
+  return (
+    onCalendar.getUTCFullYear() === year &&
+    onCalendar.getUTCMonth() === month - 1 &&
+    onCalendar.getUTCDate() === day &&
+    hour < 24 &&
+    minute < 60 &&
+    second < 60 &&
+    zoneHours < 24 &&
+    zoneMinutes < 60
+  );
+}
+
+/** The dates already said to be unreadable, each said once. */
+const toldUnreadableDates = new Set<string>();
+
+/**
+ * The answer with a date to leave results Google could not read left out,
+ * and said once in the log: the rest of the answer is still served, and a
+ * directive search engines would misread or ignore never reaches the head.
+ */
+function withReadableDate(answer: PageMetadataAnswer): PageMetadataAnswer {
+  const robots = answer.robots;
+  const date = robots?.unavailableAfter;
+  if (robots === undefined || date === undefined || isReadableDateTime(date)) {
+    return answer;
+  }
+  if (!toldUnreadableDates.has(date)) {
+    toldUnreadableDates.add(date);
+    consoleLogger.warn(
+      `The page-metadata provider gave "${date}" as the date a page leaves search results, which is not an ISO 8601 date and time with its zone; it is left out of the page's robots.`
+    );
+  }
+  const { unavailableAfter: _unreadable, ...readable } = robots;
+  return { ...answer, robots: readable };
+}
+
+/**
  * The provider's answer for one page, cached; undefined when no provider is
  * started. Throws what the provider or the answer's parse throws.
  *
@@ -641,7 +700,10 @@ async function pageAnswerFor(
   // Parsed inside the cached read, so an answer that is not one is refused
   // there and never stored: the next request asks the provider again.
   return cachedFind(
-    async () => pageMetadataAnswerSchema.parse(await resolver.resolve(input)),
+    async () =>
+      withReadableDate(
+        pageMetadataAnswerSchema.parse(await resolver.resolve(input))
+      ),
     {
       // The provider and its version too, so a replaced or upgraded provider
       // never reads an answer another one cached for the same page.

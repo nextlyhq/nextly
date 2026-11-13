@@ -34,6 +34,7 @@ import {
   clearPluginServices,
   registerPluginService,
 } from "../../../plugins/services/plugin-services-registry";
+import { consoleLogger } from "../../../shared/types";
 import { metadataFromAnswer } from "../answer-metadata";
 import type {
   PageMetadataAnswer,
@@ -791,6 +792,62 @@ describe("the answer's display controls", () => {
       tags: [],
     });
     expect(metadata.title).toBe("Own");
+  });
+});
+
+describe("a date to leave results that is not one", () => {
+  it.each([
+    ["text that names no date", "not-a-date"],
+    ["a day the calendar does not have", "2026-02-30T00:00:00Z"],
+    ["a time the clock does not have", "2026-12-31T25:00:00Z"],
+    ["a date with no time", "2026-12-31"],
+    ["a time with no zone", "2026-12-31T23:59:00"],
+  ])("leaves out %s, keeps the rest, and says so once", async (_, value) => {
+    const warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    provide({
+      resolve: () => ({
+        title: "Answered",
+        robots: {
+          index: true,
+          follow: true,
+          maxImagePreview: "large",
+          unavailableAfter: value,
+        },
+      }),
+    });
+    const first = await pageMetadataFor({ ...page, code: undefined, tags: [] });
+    await pageMetadataFor({ ...page, code: undefined, tags: [] });
+    expect(first.title).toEqual({ absolute: "Answered" });
+    expect(first.robots).toEqual({
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+    });
+    const said = warn.mock.calls.filter(([message]) =>
+      String(message).includes(value)
+    );
+    expect(said).toHaveLength(1);
+    warn.mockRestore();
+  });
+
+  it("serves a date and time with its zone, as Google reads it", async () => {
+    provide({
+      resolve: () => ({
+        robots: {
+          index: true,
+          follow: true,
+          unavailableAfter: "2026-12-31T23:59:00+05:00",
+        },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: undefined,
+      tags: [],
+    });
+    expect(metadata.robots).toMatchObject({
+      unavailable_after: "2026-12-31T23:59:00+05:00",
+    });
   });
 });
 
