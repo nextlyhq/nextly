@@ -4269,9 +4269,7 @@ export async function runFileMigrations(args: {
         // Read before each file, after the files before it have run.
         liveTables: await readLiveTables(db, dialect, [upStatements]),
         liveIndexTables: await readLiveIndexTables(db, dialect, [upStatements]),
-        ...(args.columnOverrides === undefined
-          ? {}
-          : { columnOverrides: args.columnOverrides }),
+        columnOverrides: args.columnOverrides,
       });
       assertRunnableStatements(upStatements, dialect, filename, {
         transaction: m.transaction,

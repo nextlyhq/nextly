@@ -344,6 +344,18 @@ function recordedEntities(
   );
 }
 
+/** Each recorded column's type, by its name; one in a shape this version cannot read is left out. */
+function typesByColumn(columns: readonly unknown[]): Record<string, string> {
+  const types: Record<string, string> = {};
+  for (const column of columns) {
+    const { name, type } = (column ?? {}) as { name?: unknown; type?: unknown };
+    if (typeof name === "string" && typeof type === "string") {
+      types[name] = type;
+    }
+  }
+  return types;
+}
+
 /**
  * Each table a snapshot records, with the type of each of its columns: what its migration applied,
  * which the app's overrides are read from. A table or column in a shape this version cannot read
@@ -366,17 +378,7 @@ function recordedColumnTypes(
       columns?: unknown;
     };
     if (typeof name !== "string" || !Array.isArray(columns)) continue;
-    const types: Record<string, string> = {};
-    for (const column of columns as unknown[]) {
-      const { name: column_, type } = (column ?? {}) as {
-        name?: unknown;
-        type?: unknown;
-      };
-      if (typeof column_ === "string" && typeof type === "string") {
-        types[column_] = type;
-      }
-    }
-    out.set(name, types);
+    out.set(name, typesByColumn(columns as unknown[]));
   }
   return out;
 }
