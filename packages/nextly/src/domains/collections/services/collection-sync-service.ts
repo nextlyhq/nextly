@@ -44,6 +44,7 @@ import type {
 } from "../../../collections/config/define-collection";
 import type { SanitizedNextlyConfig } from "../../../collections/config/define-config";
 import type { FieldConfig } from "../../../collections/fields/types";
+import { NextlyError } from "../../../errors/nextly-error";
 import type {
   CollectionAdminConfig,
   DynamicCollectionRecord,
@@ -65,6 +66,8 @@ import { teardownEntityComponentData } from "../../field-groups/services/teardow
 import { flushContentChange } from "../../flush-content-change";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
 import { ZodGenerator, TypeGenerator } from "../../schema";
+import { busyTableBounds } from "../../schema/busy-table/bounds";
+import { runStatementsInTries } from "../../schema/busy-table/run-on-session";
 // Resolve the versioning config so the CLI `db:sync` path persists it too
 // (parity with the boot/HMR registry sync).
 import { resolveCollectionTableName } from "../../schema/utils/resolve-table-name";
@@ -971,7 +974,13 @@ export class CollectionSyncService extends BaseService {
         }
         break;
 
-      case "delete":
+      case "delete": {
+        // Read before anything is deleted, so a bound outside its range is refused with nothing
+        // changed.
+        const bounds = busyTableBounds({ env: process.env });
+        const change = "the removal of orphaned collections";
+        // What a busy-table report names as done before the drop that stopped.
+        const applied: string[] = [];
         for (const { slug, tableName } of removed) {
           try {
             // Sweep the entity's dependent data BEFORE anything else. Embedded component
@@ -1002,7 +1011,13 @@ export class CollectionSyncService extends BaseService {
               mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
             };
             const { expire } = await this.adapter.transaction(tx =>
-              deleteEntityRegistryRow(tx, "collection", slug, tables)
+              deleteEntityRegistryRow(
+                tx,
+                "collection",
+                slug,
+                tables,
+                this.adapter.getCapabilities().dialect
+              )
             );
             // Its cached reads describe a collection that is gone from the
             // registry: expired once that is durable, before the table drop,
@@ -1015,25 +1030,45 @@ export class CollectionSyncService extends BaseService {
               )
             );
 
+            applied.push(
+              `${change}: the registry entry of collection ${JSON.stringify(slug)}`
+            );
+
             const capabilities = this.adapter.getCapabilities();
             const q = capabilities.dialect === "mysql" ? "`" : '"';
             const sql =
               capabilities.dialect === "postgresql"
                 ? `DROP TABLE IF EXISTS ${q}${tableName}${q} CASCADE`
                 : `DROP TABLE IF EXISTS ${q}${tableName}${q}`;
-            await this.adapter.executeQuery(sql);
+            // The drop waits for a table another session is using in tries on one connection,
+            // bounded by `NEXTLY_LOCK_TIMEOUT` / `NEXTLY_LOCK_TIMEOUT_TOTAL`, each try's notice
+            // through the logger's warning; one that stays busy throws `NEXTLY_TABLE_BUSY`,
+            // naming what this pass did before it.
+            applied.push(
+              ...(await runStatementsInTries(this.adapter, [sql], {
+                change,
+                bounds,
+                notify: line => this.logger.warn(line),
+                appliedBefore: applied,
+                name: () => `the drop of table ${JSON.stringify(tableName)}`,
+              }))
+            );
 
             deletedSlugs.add(slug);
             this.logger.info(
               `Deleted orphaned collection: ${slug} (table: ${tableName})`
             );
           } catch (error) {
+            // A table that stayed busy past its tries stops the sync, rather than being kept as
+            // one more warning the run then passes over.
+            if (NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) throw error;
             const warning = `Failed to delete collection "${slug}": ${error instanceof Error ? error.message : String(error)}`;
             warnings.push(warning);
             this.logger.error(warning);
           }
         }
         break;
+      }
 
       case "ignore":
         break;

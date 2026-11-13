@@ -149,6 +149,33 @@ export async function servedSchemaVersion(): Promise<number | undefined> {
 }
 
 /**
+ * Run `operation` once this copy's definitions follow the stored schema
+ * version ({@link servedSchemaVersion}), as every admin API request does
+ * before it is handled: for the Direct API, which every page a site renders
+ * and every script reads through. A process that serves no admin request
+ * (an instance that has only rendered pages since it started, a script)
+ * would otherwise keep the definitions it started with however the schema
+ * changed elsewhere, and a removed column would fail its reads while an
+ * added one went unread.
+ *
+ * Costs a memory check within the interval, one indexed read after it, and
+ * a reload only where the version moved. Nothing is read inside an open
+ * transaction: the call is part of a write already under way, which reads
+ * the definitions it began with.
+ */
+export async function withCurrentSchema<T>(
+  operation: () => Promise<T>
+): Promise<T> {
+  const adapter = registeredAdapter() as
+    | Partial<Pick<DrizzleAdapter, "transactionOpenInFlow">>
+    | undefined;
+  if (adapter !== undefined && adapter.transactionOpenInFlow?.() !== true) {
+    await servedSchemaVersion();
+  }
+  return operation();
+}
+
+/**
  * Read the stored version and, where it is not the one the definitions were
  * loaded at, load them again; the version is advanced only once they loaded.
  * Always settles `readAt` and `database`, so a failure (a read, or a reload)
