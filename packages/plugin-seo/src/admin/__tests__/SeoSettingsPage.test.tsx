@@ -982,6 +982,23 @@ describe("the content types tab", () => {
     }
   });
 
+  it("says beside Questions and answers that Google no longer shows these results", async () => {
+    serving(SET_UP);
+    render(<SeoSettingsPage />);
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("combobox", { name: "Structured data for Blog posts" })
+    );
+    const options = (await screen.findAllByRole("option")).map(
+      option => option.textContent
+    );
+    expect(options).toContain(
+      "Questions and answers · Google no longer shows these results"
+    );
+    // Only that kind carries the note.
+    expect(options.filter(text => text?.includes("·"))).toHaveLength(1);
+  });
+
   it("offers the details a type may use as well as those it needs, counting only the needed as missing", async () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);

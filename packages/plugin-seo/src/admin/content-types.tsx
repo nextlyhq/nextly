@@ -35,6 +35,7 @@ import {
   STRUCTURED_DATA_TYPE_KEYS,
   STRUCTURED_DATA_TYPES,
   isStructuredDataTypeKey,
+  structuredDataChoiceText,
   type StructuredDataDetail,
   type StructuredDataTypeKey,
 } from "../structured-data/catalog";
@@ -452,7 +453,7 @@ function DetailsEditor({
           <SelectContent>
             {MAPPABLE_TYPES.map(key => (
               <SelectItem key={key} value={key}>
-                {STRUCTURED_DATA_TYPES[key].label}
+                {structuredDataChoiceText(key)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -555,7 +556,7 @@ function StructuredData({
             <SelectItem value={AUTOMATIC}>Automatic</SelectItem>
             {STRUCTURED_DATA_TYPE_KEYS.map(key => (
               <SelectItem key={key} value={key}>
-                {STRUCTURED_DATA_TYPES[key].label}
+                {structuredDataChoiceText(key)}
               </SelectItem>
             ))}
           </SelectContent>

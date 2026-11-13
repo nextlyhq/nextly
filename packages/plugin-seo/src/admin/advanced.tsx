@@ -21,6 +21,10 @@ import { Check, ChevronRight, Lock, TriangleAlert } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { SeoAnswer } from "../resolver/order";
+import {
+  isStructuredDataTypeKey,
+  structuredDataChoiceText,
+} from "../structured-data/catalog";
 import { checkCanonical, storedCanonical } from "../tab/canonical";
 import type { SeoTabContext } from "../tab/contract";
 import { absoluteAddress } from "../tab/display";
@@ -299,7 +303,9 @@ function StructuredDataRow({
             </SelectItem>
             {structured.offered.map(type => (
               <SelectItem key={type.key} value={type.key}>
-                {type.label}
+                {isStructuredDataTypeKey(type.key)
+                  ? structuredDataChoiceText(type.key)
+                  : type.label}
               </SelectItem>
             ))}
           </SelectContent>

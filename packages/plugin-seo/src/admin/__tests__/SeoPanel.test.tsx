@@ -473,6 +473,38 @@ describe("Advanced", () => {
     expect(writes.at(-1)).toEqual(["structuredDataType", "webPage"]);
   });
 
+  it("says beside Questions and answers that Google no longer shows these results", async () => {
+    const user = userEvent.setup();
+    const structuredData = CONTEXT.structuredData;
+    if (structuredData === undefined) throw new Error("no structured data");
+    render(
+      <Harness
+        context={{
+          ...CONTEXT,
+          structuredData: {
+            ...structuredData,
+            offered: [
+              ...structuredData.offered,
+              { key: "faqPage", label: "Questions and answers" },
+            ],
+          },
+        }}
+      />
+    );
+    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    await user.click(
+      screen.getByRole("combobox", { name: "Structured data type" })
+    );
+    expect(
+      (await screen.findAllByRole("option")).map(option => option.textContent)
+    ).toEqual([
+      "Article · automatic",
+      "Article",
+      "Web page",
+      "Questions and answers · Google no longer shows these results",
+    ]);
+  });
+
   it("offers no control for a field the group does not declare", () => {
     const { structuredData: _none, ...rest } = CONTEXT;
     render(
