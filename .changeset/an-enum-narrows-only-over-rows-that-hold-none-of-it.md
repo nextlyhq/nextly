@@ -29,4 +29,6 @@
 "nextly": patch
 ---
 
-A schema apply that takes a value away from an enum column while a row still holds it is now refused before anything runs, naming the table, the column, the value and the rows — instead of failing at the database after the old check's drop had already run, with an error naming none of them. A narrowing no row holds applies as before.
+A schema apply that takes a value away from an enum column while a row still holds it is now refused before anything runs, naming the table, the column, the values the rows hold and how many rows hold them — instead of failing at the database after the old check's drop had already run, with an error naming none of them. A narrowing no row holds applies as before. The refusal also follows a column renamed in the same apply, and a value MySQL reports escaped, such as one holding a backslash.
+
+On MySQL, which commits each schema statement on its own, a check that is replaced now runs as one statement per table, drops and adds together, both when a development push applies it and in the files `migrate:create` writes. A row the new check refuses then fails the change with the old check still in place, rather than leaving the column unconstrained, and two checks that exchange names apply where they used to fail.

@@ -121,6 +121,44 @@ describeEachDialect(
       await insert("after", "archived");
     });
 
+    it("refuses taking away a value holding a backslash, which MySQL reports escaped", async () => {
+      // MySQL hands the live check back with the backslash escaped in a form
+      // whose meaning depends on its sql_mode, so the old check cannot be read
+      // back: the pair is found by its name and the rows name the value.
+      const slashed = "back\\slash";
+      current = await createTestNextly({
+        dialect,
+        plugins: [release(["draft", slashed])],
+      });
+      const adapter = current.adapter;
+      await adapter.executeQuery(
+        `INSERT INTO en__stages (id, state) VALUES ('held', ${dialect === "postgresql" ? "$1" : "?"})`,
+        [slashed]
+      );
+
+      await compileAndPublishExtensionSchema({
+        dialect,
+        plugins: [release(["draft"])],
+        config: {},
+        logger: { warn: () => {} },
+      });
+      const refused = await apply();
+      expect(refused.success).toBe(false);
+      if (refused.success) return;
+      expect(refused.error.code).toBe("PRECONDITION_FAILED");
+      const said = JSON.stringify(refused.error);
+      expect(said).toContain("1 row holds");
+      expect(said).toContain("back");
+
+      // Nothing ran: the value is still there and the old check still refuses
+      // a value outside it.
+      await expect(
+        adapter.executeQuery(
+          `INSERT INTO en__stages (id, state) VALUES ('bogus', 'invalid')`
+        )
+      ).rejects.toThrow();
+    });
+
     it("does not count retained values or collation-equivalent spellings as removed", async () => {
       current = await createTestNextly({
         dialect,
