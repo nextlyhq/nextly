@@ -82,6 +82,8 @@ export interface PartsField {
 export interface PartsState {
   /** The site's languages, in its order. */
   configured: readonly string[];
+  /** Whether the collection is translated: one that is not has no languages of its own. */
+  translated: boolean;
   defaultLocale: string;
   /** Whether the shared part is live: the entry's own publishing state. */
   sharedLive: boolean;
@@ -222,6 +224,23 @@ interface Judged {
   reads: PartsReads;
 }
 
+/**
+ * A language named for a collection that is not translated: it has no languages to move one at a
+ * time, so the request is refused rather than read as one for the whole entry.
+ */
+function untranslatedIssues(judged: Judged): Issue[] {
+  if (judged.reads.state.translated || judged.everyLanguage) return [];
+  if (judged.chosen.length === 0) return [];
+  return [
+    {
+      path: "locales",
+      code: "NOT_TRANSLATED",
+      message:
+        'This collection is not translated, so its languages are not published one at a time: publish the entry whole (`locales: "all"`).',
+    },
+  ];
+}
+
 /** A chosen language the site does not have, or one the caller may not move. */
 function languageIssues(judged: Judged): Issue[] {
   return judged.chosen.flatMap((locale): Issue[] => {
@@ -356,6 +375,8 @@ async function refusalsOf(
   judged: Judged,
   engines: PublishPartsEngines
 ): Promise<Issue[]> {
+  const untranslated = untranslatedIssues(judged);
+  if (untranslated.length > 0) return untranslated;
   return [
     ...languageIssues(judged),
     ...sharedIssues(judged),

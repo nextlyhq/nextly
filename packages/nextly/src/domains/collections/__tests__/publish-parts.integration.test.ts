@@ -534,6 +534,74 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     });
   });
 
+  // Taking one language down leaves the entry live, so its hooks are handed the entry as it is:
+  // still published.
+  it("hands the hooks the entry still published when one language alone is unpublished", async () => {
+    const seen: unknown[] = [];
+    await boot(
+      posts({
+        hooks: {
+          afterChange: [
+            ({ data }: { data?: Record<string, unknown> }) => {
+              seen.push(data?.status);
+              return data;
+            },
+          ],
+        },
+      } as never)
+    );
+    const id = await entry({ es: { title: "Hola" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    seen.length = 0;
+
+    await t!.nextly.unpublish({
+      collection: "posts",
+      id,
+      locales: ["es"],
+      data: { _overwrite: true },
+    });
+
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every(status => status === "published")).toBe(true);
+  });
+
+  // A collection that is not translated has no languages to publish one at a time: a request
+  // naming one is refused, never read as a request to publish the whole entry.
+  it("refuses a language of a collection that is not translated", async () => {
+    await boot(
+      defineCollection({
+        slug: "notes",
+        status: true,
+        fields: [text({ name: "title" })],
+      })
+    );
+    const created = await t!.nextly.create({
+      collection: "notes",
+      data: { title: "Hello" },
+    });
+    const id = String(created.item.id);
+
+    const refusal = await refusalOf(
+      t!.nextly.publish({
+        collection: "notes",
+        id,
+        locales: ["es"],
+        data: { _overwrite: true },
+      })
+    );
+    const [row] = await t!.adapter.executeQuery<{ status: string }>(
+      `SELECT ${q("status")} AS status FROM ${q("dc_notes")} WHERE ${q("id")} = '${id}'`
+    );
+
+    expect(refusal).toMatch(/NOT_TRANSLATED/);
+    expect(row?.status).toBe("draft");
+  });
+
   /** A gate holding back the parts `held` names: a language code, or "shared". */
   function holdBack(held: readonly string[]): void {
     container.registerSingleton<PublishGate>("publishGate", () => ({

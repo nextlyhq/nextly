@@ -51,6 +51,7 @@ const PUBLISHER = "part-publisher";
 const BANNERED = "partbanners";
 const BANNER = "partbanner";
 const FIELD_GUARDED = "partfieldguards";
+const LOCKED = "partlocked";
 
 /** Translatable: `title` and `body`. Shared: `views` (a number). */
 const FIELDS = () => [
@@ -100,6 +101,27 @@ async function boot(dialect: TestDialect): Promise<CollectionEntryService> {
         status: true,
         versions: { drafts: true },
         fields: FIELDS(),
+      }),
+      defineCollection({
+        slug: LOCKED,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        fields: [
+          text({ name: "title" }),
+          text({ name: "body" }),
+          // Judged with each language's own document: views may not change under a locked title.
+          number({
+            name: "views",
+            validate: (
+              value: unknown,
+              { data }: { data: Record<string, unknown> }
+            ) =>
+              data.title !== "Locked" ||
+              value === 10 ||
+              "Views cannot change while the title is Locked.",
+          }),
+        ],
       }),
       defineCollection({
         slug: FIELD_GUARDED,
@@ -578,6 +600,30 @@ describe.each(getConfiguredTestDialects())(
       expect(published.success, JSON.stringify(published)).toBe(false);
       expect(JSON.stringify(published)).toMatch(/views/);
       expect((await read(entries, FIELD_GUARDED, id, "es")).views).toBe(10);
+    }, 90_000);
+
+    // The shared part's values show in every live language, so publishing them with chosen
+    // languages judges them in each language already live too: a value valid in English but not
+    // under Spanish's own document is refused.
+    it("validates a shared promotion in every live language, not only the chosen ones", async () => {
+      const entries = await boot(dialect);
+      const id = await publishedInBoth(entries, LOCKED);
+      await save(entries, LOCKED, id, "es", { title: "Locked" });
+      await save(entries, LOCKED, id, "es", { status: "published" });
+      await save(entries, LOCKED, id, "en", { views: 80 });
+
+      const published = await entries.publishParts(
+        {
+          collectionName: LOCKED,
+          entryId: id,
+          overrideAccess: true,
+          data: { _overwrite: true },
+        },
+        { direction: "publish", locales: ["en"], shared: true }
+      );
+
+      expect(published.success, JSON.stringify(published)).toBe(false);
+      expect((await read(entries, LOCKED, id, "es")).views).toBe(10);
     }, 90_000);
 
     // A shared-only draft goes live in every language, so a publish of every

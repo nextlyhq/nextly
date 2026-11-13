@@ -35,6 +35,7 @@ const TITLE: PartsField = {
 function stateOf(overrides: Partial<PartsState> = {}): PartsState {
   return {
     configured: ["en", "es", "fr"],
+    translated: true,
     defaultLocale: "en",
     sharedLive: true,
     languages: new Map(),

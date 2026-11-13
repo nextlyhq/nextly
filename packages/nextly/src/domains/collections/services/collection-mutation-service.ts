@@ -1160,6 +1160,11 @@ type ReleaseWriteContext = Omit<
 /** What judging the languages a publish puts live needs. */
 interface LanguagesGoLiveArgs {
   /**
+   * Languages judged as well as the chosen ones: those already live where the shared part's
+   * change is promoted with chosen languages, since its values show in each of them.
+   */
+  alsoJudged?: ReadonlySet<string>;
+  /**
    * The parts a publish of chosen parts moves: only their languages are judged, and every one at
    * fault is reported, each issue naming its language, so the publisher sees all of them at once.
    * Absent, every language going live is judged and the first at fault refuses the publish.
@@ -5180,10 +5185,11 @@ export class CollectionMutationService extends BaseService {
       locale =>
         !(args.writeLocalePromoted && locale === args.writeLocale) &&
         !(locale !== undefined && args.promotedLocales?.has(locale)) &&
-        movesLanguage(
+        (movesLanguage(
           args.parts,
           locale ?? this.localization?.defaultLocale ?? ""
-        )
+        ) ||
+          (locale !== undefined && args.alsoJudged?.has(locale) === true))
     );
     const collected: ValidationIssue[] = [];
     for (const locale of languages) {
@@ -10874,10 +10880,14 @@ export class CollectionMutationService extends BaseService {
                 {
                   data: publishedParentRow ?? {
                     ...(existingEntry as Record<string, unknown>),
-                    status: direction.nextStatus,
+                    status: entryStatusAfter(),
                   },
                   originalData: existingEntry as Record<string, unknown>,
-                  touched: new Set(["status"]),
+                  // A move of chosen languages leaves the entry's status as it was: no field of
+                  // the entry changed, so no field's `afterChange` runs.
+                  touched: movesShared(params.parts)
+                    ? new Set(["status"])
+                    : new Set<string>(),
                 },
               ];
         for (const run of afterRuns) {
@@ -11244,8 +11254,23 @@ export class CollectionMutationService extends BaseService {
           : []
       )
     );
+    // A shared change promoted with chosen languages shows in every language already live, so
+    // each of those is judged with it.
+    const sharedPromoted =
+      args.caller.parts !== undefined &&
+      movesShared(args.caller.parts) &&
+      args.pending.some(change => change.locale === SHARED_DRAFT_SLOT);
     await this.assertLanguagesGoLiveValid({
       parts: args.caller.parts,
+      ...(sharedPromoted
+        ? {
+            alsoJudged: new Set(
+              [...args.prior]
+                .filter(([, status]) => status === "published")
+                .map(([locale]) => locale)
+            ),
+          }
+        : {}),
       collectionName: args.collectionName,
       entryId: args.entryId,
       // Each language judged as stored is judged over the shared values the
@@ -11767,6 +11792,7 @@ export class CollectionMutationService extends BaseService {
     }
     const state: PartsState = {
       configured,
+      translated: collection.localized === true,
       defaultLocale,
       sharedLive:
         (existingEntry as { status?: unknown }).status === "published",
