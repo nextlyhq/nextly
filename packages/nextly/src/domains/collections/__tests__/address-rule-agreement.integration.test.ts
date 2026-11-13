@@ -8,7 +8,10 @@
  * exactly the database the check answered about. A check that kept a rule of its own, or missed
  * one of the create's lookups, fails here for the address it judges differently.
  *
- * Each case has a fresh database, so an address one case creates is never in the way of another.
+ * The loop removes each entity a case creates, through the Builder's own delete, and finds the
+ * registry as it started before the next case, so every address is judged against the same
+ * registry and an earlier case's entity can never answer for a later one. Each case beside an
+ * existing entity has a fresh database.
  */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -25,6 +28,7 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { ServiceContainer } from "../../../services";
 import type { AddressKind } from "../../../shared/address-rule";
 import { ADDRESS_CASES } from "../../../shared/__tests__/helpers/address-cases";
@@ -85,6 +89,24 @@ function create(kind: AddressKind, address: string): Promise<unknown> {
       {},
       { slug: address, label: "Thing", fields: BODY }
     );
+  });
+}
+
+/** Removes an entity a case created, through the Builder's own delete of that kind. */
+function remove(kind: AddressKind, address: string): Promise<unknown> {
+  return inDevelopment(() => {
+    if (kind === "collection") {
+      return dispatchCollections(
+        {} as ServiceContainer,
+        "deleteCollection",
+        { collectionName: address },
+        undefined
+      );
+    }
+    if (kind === "single") {
+      return dispatchSingles("deleteSingle", { slug: address }, undefined);
+    }
+    return dispatchComponents("deleteComponent", { slug: address }, undefined);
   });
 }
 
@@ -158,14 +180,37 @@ for (const dialect of getConfiguredTestDialects()) {
       await rm(projectRoot, { recursive: true, force: true });
     });
 
+    /** Every address the registries hold, by kind. */
+    async function registered(): Promise<string[]> {
+      const rows = await Promise.all(
+        [
+          "dynamic_collections",
+          "dynamic_singles",
+          STORAGE_FORMAT.registryTable,
+        ].map(async table =>
+          (
+            await t!.adapter.select<{ slug: string }>(table, {
+              columns: ["slug"],
+            })
+          ).map(row => `${table}:${row.slug}`)
+        )
+      );
+      return rows.flat().sort();
+    }
+
     it("the dialog's check and the server's rule agree for each kind", async () => {
+      const before = await registered();
       for (const kind of KINDS) {
         for (const address of CASES) {
           const { check, create: created } = await bothVerdicts(kind, address);
           expect(check, `${kind} '${address}'`).toEqual(created);
+          if (created === null) await remove(kind, address);
+          expect(await registered(), `after ${kind} '${address}'`).toEqual(
+            before
+          );
         }
       }
-    }, 300_000);
+    }, 600_000);
 
     /** A field group `seo` recorded under a table name of its own, as older ones may be. */
     async function fieldGroupInACustomTable(): Promise<void> {

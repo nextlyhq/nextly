@@ -192,6 +192,23 @@ describeEachDialect("the address check routes", dialect => {
     });
   });
 
+  // The answer names the address it is about, so a client checking as a person
+  // types can match it to what it sent: it comes back exactly as sent, even one
+  // that reads as a date.
+  it("echoes the address as it was sent, a date-like one too", async () => {
+    const t = await boot();
+    const builder = await keyHolding(t, [
+      "create-settings",
+      "update-settings",
+      "delete-settings",
+    ]);
+    const sent = "2026-11-13T12:00:00Z";
+    const answer = (await (await check(builder, ROUTES[0], sent)).json()) as {
+      address: unknown;
+    };
+    expect(answer.address).toBe(sent);
+  });
+
   it("gates each kind by its own create: a field-group creator may check field groups only", async () => {
     const t = await boot();
     const fieldGroupCreator = await keyHolding(t, ["create-settings"]);

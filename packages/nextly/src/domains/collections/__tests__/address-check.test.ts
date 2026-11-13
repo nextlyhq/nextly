@@ -11,6 +11,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { judgeAddress, type UsedAddress } from "../../../shared/address-rule";
+import { consoleLogger } from "../../../shared/types";
+import { FieldGroupMetadataService } from "../../field-groups/services/field-group-metadata-service";
+import type { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
 import { checkNewAddress, type AddressCheckDeps } from "../address-check";
 
 /** The addresses each registry table holds. */
@@ -179,5 +182,85 @@ describe("a failure that is not a refusal", () => {
     const down = new Error("connection lost");
     vi.mocked(adapter.selectOne).mockRejectedValueOnce(down);
     await expect(check("collection", "posts")).rejects.toBe(down);
+  });
+});
+
+describe("the field-group create's address check", () => {
+  /** The field groups the registry holds, with the table each was recorded with. */
+  function serviceOver(held: Array<{ slug: string; tableName: string }>) {
+    const registry = { getAllComponents: vi.fn(async () => held) };
+    const service = new FieldGroupMetadataService(
+      registry as unknown as FieldGroupRegistryService,
+      consoleLogger
+    );
+    return { service, registry };
+  }
+
+  const refusalOf = async (run: Promise<void>) => {
+    try {
+      await run;
+      return null;
+    } catch (error) {
+      const e = error as {
+        code?: string;
+        publicData?: { errors?: { code: string }[] };
+      };
+      return e.publicData?.errors?.[0]?.code ?? e.code;
+    }
+  };
+
+  // Asked as an address is typed, so the field groups are read once per check.
+  it("reads the field groups once", async () => {
+    const { service, registry } = serviceOver([
+      { slug: "seo", tableName: "comp_seo" },
+    ]);
+    await service.assertNewAddressAvailable("hero", "comp_hero");
+    expect(registry.getAllComponents).toHaveBeenCalledTimes(1);
+  });
+
+  // The create's refusals, in the create's order: the rule before anything is
+  // read, then a twin, then an address held, then a table owned.
+  it("judges by the rule before reading anything", async () => {
+    const { service, registry } = serviceOver([]);
+    expect(
+      await refusalOf(service.assertNewAddressAvailable("Hero", "comp_hero"))
+    ).toBe("SLUG_INVALID_FORMAT");
+    expect(registry.getAllComponents).not.toHaveBeenCalled();
+  });
+
+  it("refuses a twin before the table it shares", async () => {
+    const { service } = serviceOver([
+      { slug: "hero_banner", tableName: "comp_hero_banner" },
+    ]);
+    expect(
+      await refusalOf(
+        service.assertNewAddressAvailable("hero-banner", "comp_hero_banner")
+      )
+    ).toBe("SLUG_SAME_SNAKE_CASE");
+  });
+
+  it("refuses an address held under a custom table name", async () => {
+    const { service } = serviceOver([
+      { slug: "seo", tableName: "my_seo_block" },
+    ]);
+    expect(
+      await refusalOf(service.assertNewAddressAvailable("seo", "comp_seo"))
+    ).toBe("DUPLICATE");
+  });
+
+  it("refuses a table another field group owns", async () => {
+    const { service } = serviceOver([
+      { slug: "other", tableName: "comp_hero" },
+    ]);
+    expect(
+      await refusalOf(service.assertNewAddressAvailable("hero", "comp_hero"))
+    ).toBe("DUPLICATE");
+  });
+
+  it("accepts an address and table no field group holds", async () => {
+    const { service } = serviceOver([{ slug: "seo", tableName: "comp_seo" }]);
+    expect(
+      await refusalOf(service.assertNewAddressAvailable("hero", "comp_hero"))
+    ).toBeNull();
   });
 });
