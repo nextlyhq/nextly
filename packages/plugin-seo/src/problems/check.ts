@@ -1096,7 +1096,13 @@ export async function problemList(
   const host =
     addresses[0] === undefined ? undefined : new URL(addresses[0]).host;
   const problems = once([
-    ...(await siteProblems(ctx, checks, addresses, reader)),
+    // A type-level problem (a type with no address) names its type and no
+    // page, and goes with the type's switch too.
+    ...(await siteProblems(ctx, checks, addresses, reader)).filter(
+      problem =>
+        problem.subject.type === undefined ||
+        !isSeoOff(rules, problem.subject.type)
+    ),
     ...found,
     ...pages.flatMap(row => row.problems),
     ...sharedValueProblems(pages),

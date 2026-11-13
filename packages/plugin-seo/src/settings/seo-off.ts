@@ -18,17 +18,21 @@ import type { SeoTypes } from "../seo-types";
 /** The keys already warned about, so each is said once per process. */
 const warned = new Set<string>();
 
-/** The types `rules` switches SEO off for, among those with SEO. */
-export function seoOffTypes(
+/**
+ * The keys `rules` switches SEO off for, among the types with SEO, each once:
+ * the one filtering every reading of the switch goes through, so a stale key
+ * (a type left out since, or removed) switches nothing off anywhere.
+ */
+export function seoOffKeys(
   rules: { readonly typesWithSeoOff?: readonly string[] },
   types: Pick<SeoTypes, "keys">,
   warn: (message: string) => void = message => console.warn(message)
-): ExtendedType[] {
+): string[] {
   const keys = new Set(types.keys);
-  const off: ExtendedType[] = [];
+  const off: string[] = [];
   for (const key of new Set(rules.typesWithSeoOff ?? [])) {
     if (keys.has(key)) {
-      off.push(pageTypeOf(key));
+      off.push(key);
     } else if (!warned.has(key)) {
       warned.add(key);
       warn(
@@ -37,6 +41,15 @@ export function seoOffTypes(
     }
   }
   return off;
+}
+
+/** The types `rules` switches SEO off for, among those with SEO. */
+export function seoOffTypes(
+  rules: { readonly typesWithSeoOff?: readonly string[] },
+  types: Pick<SeoTypes, "keys">,
+  warn?: (message: string) => void
+): ExtendedType[] {
+  return seoOffKeys(rules, types, warn).map(pageTypeOf);
 }
 
 /** Whether `rules` switches SEO off for the type kept under `key`. */

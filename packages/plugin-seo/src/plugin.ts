@@ -142,7 +142,7 @@ import {
   rememberSettingsSingle,
   setupWaiting,
 } from "./settings/rules";
-import { seoOffTypes } from "./settings/seo-off";
+import { seoOffKeys, seoOffTypes } from "./settings/seo-off";
 import { seoSettingsSingle } from "./settings/single";
 import { socialCardFromSettings } from "./settings/social-card-rules";
 import { structuredDataFromSettings } from "./settings/structured-data-rules";
@@ -494,12 +494,21 @@ function subsetOf(
  * every output and one production address answers for all of them. The
  * robots.txt route falls back to the plugin's own AI crawler option.
  */
-function rulesReader(options: { hiddenTypes?: readonly string[] }): ReadRules {
+function rulesReader(
+  options: { hiddenTypes?: readonly string[] },
+  types: Pick<SeoTypes, "keys">
+): ReadRules {
   const hiddenTypes = [...new Set(options.hiddenTypes ?? [])];
   return async (ctx, locale) => {
     const saved = await readSeoRules(ctx, locale);
+    // The switch read once for every output: only types with SEO can be
+    // off, so a stale key is ignored by the head, the listings and the
+    // problems alike, as the admin's switch ignores it.
+    const { typesWithSeoOff: _saved, ...rest } = saved;
+    const off = seoOffKeys(saved, types, message => ctx.logger.warn(message));
     return {
-      ...saved,
+      ...rest,
+      ...(off.length > 0 ? { typesWithSeoOff: off } : {}),
       ...(saved.hiddenTypes === undefined && hiddenTypes.length > 0
         ? { hiddenTypes }
         : {}),
@@ -703,7 +712,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const types = seoTypesOf(options);
 
   const sitemapSubset = subsetOf(options.sitemap, types);
-  const readRules = rulesReader(options);
+  const readRules = rulesReader(options, types);
   // The addresses redirects hold, kept for the Proxy and dropped whenever a
   // redirect saved here commits.
   const redirectKeys = heldRedirectKeys();

@@ -42,10 +42,15 @@ afterEach(async () => {
 describe.each(getConfiguredTestDialects())(
   "a content type with its SEO switched off (%s)",
   (dialect: TestDialect) => {
-    async function boot() {
+    async function boot(exclude?: string[]) {
       current = await createTestNextly({
         dialect,
-        plugins: [seoPlugin({ baseUrl: SITE })],
+        plugins: [
+          seoPlugin({
+            baseUrl: SITE,
+            ...(exclude === undefined ? {} : { exclude }),
+          }),
+        ],
         collections: [PAGES, POSTS].map(slug =>
           defineCollection({
             slug,
@@ -152,6 +157,18 @@ describe.each(getConfiguredTestDialects())(
       const head = await headOf(t, "about");
       expect(head.title).toEqual({ absolute: "About Acme, typed" });
       expect(await sitemap()).toContain(`${SITE}/about`);
+    });
+
+    it("ignores the switch for a type the site gives no SEO, in every output", async () => {
+      // Posts are left out in the configuration: a stale key naming them,
+      // saved before, switches nothing off.
+      const t = await boot([POSTS]);
+      await t.nextly.create({
+        collection: POSTS,
+        data: { title: "Launch", slug: "launch", status: "published" },
+      });
+      await switchOff(t, [POSTS]);
+      expect(await sitemap()).toContain(`${SITE}/launch`);
     });
 
     it("still refuses another page taking one of its addresses", async () => {

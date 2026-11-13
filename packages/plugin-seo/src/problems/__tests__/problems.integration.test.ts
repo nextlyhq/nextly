@@ -292,6 +292,22 @@ describe.each(getConfiguredTestDialects())(
       ).toContain("noDescription");
     });
 
+    it("stops asking for an address for a type whose SEO is switched off", async () => {
+      const { t, ctx } = await boot(dialect);
+      const noAddress = async () =>
+        (await problemList(ctx, CHECKS, everything)).problems.filter(
+          p => p.kind === "noAddress"
+        );
+      expect((await noAddress()).map(p => p.subject.label)).toEqual(["Notes"]);
+
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, typesWithSeoOff: ["notes"] },
+        overrideAccess: true,
+      });
+      expect(await noAddress()).toEqual([]);
+    });
+
     it("lists a canonical naming another address, unless the page is confirmed to live elsewhere", async () => {
       const { t, ctx } = await boot(dialect);
       // First published on another site, and said so: the canonical is meant.
