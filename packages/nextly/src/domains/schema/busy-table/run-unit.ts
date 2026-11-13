@@ -51,7 +51,7 @@ import {
 import { tableBusyError, tryNotice } from "./report";
 import { withBusyTableTries, type TryResult } from "./tries";
 import type { HolderReport } from "./types";
-import { prepareTryWatchdog } from "./watchdog";
+import { prepareTryWatchdog, type PreparedTryWatchdog } from "./watchdog";
 
 /** What a run hands every unit it runs in tries. */
 export interface BusyTableRun {
@@ -384,11 +384,22 @@ export async function runUnitInTries(
       // What holds the table, read by the watch just before it ends the try, while the session
       // still waits; after the rollback it waits for nothing and the database names no holder.
       let holder: HolderReport | undefined;
+      const beforeCancel = async (waiting: string): Promise<void> => {
+        holder = await readHolders(adapter, dialect, waiting);
+      };
       const watchdog = prepareTryWatchdog(adapter, dialect, tryMs, {
-        beforeCancel: async waiting => {
-          holder = await readHolders(adapter, dialect, waiting);
-        },
+        beforeCancel,
       });
+      // The watch of a ledger write that runs on a connection of its own, once the statements'
+      // session has closed: it has what the statements' waits left of the try.
+      let ledgerWatch: PreparedTryWatchdog | undefined;
+      const stopWatches = async (): Promise<{ fired: boolean }> => {
+        const [statements, ledger] = await Promise.all([
+          watchdog.stop(),
+          ledgerWatch?.stop() ?? Promise.resolve({ fired: false }),
+        ]);
+        return { fired: statements.fired || ledger.fired };
+      };
       try {
         const value = await runMigrationStatements(
           adapter,
@@ -415,13 +426,29 @@ export async function runUnitInTries(
             onSend: index => {
               sentIndex = index;
             },
+            afterWatch: () => {
+              const watch = prepareTryWatchdog(
+                adapter,
+                dialect,
+                Math.max(1, tryMs - watchdog.waited()),
+                { beforeCancel }
+              );
+              watch.moveTo(statements.length);
+              ledgerWatch = watch;
+              return {
+                watch: session => watch.watch(session),
+                settle: async () => {
+                  await watch.stop();
+                },
+              };
+            },
             ...(run.passOver === undefined ? {} : { passOver: run.passOver }),
           }
         );
-        await watchdog.stop();
+        await stopWatches();
         return { kind: "done", value };
       } catch (error) {
-        const { fired } = await watchdog.stop();
+        const { fired } = await stopWatches();
         if (!endedWaiting(error, dialect, fired)) throw error;
         const started = from;
         // A statement this try or an earlier one kept may have made a trigger: outside a

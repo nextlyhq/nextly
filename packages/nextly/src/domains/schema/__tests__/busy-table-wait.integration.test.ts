@@ -27,6 +27,7 @@ import { runFileMigrations } from "../../../cli/commands/migrate";
 import { createLogger } from "../../../cli/utils/logger";
 import type { BusyTableBounds } from "../busy-table/bounds";
 import { triggerTables } from "../busy-table/run-unit";
+import { runMigrationStatements } from "../migrate/migration-transaction";
 import { getSchemaEventsDdl } from "../events/schema-events-ddl";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import {
@@ -596,6 +597,128 @@ describe.each(DIALECTS)(
           await holding.catch(() => {});
           await adapter.executeQuery(`DROP TABLE IF EXISTS ${OTHER}`);
           await adapter.executeQuery(`DROP FUNCTION IF EXISTS ${touch}()`);
+        }
+      }
+    );
+
+    it.runIf(dialect === "sqlite")(
+      "keeps a file's own busy timeout from lifting the try's bound on SQLite",
+      async () => {
+        await adapter.executeQuery(`CREATE TABLE ${OTHER} (id integer)`);
+        // The statement after the file's own setting records the busy timeout in force for it:
+        // what any wait of that statement, or of the commit after it, would wait for.
+        writeFile("20261113_000001_own_timeout", [
+          "PRAGMA busy_timeout = 30000",
+          `INSERT INTO ${OTHER} (id) SELECT * FROM pragma_busy_timeout()`,
+        ]);
+
+        await migrate({ tryMs: 1_000, totalMs: 2_000 });
+
+        const [timeout] = await idsOf(OTHER);
+        expect(timeout).toBeGreaterThan(0);
+        expect(timeout).toBeLessThanOrEqual(1_000);
+      }
+    );
+
+    it.runIf(dialect === "sqlite")(
+      "undoes the whole ledger write of a unit run outside a transaction when a busy wait ends it",
+      async () => {
+        await adapter.executeQuery(`CREATE TABLE ${OTHER} (id integer)`);
+        let writes = 0;
+        const after = async (db: unknown): Promise<void> => {
+          writes += 1;
+          // The first record lands, then the second meets a busy database, once.
+          await (db as { run: (query: unknown) => Promise<unknown> }).run(
+            sql.raw(`INSERT INTO ${OTHER} (id) VALUES (${String(writes)})`)
+          );
+          if (writes === 1) {
+            throw Object.assign(new Error("database is locked"), {
+              code: "SQLITE_BUSY",
+            });
+          }
+        };
+
+        const failed = await runMigrationStatements(
+          adapter,
+          [`ALTER TABLE ${BUSY} ADD COLUMN late integer`],
+          { source: "0001_outside.sql", transaction: false },
+          after,
+          { tryMs: 1_000 }
+        ).catch((error: unknown) => error);
+
+        expect(failed).toMatchObject({ code: "SQLITE_BUSY" });
+        // Written again whole by the next try, never half of it kept from the first.
+        expect(await idsOf(OTHER)).toEqual([]);
+      }
+    );
+
+    it.runIf(dialect !== "sqlite")(
+      "ends the ledger write and the stop's record of a file run outside a transaction within their bounds",
+      async () => {
+        writeFile(
+          "20261113_000001_outside_ledger",
+          [`ALTER TABLE ${BUSY} ADD COLUMN late integer`],
+          { outside: true }
+        );
+        await holdTheTable();
+        const freeBusy = free;
+        // Once the statement waits, a second session takes the ledger table; the busy table is
+        // let go at 0.8 s, so the statement lands and its ledger write waits in turn.
+        let freeLedger: () => void = () => {};
+        const ledgerFreed = new Promise<void>(resolve => {
+          freeLedger = resolve;
+        });
+        let ledgerHeld: () => void = () => {};
+        const ledgerIsHeld = new Promise<void>(resolve => {
+          ledgerHeld = resolve;
+        });
+        const holdingLedger = sleep(300).then(() =>
+          dialect === "postgresql"
+            ? holderAdapter.transaction(async ctx => {
+                await ctx.queryStatement(
+                  sql.raw(
+                    "LOCK TABLE nextly_schema_events IN SHARE ROW EXCLUSIVE MODE"
+                  )
+                );
+                ledgerHeld();
+                await ledgerFreed;
+              })
+            : holderAdapter.withSession(async session => {
+                await session.execute("LOCK TABLES nextly_schema_events WRITE");
+                ledgerHeld();
+                await ledgerFreed;
+                await session.execute("UNLOCK TABLES");
+              })
+        );
+        const freeing = ledgerIsHeld
+          .then(() => sleep(500))
+          .then(() => freeBusy());
+        try {
+          const started = Date.now();
+          const stopped = await migrate({
+            tryMs: 1_000,
+            totalMs: 2_000,
+          }).catch((error: unknown) => error);
+          const elapsed = Date.now() - started;
+
+          expect(stopped).toMatchObject({
+            code: "NEXTLY_TABLE_BUSY",
+            logContext: { stop: { tries: 1 } },
+          });
+          // The record of the stop waits for the held ledger table one try at most, then leaves
+          // the attempt for the next run to refuse on: the command ends, rather than waiting for
+          // the holder.
+          expect(elapsed).toBeLessThan(4_000);
+          // One try of 1 s: the statement waited about 0.8 s of it, so the ledger write has what
+          // is left, not a fresh second of its own and the backstop's half second on top.
+          const { elapsedMs } = (
+            stopped as { logContext: { stop: { elapsedMs: number } } }
+          ).logContext.stop;
+          expect(elapsedMs).toBeLessThan(1_900);
+        } finally {
+          await freeing;
+          freeLedger();
+          await holdingLedger.catch(() => {});
         }
       }
     );

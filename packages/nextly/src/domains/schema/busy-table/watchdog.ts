@@ -111,6 +111,8 @@ export interface PreparedTryWatchdog extends TryWatchdog {
    * statement it saw waiting is still the one running, so it can never end a later one.
    */
   moveTo(statement: number): void;
+  /** How long the session has been seen waiting for locks so far, in milliseconds. */
+  waited(): number;
 }
 
 /**
@@ -142,6 +144,7 @@ export function prepareTryWatchdog(
       watch: () => undefined,
       idle: () => Promise.resolve(),
       moveTo: () => undefined,
+      waited: () => 0,
     };
   }
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
@@ -230,6 +233,8 @@ export function prepareTryWatchdog(
     const seen = current;
     const waiting = await waitingNow(connection, target);
     const now = performance.now();
+    // The runner moved on while this asked: what it saw was the earlier statement's, not this one's.
+    if (current !== seen) return;
     if (!waiting) {
       lastSeenWaitingAt = undefined;
       return;
@@ -275,7 +280,11 @@ export function prepareTryWatchdog(
     idle: () => cancelling,
     moveTo(statement) {
       current = statement;
+      // A sighting of the earlier statement waiting is not this one's: the time until the next
+      // sighting may be work between the two, which no lock wait took.
+      lastSeenWaitingAt = undefined;
     },
+    waited: () => waitedMs,
     async stop() {
       stopped = true;
       given(undefined);
