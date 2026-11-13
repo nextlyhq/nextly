@@ -1890,6 +1890,22 @@ export function refusalAfterUndo(error: unknown, restored: boolean): unknown {
   });
 }
 
+/** Refusals a save answers before it stores anything. */
+const BEFORE_STORING = [
+  "STALE_VERSION",
+  "VERSION_REQUIRED",
+  "CONFLICT",
+  "FORBIDDEN",
+  "NOT_FOUND",
+  "VALIDATION_ERROR",
+  "INVALID_INPUT",
+] as const;
+
+/** Whether `error` is a save's refusal made before it stored anything. */
+export function refusedBeforeStoring(error: unknown): boolean {
+  return BEFORE_STORING.some(code => NextlyError.isCode(error, code));
+}
+
 /** A version written as a step of its own, which a later refusal puts back. */
 type Written = PlannedPage[];
 
@@ -1905,7 +1921,9 @@ async function writeStep(
   written: Written
 ): Promise<void> {
   // Noted before it is made: a save can be stored and still be refused as
-  // its answer is drawn, and putting back undoes only what is there.
+  // its answer is drawn, and putting back undoes only what is there. A
+  // refusal made before anything is stored takes the note back, so a value
+  // someone else saved meanwhile is never undone as if it were the import's.
   written.push(page);
   let rev: string | undefined;
   try {
@@ -1917,6 +1935,7 @@ async function writeStep(
       "actor"
     );
   } catch (error) {
+    if (refusedBeforeStoring(error)) written.pop();
     throw refusalAbout(error, page.label);
   }
   revs.set(revKey(page), rev);
