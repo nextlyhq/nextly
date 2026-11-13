@@ -5413,7 +5413,9 @@ export function assertNoForeignDrops(args: {
    * change, never a drop or a rename. The caller decides the value family the
    * change must stay within; this guard does not read the column types.
    */
-  columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+  columnOverrides?:
+    | ReadonlyArray<{ table: string; column: string }>
+    | undefined;
 }): void {
   const read = readOrRefuse(args);
   const holders = new OwnershipView(args);
@@ -6036,7 +6038,9 @@ function refuseInPlaceChanges(
     stream: MigrationStream;
     source: string;
     liveIndexTables?: ReadonlyMap<string, string>;
-    columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+    columnOverrides?:
+      | ReadonlyArray<{ table: string; column: string }>
+      | undefined;
   }
 ): void {
   for (const change of read.alteredColumns) {
@@ -6163,7 +6167,9 @@ function refuseIndexNamed(
 function overridden(
   args: {
     stream: MigrationStream;
-    columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+    columnOverrides?:
+      | ReadonlyArray<{ table: string; column: string }>
+      | undefined;
   },
   table: string,
   column: string
