@@ -922,4 +922,37 @@ describe("resolvePromotedDocument judges a pending value by the document it prod
       ).publicData?.errors?.map(e => e.path)
     ).toEqual(["ops.secret"]);
   });
+  it("judges a pending child against the siblings the publish writes, not the pending change's", async () => {
+    // `ops` needs `kind` "public"; `ops.secret` needs its sibling `mode` to be "allow".
+    const rules = (document: Record<string, unknown>): Promise<void> => {
+      const ops = document.ops as Record<string, unknown> | undefined;
+      if (!ops) return Promise.resolve();
+      if (document.kind !== "public") delete document.ops;
+      else if (ops.mode !== "allow") delete ops.secret;
+      return Promise.resolve();
+    };
+    const pending = {
+      kind: "private",
+      ops: { mode: "allow", secret: "protected edit" },
+    };
+    const callerSupplied = { kind: "public", ops: { mode: "deny" } };
+    let refused: unknown;
+    try {
+      await resolvePromotedDocument({
+        slug: "posts",
+        applyRules: rules,
+        before: { kind: "public", ops: { mode: "deny" } },
+        live: { kind: "public", ops: { mode: "deny" } },
+        pending,
+        callerSupplied,
+      });
+    } catch (error) {
+      refused = error;
+    }
+    expect(
+      (
+        refused as { publicData?: { errors?: { path: string }[] } }
+      ).publicData?.errors?.map(e => e.path)
+    ).toEqual(["ops.secret"]);
+  });
 });

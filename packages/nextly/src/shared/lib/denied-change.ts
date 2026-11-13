@@ -563,31 +563,41 @@ async function deniedOnlyInPending(
 }
 
 /**
- * The paths at or under `path` the produced document denies once it holds the pending value there:
- * the path itself, each descendant the rules remove from it, or `path` again where the rules remove
- * a container holding it. A container the produced document allows can still hold a child its
- * rules deny, and that child is the pending change's to keep.
- * A path the produced document has no container for stays denied.
+ * The pending change's values at or under `path` that the produced document denies, judged one at
+ * a time. Each value the pending change holds there is put into the produced document on its own,
+ * keeping every other value as the publish writes it, so a rule reading a sibling reads the
+ * sibling the publish writes: a container put back whole would bring the pending change's
+ * siblings with it. A value is denied where the rules remove it, or remove a container holding it.
+ * A value inside a list, or one the produced document has no container for, stays denied.
  */
 async function deniedInProduced(
   input: PromotionAccessInput,
   path: string
 ): Promise<string[]> {
+  const denied: string[] = [];
+  for (const leaf of leafPaths(valueAt(input.pending, path), path)) {
+    if (await leafDeniedInProduced(input, leaf)) denied.push(leaf);
+  }
+  return denied;
+}
+
+/** Whether the produced document, holding the pending value at `leaf` alone, denies it. */
+async function leafDeniedInProduced(
+  input: PromotionAccessInput,
+  leaf: string
+): Promise<boolean> {
+  if (leaf.includes("[")) return true;
   const produced = detachData(input.before);
   if (
-    !setRecordPath(produced, path, detachData(valueAt(input.pending, path)))
+    !setRecordPath(produced, leaf, detachData(valueAt(input.pending, leaf)))
   ) {
-    return [path];
+    return true;
   }
   const judged = detachData(produced);
   await input.applyRules(judged);
-  const denied = deniedPaths(produced, judged, "");
-  const under = denied.filter(d => d === path || isUnder(d, path));
-  // A container the rules remove once the pending value is in it takes the value with it: the
-  // pending change's value is denied as surely as if the rule had named it.
-  return denied.some(d => isUnder(path, d))
-    ? [...new Set([path, ...under])]
-    : under;
+  return deniedPaths(produced, judged, "").some(
+    denied => denied === leaf || isUnder(leaf, denied)
+  );
 }
 
 /** Whether `path` lies inside `ancestor`, through a named field or a list row. */
