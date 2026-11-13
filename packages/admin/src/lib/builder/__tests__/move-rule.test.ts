@@ -376,9 +376,16 @@ describe("a field among copies that share its id", () => {
 });
 
 describe("names that clash where a field arrives", () => {
-  /** A top-level field `incoming` beside a group holding one field `held`. */
+  /**
+   * A field `incoming` inside a group of its own, beside a group holding one field `held`: each
+   * move below takes it somewhere new, which is where a name is judged. A reorder among the
+   * siblings it already has arrives nowhere new (the cases under "what a move takes with it").
+   */
   const tree = (incoming: string, held: string): BuilderField[] => [
-    plain("f-incoming", incoming),
+    plain("f-source", "source", {
+      type: "group",
+      fields: [plain("f-incoming", incoming)],
+    }),
     plain("f-group", "details", {
       type: "group",
       fields: [plain("f-held", held)],
@@ -391,7 +398,7 @@ describe("names that clash where a field arrives", () => {
     ["the same name in other letter case", "Subtitle", "subtitle"],
     ["a name that becomes the same column", "subTitle", "sub_title"],
   ])("%s, at the top level and inside a group", (words, incoming, held) => {
-    // Beside a top-level field of the held name.
+    // Out of its group, beside a top-level field of the held name.
     const top = refusal(
       judgeMove(
         tree(incoming, held),
@@ -472,5 +479,58 @@ describe("Move to…'s places", () => {
     expect(answers.get("f-items-cta")).toBe("ok");
     expect(answers.get("f-body")).toBe("into-blocks");
     expect(answers.get("f-seo")).toBe("into-field-group");
+  });
+});
+
+describe("what a move takes with it, and where it arrives", () => {
+  it("reorders among siblings whose names already clash in the saved definition", () => {
+    // A clash the server already holds is kept allowed on save, and a reorder
+    // leaves the field among the siblings it had.
+    const fields = [
+      plain("f-a", "body"),
+      plain("f-b", "Body"),
+      plain("f-c", "other"),
+    ];
+    expect(
+      namesIn(moved(judgeMove(fields, "f-b", { beforeFieldId: "f-a" }, ctx)))
+    ).toEqual(["Body", "body", "other"]);
+    // Arriving from elsewhere under a clashing name is still refused.
+    const arriving = [
+      ...fields,
+      plain("f-g", "group", {
+        type: "group",
+        fields: [plain("f-d", "BODY")],
+      }),
+    ];
+    expect(refusal(judgeMove(arriving, "f-d", {}, ctx)).reason).toBe(
+      "name-clash"
+    );
+  });
+
+  it("refuses moving a container holding a field that cannot change place", () => {
+    // Meta is editable, but Rating inside it is the plugin's.
+    expect(
+      refusal(
+        judgeMove(
+          nestedFixtureFields(),
+          "f-meta",
+          { parentFieldId: "f-sections" },
+          ctx
+        )
+      )
+    ).toEqual({
+      reason: "read-only",
+      message:
+        "Meta cannot move to another place: Rating inside it is defined by @acme/reviews, and moving it would change where that field is stored.",
+    });
+    // Among its own siblings it moves, Rating still inside it.
+    expect(
+      judgeMove(
+        nestedFixtureFields(),
+        "f-meta",
+        { beforeFieldId: "f-body" },
+        ctx
+      ).allowed
+    ).toBe(true);
   });
 });

@@ -293,6 +293,61 @@ function nameRefusal(
 }
 
 /**
+ * Why the field may not arrive in another container, if it may not: a field
+ * inside it that cannot change place would move with it, or its name may not
+ * stand there. A reorder within its own container arrives nowhere new: its
+ * siblings are the ones it had, so a clash among them that the saved
+ * definition already holds, which a save keeps allowing, is no reason to
+ * refuse it.
+ */
+function arrivalRefusal(
+  fields: readonly BuilderField[],
+  chain: readonly BuilderField[],
+  container: BuilderField | null,
+  ctx: MoveContext
+): MoveVerdict | null {
+  const field = chain[chain.length - 1];
+  const source = chain.length > 1 ? chain[chain.length - 2] : null;
+  if ((source?.id ?? null) === (container?.id ?? null)) return null;
+  return (
+    lockedInsideRefusal(field, chain, ctx) ??
+    nameRefusal(field, container, siblingsIn(fields, container), ctx)
+  );
+}
+
+/**
+ * Why a container may not change place, if it may not: a field inside it, at
+ * any depth, is built in or owned by code or a plugin, and moving the
+ * container would change where that field is stored.
+ */
+function lockedInsideRefusal(
+  field: BuilderField,
+  chain: readonly BuilderField[],
+  ctx: MoveContext
+): MoveVerdict | null {
+  const walk = (
+    list: readonly BuilderField[],
+    ancestors: readonly BuilderField[]
+  ): MoveVerdict | null => {
+    for (const inner of list) {
+      const reason = inner.isSystem
+        ? { kind: "code" as const }
+        : placementReadOnlyReason(inner, ancestors, ctx.entityReadOnly);
+      if (reason) {
+        return refuse(
+          "read-only",
+          `${called(field)} cannot move to another place: ${called(inner)} inside it is ${describeReadOnly(reason).toLowerCase()}, and moving it would change where that field is stored.`
+        );
+      }
+      const below = walk(inner.fields ?? [], [...ancestors, inner]);
+      if (below) return below;
+    }
+    return null;
+  };
+  return walk(field.fields ?? [], chain);
+}
+
+/**
  * Whether `fieldId` may move to `target` (a container, the top level when it
  * names none, and the sibling to go before, the end when none), and the
  * fields after the move when it may.
@@ -326,7 +381,7 @@ export function judgeMove(
     ((ctx.excludedTypes ?? []).includes(field.type)
       ? refuse("excluded-type", `${called(field)} cannot go here.`)
       : null) ??
-    nameRefusal(field, container, siblingsIn(fields, container), ctx);
+    arrivalRefusal(fields, chain, container, ctx);
   if (refusal) return refusal;
   const passed = passedReadOnlySibling(
     fields,
