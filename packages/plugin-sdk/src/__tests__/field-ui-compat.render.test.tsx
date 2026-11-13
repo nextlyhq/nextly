@@ -31,7 +31,7 @@
  *
  * This stays until the release that removes these parts.
  */
-import * as admin from "@nextlyhq/admin";
+import * as admin from "@nextlyhq/admin/kit";
 import * as entry from "@nextlyhq/plugin-sdk/admin";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";

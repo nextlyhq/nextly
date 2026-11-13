@@ -38,7 +38,7 @@ vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({ enabled: false }),
 }));
 
-vi.mock("@admin/components/ui", () => ({
+vi.mock("@admin/components/ui/toaster", () => ({
   toast: {
     success: vi.fn(),
     warning: vi.fn(),

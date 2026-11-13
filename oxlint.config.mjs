@@ -589,6 +589,45 @@ export default defineConfig({
       rules: { "turbo/no-undeclared-env-vars": "off" },
     },
     {
+      // Where the plugin SDK re-exports a core entry, a plugin imports the
+      // SDK's. `@nextlyhq/plugin-sdk/schema`, `/db` and `/testing` are the
+      // published surface for declaring tables, building their queries and
+      // booting a test instance; the core subpaths behind them are not a
+      // plugin's contract, and a plugin written against them reads as an
+      // example of doing so. Other core entries (`nextly/config` and the like)
+      // have no SDK counterpart yet, so they stay open. The SDK is the one
+      // package that re-exports these, so it is outside the rule.
+      files: [
+        "packages/plugin-*/src/**/*.{ts,tsx}",
+        "apps/playground/src/plugins/**/*.{ts,tsx}",
+      ],
+      excludeFiles: ["packages/plugin-sdk/**"],
+      rules: {
+        "no-restricted-imports": [
+          "error",
+          {
+            paths: [
+              {
+                name: "nextly/schema-extension",
+                message:
+                  "Import from @nextlyhq/plugin-sdk/schema, the plugin surface that re-exports it.",
+              },
+              {
+                name: "nextly/db-operators",
+                message:
+                  "Import from @nextlyhq/plugin-sdk/db, the plugin surface that re-exports it.",
+              },
+              {
+                name: "nextly/testing",
+                message:
+                  "Import from @nextlyhq/plugin-sdk/testing, the plugin surface that re-exports it.",
+              },
+            ],
+          },
+        ],
+      },
+    },
+    {
       // One owner for keyboard shortcuts: the admin's shortcut manager.
       files: ["packages/admin/src/**/*.{ts,tsx}"],
       rules: { "nextly/no-keyboard-listener": "error" },

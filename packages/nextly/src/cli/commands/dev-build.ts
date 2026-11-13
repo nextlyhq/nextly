@@ -180,10 +180,14 @@ export async function publishExtensionSchema(
   const { compileAndPublishExtensionSchema } = await import(
     "../../domains/schema/extension/publish"
   );
+  const capabilities = (adapter as unknown as DrizzleAdapter).getCapabilities();
   await compileAndPublishExtensionSchema({
-    dialect: (adapter as unknown as DrizzleAdapter).getCapabilities().dialect,
+    dialect: capabilities.dialect,
     plugins: configResult.config.plugins ?? [],
     config: configResult.config,
+    // The connected server's limits: a push that declares a check or
+    // expression index the server cannot hold is refused before applying.
+    server: capabilities,
     logger: {
       warn: m => context.logger.warn(m),
       debug: m => context.logger.debug(m),
