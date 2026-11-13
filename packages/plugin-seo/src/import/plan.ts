@@ -2007,6 +2007,19 @@ async function putBack(plan: ImportPlan, written: Written): Promise<boolean> {
         continue;
       }
       const now = await storedVersion(page);
+      // A draft published or discarded since is no draft to put back: a
+      // save now would make a new one.
+      if (
+        page.write === "held" &&
+        !(isRecord(now) && now._isWorkingDraft === true)
+      ) {
+        plan.engine.ctx.logger.warn(
+          "An imported draft is no longer a draft, so it is not put back",
+          { type: page.type, id: page.id, locale: page.locale }
+        );
+        restored = false;
+        continue;
+      }
       const rev = isRecord(now) ? now._rev : undefined;
       const back = undoneGroup(now, page);
       // Nothing of the import's is there any more: someone changed every
