@@ -34,8 +34,7 @@ import { getTableName } from "../../collections/services/collection-utils";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import {
   fieldGroupRowMoves,
-  keepsFieldGroupRows,
-  removedAndAddedFieldGroups,
+  fieldGroupRenamePairs,
   removedAndAddedFields as renameCandidates,
 } from "../../field-groups/storage/field-group-rename";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
@@ -2679,15 +2678,9 @@ ${allColumnDefs.join(",\n")}
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[]
   ): { from: FieldDefinition; to: FieldDefinition } | null {
-    const { oldOnly, newOnly } = removedAndAddedFieldGroups(
-      oldFields,
-      newFields
-    );
-    // A name on both sides (a field group that changed what it holds) is a remove and an add, and
-    // is never paired with itself: renaming a field to its own name moves nothing.
-    const pairs = oldOnly.flatMap(from =>
-      newOnly.filter(to => to.name !== from.name).map(to => ({ from, to }))
-    );
+    // The pairs that may be one field renamed (`fieldGroupRenamePairs`), which `migrate:create`
+    // asks about too: incompatible combinations never count toward the refusal below.
+    const pairs = fieldGroupRenamePairs(oldFields, newFields);
     if (pairs.length === 0) return null;
     if (pairs.length > 1) {
       refuseAmbiguousRename({
@@ -2700,10 +2693,7 @@ ${allColumnDefs.join(",\n")}
       });
     }
 
-    const { from, to } = pairs[0];
-    // The same rows under either name (`keepsFieldGroupRows`), which `migrate:create` asks too.
-    if (!keepsFieldGroupRows(from, to)) return null;
-    return { from, to };
+    return pairs[0];
   }
 
   /**

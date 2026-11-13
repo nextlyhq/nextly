@@ -15,6 +15,7 @@ import { DynamicCollectionSchemaService } from "../../../dynamic-collections/ser
 import { planFieldGroupRenames } from "../../../schema/migrate-create/field-group-renames";
 import type { RecordedEntitySettings } from "../../../schema/migrate-create/entity-settings";
 import {
+  fieldGroupRenamePairs,
   keepsFieldGroupRows,
   removedAndAddedFieldGroups,
   type RenamedFieldShape,
@@ -118,6 +119,9 @@ describe("migrate:create's field-group renames", () => {
       groupTables: new Map([
         ["seo", "comp_seo"],
         ["seo_v2", "comp_seo_v2"],
+        ["hero", "comp_hero"],
+        ["cta", "comp_cta"],
+        ["footer", "comp_footer"],
       ]),
       dialect: "postgresql",
       decide: async candidates => {
@@ -140,10 +144,64 @@ describe("migrate:create's field-group renames", () => {
     expect(result.down[0]).toContain(`SET "_parent_field" = 'seo'`);
   });
 
+  it("asks about no move between two fields that exchange their groups' names", async () => {
+    const zone = (name: string, components: string[]) => ({
+      name,
+      type: "component",
+      components,
+      repeatable: true,
+    });
+    const { asked, result } = await plan(
+      [zone("a", ["hero", "cta"]), zone("b", ["hero", "footer"])],
+      [zone("a", ["hero", "footer"]), zone("b", ["hero", "cta"])]
+    );
+    expect(asked).toEqual([]);
+    expect(result.up).toEqual([]);
+  });
+
   it("never offers a field renamed to its own name", async () => {
     const otherGroup = { name: "seo", type: "component", component: "seo_v2" };
     const { asked } = await plan([oldSeo], [legacySeo, otherGroup]);
     expect(asked).toEqual(["seo->legacySeo"]);
+  });
+});
+
+describe("names that held a field group before", () => {
+  const zone = (name: string, components: string[]) => ({
+    name,
+    type: "component",
+    components,
+    repeatable: true,
+  });
+
+  it("offers no rename between two fields that exchange their groups' names", async () => {
+    // `hero` rows of both fields share comp_hero: moving `a` to `b` and then `b` to `a` would
+    // hand every hero row to `a`, so neither move may be offered.
+    const before = [zone("a", ["hero", "cta"]), zone("b", ["hero", "footer"])];
+    const after = [zone("a", ["hero", "footer"]), zone("b", ["hero", "cta"])];
+    expect(fieldGroupRenamePairs(before, after)).toEqual([]);
+  });
+
+  it("offers a rename onto a name whose old field group held other groups", () => {
+    const before = [zone("a", ["hero"]), zone("b", ["footer"])];
+    const after = [zone("b", ["hero"])];
+    expect(
+      fieldGroupRenamePairs(before, after).map(
+        p => `${p.from.name}->${p.to.name}`
+      )
+    ).toEqual(["a->b"]);
+  });
+
+  it("pairs nothing between fields that only changed their groups", () => {
+    const before = [
+      { name: "a", type: "component", component: "ga" },
+      { name: "b", type: "component", component: "gb" },
+    ];
+    const after = [
+      { name: "a", type: "component", component: "gc" },
+      { name: "b", type: "component", component: "gd" },
+    ];
+    expect(fieldGroupRenamePairs(before, after)).toEqual([]);
   });
 });
 
@@ -168,6 +226,30 @@ describe("the Schema Builder's field-group rename", () => {
     );
     expect(rename?.from).toEqual(oldSeo);
     expect(rename?.to).toEqual(legacySeo);
+  });
+
+  it("finds no rename, and refuses nothing, when two fields only change their groups", () => {
+    expect(
+      service.detectFieldGroupAssociationRename(
+        asFields([
+          { name: "a", type: "component", component: "ga" },
+          { name: "b", type: "component", component: "gb" },
+        ]),
+        asFields([
+          { name: "a", type: "component", component: "gc" },
+          { name: "b", type: "component", component: "gd" },
+        ])
+      )
+    ).toBeNull();
+  });
+
+  it("pairs one rename saved beside a field that only changed its group", () => {
+    const rename = service.detectFieldGroupAssociationRename(
+      asFields([oldSeo, { name: "x", type: "component", component: "ga" }]),
+      asFields([legacySeo, { name: "x", type: "component", component: "gc" }])
+    );
+    expect(rename?.from.name).toBe("seo");
+    expect(rename?.to.name).toBe("legacySeo");
   });
 
   it("finds no rename in a field group that only changed its group", () => {
