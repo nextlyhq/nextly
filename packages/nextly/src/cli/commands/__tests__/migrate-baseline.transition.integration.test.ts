@@ -1598,6 +1598,41 @@ function runSuite(dialect: SupportedDialect): void {
     expect(again.kind).toBe("already-baselined");
     expect(await readdir(join(h.migrationsDir, "meta"))).toEqual(afterFirst);
   });
+
+  it("returns already-baselined rather than contribution-mismatch when a recorded contribution was withdrawn", async () => {
+    // Once a baseline exists, its recorded snapshot already carries any
+    // contributed element so `migrate:create` can plan its removal. Calling
+    // `migrate:baseline` again with the hook withdrawn must report
+    // `already-baselined`, not `contribution-mismatch`.
+    await runDbSync(h, pendingConfig([contributesToPlugin]));
+    const first = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      appStream: await compileAppStreamTables({
+        config: pendingConfig([contributesToPlugin]),
+        dialect: h.dialect,
+        logger: { warn: () => {} },
+      }),
+    });
+    expect(first.kind).toBe("baselined");
+
+    const again = await baselineCore({
+      adapter: h.adapter,
+      db: h.db,
+      dialect: h.dialect,
+      migrationsDir: h.migrationsDir,
+      logger,
+      appStream: await compileAppStreamTables({
+        config: pendingConfig([]),
+        dialect: h.dialect,
+        logger: { warn: () => {} },
+      }),
+    });
+    expect(again.kind).toBe("already-baselined");
+  });
 }
 
 describe("db:sync to migrations (sqlite)", () => runSuite("sqlite"));

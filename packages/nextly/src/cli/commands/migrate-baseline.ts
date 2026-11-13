@@ -680,6 +680,41 @@ function contributedElementStatements(
 }
 
 /**
+ * Unexplained live elements standing on owner tables after config withdrew
+ * the contribution that added them.
+ */
+function findContributionMismatches(
+  appStream: AppStreamTables | undefined,
+  ownerLive: ReadonlyMap<string, TableSpec>,
+  dialect: SupportedDialect
+): { table: string; elements: string[] }[] {
+  if (appStream === undefined) return [];
+  const retainedCoreColumns: ReadonlyMap<string, ReadonlySet<string>> = new Map(
+    [
+      ["media", new Set([RETAINED_SIZES_COLUMN.name])],
+      ...RETIRED_ACCESS_RULES_TABLES.map(
+        table => [table, new Set([RETIRED_ACCESS_RULES_COLUMN])] as const
+      ),
+    ]
+  );
+  const core = coreTableNames(dialect);
+  return [...ownerLive.entries()].flatMap(([name, table]) => {
+    const bare = appStream.baselines.get(name);
+    if (bare === undefined) return [];
+    const unexplained = unexplainedElements({
+      bare,
+      elements: appStream.contributed.get(name)?.elements ?? NO_ELEMENTS,
+      live: table,
+      core,
+      retained: retainedCoreColumns,
+    });
+    return unexplained.length === 0
+      ? []
+      : [{ table: name, elements: unexplained }];
+  });
+}
+
+/**
  * What adopting the database would write, decided from the database and the migrations folder:
  * the migration's text, where it and its snapshot go, or the reason there is nothing to adopt.
  * Reads only, so a run calls it under the migrate lock and a dry run calls it alone.
@@ -761,43 +796,23 @@ async function planAdoption(deps: BaselineCoreDeps): Promise<AdoptionPlan> {
       declared: deps.declared,
     }),
   });
+  // Already-baselined or existing-history projects are settled before orphan
+  // checks: a recorded snapshot already retains any withdrawn contribution so
+  // `migrate:create` can derive its removal, while empty-database projects
+  // still continue to inspect standing contributions on owner tables.
+  if (plan.kind === "already-baselined" || plan.kind === "history-not-empty") {
+    return notAdopting(plan);
+  }
   // An element standing on an owner's table that neither the owner's
   // declaration nor any current contribution explains is one a withdrawn
-  // hook left behind. Nothing records whose it was — the attribution dies
-  // with the contribution — so adopting could neither carry it to a fresh
-  // environment nor schedule its removal, and this database would keep it
-  // while every other missed it. Refused and named, like the companion
-  // mismatch: dropping content-bearing columns is the operator's decision.
-  // Judged before the empty-database answer, because a config that withdrew
-  // its every contribution is exactly one with nothing currently standing.
-  // Columns the core reconcile itself keeps on an existing database, scoped
-  // by table so a withdrawn contribution sharing a name on another table is
-  // still refused.
-  const retainedCoreColumns: ReadonlyMap<string, ReadonlySet<string>> = new Map(
-    [
-      ["media", new Set([RETAINED_SIZES_COLUMN.name])],
-      ...RETIRED_ACCESS_RULES_TABLES.map(
-        table => [table, new Set([RETIRED_ACCESS_RULES_COLUMN])] as const
-      ),
-    ]
+  // hook left behind. Judged before the empty-database answer, because a
+  // config that withdrew its every contribution is exactly one with nothing
+  // currently standing.
+  const orphans = findContributionMismatches(
+    deps.appStream,
+    ownerLive,
+    dialect
   );
-  const orphans = deps.appStream
-    ? [...ownerLive.entries()].flatMap(([name, table]) => {
-        const bare = deps.appStream?.baselines.get(name);
-        if (bare === undefined) return [];
-        const unexplained = unexplainedElements({
-          bare,
-          elements:
-            deps.appStream?.contributed.get(name)?.elements ?? NO_ELEMENTS,
-          live: table,
-          core: coreTableNames(dialect),
-          retained: retainedCoreColumns,
-        });
-        return unexplained.length === 0
-          ? []
-          : [{ table: name, elements: unexplained }];
-      })
-    : [];
   if (orphans.length > 0) {
     return { kind: "contribution-mismatch", mismatches: orphans };
   }
@@ -1160,56 +1175,79 @@ export async function runMigrateBaseline(
     });
     if (result === undefined) return;
 
-    if (result.kind === "would-baseline") {
-      reportPlan({ changes: baselineChanges(result, cwd) });
-      return;
-    }
-
-    if (result.kind === "empty-database") {
-      logger.info("No managed tables found, so there is nothing to adopt.");
-      logger.info(
-        "Create your first migration instead:  pnpm nextly migrate:create --name init"
-      );
-      if (options.dryRun === true) reportPlan({ changes: [] });
-      return;
-    }
-
-    if (result.kind !== "baselined") {
-      const refused = refusalLines(result);
-      if (options.dryRun === true) {
-        // One refusal, in the words the run prints over several lines.
-        reportPlan({
-          changes: [],
-          refusals: [
-            refused
-              .map(line => line.trim())
-              .filter(line => line !== "")
-              .join(" "),
-          ],
-        });
-        return;
-      }
-      for (const line of refused) {
-        if (line === "") logger.newline();
-        else logger.info(line);
-      }
-      return;
-    }
-
-    logger.newline();
-    logger.success(`Adopted ${result.tableCount} existing tables.`);
-    logger.info(`  Migration: ${result.sqlPath}`);
-    logger.info(`  Snapshot:  ${result.snapshotPath}`);
-    logger.newline();
-    logger.info("Recorded as applied — it will not run against this database.");
-    logger.info(
-      "Commit both files: they are how another environment builds this schema."
-    );
-    logger.newline();
-    logger.info("Next:  pnpm nextly migrate:create --name <your_change>");
+    reportBaselineOutcome({
+      result,
+      logger,
+      cwd,
+      dryRun: options.dryRun === true,
+      reportPlan,
+    });
   } finally {
     await adapter.disconnect();
   }
+}
+
+/**
+ * Reports the outcome of an adoption attempt to the logger or dry-run plan.
+ */
+function reportBaselineOutcome(args: {
+  result: BaselineCoreResult;
+  logger: CommandContext["logger"];
+  cwd: string;
+  dryRun: boolean;
+  reportPlan: (plan: DryRunPlan) => void;
+}): void {
+  const { result, logger, cwd, dryRun, reportPlan } = args;
+
+  if (result.kind === "would-baseline") {
+    reportPlan({ changes: baselineChanges(result, cwd) });
+    return;
+  }
+
+  if (result.kind === "empty-database") {
+    logger.info("No managed tables found, so there is nothing to adopt.");
+    logger.info(
+      "Create your first migration instead:  pnpm nextly migrate:create --name init"
+    );
+    if (dryRun) reportPlan({ changes: [] });
+    return;
+  }
+
+  if (result.kind !== "baselined") {
+    const refused = refusalLines(result);
+    if (dryRun) {
+      reportPlan({
+        changes: [],
+        refusals: [
+          refused
+            .map(line => line.trim())
+            .filter(line => line !== "")
+            .join(" "),
+        ],
+      });
+      return;
+    }
+    for (const line of refused) {
+      if (line === "") logger.newline();
+      else logger.info(line);
+    }
+    return;
+  }
+
+  logger.newline();
+  logger.success(`Adopted ${result.tableCount} existing tables.`);
+  logger.info(`  Migration: ${result.sqlPath}`);
+  logger.info(`  Snapshot:  ${result.snapshotPath}`);
+  logger.newline();
+  logger.info("Recorded as applied — it will not run against this database.");
+  logger.info(
+    "Your first migration will now record changes made from this point on."
+  );
+  logger.info(
+    "Commit both files: they are how another environment builds this schema."
+  );
+  logger.newline();
+  logger.info("Next:  pnpm nextly migrate:create --name <your_change>");
 }
 
 /**
