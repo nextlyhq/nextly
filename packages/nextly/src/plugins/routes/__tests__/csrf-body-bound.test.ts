@@ -57,7 +57,13 @@ const csrfRoute = (
   handler: (req: Request) => Promise<Response> | Response
 ): RouteMatch => ({
   pluginName: "@a/x",
-  route: { method: "POST", path: "/r", csrf: true, handler } as PluginRoute,
+  route: {
+    siteWide: false,
+    method: "POST",
+    path: "/r",
+    csrf: true,
+    handler,
+  } as PluginRoute,
   baseCtx,
   params: {},
 });

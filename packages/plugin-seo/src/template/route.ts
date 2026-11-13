@@ -236,6 +236,7 @@ export function seoTemplateRoute(setup: {
   baseUrl?: string | undefined;
 }): {
   method: "POST";
+  checksAccess: true;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
@@ -244,6 +245,7 @@ export function seoTemplateRoute(setup: {
   return {
     method: "POST",
     path: SEO_TEMPLATE_PATH,
+    checksAccess: true, // The handler judges each caller.
     handler: async (req, ctx) => {
       const body = await bodyOf(req);
       const caller = ctx.caller;

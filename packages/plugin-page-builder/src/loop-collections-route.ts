@@ -406,12 +406,14 @@ export function loopCollectionsRoute(
   store: ComponentStore = DEFAULT_COMPONENT_STORE
 ): {
   method: "GET";
+  checksAccess: true;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
   return {
     method: "GET",
     path: LOOP_COLLECTIONS_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     handler: async (req, ctx) => {
       const query = parseRouteQuery(
         req.url,

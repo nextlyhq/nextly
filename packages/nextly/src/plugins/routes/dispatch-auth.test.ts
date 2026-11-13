@@ -35,6 +35,7 @@ const baseCtx = {
 let handlerCalls = 0;
 function route(extra: Partial<PluginRoute>): PluginRoute {
   return {
+    siteWide: false,
     method: "GET",
     path: "/r",
     handler: (_req, ctx) => {

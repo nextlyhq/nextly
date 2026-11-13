@@ -639,6 +639,7 @@ export interface VariableRouteSetup {
  */
 export function variableRoutes(setup: VariableRouteSetup): {
   method: "GET" | "POST";
+  checksAccess?: true;
   path: string;
   requiredPermission?: ReturnType<typeof siteStylePermission>;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
@@ -657,6 +658,7 @@ export function variableRoutes(setup: VariableRouteSetup): {
     {
       method: "GET",
       path: VARIABLE_USAGE_ROUTE_PATH,
+      checksAccess: true, // The handler judges each caller.
       handler: async (req, ctx) => {
         await admitVariableReader(ctx);
         return respondDoc(
@@ -673,6 +675,7 @@ export function variableRoutes(setup: VariableRouteSetup): {
     {
       method: "GET",
       path: VARIABLE_WHERE_USED_ROUTE_PATH,
+      checksAccess: true, // The handler judges each caller.
       handler: async (req, ctx) => {
         await admitVariableReader(ctx);
         return readVariableUses(
