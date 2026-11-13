@@ -1002,6 +1002,15 @@ export type {
 } from "nextly";
 
 /**
+ * @experimental One read a plugin page makes as it opens, declared on the page
+ * as `contributes.admin.pages[].startupReads`: a route of the plugin's own,
+ * named as `usePluginRoute` names it. A fresh tab that opens on the page asks
+ * for it inside the admin's startup request, in its first round, and the
+ * page's own read takes that answer. See `STABILITY.md`.
+ */
+export type { PluginPageStartupRead } from "nextly";
+
+/**
  * @experimental What a standalone plugin declares about its own panel
  * (`contributes.admin.panel`, and `group`, `count` and `badge` on a menu
  * item), drawn by the admin with no plugin code running in the browser:

@@ -101,27 +101,62 @@ export function sendStartupRequest(
 }
 
 /**
- * The page's script: sends the startup request with `send` (the source of
- * {@link sendStartupRequest}) to the admin API at `apiPath` on this origin,
- * and leaves it, with the paths it named, in `slot` for the admin. Runs as
- * the browser reads the prebuilt page, before the admin's code has loaded,
- * so it is kept free of closures and imports, and nothing it does can throw:
- * a script that fails leaves nothing, and the admin sends the request itself.
+ * Which paths the startup request names for the page at `pathname`: what
+ * every screen needs first (`common`), and the reads the page declares, found
+ * in `screensJson`, the plugin pages' startup reads the admin layout writes
+ * into the page, at most `max` in all. The admin's `startupPathsForPage`; a
+ * type here, as this module cannot import that one, which imports it.
+ */
+export type StartupPathsFor = (
+  pathname: string,
+  common: readonly string[],
+  screensJson: string | null,
+  max: number
+) => string[];
+
+/** What the page's script is written with when the page is built. */
+export interface EarlyStartupPlan {
+  /** The admin API's path on this origin (`API_PATH_PREFIX`). */
+  apiPath: string;
+  /** What every screen needs first (`adminStartupPaths`). */
+  common: string[];
+  /** The element the admin layout writes the plugin pages' startup reads in. */
+  screensElementId: string;
+  /** The most paths one startup request may name. */
+  max: number;
+  /** Where the request is left for the admin ({@link EARLY_STARTUP_SLOT}). */
+  slot: string;
+}
+
+/**
+ * The page's script: works out the paths for the page it is on with
+ * `pathsFor`, sends the startup request with `send` (the sources of the
+ * admin's own functions) and leaves it, with the paths it named, in the
+ * plan's slot for the admin. Runs as the browser reads the prebuilt page,
+ * before the admin's code has loaded, so it is kept free of closures and
+ * imports, and nothing it does can throw: a script that fails leaves nothing,
+ * and the admin sends the request itself.
  */
 export function startEarlyStartupRequest(
   send: typeof sendStartupRequest,
-  apiPath: string,
-  paths: string[],
-  slot: string
+  pathsFor: StartupPathsFor,
+  plan: EarlyStartupPlan
 ): void {
   try {
-    const response = send(window.location.origin + apiPath, paths);
+    const screens = document.getElementById(plan.screensElementId);
+    const paths = pathsFor(
+      window.location.pathname,
+      plan.common,
+      screens === null ? null : screens.textContent,
+      plan.max
+    );
+    const response = send(window.location.origin + plan.apiPath, paths);
     // A failure is the admin's to handle once it takes the request; until
     // then it is not reported as an error nobody handled.
     response.catch(function () {
       return undefined;
     });
-    (window as unknown as Record<string, unknown>)[slot] = {
+    (window as unknown as Record<string, unknown>)[plan.slot] = {
       paths: paths,
       response: response,
     };
