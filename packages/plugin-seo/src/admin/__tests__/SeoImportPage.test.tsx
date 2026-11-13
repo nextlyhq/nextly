@@ -189,6 +189,18 @@ const dryRuns = () => sent.filter(each => each.path.endsWith("/dry-run"));
 const table = () => screen.getByRole("table");
 
 describe("importing this site's own field group", () => {
+  it("says a field group's fields were matched by name, for a person to change", async () => {
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    expect(
+      screen.getByText(
+        "Each field in SEO (old) goes to one place in the plugin. We matched them by name; change any that's wrong."
+      )
+    ).toBeTruthy();
+  });
+
   it("offers the group first, with what it holds, and another group beside it", () => {
     render(<SeoImportPage />);
     expect(
@@ -578,6 +590,20 @@ describe("importing a file another tool exported", () => {
 <wp:post_type><![CDATA[page]]></wp:post_type><content:encoded><![CDATA[${"A long page. ".repeat(500)}]]></content:encoded>
 <wp:postmeta><wp:meta_key><![CDATA[_yoast_wpseo_title]]></wp:meta_key><wp:meta_value><![CDATA[Nextly pricing]]></wp:meta_value></wp:postmeta>
 </item></channel></rss>`;
+
+  it("says a file's fields are matched by the tool's names, which can't be changed here", async () => {
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /WordPress/ }));
+    await choose("acme.WordPress.xml", WXR);
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    expect(
+      screen.getByText(
+        "Each field in the WordPress file goes to one place in the plugin, matched by the name the tool gives it."
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText(/change any that's wrong/)).toBeNull();
+  });
 
   it("reads a WordPress export and says what it holds, with a way to another file", async () => {
     render(<SeoImportPage />);

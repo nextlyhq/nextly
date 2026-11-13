@@ -197,7 +197,12 @@ function stepsOf(
 }
 
 /** What the header says on each step. */
-function leadOf(step: Step, name: string): string {
+function leadOf(step: Step, name: string, fromFile: boolean): string {
+  // A file's fields are matched by the tool's own names and can't be
+  // changed here; a field group's can.
+  if (step === 1 && fromFile) {
+    return `Each field in the ${name} goes to one place in the plugin, matched by the name the tool gives it.`;
+  }
   if (step === 1) {
     return `Each field in ${name} goes to one place in the plugin. We matched them by name; change any that's wrong.`;
   }
@@ -1287,6 +1292,7 @@ function useImportFlow() {
     failure,
     stopped,
     name: sourceName(choice, groups),
+    fromFile: choice?.kind === "file",
     ready: group !== undefined || fileRead !== undefined,
     /** Moves to `next`, the dry run worked out again for it. */
     goTo: (next: 0 | 1 | 2) => {
@@ -1415,7 +1421,7 @@ export function SeoImportPage(): JSX.Element {
     <PageFrame type="form">
       <PageHeader
         title="Import SEO values"
-        description={leadOf(flow.step, flow.name)}
+        description={leadOf(flow.step, flow.name, flow.fromFile)}
         breadcrumbs={<SeoTrail steps={[PAGES_STEP, { label: "Import" }]} />}
       />
       {/* One column no wider than the screen: a wide table scrolls inside
