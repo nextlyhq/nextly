@@ -240,18 +240,31 @@ function calledAt(
 function callVerdict(called: string): StatementJudgement | undefined {
   const parts = called.split(".");
   const word = parts[parts.length - 1];
-  const qualifier = parts.length > 1 ? parts.slice(0, -1).join(".") : undefined;
   if (word === "SETVAL") return noRetry("setval");
-  if (qualifier !== undefined && qualifier !== BUILT_IN_SCHEMA) {
+  // A call qualified by any schema but the built-in catalog is the site's own code.
+  const qualifier = parts.slice(0, -1).join(".");
+  if (qualifier !== "" && qualifier !== BUILT_IN_SCHEMA) {
     return noRetry("unknown-code");
   }
-  if (PAREN_KEYWORDS.has(word) || PAREN_TYPES.has(word)) return undefined;
-  if (BUILT_IN_FUNCTIONS.has(word) || SEQUENCE_FUNCTIONS.has(word)) {
-    return undefined;
-  }
-  if (word === "SETVAL") return noRetry("setval");
-  if (OUTSIDE_WRITES.test(word)) return noRetry("outside-write");
-  return noRetry("unknown-code");
+  return wordVerdict(word);
+}
+
+/** Whether `word` is called harmlessly: a keyword's list, a type's size, a built-in function. */
+function knownHarmless(word: string): boolean {
+  return [
+    PAREN_KEYWORDS,
+    PAREN_TYPES,
+    BUILT_IN_FUNCTIONS,
+    SEQUENCE_FUNCTIONS,
+  ].some(set => set.has(word));
+}
+
+/** What a call of the unqualified `word` makes of a statement; undefined where harmless. */
+function wordVerdict(word: string): StatementJudgement | undefined {
+  if (knownHarmless(word)) return undefined;
+  return OUTSIDE_WRITES.test(word)
+    ? noRetry("outside-write")
+    : noRetry("unknown-code");
 }
 
 /**
