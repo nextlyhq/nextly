@@ -13,6 +13,8 @@
  * @module init/seed-permissions
  */
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import { inArray } from "drizzle-orm";
 
 import type { AccessTarget } from "../auth/access/decide";
@@ -21,7 +23,9 @@ import {
   ROLE_PRESETS,
   seedRolePresets,
 } from "../database/seeders/role-presets";
+import type { NextlyServiceConfig } from "../di/register";
 import { getService } from "../di/service-access";
+import { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import { PermissionService } from "../domains/auth/services/permission-service";
 import {
   permissionIdsBySlug,
@@ -33,21 +37,28 @@ import {
   PUBLIC_ROLE_SLUG,
   publicRoleMade,
   seedPublicRole,
+  type PublicRoleSeeded,
 } from "../domains/auth/services/public-role";
 import { RoleMutationService } from "../domains/auth/services/role/role-mutation-service";
 import { RoleQueryService } from "../domains/auth/services/role/role-query-service";
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
 import { isMissingTable } from "../domains/field-groups/migration/session";
+import type { MetaService } from "../domains/meta/services/meta-service";
 import { describeError } from "../errors/describe-error";
 import { NextlyError } from "../errors/nextly-error";
-import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
+import {
+  collectCustomPermissions,
+  type PermissionConfigSource,
+} from "../plugins/permissions/collect-permissions";
+import type { PluginDefinition } from "../plugins/plugin-context";
 import { collectPublicGrants } from "../plugins/public-grants/collect-public-grants";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { seedPluginRoles } from "../plugins/roles/seed-roles";
 import { permissionSlug, SYSTEM_RESOURCES } from "../schemas/_zod/rbac";
-import { consoleLogger } from "../shared/types";
+import { consoleLogger, type Logger } from "../shared/types";
 
 import { runBoundedDiagnostic } from "./bounded-diagnostic";
+import type { RuleContextConfig } from "./code-rule-context";
 
 /**
  * Seed system, collection, single and plugin-declared permissions, then grant
@@ -64,23 +75,49 @@ import { runBoundedDiagnostic } from "./bounded-diagnostic";
  * otherwise take a partial seeding for a whole one.
  */
 export async function seedAllPermissions(): Promise<void> {
-  const permissionSeedService = getService("permissionSeedService");
-  const systemResult = await permissionSeedService.seedSystemPermissions();
-  const collectionResult =
-    await permissionSeedService.seedAllCollectionPermissions();
-  const singleResult = await permissionSeedService.seedAllSinglePermissions();
+  // What a start reads and writes comes from the registered services. It adds
+  // and updates, and marks nothing orphaned: a permission its build no longer
+  // declares leaves only when `nextly migrate` applies the recorded migration
+  // that drops it, so an older or a misconfigured build starting against the
+  // database cannot take a permission away.
+  await seedDeclaredPermissions({
+    permissionSeedService: getService("permissionSeedService"),
+    config: getService("config"),
+  });
+}
 
-  const config = getService("config");
+/** What seeding the declared permissions reads the declarations from and writes through. */
+interface PermissionSeeding {
+  permissionSeedService: PermissionSeedService;
+  /** The configuration: its collections, Singles, own permissions and plugins. */
+  config: PermissionConfigSource & { plugins?: PluginDefinition[] };
+}
+
+/**
+ * Seed system, collection, single and app- and plugin-declared permissions,
+ * then grant whatever is new to super_admin: the one implementation a start
+ * (`seedAllPermissions`) and `nextly migrate`
+ * (`seedPermissionsRolesAndPresets`) share, so the two never add a different
+ * set. Neither marks a permission orphaned here: `nextly migrate` does that
+ * as each recorded migration applies, from the permissions its snapshot
+ * declares, never from the configuration a run or a start happens to have.
+ *
+ * Throws once everything that could be written has been, when a seeder
+ * counted a permission it could not write (see `seedAllPermissions`).
+ */
+async function seedDeclaredPermissions({
+  permissionSeedService,
+  config,
+}: PermissionSeeding): Promise<void> {
+  const systemResult = await permissionSeedService.seedSystemPermissions();
+  // Every entity's permissions against one read of the table: the start's one
+  // ensuring of them, which the registry syncs leave to it.
+  const { collections: collectionResult, singles: singleResult } =
+    await permissionSeedService.seedAllEntityPermissions();
+
   const declared = collectCustomPermissions(config, config.plugins ?? []);
   const customResult =
     await permissionSeedService.seedCustomPermissions(declared);
-
-  // Seeding only ever adds. A permission whose package has stopped declaring
-  // it keeps the attribution it had, which is read to decide whether it is a
-  // plugin's — so a declaration that goes away quietly changes what the
-  // presets grant. Marked here, against the same list that was just seeded;
-  // grants are untouched and nothing is deleted.
-  await permissionSeedService.markOrphanedPermissions(declared);
 
   const allNewIds = [
     ...systemResult.newPermissionIds,
@@ -113,11 +150,203 @@ export async function seedAllPermissions(): Promise<void> {
   }
 }
 
+/**
+ * The permissions, the declared roles and the preset roles' grants, as
+ * `nextly migrate` writes them once its migrations and registry rows are in
+ * place: every missing permission (core's, each registered collection's and
+ * Single's, the app's and each configured plugin's), then each preset role's
+ * grants set by difference, then the roles the app and its plugins declare.
+ *
+ * The same services a start seeds through, on the command's own connection
+ * and configuration rather than the registered ones, which a command never
+ * has: `seedDeclaredPermissions`, `seedRolePresets`, the Public role's steps
+ * and `seedPluginRoles`. Each writes only where it finds a difference, so a
+ * database already in step is read and not written. It marks nothing orphaned
+ * (the command does that as each migration applies).
+ *
+ * The Public role, the role visitors are judged by, is made here too, and
+ * granted the read of each collection and Single whose read rule answers a
+ * visitor `true`, `read-media`, and what the plugins declare for it, each once
+ * (`seedPublicReadGrants`). A production start makes none of it, so without
+ * this a site set up by `nextly migrate` alone would refuse every visitor. The
+ * rules are asked as a start asks them, with what a start of this
+ * configuration would tell them (`withRuleContextOf`).
+ *
+ * Throws when a permission could not be written, before any role is set: a
+ * declared role is made once and never revisited, so made against a partial
+ * set it would lack those grants for good. A run that throws is repeated
+ * whole by the next.
+ */
+export async function seedPermissionsRolesAndPresets(args: {
+  adapter: DrizzleAdapter;
+  logger: Logger;
+  /** The configuration the command loaded; `roles` only where a caller has them. */
+  config: PermissionSeeding["config"] &
+    Pick<NextlyServiceConfig, "roles"> &
+    RuleContextConfig;
+}): Promise<void> {
+  const { adapter, logger, config } = args;
+  // Loaded here, where a command needs them, rather than with this module,
+  // which every start imports.
+  const { withRuleContextOf } = await import("./code-rule-context");
+  const publicRole = publicRoleSteps(
+    await commandPublicRoleDeps(adapter, logger, config)
+  );
+  // Decided before anything is seeded, as a start decides it (`seedEverything`).
+  await publicRole.recordNotice();
+  await seedDeclaredPermissions({
+    permissionSeedService: new PermissionSeedService(adapter, logger),
+    config,
+  });
+  await seedRolePresets(adapter, logger);
+  const made = await publicRole.make();
+  if (made.made) {
+    await withRuleContextOf(adapter, config, () =>
+      seedPublicReadGrants(publicRole.grantSeeding())
+    );
+  } else {
+    // A start in development holds the claim to make it: the next run makes it.
+    logger.warn(
+      "The Public role is being made by a start in another process, so its grants were not set. Run `nextly migrate` again to set them."
+    );
+  }
+  // A declared role bundling a permission not seeded yet waits for a run that
+  // has it, rather than being made without it for good.
+  await seedPluginRoles(
+    adapter,
+    collectRoles(config, config.plugins ?? []),
+    logger,
+    { deferIncomplete: true }
+  );
+}
+
+/** What the Public role's steps read and write through. */
+interface PublicRoleDeps {
+  adapter: DrizzleAdapter;
+  logger: Logger;
+  meta: MetaService;
+  /** The roles the app and its plugins declare, and the plugins' public grants. */
+  config: Pick<NextlyServiceConfig, "roles"> & {
+    plugins?: PluginDefinition[];
+  };
+  /** Every collection's and Single's slug, as the registry holds them. */
+  entities: () => Promise<{
+    collections: ReadonlyArray<{ slug: string }>;
+    singles: ReadonlyArray<{ slug: string }>;
+  }>;
+  /** The target an entity's code-defined rules are registered under, if any. */
+  registeredTarget: (slug: string) => AccessTarget | undefined;
+}
+
+/** The Public role's steps, as a start's seeding and `nextly migrate` both take them. */
+function publicRoleSteps(deps: PublicRoleDeps): {
+  /** Whether this site is told once which reads its visitors lost. */
+  recordNotice: () => Promise<void>;
+  /** Makes the Public role, once per install; who holds the claim where another does. */
+  make: () => Promise<PublicRoleSeeded>;
+  /** What the Public role's grants are seeded through. */
+  grantSeeding: () => Parameters<typeof seedPublicReadGrants>[0];
+} {
+  const { adapter, logger, meta, config } = deps;
+  return {
+    recordNotice: () =>
+      recordPublicReadNotice({
+        meta,
+        publicRoleMade: () => publicRoleMade(meta),
+        seededBefore: () => presetRoleExists(adapter),
+      }),
+    make: () => {
+      const roles = new RoleMutationService(adapter, logger);
+      // The names roles the app and its plugins declare go by, which the
+      // built-in role leaves to them though they are made after it.
+      const declaredNames = [
+        ...(config.roles ?? []),
+        ...(config.plugins ?? []).flatMap(
+          plugin => plugin.contributes?.roles ?? []
+        ),
+      ].map(role => role.name);
+      return seedPublicRole({
+        publicSlugHolder: () => roles.publicSlugHolder(),
+        moveRoleOffPublicSlug: id => roles.moveRoleOffPublicSlug(id),
+        ensurePublicRole: () => roles.ensurePublicRole(declaredNames),
+        unlinkPublicRole: async () => {
+          const holder = await roles.publicSlugHolder();
+          if (holder?.builtIn) await roles.unlinkPublicRole(holder.id);
+        },
+        meta,
+        logger,
+      });
+    },
+    grantSeeding: () => publicGrantSeeding(deps),
+  };
+}
+
+/** The Public role's steps on a start's registered services. */
+function startPublicRoleDeps(): PublicRoleDeps {
+  return {
+    adapter: getService("adapter"),
+    logger: getService("logger"),
+    meta: getService("metaService"),
+    config: getService("config"),
+    entities: async () => {
+      // As stored: the Public role's permissions are written from them.
+      const asStored = { forWrite: true };
+      const [collections, singles] = await Promise.all([
+        getService("collectionRegistryService").getAllLabels(asStored),
+        getService("singleRegistryService").getAllLabels(asStored),
+      ]);
+      return { collections, singles };
+    },
+    registeredTarget: slug =>
+      getService("rbacAccessControlService").getRegisteredTarget(slug),
+  };
+}
+
+/**
+ * The Public role's steps on a command's own connection and configuration:
+ * the registry as the command's migrations left it, and the code-defined
+ * access its configuration declares, as a start of it registers them.
+ */
+async function commandPublicRoleDeps(
+  adapter: DrizzleAdapter,
+  logger: Logger,
+  config: PublicRoleDeps["config"] &
+    Pick<NextlyServiceConfig, "collections" | "singles">
+): Promise<PublicRoleDeps> {
+  const [
+    { codeDefinedAccessTargets },
+    { CollectionRegistryService },
+    { MetaService },
+    { SingleRegistryService },
+  ] = await Promise.all([
+    import("./code-rule-context"),
+    import("../domains/collections/services/collection-registry-service"),
+    import("../domains/meta/services/meta-service"),
+    import("../domains/singles/services/single-registry-service"),
+  ]);
+  const targets = new Map(
+    codeDefinedAccessTargets(config).map(target => [target.slug, target])
+  );
+  return {
+    adapter,
+    logger,
+    meta: new MetaService(adapter, logger),
+    config,
+    entities: async () => {
+      // As stored: the Public role's permissions are written from them.
+      const asStored = { forWrite: true };
+      const [collections, singles] = await Promise.all([
+        new CollectionRegistryService(adapter, logger).getAllLabels(asStored),
+        new SingleRegistryService(adapter, logger).getAllLabels(asStored),
+      ]);
+      return { collections, singles };
+    },
+    registeredTarget: slug => targets.get(slug),
+  };
+}
+
 /** How long after a failure to make the Public role it is tried again. */
 const RETRY_AFTER_FAILURE_MS = 60_000;
-
-/** The value Next.js gives `NEXT_PHASE` while `next build` runs. */
-const NEXT_PRODUCTION_BUILD_PHASE = "phase-production-build";
 
 /**
  * The seeding in flight in this process, on `globalThis` for the reason the
@@ -128,6 +357,12 @@ const NEXT_PRODUCTION_BUILD_PHASE = "phase-production-build";
 const globalForSeeding = globalThis as unknown as {
   __nextly_seeding?: Promise<void>;
   __nextly_seedingHolds?: Set<Promise<void>>;
+  /** How many seeding runs have been asked for in this process. */
+  __nextly_seedingAsked?: number;
+  /** Each hold, with how many seeding runs had been asked for when it was taken. */
+  __nextly_seedingHeldAt?: Map<Promise<void>, number>;
+  /** How many seeding runs had been asked for when the run in flight began. */
+  __nextly_seedingBeganAt?: number;
   __nextly_publicRoleRetry?: ReturnType<typeof setTimeout>;
 };
 
@@ -160,21 +395,39 @@ const globalForSeeding = globalThis as unknown as {
  * that run, and {@link awaitBootSeeding} waits for it.
  */
 export function seedPermissionsAndRolePresets(): Promise<void> {
+  // Asked for, whatever happens next: a hold taken before this no longer has a
+  // seeding to come (`bootSeedingFollows`).
+  globalForSeeding.__nextly_seedingAsked =
+    (globalForSeeding.__nextly_seedingAsked ?? 0) + 1;
   // A production build boots Nextly too, when it prerenders a page that reads
   // through it, and it writes nothing here. It serves no request, and the first
   // runtime boot seeds before it does. It may run against a database other
   // deployments share, from a config older or newer than theirs, so its writes
   // would reach data it never serves. Next sets this phase for the build, and
   // skips `instrumentation.register()` in it for the same reason.
-  if (process.env.NEXT_PHASE === NEXT_PRODUCTION_BUILD_PHASE) {
+  if (isNextBuildPhase()) {
     return Promise.resolve();
   }
 
   // A boot that arrives while another is seeding joins that run rather than
   // starting a second one over the same rows.
   const inFlight = globalForSeeding.__nextly_seeding;
-  if (inFlight) return inFlight;
+  if (inFlight) {
+    // A boot that took its hold after the run in flight began registered what
+    // that run may already have read past, so it seeds once that run is done
+    // rather than taking it for its own.
+    const began = globalForSeeding.__nextly_seedingBeganAt ?? 0;
+    const heldSince = [
+      ...(globalForSeeding.__nextly_seedingHeldAt?.values() ?? []),
+    ].some(askedWhenHeld => askedWhenHeld >= began);
+    if (!heldSince) return inFlight;
+    return inFlight
+      .catch(() => undefined)
+      .then(() => seedPermissionsAndRolePresets());
+  }
 
+  globalForSeeding.__nextly_seedingBeganAt =
+    globalForSeeding.__nextly_seedingAsked;
   const run = seedEverything().finally(() => {
     if (globalForSeeding.__nextly_seeding === run) {
       globalForSeeding.__nextly_seeding = undefined;
@@ -202,10 +455,31 @@ export function holdBootSeeding(): () => void {
   });
   const holds = (globalForSeeding.__nextly_seedingHolds ??= new Set());
   holds.add(held);
+  const heldAt = (globalForSeeding.__nextly_seedingHeldAt ??= new Map());
+  heldAt.set(held, globalForSeeding.__nextly_seedingAsked ?? 0);
   return () => {
     holds.delete(held);
+    heldAt.delete(held);
     release();
   };
+}
+
+/**
+ * Whether a start's own seeding is still to come: a boot holds the seeding gate
+ * (`holdBootSeeding`) and no seeding run has been asked for since it took it.
+ * Work the seeding would repeat, such as a registry sync ensuring each entity's
+ * permissions, is left to it then, so a start ensures each permission once.
+ * Once a run has been asked for, the start's seeding is behind it, and work
+ * done after it (an entity the request-path boot's apply registers from a
+ * migration) seeds for itself.
+ */
+export function bootSeedingFollows(): boolean {
+  const asked = globalForSeeding.__nextly_seedingAsked ?? 0;
+  for (const askedWhenHeld of globalForSeeding.__nextly_seedingHeldAt?.values() ??
+    []) {
+    if (askedWhenHeld === asked) return true;
+  }
+  return false;
 }
 
 /**
@@ -231,13 +505,12 @@ async function seedEverything(): Promise<void> {
   // waits for it: made first, it would leave such a site recorded as not due
   // at the next boot, and never told. Tried again in a while, as a failure to
   // make the role is.
+  // Built in each step, so a service a step cannot reach fails that step
+  // alone, as each step's own lookups did.
+  const publicRole = () => publicRoleSteps(startPublicRoleDeps());
   const noticeRecorded = await seedingStep("public read notice", async () => {
     try {
-      await recordPublicReadNotice({
-        meta: getService("metaService"),
-        publicRoleMade: () => publicRoleMade(getService("metaService")),
-        seededBefore: presetRoleExists,
-      });
+      await publicRole().recordNotice();
     } catch (error) {
       if (!isMissingTableOnThisDatabase(error)) {
         retrySeedingAt(Date.now() + RETRY_AFTER_FAILURE_MS);
@@ -257,31 +530,8 @@ async function seedEverything(): Promise<void> {
   const publicRoleSeeded =
     noticeRecorded &&
     (await seedingStep("public role", async () => {
-      const roles = new RoleMutationService(
-        getService("adapter"),
-        getService("logger")
-      );
-      const config = getService("config");
-      // The names roles the app and its plugins declare go by, which the
-      // built-in role leaves to them though they are made after it.
-      const declaredNames = [
-        ...(config.roles ?? []),
-        ...(config.plugins ?? []).flatMap(
-          plugin => plugin.contributes?.roles ?? []
-        ),
-      ].map(role => role.name);
       try {
-        const seeded = await seedPublicRole({
-          publicSlugHolder: () => roles.publicSlugHolder(),
-          moveRoleOffPublicSlug: id => roles.moveRoleOffPublicSlug(id),
-          ensurePublicRole: () => roles.ensurePublicRole(declaredNames),
-          unlinkPublicRole: async () => {
-            const holder = await roles.publicSlugHolder();
-            if (holder?.builtIn) await roles.unlinkPublicRole(holder.id);
-          },
-          meta: getService("metaService"),
-          logger: getService("logger"),
-        });
+        const seeded = await publicRole().make();
         if (!seeded.made) retrySeedingAt(seeded.retryAt);
       } catch (error) {
         // Not left unmade until the next start: tried again in a while, as
@@ -300,13 +550,13 @@ async function seedEverything(): Promise<void> {
   // boot does it whole.
   if (publicRoleSeeded && permissionsSeeded) {
     await seedingStep("public role's grants", () =>
-      seedPublicReadGrants(publicGrantSeeding())
+      seedPublicReadGrants(publicRole().grantSeeding())
     );
   } else if (publicRoleSeeded) {
     // Taking back a plugin grant no enabled plugin declares any longer needs
     // no permission made, so it is not left for a later boot.
     await seedingStep("public role's undeclared plugin grants", () =>
-      withdrawUndeclaredPluginGrants(publicGrantSeeding())
+      withdrawUndeclaredPluginGrants(publicRole().grantSeeding())
     );
   }
   // A plugin role is created once and never revisited: a later boot skips a
@@ -357,9 +607,9 @@ async function seedEverything(): Promise<void> {
  * Whether a boot's seeding has run on this database: a preset role exists,
  * as every boot's seeding makes them and nothing else does.
  */
-async function presetRoleExists(): Promise<boolean> {
+async function presetRoleExists(adapter: DrizzleAdapter): Promise<boolean> {
   const { roles } = getDialectTables();
-  const db = getService("adapter").getDrizzle<{
+  const db = adapter.getDrizzle<{
     select(fields: Record<string, unknown>): {
       from(table: unknown): {
         where(condition: unknown): { limit(count: number): Promise<unknown[]> };
@@ -382,16 +632,17 @@ async function presetRoleExists(): Promise<boolean> {
 /** How long the retired manage check may hold a boot, as the schema check may. */
 const RETIRED_MANAGE_CHECK_TIMEOUT_MS = 2_000;
 
-/** What the Public role's grant steps need, from the registered services. */
-function publicGrantSeeding(): Parameters<typeof seedPublicReadGrants>[0] {
-  const adapter = getService("adapter");
-  const logger = getService("logger");
+/** What the Public role's grant steps need, from `deps`. */
+function publicGrantSeeding(
+  deps: PublicRoleDeps
+): Parameters<typeof seedPublicReadGrants>[0] {
+  const { adapter, logger, meta } = deps;
   const grants = new RolePermissionService(adapter, logger);
   return {
     // Only once the Public role is made and recorded: before that, another
     // boot may still be moving a site's own role off the slug.
     publicRoleId: async () =>
-      (await publicRoleMade(getService("metaService")))
+      (await publicRoleMade(meta))
         ? ((
             await new RoleQueryService(adapter, logger).findRoleIdBySlug(
               PUBLIC_ROLE_SLUG
@@ -399,11 +650,7 @@ function publicGrantSeeding(): Parameters<typeof seedPublicReadGrants>[0] {
           )?.id ?? null)
         : null,
     targets: async () => {
-      const rbac = getService("rbacAccessControlService");
-      const [collections, singles] = await Promise.all([
-        getService("collectionRegistryService").getAllLabels(),
-        getService("singleRegistryService").getAllLabels(),
-      ]);
+      const { collections, singles } = await deps.entities();
       // Each slug once, as a request finds it: the target the rules are
       // registered under, kind and rules together. Boot keeps one slug to
       // one kind, so this is the entity itself.
@@ -418,10 +665,7 @@ function publicGrantSeeding(): Parameters<typeof seedPublicReadGrants>[0] {
         ...singles.map(({ slug }) => ({ kind: "single" as const, slug })),
       ]) {
         if (bySlug.has(target.slug)) continue;
-        bySlug.set(
-          target.slug,
-          rbac.getRegisteredTarget(target.slug) ?? target
-        );
+        bySlug.set(target.slug, deps.registeredTarget(target.slug) ?? target);
       }
       return [...bySlug.values()];
     },
@@ -433,12 +677,12 @@ function publicGrantSeeding(): Parameters<typeof seedPublicReadGrants>[0] {
           permissionSlug(action, resource)
         )
       ),
-    declared: () => collectPublicGrants(getService("config").plugins ?? []),
+    declared: () => collectPublicGrants(deps.config.plugins ?? []),
     addOnce: (roleId, wanted, pick) =>
       grants.addRolePermissionsOnce(roleId, wanted, pick),
     withdraw: (roleId, unwanted, pick) =>
       grants.withdrawRolePermissions(roleId, unwanted, pick),
-    meta: getService("metaService"),
+    meta,
     logger,
   };
 }

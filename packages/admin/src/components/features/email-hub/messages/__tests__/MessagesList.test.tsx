@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@admin/__tests__/utils";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import type { EmailTemplateRecord } from "@admin/services/emailTemplateApi";
+import type { PluginMetadata } from "@admin/types/branding";
 import { holdsPermission } from "@admin/lib/permissions/holds-permission";
 
 import { MessagesList } from "../MessagesList";
@@ -26,6 +27,17 @@ vi.mock("@admin/hooks/queries/useEmailTemplates", () => ({
 
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
   useCurrentUserPermissions: vi.fn(),
+}));
+
+// The installed plugins the admin knows; none unless a test names some.
+const { plugins } = vi.hoisted(() => ({
+  plugins: { current: undefined as PluginMetadata[] | undefined },
+}));
+vi.mock("@admin/context/providers/BrandingProvider", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("@admin/context/providers/BrandingProvider")
+  >()),
+  useBranding: () => ({ plugins: plugins.current }),
 }));
 
 function holding(slugs: string[]) {
@@ -123,6 +135,7 @@ beforeEach(() => {
     error: null,
   });
   holding(MANAGER);
+  plugins.current = undefined;
 });
 
 describe("MessagesList", () => {
@@ -134,6 +147,27 @@ describe("MessagesList", () => {
       .map(cell => cell.textContent);
     expect(headings).toEqual(["Nextly · 2", "accounts · 2", "This site · 2"]);
     expect(within(table()).queryByText("Default layout")).toBeNull();
+  });
+
+  it("names a plugin's group, and its owner filter, as the admin names the plugin", () => {
+    plugins.current = [
+      { name: "accounts", appearance: { label: "Member accounts" } },
+    ] as PluginMetadata[];
+    render(<MessagesList />);
+    const headings = within(table())
+      .getAllByRole("columnheader")
+      .filter(cell => cell.getAttribute("scope") === "colgroup")
+      .map(cell => cell.textContent);
+    expect(headings).toEqual([
+      "Nextly · 2",
+      "Member accounts · 2",
+      "This site · 2",
+    ]);
+    fireEvent.click(screen.getByLabelText("Owner"));
+    expect(
+      screen.getByRole("option", { name: "Member accounts" })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "accounts" })).toBeNull();
   });
 
   it("names each email's state", () => {
@@ -244,7 +278,7 @@ describe("MessagesList", () => {
         within(table())
           .getByRole("link", { name: "Newsletter" })
           .getAttribute("href")
-      ).toBe("/admin/email/messages/edit/newsletter");
+      ).toBe("/admin/settings/email/messages/edit/newsletter");
     });
 
     it("gives the site's own email a Delete and an owner's email none", async () => {

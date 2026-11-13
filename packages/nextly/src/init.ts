@@ -43,19 +43,31 @@ import { recordRegisteredLocalization } from "./di/registered-localization";
 import { getService, isServicesRegistered } from "./di/service-access";
 import { installLegacyFieldGroupsNamespaceGuard } from "./direct-api/legacy-field-groups-namespace";
 import { requireNextly as getDirectAPI } from "./direct-api/nextly";
+import { recordBuildSchemaVersion } from "./domains/schema/build-schema-version";
 import { NextlyError } from "./errors/nextly-error";
-import { runBootTimeApplyIfDev } from "./init/boot-apply";
+import {
+  markNotInLine,
+  recordStartFingerprints,
+  runBootTimeApplyIfDev,
+  unchangedSinceLastStart,
+} from "./init/boot-apply";
 import { awaitBootMigrations } from "./init/boot-migrations-gate";
 import {
   buildServiceConfig,
   type GetNextlyOptions,
 } from "./init/build-service-config";
-import { driftCheckCollections, runDriftCheck } from "./init/drift-check";
+import {
+  driftCheckCollections,
+  driftCheckFieldGroups,
+  driftCheckSingles,
+  runDriftCheck,
+} from "./init/drift-check";
 import type { Nextly } from "./init/nextly-instance";
 import {
   provisionUserFieldsAtStart,
   runPostInitTasks,
 } from "./init/post-init-tasks";
+import { isProductionStart } from "./init/production-start";
 import { reloadNextlyConfig } from "./init/reload-config";
 import {
   awaitBootSeeding,
@@ -143,6 +155,14 @@ const globalForInit = globalThis as unknown as {
 };
 
 /**
+ * Run `task` once the current turn of the event loop, the rest of the start
+ * included, has finished: background work the start does not wait for.
+ */
+function afterThisStart(task: () => Promise<void>): Promise<void> {
+  return new Promise<void>(resolve => setImmediate(resolve)).then(task);
+}
+
+/**
  * Settles once the work the newest `getNextly()` start left running after it
  * resolved has finished: the post-initialisation tasks it does not wait for.
  * Never rejects, since each task catches its own errors. Internal, for tests
@@ -175,6 +195,8 @@ function buildNextlyInstance(
     findByID: directAPI.findByID.bind(directAPI),
     create: directAPI.create.bind(directAPI),
     update: directAPI.update.bind(directAPI),
+    publish: directAPI.publish.bind(directAPI),
+    unpublish: directAPI.unpublish.bind(directAPI),
     delete: directAPI.delete.bind(directAPI),
     count: directAPI.count.bind(directAPI),
     group: directAPI.group.bind(directAPI),
@@ -419,7 +441,9 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // boot has seeded, the request-path boot finds them registered and
         // waits on this hold rather than serving.
         releaseSeeding = holdBootSeeding();
-        await registerServices(finalConfig);
+        // A start, so in production it writes no bookkeeping
+        // (`isProductionStart`).
+        await registerServices(finalConfig, { start: true });
         // What these services hold, so the request path can tell an
         // unchanged `localization` block from an edited one rather than
         // registering them again on its first request.
@@ -457,12 +481,86 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
             warn: (msg: string) => consoleLogger.warn(msg),
             error: (msg: string) => consoleLogger.error(msg),
           };
-          // Reduced by the drift check's own helper, which carries every
-          // attribute that changes a table (status, declared indexes).
+          // Reduced by the drift check's own helpers, which carry every
+          // attribute that changes a table (status, declared indexes). An
+          // entity whose declaration a start already brought in line is not
+          // read again: nothing about it changed since. Every changed entity
+          // is, of every kind: a Single's or field group's table is checked
+          // as a collection's is, since nothing else at a start vouches for it
+          // (the start's reload reads no configuration where none is a file).
+          const changed = driftCheckCollections(
+            (config.collections ?? []).filter(
+              collection =>
+                !unchangedSinceLastStart("collection", collection.slug)
+            )
+          );
+          const changedSingles = driftCheckSingles(
+            (config.singles ?? []).filter(
+              single => !unchangedSinceLastStart("single", single.slug)
+            )
+          );
+          const changedFieldGroups = driftCheckFieldGroups(
+            (config.fieldGroups ?? []).filter(
+              group => !unchangedSinceLastStart("fieldGroup", group.slug)
+            )
+          );
+          const [{ previewDesiredSchema }, { operationTargetTable }] =
+            await Promise.all([
+              import("./domains/schema/pipeline/preview"),
+              import("./domains/schema/pipeline/pushschema-pipeline"),
+            ]);
           await runDriftCheck({
             adapter,
-            collections: driftCheckCollections(config.collections ?? []),
+            collections: changed,
+            singles: changedSingles,
+            fieldGroups: changedFieldGroups,
             logger: driftLogger,
+            deps: {
+              // Each entity's own preview, judged on its own: one that fails or finds changes is
+              // left unrecorded, so the next start checks it, and warns, again.
+              previewDesiredSchema: async args => {
+                // The one entity this preview was asked about, by its kind.
+                const asked = (
+                  [
+                    ["collection", args.desired.collections],
+                    ["single", args.desired.singles],
+                    ["fieldGroup", args.desired.components],
+                  ] as const
+                ).flatMap(([kind, entries]) =>
+                  Object.values(entries ?? {}).map(entry => ({
+                    kind,
+                    slug: entry.slug,
+                    own: entry.tableName,
+                  }))
+                )[0];
+                try {
+                  const preview = await previewDesiredSchema(args);
+                  // Only an operation on the entity's own tables (its table,
+                  // its translations, its junctions): every preview also
+                  // reports the plugin and app tables, which are not it.
+                  const own = asked?.own;
+                  if (
+                    asked &&
+                    own &&
+                    preview.operations.some(operation => {
+                      // The pipeline's own reading of the table an operation
+                      // targets (a rename by its source).
+                      const table = operationTargetTable(operation);
+                      return (
+                        table !== null &&
+                        (table === own || table.startsWith(`${own}_`))
+                      );
+                    })
+                  ) {
+                    markNotInLine(asked.kind, asked.slug);
+                  }
+                  return preview;
+                } catch (error) {
+                  if (asked) markNotInLine(asked.kind, asked.slug);
+                  throw error;
+                }
+              },
+            },
           });
         }
 
@@ -483,26 +581,40 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // migrations ran THROWS, because serving a schema nobody verified is
         // worse than not starting.
 
-        // Permissions and roles are seeded BEFORE getNextly() resolves, as the
-        // request-path boot already does. Left to run in the background, a
-        // serverless instance could be frozen after its first response with a
-        // role's permissions half-written, and every cold start rewrote them
-        // against every other. The seeding writes only what differs, so an
-        // unchanged boot pays for its reads alone. Next.js's `after()` would not
-        // do: it can only be called inside a request, and getNextly() also runs
-        // from instrumentation and scripts.
-        await seedPermissionsAndRolePresets();
+        // A development start seeds the permissions and roles BEFORE
+        // getNextly() resolves, as the request-path boot already does. Left to
+        // run in the background, a serverless instance could be frozen after
+        // its first response with a role's permissions half-written. The
+        // seeding writes only what differs, so an unchanged boot pays for its
+        // reads alone. Next.js's `after()` would not do: it can only be called
+        // inside a request, and getNextly() also runs from instrumentation and
+        // scripts.
+        //
+        // A production start seeds nothing: the permissions, the roles and
+        // their grants arrive through `nextly migrate` and a plugin's install
+        // and uninstall, so a build older or newer than the one that migrated
+        // the database cannot change them, and the start's statements do not
+        // grow with the number of entities.
+        if (!isProductionStart()) await seedPermissionsAndRolePresets();
         releaseSeeding();
         // The merged user fields too, before getNextly() resolves: a request
-        // served before they load sees the code's user fields alone.
+        // served before they load sees the code's user fields alone. Read only
+        // in production (`provisionUserFieldsAtStart`).
         await provisionUserFieldsAtStart();
+
+        // What this development start brought in line, for the next to skip. Written only when it
+        // differs from what is recorded, so a start with nothing changed writes nothing here.
+        await recordStartFingerprints(adapter, getService("logger"));
 
         // The remaining post-initialisation tasks (templates, code-field sync,
         // and the like) run in the background so that getNextly() returns as
         // soon as the database is ready. Each is idempotent and catches its own
         // errors.
-        // Kept, so `startSettled` can tell when this work has finished.
-        globalForInit.__nextly_postInitTasks = runPostInitTasks();
+        // Kept, so `startSettled` can tell when this work has finished. Begun
+        // once this start has handed its instance over, not inside it: on
+        // SQLite, whose driver blocks, a task begun here would run its first
+        // statements before getNextly() resolved, on the start's own time.
+        globalForInit.__nextly_postInitTasks = afterThisStart(runPostInitTasks);
       } else {
         // Registered by the request-path boot, which may still be seeding: wait
         // for it, so this boot does not serve before the roles are written.
@@ -731,11 +843,17 @@ export async function getCachedNextly(): Promise<Nextly> {
  *               it on, a cached read finding no `"use cache"` read function
  *               registered is said once, naming the file to add. With it off,
  *               or not passed, Nextly warns once at start: it supports only
- *               Cache Components on.
+ *               Cache Components on. `buildSchemaVersion` is the value
+ *               Next.js inlines there for
+ *               `process.env.NEXTLY_BUILD_SCHEMA_VERSION`, which `withNextly`
+ *               sets: the build's newest migration, which a production start
+ *               compares with the database's schema version. Not passed, the
+ *               start reads the variable from its own environment, which only
+ *               `next start` has.
  */
 export function createRegister(
   config: SanitizedNextlyConfig,
-  host: { cacheComponents?: string | boolean } = {}
+  host: RegisterHost = {}
 ): () => Promise<void> {
   // Not `async`: it awaits nothing, since it begins the start and returns.
   // Run inside the promise, so a throw from the steps before the start still
@@ -746,11 +864,14 @@ export function createRegister(
   };
 }
 
+/** What the app's `instrumentation.ts` tells `createRegister` about its build. */
+export interface RegisterHost {
+  cacheComponents?: string | boolean;
+  buildSchemaVersion?: string;
+}
+
 /** What `register()` does: record the host's settings, then begin the start. */
-function beginStart(
-  config: SanitizedNextlyConfig,
-  host: { cacheComponents?: string | boolean }
-): void {
+function beginStart(config: SanitizedNextlyConfig, host: RegisterHost): void {
   // Kept for the cached reads: under Cache Components they go through the
   // app's `"use cache"` function, and one that was never registered is said.
   // Nextly cannot read this itself: Next.js inlines the setting only into
@@ -760,6 +881,10 @@ function beginStart(
   recordCacheComponents(cacheComponentsEnabled(host.cacheComponents));
   // Before Nextly starts, so the line comes first in the server's output.
   warnIfRegisteredWithCacheComponentsOff(host.cacheComponents);
+  // Kept for the production start's schema version comparison, which reads
+  // it (`buildSchemaVersion`): Next.js inlines the value only into the app's
+  // own bundled code, as it does the Cache Components setting above.
+  recordBuildSchemaVersion(host.buildSchemaVersion);
   // Begun here and not waited for. Next.js serves nothing until `register()`
   // returns, so waiting would hold every request, the admin page and static
   // files among them, for the whole start: over a minute against a database

@@ -27,7 +27,7 @@ async function previewHtml(page: Page): Promise<string> {
 }
 
 async function openDesign(page: Page) {
-  await gotoAdmin(page, "/email/design");
+  await gotoAdmin(page, "/settings/email/design");
   await expect(
     page.getByRole("heading", { name: "Brand settings", exact: true })
   ).toBeVisible({ timeout: 30_000 });
@@ -75,7 +75,9 @@ test("opens a layout in the workbench", async ({ page }) => {
     timeout: 30_000,
   });
   await layouts.getByRole("link", { name: "Open" }).first().click();
-  await expect(page).toHaveURL(/\/admin\/email\/messages\/edit\/[^/]+$/);
+  await expect(page).toHaveURL(
+    /\/admin\/settings\/email\/messages\/edit\/[^/]+$/
+  );
 });
 
 for (const size of WIDTHS) {

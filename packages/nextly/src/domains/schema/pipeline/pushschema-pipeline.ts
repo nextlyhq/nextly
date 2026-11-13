@@ -140,6 +140,7 @@ import { builtByFor } from "./registered-collections";
 import { refuseNotNullOverNulls } from "./required-column-gate";
 import type { ClassifierEvent, Resolution } from "./resolution/types";
 import { withRetainedSizesColumn } from "./retained-core-columns";
+import { assertSchemaLockHeld } from "./schema-lock";
 import {
   refuseSeveralReferencesForOne,
   refuseSwitchesWithRename,
@@ -1683,6 +1684,13 @@ export class PushSchemaPipeline {
         // would report a mismatch on every apply that had to put an index
         // back; the pre-created CREATEs WERE planned (add_table ops) and
         // executed, so they count.
+        //
+        // On PostgreSQL the commit is what lands the apply: refused, and the
+        // transaction undone, as a statement is, so a run that lost the schema
+        // lock while its last statement ran changes nothing. MySQL's DDL has
+        // committed as it ran, and SQLite runs without a transaction, so there
+        // a refusal here would report an apply that already landed.
+        if (dialect === "postgresql") await assertSchemaLockHeld();
         return (
           safe.length +
           preCreatedStatements +
@@ -1943,8 +1951,13 @@ export class PushSchemaPipeline {
     // instead of collection columns (title, slug). FieldGroupSchemaService
     // owns that column layout; generateRuntimeSchema would inject wrong
     // system columns.
-    const fieldGroupSchemaService = new FieldGroupSchemaService(dialect);
     for (const c of Object.values(desired.components)) {
+      // Rendered as DDL by drizzle-kit, so the builder that made it is named here too, as for a
+      // Single above: a code-first field group's text is 255 wide, a Builder one's unbounded.
+      const fieldGroupSchemaService = new FieldGroupSchemaService(
+        dialect,
+        builtByFor("fieldGroup", c.builderOwned)
+      );
       // i18n: omit a localized component's translatable columns from the main
       // comp_ table handed to drizzle-kit (they live in comp_<slug>_locales,
       // provisioned out-of-band) — same rule as collections/singles above.

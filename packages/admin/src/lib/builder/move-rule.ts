@@ -61,18 +61,28 @@ export interface MoveContext {
    */
   fieldGroupFieldHolding?: (rowId: string) => BuilderField | undefined;
   /**
-   * Whether a field may change container at all; `CONTAINER_CHANGES_KEEP_VALUES`
+   * Whether a saved field may change level at all; `CONTAINER_CHANGES_KEEP_VALUES`
    * when not given. The rule's other answers hold either way.
    */
   containerChanges?: boolean;
+  /**
+   * The ids of the containers a saved field sits in, outermost first, or null for a field never
+   * saved. Leaving repeating rows is refused only where the field's saved rows are: a field added
+   * there, or moved there, in this unsaved draft has no rows of its own to lose. A field never
+   * saved has no values a change of level could lose either. Without it, every field's rows are
+   * taken as saved where it stands.
+   */
+  savedContainerIdsOf?: (fieldId: string) => readonly string[] | null;
 }
 
 /**
  * Whether a save keeps a field's values when the field changes container: not
  * yet, since the save drops the column of a field that leaves the main table
- * and starts the JSON value of one that enters a group empty. Until it does,
- * every move into or out of a group or repeating rows is refused, so no gesture
- * offers a move that would lose values; reorders within a container go ahead.
+ * and starts the JSON value of one that enters a group empty. Until it does, a
+ * saved field's move to another level (into or out of a group or repeating
+ * rows) is refused, so no gesture offers a move that would lose values. Reorders
+ * on one level, moves through layout containers and moves of fields never saved
+ * go ahead.
  */
 const CONTAINER_CHANGES_KEEP_VALUES = false;
 
@@ -123,12 +133,58 @@ function chainTo(
   return null;
 }
 
+/**
+ * `MoveContext.savedContainerIdsOf` for the fields as last saved: the ids of the containers a field
+ * sits in there, outermost first, or null for a field the saved definition does not hold. Found by
+ * the same walk a move uses (`chainTo`), on the saved fields; their ids are the editor's own and
+ * stay with a field across edits, so a field moved in this draft still answers where it was saved.
+ */
+export function savedContainerIdsFrom(
+  saved: readonly BuilderField[]
+): (fieldId: string) => readonly string[] | null {
+  return fieldId => {
+    const chain = chainTo(saved, fieldId);
+    return chain ? chain.slice(0, -1).map(each => each.id) : null;
+  };
+}
+
 /** The fields one container holds: the top level for none. */
 function siblingsIn(
   fields: readonly BuilderField[],
   container: BuilderField | null
 ): readonly BuilderField[] {
   return container ? (container.fields ?? []) : fields;
+}
+
+/** A field's name as the save sends it (`convertToFieldDefinition`), which is what a clash is judged on. */
+function sentName(field: BuilderField): string {
+  return convertToFieldDefinition(field).name ?? "";
+}
+
+/**
+ * Whether a field is a layout container: it has no name, so it holds no value of its own, and the
+ * fields inside it are stored on the level that holds it (the server's sibling rule).
+ */
+function isLayoutContainer(field: BuilderField): boolean {
+  return sentName(field) === "" && Array.isArray(field.fields);
+}
+
+/** The named fields one level holds, those inside its layout containers among them. */
+function namedFieldsIn(list: readonly BuilderField[]): BuilderField[] {
+  return list.flatMap(each =>
+    isLayoutContainer(each) ? namedFieldsIn(each.fields ?? []) : [each]
+  );
+}
+
+/**
+ * The container whose level a field in `chain`'s last container is named on: the nearest one with
+ * a name, a layout container being part of the level holding it; null for the top level.
+ */
+function namingLevel(chain: readonly BuilderField[]): BuilderField | null {
+  for (let at = chain.length - 1; at >= 0; at--) {
+    if (!isLayoutContainer(chain[at])) return chain[at];
+  }
+  return null;
 }
 
 function refuse(reason: MoveRefusalReason, message: string): MoveVerdict {
@@ -207,14 +263,21 @@ function fieldGroupRefusal(
 }
 
 /** The refusal of any change of container while a save would lose its values. */
+/**
+ * The refusal of a saved field's change of level while a save would lose its values. Called only
+ * for a move that changes the field's naming level (`arrivalRefusal`), so a move into or out of a
+ * layout container, which keeps the field on the level holding it, is never refused here. A field
+ * never saved (`savedContainerIdsOf` answers null) has no values to lose and moves freely.
+ */
 function containerChangeRefusal(
-  from: readonly BuilderField[],
-  container: BuilderField | null,
+  field: BuilderField,
   ctx: MoveContext
 ): MoveVerdict | null {
   const allowed = ctx.containerChanges ?? CONTAINER_CHANGES_KEEP_VALUES;
-  const source = from.length > 0 ? from[from.length - 1] : null;
-  if (allowed || (source?.id ?? null) === (container?.id ?? null)) return null;
+  const neverSaved =
+    ctx.savedContainerIdsOf !== undefined &&
+    ctx.savedContainerIdsOf(field.id) === null;
+  if (allowed || neverSaved) return null;
   return refuse(
     "not-available-yet",
     "Moving a field into or out of a group or repeating rows is not available yet."
@@ -230,10 +293,20 @@ function repeatersOn(chain: readonly BuilderField[]): BuilderField[] {
 function crossingRefusal(
   field: BuilderField,
   from: readonly BuilderField[],
-  into: readonly BuilderField[]
+  into: readonly BuilderField[],
+  ctx: MoveContext
 ): MoveVerdict | null {
   const intoIds = new Set(into.map(each => each.id));
-  if (repeatersOn(from).some(repeater => !intoIds.has(repeater.id))) {
+  // Only rows the field is saved in hold values of its own (`savedContainerIdsOf`).
+  const savedIn = ctx.savedContainerIdsOf
+    ? new Set(ctx.savedContainerIdsOf(field.id) ?? [])
+    : null;
+  const leaving = repeatersOn(from).filter(
+    repeater =>
+      !intoIds.has(repeater.id) &&
+      (savedIn === null || savedIn.has(repeater.id))
+  );
+  if (leaving.length > 0) {
     return refuse(
       "out-of-repeating-rows",
       `${called(field)} cannot leave its repeating rows: each entry may hold several rows of it, which one field outside them cannot keep. Add a new field there instead.`
@@ -272,7 +345,7 @@ function siblingClashRefusal(
 ): MoveVerdict | null {
   for (const other of siblings) {
     if (other.id === field.id) continue;
-    const kind = siblingNameClash(field.name, other.name);
+    const kind = siblingNameClash(sentName(field), sentName(other));
     if (kind) {
       return refuse(
         "name-clash",
@@ -290,7 +363,7 @@ function heldNameRefusal(
   ctx: MoveContext
 ): MoveVerdict | null {
   for (const held of ctx.heldNames?.get(container?.id ?? "") ?? []) {
-    const kind = siblingNameClash(field.name, held);
+    const kind = siblingNameClash(sentName(field), held);
     if (kind) {
       return refuse(
         "name-clash",
@@ -309,17 +382,80 @@ function nameRefusal(
   ctx: MoveContext
 ): MoveVerdict | null {
   const reserved =
-    !container && ctx.topLevelReservesNames && isReservedFieldName(field.name);
+    !container &&
+    ctx.topLevelReservesNames &&
+    isReservedFieldName(sentName(field));
   return (
     siblingClashRefusal(field, container, siblings) ??
     heldNameRefusal(field, container, ctx) ??
     (reserved
       ? refuse(
           "reserved-name",
-          `${field.name} is reserved at the top level. Rename ${called(field)} first.`
+          `${sentName(field)} is reserved at the top level. Rename ${called(field)} first.`
         )
       : null)
   );
+}
+
+/**
+ * Why the field may not arrive in another container, if it may not: a field
+ * inside it that cannot change place would move with it, or its name may not
+ * stand there. A reorder within its own container arrives nowhere new: its
+ * siblings are the ones it had, so a clash among them that the saved
+ * definition already holds, which a save keeps allowing, is no reason to
+ * refuse it.
+ */
+function arrivalRefusal(
+  fields: readonly BuilderField[],
+  chain: readonly BuilderField[],
+  container: BuilderField | null,
+  ctx: MoveContext
+): MoveVerdict | null {
+  const field = chain[chain.length - 1];
+  // Judged by level, not by container: a layout container is part of the level holding it, so
+  // moving into or out of one takes the field nowhere new.
+  const from = namingLevel(chain.slice(0, -1));
+  const into = container
+    ? namingLevel(chainTo(fields, container.id) ?? [container])
+    : null;
+  if ((from?.id ?? null) === (into?.id ?? null)) return null;
+  return (
+    containerChangeRefusal(field, ctx) ??
+    lockedInsideRefusal(field, chain, ctx) ??
+    nameRefusal(field, into, namedFieldsIn(siblingsIn(fields, into)), ctx)
+  );
+}
+
+/**
+ * Why a container may not change place, if it may not: a field inside it, at
+ * any depth, is built in or owned by code or a plugin, and moving the
+ * container would change where that field is stored.
+ */
+function lockedInsideRefusal(
+  field: BuilderField,
+  chain: readonly BuilderField[],
+  ctx: MoveContext
+): MoveVerdict | null {
+  const walk = (
+    list: readonly BuilderField[],
+    ancestors: readonly BuilderField[]
+  ): MoveVerdict | null => {
+    for (const inner of list) {
+      const reason = inner.isSystem
+        ? { kind: "code" as const }
+        : placementReadOnlyReason(inner, ancestors, ctx.entityReadOnly);
+      if (reason) {
+        return refuse(
+          "read-only",
+          `${called(field)} cannot move to another place: ${called(inner)} inside it is ${describeReadOnly(reason).toLowerCase()}, and moving it would change where that field is stored.`
+        );
+      }
+      const below = walk(inner.fields ?? [], [...ancestors, inner]);
+      if (below) return below;
+    }
+    return null;
+  };
+  return walk(field.fields ?? [], chain);
 }
 
 /**
@@ -352,12 +488,11 @@ export function judgeMove(
   const refusal =
     sourceRefusal(chain, ctx) ??
     containerRefusal(field, into, ctx) ??
-    crossingRefusal(field, from, into ?? []) ??
+    crossingRefusal(field, from, into ?? [], ctx) ??
     ((ctx.excludedTypes ?? []).includes(field.type)
       ? refuse("excluded-type", `${called(field)} cannot go here.`)
       : null) ??
-    containerChangeRefusal(from, container, ctx) ??
-    nameRefusal(field, container, siblingsIn(fields, container), ctx);
+    arrivalRefusal(fields, chain, container, ctx);
   if (refusal) return refusal;
   const passed = passedReadOnlySibling(
     fields,

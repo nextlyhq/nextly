@@ -11,7 +11,7 @@ import { expect, type Page } from "@playwright/test";
 import { includingHidden, test } from "./support/test";
 import { STORAGE_STATE } from "../global-setup";
 
-import { gotoAdmin } from "./support/admin";
+import { gotoAdmin, tableRow } from "./support/admin";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
 import { createEntry } from "./support/runtime-collection";
 
@@ -62,14 +62,8 @@ test.afterAll(async () => {
   await limited?.context.close();
 });
 
-/**
- * The post this file changes, as the list's row for it. A row that opens its entry
- * is a button; the phone-width card drawing the same entry stays hidden.
- */
-const row = () =>
-  page
-    .getByRole("button", { name: new RegExp(TITLE) })
-    .filter({ visible: true });
+/** The post this file changes, as the list's row for it. */
+const row = () => tableRow(page, TITLE);
 
 test('offers "New", row checkboxes and bulk delete', async () => {
   await gotoAdmin(page, "/collections/posts");

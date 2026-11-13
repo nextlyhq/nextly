@@ -132,6 +132,8 @@ describe.each(getConfiguredTestDialects())(
           // History to restore from: no password, which a restore withholds.
           defineCollection({
             slug: "rversioned",
+            // Kept with working drafts, which a restore writes.
+            status: true,
             versions: true,
             fields: [
               text({ name: "title" }),

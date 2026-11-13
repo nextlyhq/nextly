@@ -49,6 +49,18 @@ const document = {
   heroTitle: "",
 } as unknown as SingleDocumentData;
 
+/**
+ * The same Single with autosave on: only a Single that keeps recovery points
+ * records any, so a test about what else holds recording off starts here.
+ */
+const schemaWithAutosave = {
+  ...(schema as object),
+  versions: {
+    enabled: true,
+    drafts: { enabled: true, autosave: { enabled: true } },
+  },
+} as unknown as SingleSchema;
+
 const bob = { ownerId: "u2", ownerLabel: "Bob", expiresInSeconds: 90 };
 /** The real DOM document, since `document` here is the single being edited. */
 const document_ = globalThis.document;
@@ -172,7 +184,11 @@ describe("SingleForm under a document lock", () => {
     });
 
     render(
-      <SingleForm schema={schema} document={document} onSubmit={vi.fn()} />
+      <SingleForm
+        schema={schemaWithAutosave}
+        document={document}
+        onSubmit={vi.fn()}
+      />
     );
 
     expect(useDocumentAutosave).toHaveBeenCalledWith(

@@ -66,7 +66,11 @@ export const AI_CHOICES: readonly {
 export const AI_CHOICES_NOTE =
   "These are requests. Well-behaved tools follow them; some ignore them. Asking Google not to use your pages for AI training also limits what Gemini can use from them. Google Search itself is not affected.";
 
-/** A group of choice cards, each a radio button with its explanation. */
+/**
+ * A group of choice cards, each a radio button with its explanation: a card
+ * bordered in the admin's own colours, the chosen one ringed in the
+ * foreground colour, as Import's first step draws its sources.
+ */
 export function ChoiceCards<T extends string>({
   name,
   label,
@@ -80,26 +84,38 @@ export function ChoiceCards<T extends string>({
   choices: readonly { value: T; title: string; detail: string }[];
   value: T | null;
   onChange: (value: T) => void;
-  columns?: 1 | 2;
+  columns?: 1 | 2 | 3;
 }): JSX.Element {
+  const grid =
+    columns === 3
+      ? "grid gap-3 sm:grid-cols-3"
+      : columns === 2
+        ? "grid gap-3 sm:grid-cols-2"
+        : "grid gap-3";
   return (
-    <div
-      className={columns === 2 ? "nx-seo-rgroup two" : "nx-seo-rgroup"}
-      role="radiogroup"
-      aria-label={label}
-    >
+    <div className={grid} role="radiogroup" aria-label={label}>
       {choices.map(choice => (
-        <label key={choice.value} className="nx-seo-radio">
+        // The hover outline in the muted text token, un-faded, so it keeps
+        // the 3:1 a control's boundary needs against the card.
+        <label
+          key={choice.value}
+          className="flex cursor-pointer items-start gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:border-muted-foreground has-[:checked]:border-foreground has-[:checked]:ring-1 has-[:checked]:ring-foreground has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring"
+        >
           <input
             type="radio"
+            className="mt-0.5 size-4 shrink-0 accent-primary"
             name={name}
             value={choice.value}
             checked={value === choice.value}
             onChange={() => onChange(choice.value)}
           />
-          <span>
-            <b>{choice.title}</b>
-            <span>{choice.detail}</span>
+          <span className="grid gap-0.5">
+            <span className="text-sm font-semibold text-foreground">
+              {choice.title}
+            </span>
+            <span className="text-xs leading-normal text-muted-foreground">
+              {choice.detail}
+            </span>
           </span>
         </label>
       ))}

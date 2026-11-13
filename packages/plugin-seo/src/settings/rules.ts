@@ -25,6 +25,7 @@ import {
   AI_CRAWLER_CHOICES,
   SEO_PLUGIN_NAME,
   SEO_SETTINGS_SLUG,
+  SETUP_STEPS,
   SITE_KINDS,
   type AiCrawlerChoice,
   type SiteKind,
@@ -70,6 +71,12 @@ export interface SeoRules {
    * are, once the settings name any.
    */
   hiddenTypes?: string[];
+  /** Whether IndexNow is told of changed pages: only once switched on. */
+  indexNow?: boolean;
+  /** Whether `/llms.txt` is served: only once switched on. */
+  llmsTxt?: boolean;
+  /** Whether each listed page has a plain-text copy: only once switched on. */
+  plainTextCopies?: boolean;
 }
 
 /** One of the brand's official accounts. */
@@ -184,6 +191,13 @@ async function rulesOf(
     defaultPatterns: { title: defaultTitlePattern(separatorOf(document)) },
     ...withDefined("aiCrawlers", aiCrawlersOf(document)),
     ...withDefined("hiddenTypes", hiddenTypesOf(document)),
+    // Off unless stored as switched on: a value that is not `true` is off.
+    ...withDefined("indexNow", document.indexNow === true ? true : undefined),
+    ...withDefined("llmsTxt", document.llmsTxt === true ? true : undefined),
+    ...withDefined(
+      "plainTextCopies",
+      document.plainTextCopies === true ? true : undefined
+    ),
     patterns: patternsOf(document),
   };
 }
@@ -273,6 +287,17 @@ export async function readSeoRules(
 }
 
 /**
+ * Whether first-time setup still waits to be asked: fewer than its steps
+ * answered, and not closed for later. The Overview sends a first visit on
+ * to it. Like {@link readSeoRules}, never awaited while the site starts.
+ */
+export async function setupWaiting(ctx: PluginContext): Promise<boolean> {
+  const document = await readSeoSettingsDocument(ctx);
+  const step = typeof document.setupStep === "number" ? document.setupStep : 0;
+  return step < SETUP_STEPS && document.setupDismissed !== true;
+}
+
+/**
  * The site's brand facts in `locale`, for structured data and the like. Like
  * {@link readSeoRules}, never awaited while the site starts.
  */
@@ -288,6 +313,8 @@ export interface StructuredDataSettings {
   /** The production address the language is served from. */
   origin?: string;
   siteName?: string;
+  /** The site's default description, which says what the site is. */
+  description?: string;
   brand: Omit<BrandFacts, "siteKind">;
   /** Per content type: the collection slug, or `single:<slug>` for a Single. */
   types: Readonly<Record<string, StructuredDataTypeRule>>;
@@ -315,6 +342,47 @@ async function originIn(
   return addresses[0];
 }
 
+/** The site's own name and address, as every output names the site. */
+export interface SiteIdentity {
+  /** The production address the language is served from. */
+  origin?: string;
+  siteName?: string;
+}
+
+/** The site's name and the production address `locale` is served from. */
+async function identityOf(
+  document: SeoSettingsDocument,
+  locale: string | undefined
+): Promise<SiteIdentity> {
+  const origin = await originIn(
+    productionAddressesOf(
+      checked<string[]>(
+        document.productionAddresses,
+        productionAddressesProblem
+      )
+    ),
+    locale
+  );
+  const siteName = trimmed(document.siteName);
+  return {
+    ...(origin === undefined ? {} : { origin }),
+    ...(siteName === undefined ? {} : { siteName }),
+  };
+}
+
+/**
+ * The site's name and the production address `locale` is served from (the
+ * environment's addresses winning, as for every output), with no media read:
+ * what a page's social card names the site by. Never awaited while the site
+ * starts.
+ */
+export async function readSiteIdentity(
+  ctx: PluginContext,
+  locale?: string
+): Promise<SiteIdentity> {
+  return identityOf(await readSeoSettingsDocument(ctx, locale), locale);
+}
+
 /**
  * What the SEO settings hold for structured data in `locale`, from one read:
  * the production address the language is served from (the environment's
@@ -330,19 +398,10 @@ export async function readStructuredDataSettings(
     document,
     mediaImages(ctx)
   );
-  const origin = await originIn(
-    productionAddressesOf(
-      checked<string[]>(
-        document.productionAddresses,
-        productionAddressesProblem
-      )
-    ),
-    locale
-  );
-  const siteName = trimmed(document.siteName);
+  const description = trimmed(document.description);
   return {
-    ...(origin === undefined ? {} : { origin }),
-    ...(siteName === undefined ? {} : { siteName }),
+    ...(await identityOf(document, locale)),
+    ...(description === undefined ? {} : { description }),
     brand,
     types:
       checked<Record<string, StructuredDataTypeRule>>(

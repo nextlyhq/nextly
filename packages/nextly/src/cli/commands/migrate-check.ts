@@ -64,8 +64,8 @@ import {
 import {
   fileDeletions,
   functionsDefinedBy,
-  type DeletionFacts,
 } from "../../domains/schema/migrate/file-deletions";
+import { offlineDeletionFacts } from "../../domains/schema/migrate/offline-deletion-facts";
 import { declaredNamesOf } from "../../domains/schema/migrate/resolved-schema";
 import {
   marksNoTransaction,
@@ -80,10 +80,7 @@ import {
   NO_APP_STREAM_TABLES,
   type AppStreamTables,
 } from "../../domains/schema/migrate-create/app-stream";
-import {
-  toMinimalEntities,
-  withBuilderSettingsAll,
-} from "../../domains/schema/migrate-create/config-entities";
+import { toMinimalEntities } from "../../domains/schema/migrate-create/config-entities";
 import {
   describeSettingsChange,
   settingsChangesFor,
@@ -102,7 +99,6 @@ import {
 import { describeOp } from "../../domains/schema/pipeline/diff/describe-operation";
 import { diffSnapshots } from "../../domains/schema/pipeline/diff/diff";
 import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/types";
-import { renderedType } from "../../domains/schema/pipeline/sql-templates/create-table-body";
 import { siblingClashesErrorFor } from "../../domains/schema/sibling-fields";
 import { validateCrossFile } from "../../domains/schema/ui-schema/cross-file";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
@@ -307,8 +303,9 @@ export async function runMigrateCheck(
     appStream,
     dialect,
     declared,
-    // Each entity with its settings, as `migrate:create` records them.
-    entities: withBuilderSettingsAll(merged, manifest),
+    // Each entity with its settings, as `migrate:create` records them; the
+    // merge sets a Builder entity's (`uiToMinimal`).
+    entities: merged,
     logger,
   });
 }
@@ -654,7 +651,7 @@ export async function judgeStatements(
       const deletions = fileDeletions(
         statements,
         dialect,
-        offlineFacts(schemaFor[section], functions)
+        offlineDeletionFacts(schemaFor[section], functions)
       );
       if (deletions.length > 0) destructive.push({ file, section, deletions });
     }
@@ -662,16 +659,6 @@ export async function judgeStatements(
   return { outsideTransaction, refused, destructive };
 }
 
-/**
- * The facts a section's deletions are judged against without a database.
- * No foreign key or trigger is known: the deletions named are the ones the
- * statements name, and the run itself judges what a removal reaches. The
- * user-defined functions are `functions`, the ones a migration file defines. The
- * columns of the tables a SQLite rebuild rebuilds are read from `schema`, the
- * snapshot of the schema the section runs against, so a column the rebuild
- * leaves out is named. Without a snapshot, or for a table it does not hold, a
- * rebuild is left to the run unless it carries everything.
- */
 /** Each migration file in run order, the dialect's variant, with its UP and DOWN split into statements. */
 async function readSections(
   migrationsDir: string,
@@ -703,48 +690,6 @@ async function readSections(
     });
   }
   return files;
-}
-
-function offlineFacts(
-  schema: NextlySchemaSnapshot | undefined,
-  functions: ReadonlySet<string>
-): DeletionFacts {
-  const columnTypes = new Map(
-    (schema?.tables ?? []).map(table => [
-      table.name.toLowerCase(),
-      // Each type as the generated DDL spells it, so a column the rebuild
-      // carries unchanged compares equal and only a converted one is named.
-      new Map(
-        table.columns.map(column => [
-          column.name.toLowerCase(),
-          renderedType(column).toLowerCase(),
-        ])
-      ),
-    ])
-  );
-  return {
-    cascadeFrom: () => [],
-    truncateCascadeFrom: () => [],
-    nulledBy: () => [],
-    // No code a table carries, nor inheritance tree, is known without a
-    // database; the run judges what a change reaches.
-    hiddenCode: () => false,
-    descendantsOf: () => [],
-    // The tables the schema before the section holds, from its snapshot.
-    liveTable: table =>
-      schema === undefined ? undefined : columnTypes.has(table.toLowerCase()),
-    userFunctions: functions,
-    unseenRebuild: "deferred",
-    // Derived from the one reading of the types, so the two agree on which
-    // columns a table has.
-    liveColumns: new Map(
-      [...columnTypes].map(([table, columns]) => [
-        table,
-        new Set(columns.keys()),
-      ])
-    ),
-    liveColumnTypes: columnTypes,
-  };
 }
 
 /**

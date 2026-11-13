@@ -254,12 +254,15 @@ Add `serverExternalPackages` so Next.js doesn't try to bundle server-only depend
 
 ```typescript title="next.config.ts"
 import type { NextConfig } from "next";
-import { nextlyHtmlLimitedBots } from "nextly/next";
+import { nextlyHtmlLimitedBots, nextlyTracingIncludes } from "nextly/next";
 
 const nextConfig: NextConfig = {
   // Search engines and AI crawlers read each page's whole head in the first
   // HTML; see "Metadata in the first HTML" in the routing and SEO guide.
   htmlLimitedBots: nextlyHtmlLimitedBots,
+  // Files Nextly loads at request time that the build's trace leaves out;
+  // see "Deploying with traced functions" below.
+  outputFileTracingIncludes: { "/**": nextlyTracingIncludes() },
   // Nextly runs with both on; see Cache Components below.
   cacheComponents: true,
   partialPrefetching: true,
@@ -287,6 +290,10 @@ export default nextConfig;
 ```
 
 Drop adapters and drivers your project doesn't actually use. A project made with `create-next-app` 16.4 already has `cacheComponents: true` and `partialPrefetching: true`. In a `next.config.mjs`, which has no `require` of its own, add `import { createRequire } from "node:module";` and `const require = createRequire(import.meta.url);` at the top.
+
+#### Deploying with traced functions
+
+A host that deploys each route with only the files the build traced, such as Vercel, needs the files Nextly loads at request time. Nextly reaches Next.js's `next/navigation`, `next/cache`, `next/headers` and `next/server` at request time, through a require the build's trace may not follow, so without them the first request that needs one can fail with `Cannot find module`. `nextlyTracingIncludes()` lists those files, with the database drivers and adapters, as globs relative to the project, and the `outputFileTracingIncludes` line above adds them to every route. A config wrapped in `withNextly()` from `nextly/next` gets them without the line. `next start` on a server with the whole `node_modules` needs neither.
 
 ### 4. Set Up Admin Routes
 
@@ -416,11 +423,14 @@ export async function register(): Promise<void> {
   // Nextly warns at start when it is off.
   await createRegister(config, {
     cacheComponents: process.env.__NEXT_CACHE_COMPONENTS,
+    // The build's newest migration, which `withNextly` sets: a production
+    // start warns when the database is behind it.
+    buildSchemaVersion: process.env.NEXTLY_BUILD_SCHEMA_VERSION,
   })();
 }
 ```
 
-Next.js skips `register()` during `next build`, so this opens no database connection at build time. If the config sets `pageExtensions`, name the file with one of them (`instrumentation.page.ts` for `page.ts`).
+Next.js skips `register()` during `next build`, so this opens no database connection at build time. `buildSchemaVersion` is what lets a production start compare the database's schema version with the build's (see [the schema version a production start checks](/docs/guides/production-migrations#the-schema-version-a-production-start-checks)); Next.js inlines it into this file, which is how it reaches Nextly on every host, Vercel and `output: "standalone"` included. If the config sets `pageExtensions`, name the file with one of them (`instrumentation.page.ts` for `page.ts`).
 
 ### 5. Set Up Environment Variables
 

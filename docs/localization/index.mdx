@@ -112,6 +112,8 @@ In code, set `localized: false` on the field and run `nextly migrate:create`. It
 
 If the archive cannot be written, the change is refused and nothing is changed.
 
+In development, `next dev` makes the same move when you save the config, and so does `nextly db:sync` (and each re-sync of `nextly db:sync --watch`): the other languages go to the archive, the default language's value is copied into the shared column, and then the translated column is removed. A Required or Unique field gets its setting once its values are copied. When the values can't take it, the change is refused before anything changes, and the message names the field and how many entries are in the way.
+
 A field marked Required or Unique can stop being translated in the same change, as long as the default language's values can take the setting. The shared column is created without the setting, filled with the default language's values, and only then made required or unique. In the Schema Builder, the change is refused before anything runs when they can't, and the dialog says so before Apply: Required needs every entry to have a default-language value, and Unique needs no two entries to end up with the same value (an entry with no default-language value takes another language's, which counts). The refusal names the field and how many entries are in the way, never a value. In code, `migrate:create` writes the setting into the third file, after the copy and before the translated column is removed. `nextly migrate` checks the values before the first of the three files runs, and again before the third: when they can't take the setting, it refuses with the field and how many entries are in the way, and changes nothing. Give those entries their values, then run `nextly migrate` again. The values are checked once, before the move starts, so stop the app's writes while `nextly migrate` runs. Files that record the setting need this version of Nextly or a newer one to run.
 
 To bring those values back, make the field translated again, then restore that field:
@@ -201,6 +203,66 @@ still being translated stays invisible while the others are live.
   release](/docs/releases) schedules the whole document across every language;
   it cannot schedule one language on its own.
 </Callout>
+
+### Publish chosen languages in one request
+
+<Callout type="warn">
+  Experimental: the request and its answer may change until publishing per
+  language is complete.
+</Callout>
+
+An entry has a **shared part**, the values every language shows (fields with `localized: false`),
+and one part per language. Publish or unpublish the parts you choose in one request:
+
+```ts
+// Spanish and French together, and the shared part with them.
+await nextly.publish({
+  collection: "posts",
+  id,
+  locales: ["es", "fr"],
+  shared: true,
+  data: { _overwrite: true },
+});
+
+// Only Spanish: its own values go live, the shared part stays as it is.
+await nextly.publish({ collection: "posts", id, locales: ["es"], data: { _rev } });
+
+// Take French down, leaving every other language live.
+await nextly.unpublish({ collection: "posts", id, locales: ["fr"], data: { _rev } });
+```
+
+Over REST, send the same choice to `POST /api/collections/{slug}/entries/{id}/publish` or
+`.../unpublish`, with a body of `{ "locales": ["es", "fr"], "shared": true, "_rev": 4 }`.
+`locales: "all"` chooses every language the site has, and the shared part with them.
+
+Everything chosen moves together, or nothing moves:
+
+- **Every refusal is reported at once.** A request is refused whole when any chosen part is
+  refused, and the error lists each one, each issue naming its language in `locale`: the publish
+  or unpublish rule in that language, validation of that language's values, and anything else
+  that holds a part back.
+- **A language can go live first.** An entry's first publish takes the shared part with it,
+  whichever language goes first, since no language is shown without its shared part. The answer
+  says so: `shared: { changes: true, added: true }`. The shared part's publish rule is asked in
+  every language, because every language shows it, so a rule that admits only Spanish refuses
+  that first publish.
+- **The shared part stays live while a language does.** Unpublishing the shared part while a
+  language you did not choose stays live is refused, naming that language.
+- **A languages-only publish changes no shared value.** Pending edits to the shared part stay
+  pending until the shared part is published.
+- **A unique translated field needs a value in each language.** A unique field is never filled
+  from another language, so a language whose required unique field is empty is refused with
+  `UNIQUE_VALUE_REQUIRED_IN_LANGUAGE`.
+
+Add `describe: true` to get the answer without changing anything: each chosen language's outcome
+(`goes-live`, `goes-live-with-pending-change`, `stays-published`, `shows-fallback`, or for an
+unpublish `taken-down` and `stays-unpublished`) and what happens to the shared part. A refusal is
+answered the same way it would be for the real request.
+
+By default a language whose required translated field is empty publishes and shows the value it
+falls back to. To require each language to hold its own value, set `requireEveryLanguage: true`
+on the collection (experimental); a language missing one is refused with
+`REQUIRED_IN_LANGUAGE`.
 
 ## Access rules and languages
 
@@ -294,6 +356,11 @@ languageAddresses: {
   serves the prefixes. Sending each domain to its language, and the default language's
   unprefixed addresses to the route, stays with your site, for example a rewrite in
   `next.config.ts` or a Proxy.
+- On a Page Builder route under a `[locale]` segment, a block's link to another entry is read in
+  the request's language and points at that entry's address in it: a German page's button links
+  to `/de/kontakt`, not the English `/contact`. A route mounted for one language with its own
+  `locale` keeps its links as it serves its pages. A route given its own `resolveEntryPath` is
+  handed the language as a third argument and answers the whole address itself.
 - `languageAddressOf(path, locale)`, from `nextly` or `@nextlyhq/plugin-sdk`, answers the address
   a path kept in a language is opened at: `{ status: "resolved", path, origin? }`, or
   `{ status: "unavailable" }` for a language the site does not have.

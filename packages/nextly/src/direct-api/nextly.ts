@@ -96,6 +96,7 @@ import {
   createContentEventsNamespace,
   createJobsNamespace,
   createNoticesNamespace,
+  createVersionsNamespace,
   createReleasesNamespace,
   createFieldGroupsNamespace,
   createEmailNamespace,
@@ -112,6 +113,7 @@ import {
   type ContentEventsNamespace,
   type JobsNamespace,
   type NoticesNamespace,
+  type VersionsNamespace,
   type ReleasesNamespace,
   type FieldGroupsNamespace,
   type EmailNamespace,
@@ -167,6 +169,8 @@ import type {
   SingleListResult,
   SingleSlug,
   UpdateArgs,
+  PublishArgs,
+  PublishResult,
   UpdateSingleArgs,
   UserContext,
   VerifyEmailArgs,
@@ -291,6 +295,8 @@ export class Nextly implements NextlyContext {
   public readonly releases: ReleasesNamespace;
   /** A person's own notices. */
   public readonly notices: NoticesNamespace;
+  /** @experimental A document's history: list, read, compare, name, restore. */
+  public readonly versions: VersionsNamespace;
   /** @experimental A subject's content events: a document's or a release's. */
   public readonly contentEvents: ContentEventsNamespace;
   /** @experimental Recognising a plugin's kind of signed-in person. */
@@ -325,6 +331,7 @@ export class Nextly implements NextlyContext {
     this.jobs = createJobsNamespace();
     this.releases = createReleasesNamespace(this);
     this.notices = createNoticesNamespace();
+    this.versions = createVersionsNamespace(this);
     this.contentEvents = createContentEventsNamespace(this);
     this.principals = createNextlyPrincipals();
 
@@ -583,6 +590,29 @@ export class Nextly implements NextlyContext {
   ): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
     return runAsCaller(this.defaultConfig, args, callArgs =>
       collectionsNs.update(this, callArgs)
+    );
+  }
+
+  /**
+   * Publish the parts of one entry `args` chooses: some of its languages, or every one, and its
+   * shared part. With `describe`, say what publishing them would do, and change nothing.
+   *
+   * @experimental Until publishing per language is complete.
+   */
+  publish(args: PublishArgs): Promise<MutationResult<PublishResult>> {
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.publish(this, callArgs)
+    );
+  }
+
+  /**
+   * Unpublish the parts of one entry `args` chooses, or say what doing so would do.
+   *
+   * @experimental Until publishing per language is complete.
+   */
+  unpublish(args: PublishArgs): Promise<MutationResult<PublishResult>> {
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.unpublish(this, callArgs)
     );
   }
 
@@ -961,6 +991,12 @@ export const nextly = {
     (await requireNextlyOnceStarted()).create(args),
   update: async <TSlug extends CollectionSlug>(args: UpdateArgs<TSlug>) =>
     (await requireNextlyOnceStarted()).update(args),
+  /** Publish the chosen parts of one entry. @experimental */
+  publish: async (args: PublishArgs) =>
+    (await requireNextlyOnceStarted()).publish(args),
+  /** Unpublish the chosen parts of one entry. @experimental */
+  unpublish: async (args: PublishArgs) =>
+    (await requireNextlyOnceStarted()).unpublish(args),
   delete: async (args: DeleteArgs) =>
     (await requireNextlyOnceStarted()).delete(args),
   count: async (args: CountArgs) =>

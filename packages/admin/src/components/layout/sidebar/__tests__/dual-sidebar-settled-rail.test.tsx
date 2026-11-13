@@ -9,6 +9,7 @@ import { render, screen } from "@testing-library/react";
 import type React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { LocalizationConfig } from "@admin/lib/localization";
 import type { AdminCapabilities } from "@admin/types/permissions";
 
 interface Answers {
@@ -18,6 +19,21 @@ interface Answers {
 }
 
 let answers: Answers;
+
+/** A localization config naming these locale codes, as admin-meta delivers it. */
+const localesOf = (...codes: string[]): LocalizationConfig => ({
+  defaultLocale: codes[0] ?? "en",
+  fallback: true,
+  locales: codes.map(code => ({
+    code,
+    label: code,
+    rtl: false,
+    fallbackLocale: [],
+  })),
+});
+
+/** The site's locales once the workspace answer is in; two unless a case says otherwise. */
+let siteLocales: LocalizationConfig = localesOf("en", "fr");
 
 const EVERYTHING: Partial<AdminCapabilities> = {
   isSuperAdmin: true,
@@ -37,6 +53,8 @@ vi.mock("@nextlyhq/ui", () => ({
     <>{children}</>
   ),
   TooltipContent: () => null,
+  // The rail's neutral shapes for entries not decided yet.
+  Skeleton: () => <span data-testid="skeleton" />,
 }));
 vi.mock("@admin/components/shared/ThemeAwareLogo", () => ({
   ThemeAwareLogo: () => null,
@@ -67,7 +85,9 @@ vi.mock("@admin/context/providers/MediaProvider", () => ({
 }));
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () =>
-    answers.workspacePending ? {} : { plugins: [], showBuilder: false },
+    answers.workspacePending
+      ? {}
+      : { plugins: [], showBuilder: false, locales: siteLocales },
   useBrandingStatus: () => ({
     isPending: answers.workspacePending,
     isUnavailable: false,
@@ -87,6 +107,12 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
     error: null,
     content: { isLoading: answers.contentLoading },
   }),
+}));
+// The Content panel's lists, which the rail reads only to keep the menu on
+// the device: nothing in these tests asks for them.
+vi.mock("@admin/hooks/useSidebarContentLists", () => ({
+  useSidebarCollectionList: () => ({ items: [], data: undefined }),
+  useSidebarSingleList: () => ({ items: [], hasArrived: false }),
 }));
 vi.mock("@admin/hooks/queries", () => ({
   NAV_COLLECTIONS_PARAMS: {},
@@ -115,6 +141,7 @@ const railLabels = () =>
 
 afterEach(() => {
   vi.clearAllMocks();
+  siteLocales = localesOf("en", "fr");
 });
 
 describe("DualSidebar's rail while its answers arrive", () => {
@@ -160,6 +187,33 @@ describe("DualSidebar's rail while its answers arrive", () => {
     expect(screen.queryByLabelText("Media Library")).not.toBeInTheDocument();
   });
 
+  it("holds the places of entries not decided yet with neutral shapes, and draws none once settled", () => {
+    const ghosts = () => screen.queryAllByTestId("rail-ghost-item");
+    answers = {
+      workspacePending: false,
+      permissionsLoading: false,
+      contentLoading: true,
+    };
+    const { unmount } = render(<DualSidebar />);
+    // Dashboard is drawn; every place after it, still undecided, is a shape
+    // naming nothing, so the rail never reads as empty while it waits.
+    expect(railLabels()).toEqual(["Dashboard"]);
+    expect(ghosts().length).toBeGreaterThan(0);
+    for (const ghost of ghosts()) {
+      expect(ghost).toHaveAttribute("aria-hidden", "true");
+      expect(ghost).not.toHaveAttribute("aria-label");
+    }
+    unmount();
+
+    answers = {
+      workspacePending: false,
+      permissionsLoading: false,
+      contentLoading: false,
+    };
+    render(<DualSidebar />);
+    expect(ghosts()).toHaveLength(0);
+  });
+
   it("marks the rail settled only once every answer it waits on is in", () => {
     const marker = () =>
       document.querySelector("aside")?.getAttribute("data-shell-answers");
@@ -195,6 +249,53 @@ describe("DualSidebar's rail while its answers arrive", () => {
   });
 });
 
+describe("the entries DualSidebar's rail offers", () => {
+  const ALL_IN: Answers = {
+    workspacePending: false,
+    permissionsLoading: false,
+    contentLoading: false,
+  };
+
+  it("offers Releases in the main menu, beside Media", () => {
+    answers = ALL_IN;
+    render(<DualSidebar />);
+    const labels = railLabels();
+    expect(labels).toContain("Releases");
+    expect(labels.indexOf("Releases")).toBe(
+      labels.indexOf("Media Library") + 1
+    );
+  });
+
+  it("has no Email entry, which lives in the Settings panel", () => {
+    answers = ALL_IN;
+    render(<DualSidebar />);
+    // The control: the rail is drawn, Settings among it.
+    expect(railLabels()).toContain("Settings");
+    expect(railLabels()).not.toContain("Email");
+  });
+
+  it.each([
+    ["no localization", undefined],
+    ["a single locale", localesOf("en")],
+  ])("hides Translations on a site with %s", (_, locales) => {
+    answers = ALL_IN;
+    siteLocales = locales;
+    render(<DualSidebar />);
+    expect(railLabels()).not.toContain("Translations");
+    // The control: the entries around it are still drawn.
+    expect(railLabels()).toEqual(
+      expect.arrayContaining(["Media Library", "Settings"])
+    );
+  });
+
+  it("shows Translations on a site with two locales", () => {
+    answers = ALL_IN;
+    siteLocales = localesOf("en", "fr");
+    render(<DualSidebar />);
+    expect(railLabels()).toContain("Translations");
+  });
+});
+
 describe("DualSidebar's rail under the keyboard", () => {
   // The rail's controls draw no browser outline, so a keyboard reader sees where focus is only
   // by the ring each control draws on :focus-visible. A control without it is invisible to Tab.
@@ -215,7 +316,9 @@ describe("DualSidebar's rail under the keyboard", () => {
       permissionsLoading: false,
       contentLoading: false,
     };
-    render(<DualSidebar />);
+    // On a phone an entry with a panel is a button that opens it, and one
+    // without (the Dashboard) a link, so both kinds are drawn.
+    render(<DualSidebar isMobile />);
     const entries = Array.from(
       document.querySelectorAll<HTMLElement>("aside nav [aria-label]")
     );

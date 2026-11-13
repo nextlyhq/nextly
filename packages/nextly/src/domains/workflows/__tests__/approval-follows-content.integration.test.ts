@@ -11,7 +11,9 @@
  * Each withdrawal is observed on the review state, the record of content events and the
  * history's pins, as a reader of each would see them.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   defineCollection,
@@ -29,6 +31,8 @@ import {
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { VersionsDbApi } from "../../versions/db-api";
 import { VersionsRepository } from "../../versions/versions-repository";
+import { canonicalJson } from "../../../shared/lib/canonical-json";
+import { documentSystemKeys } from "../../versions/snapshot-system-keys";
 import { approvalDigest } from "../approval-digest";
 import { defineWorkflow } from "../define-workflow";
 import { workflowDefinitionHash } from "../hash";
@@ -141,10 +145,13 @@ async function boot(
   options: {
     postsWorkflow?: ReturnType<typeof defineWorkflow>;
     adapter?: TestNextly["adapter"];
+    /** Keep every translatable field per language, and a held edit's drafts by part. */
+    perLanguageStorage?: boolean;
   } = {}
 ): Promise<TestNextly> {
   t = await createTestNextly({
     ...(options.adapter ? { adapter: options.adapter } : { dialect }),
+    perLanguageStorage: options.perLanguageStorage === true,
     localization: { locales: ["en", "es"], defaultLocale: "en" },
     // A field group whose own field has a read rule, which only the field-group pass of a read
     // applies: the collection's pass does not reach inside a field group.
@@ -371,6 +378,96 @@ describe.each(getConfiguredTestDialects())(
         expect(await withdrawals("posts", post)).toEqual([]);
       });
 
+      it("keeps one language's approval through another language's held edit, whatever second its first publish stored", async () => {
+        await boot(dialect);
+        const bob = await person(app(), "bob", [["sign-off", "posts"]]);
+        const post = await entry(app(), "posts");
+        // English published first, then Spanish: the document's first-published time is written
+        // to the millisecond in English's version and read back, on SQLite and MySQL, to the
+        // second in Spanish's.
+        // A first publish at a time with milliseconds, which SQLite and MySQL read back without them.
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-11-12T10:00:00.123Z"));
+        try {
+          await save("posts", post, { status: "published" }, { locale: "en" });
+        } finally {
+          vi.useRealTimers();
+        }
+        await save(
+          "posts",
+          post,
+          { title: "Hola", status: "published" },
+          { locale: "es" }
+        );
+        for (const part of ["en", "es"]) {
+          await seedState(app(), partOf("posts", post, part), "legal", {
+            enteredBy: "alice",
+            definitionHash: HASH,
+          });
+          await take("posts", post, part, "clear", bob);
+        }
+        const english = await stateOf(app(), partOf("posts", post, "en"));
+
+        // A held edit of the Spanish translation, touching nothing English shows.
+        await save("posts", post, { title: "Adiós" }, { locale: "es" });
+
+        expect(await stateOf(app(), partOf("posts", post, "en"))).toEqual(
+          english
+        );
+      });
+
+      it("keeps an approval given before an upgrade through a save that leaves its content alone, and withdraws it on a change", async () => {
+        await boot(dialect);
+        const post = await entry(app(), "posts");
+        await save("posts", post, { status: "published" }, { locale: "en" });
+        const versionNo = await shownVersion(app(), "posts", post, "en");
+        // The digest an earlier release gave the approval: every top-level key but the ones it left
+        // out, the first-published time among those it kept.
+        const snapshot = (await snapshotOf(
+          app(),
+          "posts",
+          post,
+          versionNo
+        )) as Record<string, unknown>;
+        const kept = documentSystemKeys("collection");
+        const legacy = createHash("sha256")
+          .update(
+            canonicalJson(
+              Object.fromEntries(
+                Object.entries(snapshot).filter(
+                  ([key, held]) =>
+                    !kept.has(key) && held !== null && held !== undefined
+                )
+              )
+            ) ?? "",
+            "utf8"
+          )
+          .digest("hex");
+        expect(legacy).not.toBe(approvalDigest(snapshot, "collection"));
+        await seedState(app(), partOf("posts", post, "en"), "cleared", {
+          enteredBy: "alice",
+          definitionHash: HASH,
+          approval: {
+            versionNo,
+            digest: legacy,
+            by: "bob",
+            at: new Date("2026-11-02T10:00:00.000Z"),
+          },
+        });
+
+        // A held edit of the Spanish translation records a version, so every approved part is
+        // judged again, and English's content is what it was.
+        await save("posts", post, { title: "Hola" }, { locale: "es" });
+        expect(
+          (await stateOf(app(), partOf("posts", post, "en")))?.approval
+        ).toMatchObject({ digest: legacy });
+
+        await save("posts", post, { title: "Changed" }, { locale: "en" });
+        expect(await stateOf(app(), partOf("posts", post, "en"))).toMatchObject(
+          { approval: null }
+        );
+      });
+
       it("keeps the approval on an edit to an exempt field, and withdraws it on another field's", async () => {
         await boot(dialect);
         const carol = await person(app(), "carol", [["sign-off", "briefs"]]);
@@ -518,6 +615,72 @@ describe.each(getConfiguredTestDialects())(
           { stage: "legal", approval: null }
         );
         expect(await withdrawals("posts", post)).toHaveLength(1);
+      });
+    });
+
+    describe("a shared field held as a draft by part", () => {
+      /**
+       * A post published in Spanish and then English, each part approved by bob, under
+       * per-language storage. English is published last, so its approval names its own newest
+       * version, with no other language's shared values laid over it.
+       */
+      async function approvedInBoth(): Promise<string> {
+        await boot(dialect, { perLanguageStorage: true });
+        const bob = await person(app(), "bob", [["sign-off", "posts"]]);
+        const post = await entry(app(), "posts");
+        await save(
+          "posts",
+          post,
+          { title: "Hola", status: "published" },
+          { locale: "es" }
+        );
+        await save("posts", post, { status: "published" }, { locale: "en" });
+        for (const part of ["en", "es"]) {
+          await seedState(app(), partOf("posts", post, part), "legal", {
+            enteredBy: "alice",
+            definitionHash: HASH,
+          });
+          await take("posts", post, part, "clear", bob);
+        }
+        for (const part of ["en", "es"]) {
+          expect(
+            (await stateOf(app(), partOf("posts", post, part)))?.approval,
+            part
+          ).not.toBeNull();
+        }
+        return post;
+      }
+
+      // A held edit to a shared field goes to the document's one shared
+      // draft, which any language's publish puts live: so it withdraws every
+      // language's approval, not only the one it was made in.
+      it("withdraws every language's approval for a held edit to a shared field", async () => {
+        const post = await approvedInBoth();
+
+        // No status: held, in the shared draft, made through Spanish.
+        await save("posts", post, { code: "X-2" }, { locale: "es" });
+
+        for (const part of ["en", "es"]) {
+          expect(
+            await stateOf(app(), partOf("posts", post, part)),
+            part
+          ).toMatchObject({ stage: "legal", approval: null });
+        }
+      });
+
+      // A held edit to one language's own text reaches no other language.
+      it("keeps another language's approval for a held edit to a translation", async () => {
+        const post = await approvedInBoth();
+        const english = await stateOf(app(), partOf("posts", post, "en"));
+
+        await save("posts", post, { title: "Adiós" }, { locale: "es" });
+
+        expect(
+          (await stateOf(app(), partOf("posts", post, "es")))?.approval
+        ).toBeNull();
+        expect(await stateOf(app(), partOf("posts", post, "en"))).toEqual(
+          english
+        );
       });
     });
 

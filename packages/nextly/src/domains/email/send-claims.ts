@@ -180,14 +180,28 @@ interface ProviderCall {
   bcc?: readonly string[];
 }
 
+/**
+ * The keyed digest a send's idempotency key is stored and recorded under:
+ * its caller's scope and the key, so one plugin's key never stands for
+ * another's. The one spelling, read by the claim and by a plugin forgetting
+ * its sends (`plugin-send-forgetting`).
+ */
+export function idempotencyKeyDigest(
+  digest: PrincipalDigests["digest"],
+  scope: string,
+  key: string
+): string {
+  return digest({
+    kind: "nextly.email.idempotency-key",
+    id: JSON.stringify([scope, key]),
+  });
+}
+
 function claimDigests(
   digest: PrincipalDigests["digest"],
   sendKey: SendKey
 ): ClaimDigests {
-  const key = digest({
-    kind: "nextly.email.idempotency-key",
-    id: JSON.stringify([sendKey.scope, sendKey.key]),
-  });
+  const key = idempotencyKeyDigest(digest, sendKey.scope, sendKey.key);
   const message = digest({ kind: "nextly.email.message", id: sendKey.message });
   return {
     key,

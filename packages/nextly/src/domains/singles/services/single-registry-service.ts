@@ -49,10 +49,10 @@ import {
 import type { Logger } from "../../../shared/types";
 import type { SingleConfig } from "../../../singles/config/types";
 import {
+  fieldSettingsChanged,
   withUnsaidKept,
   type RecordedWriteOptions,
 } from "../../collections/services/collection-registry-service";
-import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import {
   moveWebhookRecording,
@@ -65,10 +65,6 @@ import {
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
-import {
-  deleteEntityRegistryRow,
-  mediaUsageTablePresent,
-} from "../../versions/entity-teardown";
 import { resolveVersionsConfig } from "../../versions/resolve-config";
 import { storedWebhookRecording } from "../../webhooks/builder-webhooks";
 import {
@@ -503,10 +499,10 @@ export class SingleRegistryService extends BaseRegistryService<
    * Every Single's slug and label, read without the rest of its record: what
    * a screen naming every Single needs.
    */
-  async getAllLabels(): Promise<
-    Array<Pick<DynamicSingleRecord, "slug" | "label">>
-  > {
-    const records = await this.getAllRecordsWithColumns(["label"]);
+  async getAllLabels(
+    options: { forWrite?: boolean } = {}
+  ): Promise<Array<Pick<DynamicSingleRecord, "slug" | "label">>> {
+    const records = await this.getAllRecordsWithColumns(["label"], options);
     return records.map(({ slug, label }) => ({ slug, label }));
   }
 
@@ -527,6 +523,18 @@ export class SingleRegistryService extends BaseRegistryService<
     options?: ListSinglesOptions
   ): Promise<DynamicSingleRecord[]> {
     return this.getAllRecords(options);
+  }
+
+  /**
+   * Every Single, oldest first, from the registry cache outside a transaction
+   * (`getAllRecordsForRead`): for a read that decides no write, such as a
+   * screen or a widget listing the Singles. A write decides from
+   * `getAllSingles`, which reads them as stored.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async getAllSinglesForRead(): Promise<DynamicSingleRecord[]> {
+    return this.getAllRecordsForRead();
   }
 
   async listSingles(options?: ListSinglesOptions): Promise<ListSinglesResult> {
@@ -567,12 +575,31 @@ export class SingleRegistryService extends BaseRegistryService<
    * @throws NextlyError(DATABASE_ERROR) on insert failure.
    */
   async registerSingle(
-    data: DynamicSingleInsert
+    data: DynamicSingleInsert,
+    options: {
+      /**
+       * `false` leaves the Single's permissions to a seeding the caller knows
+       * follows, as a start's does (`syncCodeFirstSingles`).
+       */
+      seedPermissions?: boolean;
+      /**
+       * Runs the row's write, for a caller that writes it in a transaction of
+       * its own (a Builder save, with the stored schema version beside it).
+       * The permissions are seeded after it returns, outside that
+       * transaction: their writes take connections of their own.
+       */
+      writeRow?: (
+        write: () => Promise<DynamicSingleRecord>
+      ) => Promise<DynamicSingleRecord>;
+    } = {}
   ): Promise<DynamicSingleRecord> {
-    const record = await this.insertSingle(data);
+    const write = () => this.insertSingle(data);
+    const record = await (options.writeRow ? options.writeRow(write) : write());
     // Seeded after the row is written; `seedPermissionsForSingle` logs and
     // swallows its own failures, so a seeding error never fails registration.
-    await this.seedPermissionsForSingle(data.slug);
+    if (options.seedPermissions !== false) {
+      await this.seedPermissionsForSingle(data.slug);
+    }
     return record;
   }
 
@@ -602,10 +629,13 @@ export class SingleRegistryService extends BaseRegistryService<
     const record = this.buildInsertRecord(data, fieldsJson, schemaHash);
 
     try {
-      const result = await this.adapter.insert<DynamicSingleRecord>(
-        this.registryTableName,
-        record,
-        { returning: "*" }
+      // With the stored schema version's count (`writeRegistry`).
+      const result = await this.writeRegistry(() =>
+        this.adapter.insert<DynamicSingleRecord>(
+          this.registryTableName,
+          record,
+          { returning: "*" }
+        )
       );
       // The cached registry row is now out of date.
       clearRegistryRowCache();
@@ -661,6 +691,8 @@ export class SingleRegistryService extends BaseRegistryService<
       record,
       { returning: "*" }
     );
+    // The stored schema version's count moves in the caller's transaction.
+    await this.countWriteOn(tx);
     // The cached registry row is now out of date.
     clearRegistryRowCache();
 
@@ -866,14 +898,18 @@ export class SingleRegistryService extends BaseRegistryService<
 
     try {
       // A slug different from the stored one is a rename, written with
-      // everything keyed by the old slug in one transaction.
+      // everything keyed by the old slug in one transaction. Either moves the
+      // stored schema version's count with it (`writeRegistry`, and
+      // `renameEntity`'s own).
       const results =
         targetSlug === slug
-          ? await this.adapter.update<DynamicSingleRecord>(
-              this.registryTableName,
-              updateData,
-              this.whereEq("slug", slug),
-              { returning: "*" }
+          ? await this.writeRegistry(() =>
+              this.adapter.update<DynamicSingleRecord>(
+                this.registryTableName,
+                updateData,
+                this.whereEq("slug", slug),
+                { returning: "*" }
+              )
             )
           : await this.renameSingleRow(
               { id: existing.id, slug, tableName: existing.tableName },
@@ -1139,16 +1175,12 @@ export class SingleRegistryService extends BaseRegistryService<
       //
       // What is swept, and what is deliberately kept, is for
       // `deleteEntityRegistryRow` to say.
-      // Asked before the transaction opens: see `DashboardTables`.
-      const tables = {
-        dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
-        mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
-      };
-      const { deleted: count, expire } = await this.adapter.transaction(
-        async tx => deleteEntityRegistryRow(tx, "single", slug, tables)
+      // The row, its sweep and the stored schema version's count in one
+      // transaction (`deleteEntityRow`).
+      const { deleted: count, expire } = await this.deleteEntityRow(
+        "single",
+        slug
       );
-      // The cached registry row is now out of date.
-      clearRegistryRowCache();
 
       if (count === 0) {
         // §13.8: generic "Not found." — slug in logContext only.
@@ -1227,6 +1259,9 @@ export class SingleRegistryService extends BaseRegistryService<
         existing,
         !schemaHashesMatch(schemaHash, existing.schemaHash)
       ) ||
+      // Field settings the hash omits (help text, placeholder, hidden): the
+      // stored field list carries them, so a change to one alone rewrites it.
+      fieldSettingsChanged(config.fields, existing.fields) ||
       // A Single's physical table, which a changed `dbName` moves: the row
       // follows it, or reads address a table that is gone.
       declaredSingleTable(config) !== existing.tableName
@@ -1266,7 +1301,7 @@ export class SingleRegistryService extends BaseRegistryService<
         : options.existing;
     const config =
       options.leavesUnsaid === true
-        ? withUnsaidKept(recorded, existing)
+        ? withUnsaidKept(recorded, existing, options.cleared)
         : recorded;
     const decision = this.codeFirstSyncStep(config, existing);
     const { schemaHash } = decision;
@@ -1299,11 +1334,20 @@ export class SingleRegistryService extends BaseRegistryService<
    * Singles as needed. Typically called during application startup.
    */
   async syncCodeFirstSingles(
-    configs: CodeFirstSingleConfig[]
+    configs: CodeFirstSingleConfig[],
+    /**
+     * `seedPermissions: false` when a seeding of every entity's permissions
+     * follows, as at a start: the sync then leaves them to it, so each is
+     * ensured once. Every other caller has its Singles' permissions seeded
+     * here, as before.
+     */
+    options: { seedPermissions?: boolean } = {}
   ): Promise<SyncSingleResult> {
     this.logger.info("Syncing code-first Singles", {
       count: configs.length,
     });
+    const seedPermissions = options.seedPermissions !== false;
+    const recordOf = await this.storedRecordsBySlug();
 
     const result: SyncSingleResult = {
       created: [],
@@ -1315,22 +1359,27 @@ export class SingleRegistryService extends BaseRegistryService<
     for (const config of configs) {
       try {
         // The decision `writeRecordedSingle` shares; the columns come from the
-        // same helpers, with the code origin added on top.
+        // same helpers, with the code origin added on top. The stored record
+        // comes from one read of the registry (`storedRecordsBySlug`).
         const decision = this.codeFirstSyncStep(
           config,
-          await this.findRecordForWrite(config.slug)
+          await recordOf(config.slug)
         );
         const { schemaHash } = decision;
 
         if (decision.step === "create") {
-          await this.registerSingle({
-            ...declaredSingleRegistration(config, schemaHash),
-            source: "code",
-            locked: true,
-            configPath: config.configPath,
-          });
+          await this.registerSingle(
+            {
+              ...declaredSingleRegistration(config, schemaHash),
+              source: "code",
+              locked: true,
+              configPath: config.configPath,
+            },
+            // Registering seeds the Single's permissions, unless a later
+            // seeding of every entity's is left to.
+            { seedPermissions }
+          );
           result.created.push(config.slug);
-          await this.seedPermissionsForSingle(config.slug);
         } else if (decision.step === "update") {
           // Either fields changed or the status toggle flipped — both warrant
           // a write so dynamic_singles.status stays in sync with the
@@ -1345,7 +1394,7 @@ export class SingleRegistryService extends BaseRegistryService<
             { source: "code" }
           );
           result.updated.push(config.slug);
-          await this.seedPermissionsForSingle(config.slug);
+          if (seedPermissions) await this.seedPermissionsForSingle(config.slug);
         } else if (decision.step === "metadata") {
           /*
            * Metadata only: no field changed, so nothing physical has to move.
@@ -1372,10 +1421,11 @@ export class SingleRegistryService extends BaseRegistryService<
             { source: "code" }
           );
           result.updated.push(config.slug);
-          await this.seedPermissionsForSingle(config.slug);
+          if (seedPermissions) await this.seedPermissionsForSingle(config.slug);
         } else {
-          // No changes — still ensure permissions exist (idempotent)
-          await this.seedPermissionsForSingle(config.slug);
+          // No changes — still ensure permissions exist (idempotent), unless a
+          // seeding of every entity's follows.
+          if (seedPermissions) await this.seedPermissionsForSingle(config.slug);
           result.unchanged.push(config.slug);
         }
       } catch (error) {
@@ -1489,6 +1539,27 @@ export class SingleRegistryService extends BaseRegistryService<
   // ============================================================
   // Private Helpers
   // ============================================================
+
+  /**
+   * The record as stored for a slug, from one read of every record rather than
+   * a read per slug, so a sync costs the same number of reads for five Singles
+   * as for fifty. Read past the registry row cache, as `findRecordForWrite`
+   * reads, since a sync decides from it. Where that read fails (a registry a
+   * migration has not created yet), each slug is read on its own, as before, so
+   * each failure lands on the Single it belongs to.
+   */
+  private async storedRecordsBySlug(): Promise<
+    (slug: string) => Promise<DynamicSingleRecord | null>
+  > {
+    try {
+      const records = new Map(
+        (await this.getAllSingles()).map(record => [record.slug, record])
+      );
+      return slug => Promise.resolve(records.get(slug) ?? null);
+    } catch {
+      return slug => this.findRecordForWrite(slug);
+    }
+  }
 
   /**
    * Seed read/update permissions for a single and assign to super_admin.

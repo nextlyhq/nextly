@@ -20,10 +20,14 @@ import {
 
 import { useAuthSession } from "../../hooks/queries/useAuthSession";
 import { useFaviconInjection } from "../../hooks/useFaviconInjection";
-import { readConfiguredBranding } from "../../lib/branding/configured-branding";
 import { enableDevReload } from "../../lib/api/fetcher";
 import { protectedApi } from "../../lib/api/protectedApi";
 import { publicApi } from "../../lib/api/publicApi";
+import { readConfiguredBranding } from "../../lib/branding/configured-branding";
+import {
+  recallBranding,
+  rememberBranding,
+} from "../../lib/device-memory/device-memory";
 import type {
   AdminBranding,
   ResolvedBrandingColors,
@@ -402,13 +406,25 @@ export function BrandingProvider({
   // paint, and it wins over branding set in General settings.
   const [configured] = useState(readConfiguredBranding);
 
+  // The site's public branding as this device last saw it (logo, name,
+  // favicon), drawn until the server's own answer arrives, so the sign-in
+  // screen and the frame look like the site from the first paint. The answer
+  // replaces it whole, a logo since removed in settings included.
+  const [remembered] = useState(recallBranding);
+  const publicBranding: AdminBranding | undefined = brandingData ?? remembered;
+  useEffect(() => {
+    if (brandingData !== undefined) {
+      rememberBranding(brandingData as Record<string, unknown>);
+    }
+  }, [brandingData]);
+
   useColorInjection(brandingData?.colors);
   // Only a favicon set in General settings is applied here. A configured one
   // is already linked in the first HTML, and with none set the page keeps its
   // own icon: either way nothing is swapped after load.
   useFaviconInjection(
     configured.favicon === undefined
-      ? brandingData?.favicon?.trim() || null
+      ? publicBranding?.favicon?.trim() || null
       : null
   );
 
@@ -438,10 +454,11 @@ export function BrandingProvider({
     const merged =
       brandingData === undefined &&
       workspaceData === undefined &&
-      Object.keys(configured).length === 0
+      Object.keys(configured).length === 0 &&
+      Object.keys(remembered).length === 0
         ? undefined
         : {
-            ...brandingData,
+            ...publicBranding,
             ...workspaceData,
             ...placesOfBothHalves(brandingData, workspaceData),
             ...configured,
@@ -470,6 +487,8 @@ export function BrandingProvider({
     };
   }, [
     brandingData,
+    publicBranding,
+    remembered,
     workspaceData,
     configured,
     sessionPending,

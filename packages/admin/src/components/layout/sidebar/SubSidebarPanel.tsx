@@ -19,8 +19,10 @@
  * reader moves between the dashboard and a collection.
  */
 
-import type { JSX } from "react";
+import type { JSX, ReactNode } from "react";
 
+import { Link } from "@admin/components/ui/link";
+import { ROUTES } from "@admin/constants/routes";
 import { cn } from "@admin/lib/utils";
 
 import { useSuppressedChrome } from "../ChromeSuppression";
@@ -31,6 +33,7 @@ import {
   subSidebarBorderClass,
   subSidebarHoldsWidth,
 } from "./lib/sub-sidebar-classes";
+import { PanelGhostBody } from "./RailColumn";
 import { SubSidebarContent } from "./SubSidebarContent";
 
 /** The panel's own title, which is the selection's name unless it has one. */
@@ -43,6 +46,37 @@ function panelTitle(selectedMain: string, standaloneLabel: string): string {
   return selectedMain;
 }
 
+const TITLE_CLASS =
+  "font-bold text-base tracking-tight capitalize text-foreground motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-150";
+
+/**
+ * The panel's title. The Content panel's goes to the Content overview, the
+ * page of every collection and Single the panel lists; the others name it.
+ */
+function PanelTitle({
+  selectedMain,
+  standaloneLabel,
+}: {
+  selectedMain: string;
+  standaloneLabel: string;
+}): JSX.Element {
+  const title = panelTitle(selectedMain, standaloneLabel);
+  if (!isContentSection(selectedMain)) {
+    return <span className={TITLE_CLASS}>{title}</span>;
+  }
+  return (
+    <Link
+      href={ROUTES.CONTENT}
+      className={cn(
+        TITLE_CLASS,
+        "rounded-sm outline-none hover:underline underline-offset-4 focus-visible:ring-2 focus-visible:ring-ring"
+      )}
+    >
+      {title}
+    </Link>
+  );
+}
+
 export function SubSidebarPanel({
   isMobile,
   selectedMain,
@@ -50,19 +84,32 @@ export function SubSidebarPanel({
   isFolderTreeVisible,
   standaloneLabel,
   content,
+  outlineBody,
 }: {
   isMobile: boolean;
   selectedMain: string;
   visibleMenuItemIds: readonly string[];
   isFolderTreeVisible: boolean;
   standaloneLabel: string;
-  /** Everything `SubSidebarContent` needs, passed through unread. */
-  content: React.ComponentProps<typeof SubSidebarContent>;
+  /**
+   * Everything `SubSidebarContent` needs, passed through unread. Absent for
+   * the panel's outline, drawn before the session is confirmed: then the panel
+   * opens for the route's section alone and holds neutral rows where its
+   * links will be.
+   */
+  content?: React.ComponentProps<typeof SubSidebarContent>;
+  /**
+   * What the panel's outline holds in place of its neutral rows: the panel
+   * drawn from what this device remembered, where it remembered one.
+   */
+  outlineBody?: ReactNode;
 }): JSX.Element {
   const suppressed = useSuppressedChrome();
   const hasSubSidebar = isSubSidebarOpen(
     selectedMain,
-    visibleMenuItemIds,
+    // The outline knows no entries yet, so the route's section stands for
+    // the one entry it will open.
+    content === undefined ? [selectedMain] : visibleMenuItemIds,
     isFolderTreeVisible,
     suppressed
   );
@@ -105,9 +152,10 @@ export function SubSidebarPanel({
       */}
       <div className="h-(--admin-bar-height) shrink-0 px-6 flex items-center border-b border-border">
         {hasSubSidebar ? (
-          <span className="font-bold text-base tracking-tight capitalize text-foreground motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-150">
-            {panelTitle(selectedMain, standaloneLabel)}
-          </span>
+          <PanelTitle
+            selectedMain={selectedMain}
+            standaloneLabel={standaloneLabel}
+          />
         ) : null}
       </div>
 
@@ -121,7 +169,11 @@ export function SubSidebarPanel({
       */}
       {hasSubSidebar ? (
         <div className="flex-1 overflow-y-auto motion-safe:animate-in motion-safe:fade-in-0 motion-safe:duration-150">
-          <SubSidebarContent {...content} />
+          {content === undefined ? (
+            (outlineBody ?? <PanelGhostBody />)
+          ) : (
+            <SubSidebarContent {...content} />
+          )}
         </div>
       ) : null}
     </aside>

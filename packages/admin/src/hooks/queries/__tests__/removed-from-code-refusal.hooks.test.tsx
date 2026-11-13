@@ -33,7 +33,6 @@ const api = vi.hoisted(() => ({
   getSingleSchema: vi.fn(),
   getCollectionSchema: vi.fn(),
   discardWorkingDraft: vi.fn(),
-  restore: vi.fn(),
   setLabel: vi.fn(),
   toastError: vi.fn(),
 }));
@@ -91,7 +90,6 @@ vi.mock("@admin/services/versionApi", async importOriginal => {
     versionApi: {
       ...actual.versionApi,
       discardWorkingDraft: api.discardWorkingDraft,
-      restore: api.restore,
       setLabel: api.setLabel,
     },
   };
@@ -128,7 +126,7 @@ import {
   useUpdateSingleDocument,
 } from "../useSingles";
 import { useUpdateEntry } from "../useUpdateEntry";
-import { useRestoreVersion, useSetVersionLabel } from "../useVersions";
+import { useSetVersionLabel } from "../useVersions";
 
 function sentence(kind: "collection" | "single", slug: string) {
   const thing = kind === "single" ? "Single" : "collection";
@@ -249,14 +247,6 @@ const HOOKS: HookCase[] = [
     toasts: true,
   },
   {
-    name: "useRestoreVersion (an entry)",
-    kind: "collection",
-    spy: api.restore,
-    use: () => useRestoreVersion({ scope: COLLECTION_SCOPE }) as MutationLike,
-    variables: 2,
-    toasts: false,
-  },
-  {
     name: "useSetVersionLabel (an entry)",
     kind: "collection",
     spy: api.setLabel,
@@ -288,14 +278,6 @@ const HOOKS: HookCase[] = [
     spy: api.updateDocument,
     use: () => useUpdateSingleDocument("home") as MutationLike,
     variables: { title: "Hello" },
-    toasts: false,
-  },
-  {
-    name: "useRestoreVersion (a Single)",
-    kind: "single",
-    spy: api.restore,
-    use: () => useRestoreVersion({ scope: SINGLE_SCOPE }) as MutationLike,
-    variables: 2,
     toasts: false,
   },
   {

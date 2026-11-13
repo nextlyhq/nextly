@@ -20,9 +20,21 @@ import {
   defaultTitlePattern,
   fillPattern,
   SEPARATORS,
+  tokenKey,
   unknownTokens,
   type Separator,
 } from "../settings/patterns";
+import {
+  DETAIL_GUESSES,
+  STRUCTURED_DATA_TYPES,
+  type StructuredDataDetail,
+  type StructuredDataTypeKey,
+} from "../structured-data/catalog";
+import type {
+  DetailMapping,
+  DetailSource,
+  StructuredDataTypeRule,
+} from "../structured-data/rules";
 
 /** One of the brand's official accounts, as the form holds it. */
 export interface ProfileDraft {
@@ -47,6 +59,16 @@ export interface SettingsDraft {
   patterns: Record<string, { title?: string; description?: string }>;
   setupStep: number;
   setupDismissed: boolean;
+  /** The content types hidden from search as a whole, by key. */
+  hiddenTypes: string[];
+  /** Each content type's structured data choice and detail mapping, by key. */
+  structuredData: Record<string, StructuredDataTypeRule>;
+  /** Whether IndexNow is told of changed pages. */
+  indexNow: boolean;
+  /** Whether `/llms.txt` is served. */
+  llmsTxt: boolean;
+  /** Whether each listed page has a plain-text copy. */
+  plainTextCopies: boolean;
 }
 
 /** The stored Single as the admin reads it. */
@@ -94,6 +116,13 @@ function patternsOf(value: unknown): SettingsDraft["patterns"] {
 export interface SettingsDefaults {
   /** The plugin's `aiCrawlers` option: what robots.txt asks until the site chooses. */
   aiCrawlers?: AiCrawlerChoice;
+  /** The plugin's `hiddenTypes` option: what is hidden until the site chooses. */
+  hiddenTypes?: readonly string[];
+  /**
+   * The plugin's `structuredData.types` option: each content type's choice
+   * and mapping until the site makes its own for that type.
+   */
+  structuredData?: Readonly<Record<string, StructuredDataTypeRule>>;
 }
 
 /** The form's values for the stored settings, `defaults` where nothing is stored. */
@@ -126,16 +155,229 @@ export function draftOf(
     patterns: patternsOf(stored.patterns),
     setupStep: typeof stored.setupStep === "number" ? stored.setupStep : 0,
     setupDismissed: stored.setupDismissed === true,
+    // The types hidden in force: the site's own list, else the plugin's, so
+    // showing one the plugin hides is a change that saves.
+    hiddenTypes: Array.isArray(stored.hiddenTypes)
+      ? stored.hiddenTypes.filter(
+          (key): key is string => typeof key === "string"
+        )
+      : [...(defaults.hiddenTypes ?? [])],
+    // The rules in force: the site's own for a type it chose for, else the
+    // plugin's, as the page's markup reads them.
+    structuredData: {
+      ...defaults.structuredData,
+      ...structuredDataOf(stored.structuredData),
+    },
+    // Off unless stored as switched on.
+    indexNow: stored.indexNow === true,
+    llmsTxt: stored.llmsTxt === true,
+    plainTextCopies: stored.plainTextCopies === true,
   };
+}
+
+/** Each type's stored structured data choice, as far as the form edits it. */
+export function structuredDataOf(
+  value: unknown
+): Record<string, StructuredDataTypeRule> {
+  if (!isRecord(value)) return {};
+  const rules: Record<string, StructuredDataTypeRule> = {};
+  for (const [key, rule] of Object.entries(value)) {
+    if (isRecord(rule)) rules[key] = rule;
+  }
+  return rules;
+}
+
+/** Whether every page of the type `key` is hidden from search. */
+export function isHidden(draft: SettingsDraft, key: string): boolean {
+  return draft.hiddenTypes.includes(key);
+}
+
+/** `draft` with the type `key` hidden from search as a whole, or shown. */
+export function withHidden(
+  draft: SettingsDraft,
+  key: string,
+  hidden: boolean
+): SettingsDraft {
+  const others = draft.hiddenTypes.filter(each => each !== key);
+  return { ...draft, hiddenTypes: hidden ? [...others, key] : others };
+}
+
+/** The structured data type the type `key` chose, or none: automatic. */
+export function structuredTypeOf(
+  draft: SettingsDraft,
+  key: string
+): StructuredDataTypeKey | undefined {
+  return draft.structuredData[key]?.type;
+}
+
+/**
+ * `draft` with only the type `key`'s rule changed. An empty rule is kept: it
+ * is the type described automatically, over any choice the plugin makes.
+ */
+function withRule(
+  draft: SettingsDraft,
+  key: string,
+  rule: StructuredDataTypeRule
+): SettingsDraft {
+  return {
+    ...draft,
+    structuredData: { ...draft.structuredData, [key]: rule },
+  };
+}
+
+/** A value as text with every object's keys in order, to compare rules by. */
+function sorted(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sorted);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map(key => [key, sorted(value[key])])
+  );
+}
+
+const sameRule = (a: StructuredDataTypeRule, b: StructuredDataTypeRule) =>
+  JSON.stringify(sorted(a)) === JSON.stringify(sorted(b));
+
+const isEmptyRule = (rule: StructuredDataTypeRule): boolean =>
+  rule.type === undefined && Object.keys(rule.details ?? {}).length === 0;
+
+/**
+ * The rules the site saves: those that differ from the plugin's, so a type
+ * the site never chose for keeps following the plugin's option. An empty
+ * rule is saved only where it overrides one of the plugin's.
+ */
+function savedRules(
+  rules: SettingsDraft["structuredData"],
+  defaults: SettingsDefaults
+): SettingsDraft["structuredData"] {
+  const fromPlugin = defaults.structuredData ?? {};
+  return Object.fromEntries(
+    Object.entries(rules).filter(([key, rule]) => {
+      const plugin = fromPlugin[key];
+      return plugin === undefined
+        ? !isEmptyRule(rule)
+        : !sameRule(rule, plugin);
+    })
+  );
+}
+
+/** `draft` with the type `key` described as `type`, or automatically. */
+export function withStructuredType(
+  draft: SettingsDraft,
+  key: string,
+  type: StructuredDataTypeKey | undefined
+): SettingsDraft {
+  const { type: _previous, ...rest } = draft.structuredData[key] ?? {};
+  return withRule(draft, key, type === undefined ? rest : { ...rest, type });
+}
+
+/** The fields the type `key` reads each detail of `type` from. */
+export function mappingOf(
+  draft: SettingsDraft,
+  key: string,
+  type: StructuredDataTypeKey
+): DetailMapping {
+  return draft.structuredData[key]?.details?.[type] ?? {};
+}
+
+/** `draft` with `detail` of `type` read from `field`, or from nothing chosen. */
+export function withDetailField(
+  draft: SettingsDraft,
+  key: string,
+  type: StructuredDataTypeKey,
+  detail: StructuredDataDetail,
+  field: string
+): SettingsDraft {
+  const rule = draft.structuredData[key] ?? {};
+  const { [detail]: _previous, ...mapping } = mappingOf(draft, key, type);
+  const nextMapping: DetailMapping =
+    field === "" ? mapping : { ...mapping, [detail]: field };
+  const details = { ...rule.details };
+  if (Object.keys(nextMapping).length === 0) delete details[type];
+  else details[type] = nextMapping;
+  const { details: _details, ...withoutDetails } = rule;
+  return withRule(
+    draft,
+    key,
+    Object.keys(details).length === 0
+      ? withoutDetails
+      : { ...withoutDetails, details }
+  );
+}
+
+/**
+ * The details a page supplies itself until a field is chosen, with what the
+ * mapping screen calls that source.
+ */
+export const FROM_THE_PAGE: Readonly<
+  Partial<Record<StructuredDataDetail, string>>
+> = {
+  // The page's own share image, from the order of who wins.
+  image: "The page's share image",
+  // A page's route can give the questions it shows, with no field holding
+  // them.
+  questions: "The questions the page's route gives",
+};
+
+/**
+ * The details `type` needs that the content type has no field for yet:
+ * neither mapped nor held by a field named like the detail, which is where
+ * the page's markup looks when nothing is mapped.
+ */
+export function missingDetails(
+  draft: SettingsDraft,
+  type: SeoContentType,
+  structuredType: StructuredDataTypeKey
+): StructuredDataDetail[] {
+  const mapping = mappingOf(draft, type.key, structuredType);
+  // The markup finds a detail by name among the entry's own fields only,
+  // never inside a group.
+  const named = new Set(
+    type.mappableFields
+      .filter(field => !field.name.includes("."))
+      .map(field => tokenKey(field.name))
+  );
+  return STRUCTURED_DATA_TYPES[structuredType].needs.filter(detail => {
+    const source = mapping[detail];
+    if (source !== undefined) return !holdsField(type, source);
+    return (
+      FROM_THE_PAGE[detail] === undefined &&
+      !DETAIL_GUESSES[detail].some(guess => named.has(tokenKey(guess)))
+    );
+  });
+}
+
+/**
+ * Whether a mapped source still reads something: a fixed value, a field the
+ * type has, or a path into a field whose inside is not listed, such as a
+ * linked entry's `author.name`. A group's fields are listed, so a path into
+ * a group must be one of them. A field since removed reads nothing, so its
+ * detail is missing until another is chosen.
+ */
+export function holdsField(
+  type: SeoContentType,
+  source: DetailSource
+): boolean {
+  if (typeof source !== "string") return true;
+  const names = type.mappableFields.map(field => field.name);
+  if (names.includes(source)) return true;
+  const root = source.split(".")[0] ?? "";
+  const listedInside = names.some(name => name.startsWith(`${root}.`));
+  return names.includes(root) && !listedInside;
 }
 
 /**
  * The values as they are stored: blank addresses and profiles left out, and
  * each profile's network read from its address.
  */
-function storedForm(draft: SettingsDraft): Record<string, unknown> {
+function storedForm(
+  draft: SettingsDraft,
+  defaults: SettingsDefaults
+): Record<string, unknown> {
   return {
     ...draft,
+    structuredData: savedRules(draft.structuredData, defaults),
     productionAddresses: draft.productionAddresses
       .map(address => address.trim())
       .filter(address => address !== ""),
@@ -158,13 +400,127 @@ const same = (a: unknown, b: unknown): boolean =>
  * rather than overwritten. A document never saved has no version, and is
  * replaced. Null when nothing changed.
  */
+/**
+ * `draft` moved from the settings it was made from onto newer ones: each
+ * value edited since `before` stays as edited, and each other takes its
+ * value in `after`, so a change made elsewhere meanwhile is kept. A map kept
+ * per content type (patterns, structured data) is moved entry by entry, and
+ * a list (hidden types, production addresses, social profiles) item by item,
+ * so an edit to one type keeps another person's edit to another, and an
+ * item added elsewhere stays.
+ */
+export function rebasedDraft(
+  draft: SettingsDraft,
+  before: SettingsDraft,
+  after: SettingsDraft
+): SettingsDraft {
+  return {
+    ...after,
+    ...editedScalars(draft, before),
+    patterns: rebasedEntries(draft.patterns, before.patterns, after.patterns),
+    structuredData: rebasedEntries(
+      draft.structuredData,
+      before.structuredData,
+      after.structuredData
+    ),
+    hiddenTypes: rebasedSet(
+      draft.hiddenTypes,
+      before.hiddenTypes,
+      after.hiddenTypes
+    ),
+    productionAddresses: rebasedSet(
+      draft.productionAddresses,
+      before.productionAddresses,
+      after.productionAddresses
+    ),
+    socialProfiles: rebasedSet(
+      draft.socialProfiles,
+      before.socialProfiles,
+      after.socialProfiles
+    ),
+  };
+}
+
+/** The values moved as a whole map or list rather than as one value. */
+const MOVED_BY_PART: ReadonlySet<keyof SettingsDraft> = new Set([
+  "patterns",
+  "structuredData",
+  "hiddenTypes",
+  "productionAddresses",
+  "socialProfiles",
+]);
+
+/** The draft's own values, other than the per-type ones, edited since `before`. */
+function editedScalars(
+  draft: SettingsDraft,
+  before: SettingsDraft
+): Partial<SettingsDraft> {
+  const edited: Partial<SettingsDraft> = {};
+  for (const key of Object.keys(draft) as (keyof SettingsDraft)[]) {
+    if (MOVED_BY_PART.has(key)) continue;
+    if (!same(draft[key], before[key])) keepEdited(edited, draft, key);
+  }
+  return edited;
+}
+
+/** `target`'s `key` set to `source`'s, the value edited here. */
+function keepEdited<K extends keyof SettingsDraft>(
+  target: Partial<SettingsDraft>,
+  source: SettingsDraft,
+  key: K
+): void {
+  target[key] = source[key];
+}
+
+/** A map moved entry by entry: each entry edited here kept, every other the newer one. */
+function rebasedEntries<T>(
+  draft: Readonly<Record<string, T>>,
+  before: Readonly<Record<string, T>>,
+  after: Readonly<Record<string, T>>
+): Record<string, T> {
+  const next: Record<string, T> = { ...after };
+  for (const key of new Set([...Object.keys(draft), ...Object.keys(before)])) {
+    if (same(draft[key], before[key])) continue;
+    const edited = draft[key];
+    if (edited === undefined) delete next[key];
+    else next[key] = edited;
+  }
+  return next;
+}
+
+/**
+ * A list moved item by item, items told apart by value. Changed on one side
+ * only, it is that side's list as it is. Changed on both, it is the newer
+ * list, in its order, with what was taken out here taken out and what was
+ * added here put in at the place it holds here. Order matters (the first production
+ * address is the main one), so a main address changed elsewhere stays first
+ * unless one was put first here.
+ */
+function rebasedSet<T>(
+  draft: readonly T[],
+  before: readonly T[],
+  after: readonly T[]
+): T[] {
+  // Changed on one side only, the list is that side's, order and all.
+  if (same(after, before)) return [...draft];
+  if (same(draft, before)) return [...after];
+  const has = (list: readonly T[], item: T) =>
+    list.some(each => same(each, item));
+  const next = after.filter(item => !has(before, item) || has(draft, item));
+  draft.forEach((item, index) => {
+    if (has(before, item) || has(next, item)) return;
+    next.splice(Math.min(index, next.length), 0, item);
+  });
+  return next;
+}
+
 export function changesOf(
   stored: StoredSettings,
   draft: SettingsDraft,
   defaults: SettingsDefaults = {}
 ): Record<string, unknown> | null {
-  const before = storedForm(draftOf(stored, defaults));
-  const after = storedForm(draft);
+  const before = storedForm(draftOf(stored, defaults), defaults);
+  const after = storedForm(draft, defaults);
   const changes: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(after)) {
     if (!same(value, before[key])) changes[key] = value;
@@ -283,7 +639,7 @@ export function networkOf(url: string): string {
 export interface AttentionItem {
   text: string;
   fix: string;
-  tab: "general" | "types" | "brand";
+  tab: "general" | "types" | "images" | "brand";
 }
 
 /** What a logo and share image still missing are, said as one item. */
@@ -298,7 +654,7 @@ function imagesItem(draft: SettingsDraft): AttentionItem | null {
   }
   return draft.logo === null
     ? { text: "No logo yet", fix: "Add a logo", tab: "brand" }
-    : { text: "No share image yet", fix: "Add a share image", tab: "general" };
+    : { text: "No share image yet", fix: "Add a share image", tab: "images" };
 }
 
 /**
@@ -308,10 +664,15 @@ function imagesItem(draft: SettingsDraft): AttentionItem | null {
  */
 export function attentionItems(
   draft: SettingsDraft,
-  types: readonly SeoContentType[]
+  types: readonly SeoContentType[],
+  /** The addresses the server names, which stand in for saved ones. */
+  serverAddresses: readonly string[] = []
 ): AttentionItem[] {
   const items: AttentionItem[] = [];
-  if (!draft.productionAddresses.some(address => address.trim() !== "")) {
+  if (
+    serverAddresses.length === 0 &&
+    !draft.productionAddresses.some(address => address.trim() !== "")
+  ) {
     items.push({
       text: "No production address is saved",
       fix: "Set the address",

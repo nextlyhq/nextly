@@ -32,6 +32,8 @@ import type {
   FindByIDArgs,
   ListResult,
   MutationResult,
+  PublishArgs,
+  PublishResult,
   UpdateArgs,
 } from "../types/index";
 
@@ -88,6 +90,7 @@ export async function find<TSlug extends CollectionSlug>(
     select: args.select,
     sort: args.sort,
     richTextFormat: config.richTextFormat,
+    richTextStyles: config.richTextStyles,
     ...accessOptions(config),
     // i18n M4: forward the content locale + fallback so localized fields resolve.
     locale: config.locale,
@@ -140,6 +143,7 @@ export async function findByID<TSlug extends CollectionSlug>(
       depth: config.depth,
       select: args.select,
       richTextFormat: config.richTextFormat,
+      richTextStyles: config.richTextStyles,
       ...accessOptions(config),
       // Overlay the pending working draft when the caller opts in; the service
       // still gates it on an update-capability probe.
@@ -327,6 +331,63 @@ export async function update<TSlug extends CollectionSlug>(
     publicMessage: "Either 'id' or 'where' clause is required for update",
     statusCode: 400,
   });
+}
+
+/**
+ * Publish or unpublish the parts of one entry `args` chooses, or say what doing so would do.
+ *
+ * @experimental
+ */
+async function moveParts(
+  ctx: NextlyContext,
+  args: PublishArgs,
+  direction: "publish" | "unpublish"
+): Promise<MutationResult<PublishResult>> {
+  const config = mergeConfig(ctx.defaultConfig, args);
+  const { result, warnings } = await collectingWarnings(() =>
+    ctx.collectionsHandler.publishParts(
+      {
+        collectionName: args.collection,
+        entryId: args.id,
+        ...accessOptions(config),
+        context: config.context,
+        disableRevalidate: config.disableRevalidate,
+        data: args.data,
+      },
+      {
+        direction,
+        locales: args.locales,
+        shared: args.shared,
+        describe: args.describe,
+      }
+    )
+  );
+  if (!result.success) {
+    throw createErrorFromResult(result);
+  }
+  return {
+    message:
+      result.message ??
+      `${direction === "publish" ? "Published" : "Unpublished"}.`,
+    item: result.data as PublishResult,
+    ...(warnings ? { warnings } : {}),
+  };
+}
+
+/** Publish the chosen parts of one entry. @experimental */
+export function publish(
+  ctx: NextlyContext,
+  args: PublishArgs
+): Promise<MutationResult<PublishResult>> {
+  return moveParts(ctx, args, "publish");
+}
+
+/** Unpublish the chosen parts of one entry. @experimental */
+export function unpublish(
+  ctx: NextlyContext,
+  args: PublishArgs
+): Promise<MutationResult<PublishResult>> {
+  return moveParts(ctx, args, "unpublish");
 }
 
 /**
