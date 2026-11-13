@@ -48,7 +48,7 @@ import {
 } from "nextly/config";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
 import { LAYOUTS_SLUG } from "../collections/layouts";
@@ -638,22 +638,40 @@ describe.each(getConfiguredTestDialects())(
       return answered;
     }
 
-    /** A field group made as the admin makes one: through its own route. */
+    /**
+     * A field group made as the admin makes one: through its own route, on a
+     * development server. There a Builder save runs its migration at once, so
+     * the group's table exists for the Single's save that follows. Anywhere
+     * else the save only writes the migration, for the deploy's
+     * `nextly migrate` to apply, and the table would not exist yet.
+     */
     async function adminGroup(cookie: string, fields: unknown[]) {
       const handlers = createDynamicHandlers();
-      const response = await handlers.POST(
-        new Request(`${ORIGIN}/api/field-groups`, {
-          method: "POST",
-          headers: {
-            cookie: `${cookie}; nextly_csrf=${CSRF}`,
-            "x-csrf-token": CSRF,
-            origin: ORIGIN,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({ slug: ADMIN_GROUP, label: "Promo", fields }),
-        }),
-        { params: Promise.resolve({ params: ["field-groups"] }) }
-      );
+      vi.stubEnv("NODE_ENV", "development");
+      let response: Response;
+      try {
+        response = await handlers.POST(
+          new Request(`${ORIGIN}/api/field-groups`, {
+            method: "POST",
+            headers: {
+              cookie: `${cookie}; nextly_csrf=${CSRF}`,
+              "x-csrf-token": CSRF,
+              origin: ORIGIN,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              slug: ADMIN_GROUP,
+              label: "Promo",
+              fields,
+            }),
+          }),
+          { params: Promise.resolve({ params: ["field-groups"] }) }
+        );
+      } finally {
+        // Only the save runs as development: the delete under test runs as
+        // the rest of the file does.
+        vi.unstubAllEnvs();
+      }
       expect(response.status, await response.clone().text()).toBe(201);
     }
 
