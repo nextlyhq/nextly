@@ -475,19 +475,29 @@ test.describe("the inspector", () => {
     await select(page, SECTION);
     const never = page.getByRole("switch", { name: "Never quote this" });
     await expect(never).toHaveAttribute("aria-checked", "false");
-    // After the block's own fields and Visible on, before Advanced.
+    // After Visible on and Show when, before Advanced: each is measured, so
+    // the switch drawn above Show when, or Show when missing, fails here.
     const order = await page
-      .locator("[data-visible-on], [data-never-quote], .nx-inspector__advanced")
+      .locator(
+        "[data-visible-on], .nx-show-when, [data-never-quote], .nx-inspector__advanced"
+      )
       .evaluateAll(elements =>
         elements.map(element =>
           element.hasAttribute("data-visible-on")
             ? "visible-on"
-            : element.hasAttribute("data-never-quote")
-              ? "never-quote"
-              : "advanced"
+            : element.classList.contains("nx-show-when")
+              ? "show-when"
+              : element.hasAttribute("data-never-quote")
+                ? "never-quote"
+                : "advanced"
         )
       );
-    expect(order).toEqual(["visible-on", "never-quote", "advanced"]);
+    expect(order).toEqual([
+      "visible-on",
+      "show-when",
+      "never-quote",
+      "advanced",
+    ]);
 
     await never.click();
     await expect(page.getByText("On: marked")).toBeVisible();

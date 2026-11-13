@@ -150,7 +150,7 @@ export function containerContentModel(props: ContainerProps): ContentModel {
  * The renderer and the content model both ask this, so a link the renderer
  * would drop never makes the block count as interactive, and the reverse.
  */
-function linkOf(props: Pick<ContainerProps, "link">): string | undefined {
+function linkOf(props: { readonly link?: unknown }): string | undefined {
   return url(props.link);
 }
 
@@ -159,13 +159,15 @@ function linkOf(props: Pick<ContainerProps, "link">): string | undefined {
  * while it is linked, else its tag, and `div` for a tag it may not render.
  * The render functions below draw it, and an editor asks it, through
  * `containerRootTag`, to say what the page will hold, so the two never
- * disagree. Read from stored props, which may hold anything.
+ * disagree; whether a preset is linked is `linkOf`'s answer, the one the
+ * renderer and the content model use. Read from stored props, which may
+ * hold anything.
  */
 export function rootTagOf(
   props: { readonly as?: unknown; readonly link?: unknown },
   linkable: boolean
 ): ContainerTag | "a" {
-  if (linkable && url(props.link) !== undefined) return "a";
+  if (linkable && linkOf(props) !== undefined) return "a";
   return isContainerTag(props.as) ? props.as : "div";
 }
 

@@ -2266,6 +2266,40 @@ describe("PageRenderer", () => {
       expect(html).toContain("survivor");
     });
 
+    it("refuses a node marked never to be quoted whose block gives it no DOM root", async () => {
+      // The mark is an attribute on the root like `cssId`: a fragment root
+      // would publish the text with no mark and no word that it was dropped.
+      const fragmentRoot = defineBlock({
+        name: "test/fragment-quoted",
+        version: 1,
+        description: "Returns a fragment rather than an element.",
+        example: { props: {} },
+        render: () => (
+          <>
+            <span>secret price</span>
+            <span>two</span>
+          </>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/fragment-quoted", { nosnippet: true }),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            fragmentRoot as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).not.toContain("secret price");
+      expect(html).toContain("survivor");
+    });
+
     it("leaves a wrapper root alone when the node asks for nothing", async () => {
       // Only the combination is refused. A block returning a fragment is
       // ordinary and must keep working.
