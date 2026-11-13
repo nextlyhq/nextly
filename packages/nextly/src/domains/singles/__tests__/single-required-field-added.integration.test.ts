@@ -187,6 +187,29 @@ describeEachDialect("a field added to a Single that holds its row", dialect => {
     expect((read.data as { rank?: unknown } | undefined)?.rank).toBe(0);
   });
 
+  it("reads a new Single whose required field states a default of the wrong form as stating none", async () => {
+    await dispatchSingles(
+      "createSingle",
+      {},
+      {
+        slug: "hero",
+        label: "Hero",
+        fields: [
+          TITLE,
+          { name: "rank", type: "number", required: true, default: "oops" },
+        ],
+      }
+    );
+    const singles: SingleEntryService =
+      current.getService("singleEntryService");
+
+    // Text is no number: written, it would be refused or stored as text in the number column.
+    const read = await singles.get("hero", { overrideAccess: true });
+
+    expect(read.success, JSON.stringify(read)).toBe(true);
+    expect((read.data as { rank?: unknown } | undefined)?.rank).toBe(0);
+  });
+
   it("gives a new Single's first document the default a field states, with no column default to supply it", async () => {
     await dispatchSingles(
       "createSingle",
