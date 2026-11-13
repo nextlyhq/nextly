@@ -13,49 +13,85 @@ import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { ResolvedVersionsConfig } from "../../../schemas/versions/types";
 import { builderVersionsOf } from "../../versions/builder-versions";
 
-/** What the registry stores for a field group, as the writer reads it. */
+/**
+ * What the registry stores for a field group, as the writer reads it: a
+ * registry row, or the create input that becomes one. Read loosely, since the
+ * two spell some settings differently; each is checked as it is read.
+ */
 export interface StoredFieldGroup {
   slug: string;
-  label?: string | null;
-  description?: string | null;
-  admin?: Record<string, unknown> | null;
-  localized?: boolean | null;
-  fields?: readonly unknown[] | null;
+  label?: unknown;
+  description?: unknown;
+  admin?: unknown;
+  localized?: unknown;
+  fields?: unknown;
 }
 
 /** What the registry stores for a Single, as the writer reads it. */
 export interface StoredSingle extends StoredFieldGroup {
-  status?: boolean | null;
-  versions?: ResolvedVersionsConfig | boolean | null;
-  revalidate?: boolean | null;
-  webhooks?: boolean | null;
+  status?: unknown;
+  versions?: unknown;
+  revalidate?: unknown;
+  webhooks?: unknown;
 }
 
 /** A field group as the definition file records it. */
 export function fieldGroupEntity(stored: StoredFieldGroup): UiSchemaEntity {
-  const label = stored.label ?? stored.slug;
+  const label = typeof stored.label === "string" ? stored.label : stored.slug;
   return {
     slug: stored.slug,
     labels: { singular: label, plural: label },
     // A setting stored as null is left unsaid, as the definition file writes it.
-    ...(stored.description == null ? {} : { description: stored.description }),
-    ...(stored.admin == null ? {} : { admin: stored.admin }),
-    ...(stored.localized == null ? {} : { localized: stored.localized }),
-    fields: (stored.fields ?? []) as UiSchemaEntity["fields"],
+    ...(typeof stored.description === "string"
+      ? { description: stored.description }
+      : {}),
+    ...(stored.admin !== null && typeof stored.admin === "object"
+      ? { admin: stored.admin }
+      : {}),
+    ...(typeof stored.localized === "boolean"
+      ? { localized: stored.localized }
+      : {}),
+    fields: (Array.isArray(stored.fields)
+      ? stored.fields
+      : []) as UiSchemaEntity["fields"],
   };
 }
 
 /** A Single as the definition file records it. */
 export function singleEntity(stored: StoredSingle): UiSchemaEntity {
-  // The registry keeps history as a resolved config; the file keeps the
-  // switch and the cap it was resolved from.
-  const history =
-    stored.versions == null ? {} : builderVersionsOf(stored.versions);
   return {
     ...fieldGroupEntity(stored),
-    ...(stored.status == null ? {} : { status: stored.status }),
-    ...history,
-    ...(stored.revalidate == null ? {} : { revalidate: stored.revalidate }),
-    ...(stored.webhooks == null ? {} : { webhooks: stored.webhooks }),
+    ...(typeof stored.status === "boolean" ? { status: stored.status } : {}),
+    // The registry keeps history as a resolved config; the file keeps the
+    // switch and the cap it was resolved from.
+    ...(stored.versions == null
+      ? {}
+      : builderVersionsOf(stored.versions as ResolvedVersionsConfig | boolean)),
+    // The registry keeps an opt-out as its config (`resolveBuilderRevalidate`,
+    // `resolveBuilderWebhooks`); the file keeps the switch, said only when off.
+    ...(builderSwitchOff(stored.revalidate, "disable", true)
+      ? { revalidate: false }
+      : {}),
+    ...(builderSwitchOff(stored.webhooks, "record", false)
+      ? { webhooks: false }
+      : {}),
   };
+}
+
+/**
+ * Whether a stored setting is the Builder's switch turned off: `false`, or
+ * the config the switch resolves to when off (`{ disable: true }` for
+ * revalidation, `{ record: false }` for webhooks). Null is the default, on.
+ */
+function builderSwitchOff(
+  stored: unknown,
+  key: "disable" | "record",
+  offWhen: boolean
+): boolean {
+  if (stored === false) return true;
+  return (
+    stored !== null &&
+    typeof stored === "object" &&
+    (stored as Record<string, unknown>)[key] === offWhen
+  );
 }

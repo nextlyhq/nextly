@@ -330,6 +330,14 @@ describe.each(getConfiguredTestDialects())(
         ],
         confirmed: true,
         schemaVersion: (await registry.getComponent("older")).schemaVersion,
+        // The push drops the undeclared column only once its drop is confirmed,
+        // as the Builder's prompt answers it.
+        eventResolutions: [
+          {
+            kind: "confirm_drop",
+            eventId: "destructive_drop:comp_older.extra",
+          },
+        ],
       };
 
       const preview = await bodyOf(
@@ -461,7 +469,9 @@ describe.each(getConfiguredTestDialects())(
           t.adapter as unknown as { listTables(): Promise<string[]> }
         ).listTables()
       ).find(
-        name => name.startsWith("single_picks") && name.includes("featured")
+        // A junction's name joins its two tables in sorted order, so the
+        // Single's table may stand second.
+        name => name.includes("single_picks") && name.includes("featured")
       );
       expect(junction).toBeDefined();
       const created = migrationFiles(t).find(f =>

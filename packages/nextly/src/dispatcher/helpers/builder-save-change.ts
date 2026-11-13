@@ -98,7 +98,10 @@ export async function writeBuilderSchemaChange(
   }
   const { save } = saveOfSchemaChange({
     ...change,
-    row: { labels: change.stored.labels, fields: change.stored.fields },
+    row: {
+      labels: change.stored.labels,
+      fields: change.stored.fields as unknown as FieldDefinition[],
+    },
     definition: await loadUiSchema({
       projectRoot: deps.projectRoot,
       uiSchemaFile: deps.config.db.uiSchemaFile,
@@ -121,7 +124,10 @@ export async function reviewBuilderSchemaChange(
   if (deps === undefined) return [];
   const { save } = saveOfSchemaChange({
     ...change,
-    row: { labels: change.stored.labels, fields: change.stored.fields },
+    row: {
+      labels: change.stored.labels,
+      fields: change.stored.fields as unknown as FieldDefinition[],
+    },
     definition: await loadUiSchema({
       projectRoot: deps.projectRoot,
       uiSchemaFile: deps.config.db.uiSchemaFile,

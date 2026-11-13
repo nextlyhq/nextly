@@ -1266,7 +1266,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // What the save writes beyond the person's change, for the review to show before they
       // confirm, as a collection's does: each conversion an adoption makes, each fill and delete.
       const answers = body as SchemaChangeAnswers;
-      const notices = await reviewBuilderSchemaChange(builderSaveDeps(), {
+      const reviewDeps = builderSaveDeps();
+      const notices = await reviewBuilderSchemaChange(reviewDeps, {
         kind: "single",
         slug,
         table: tableName,
@@ -1285,13 +1286,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             ? {}
             : { acknowledgedConversions: answers.acknowledgedConversions }),
         },
-        ...(await singleRelations(
-          adapter,
-          getLoggerFromDI() ?? consoleLogger,
-          tableName,
-          currentFields,
-          fields as FieldDefinition[]
-        )),
+        ...(reviewDeps === undefined
+          ? {}
+          : await singleRelations(
+              reviewDeps.adapter,
+              reviewDeps.logger,
+              tableName,
+              currentFields,
+              fields as FieldDefinition[]
+            )),
       });
       return respondData({ ...preview, notices });
     },
@@ -1590,13 +1593,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                   : { acknowledgedConversions }),
               },
               // Its junction tables and relationship keys, which the writer does not derive itself.
-              ...(await singleRelations(
-                adapter,
-                getLoggerFromDI() ?? consoleLogger,
-                tableName,
-                (single.fields ?? []) as unknown as FieldDefinition[],
-                fields as unknown as FieldDefinition[]
-              )),
+              ...(builderSave === undefined
+                ? {}
+                : await singleRelations(
+                    builderSave.adapter,
+                    builderSave.logger,
+                    tableName,
+                    (single.fields ?? []) as unknown as FieldDefinition[],
+                    fields as unknown as FieldDefinition[]
+                  )),
             }
           );
 
