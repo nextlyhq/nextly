@@ -1,4 +1,6 @@
 import {
+  confineVariantClasses,
+  findUnconfinedVariants,
   findUnscopedRules,
   namespaceInternalProperties,
   prefixKeyframes,
@@ -145,18 +147,24 @@ export function hasHostElementShield(css) {
 /**
  * The admin's own compiled stylesheet, made safe to load in a host's document.
  *
- * The passes, in order: every selector under `.nextly-admin`; then the two
- * kinds of name a document resolves globally whatever selector accompanies
- * them, given the prefix. `@keyframes` names are global: the sheet defines
- * `spin`, `pulse` and `fade-in`, and a host defining its own gets whichever
- * loaded later. `@property` registrations are global too, and worse:
- * registering a name changes its semantics everywhere, and a host running
- * Tailwind registers the same `--tw-*` names. Then the shield that keeps the
- * host's own element rules off the admin (see `HOST_ELEMENT_SHIELD`): the
- * passes before it keep the admin off the host, this keeps the host off the
- * admin. Then a check that no style rule escaped the scope, the shield's
- * included, which throws naming the first offenders: an escaped rule restyles
- * the host page.
+ * The passes, in order: every selector under `.nextly-admin`; then the
+ * variant ancestor references confined to it — `dark:`, `group-*:` and
+ * `peer-*:` compile to a reference to an ancestor class the rule does not own
+ * (`:where(.dark, .dark *)`), which the host's own `<html class="dark">`
+ * satisfies inside the wrapper, so it is rewritten to sit under the scope the
+ * admin's own theme sync controls; then the two kinds of name a document
+ * resolves globally whatever selector accompanies them, given the prefix.
+ * `@keyframes` names are global: the sheet defines `spin`, `pulse` and
+ * `fade-in`, and a host defining its own gets whichever loaded later.
+ * `@property` registrations are global too, and worse: registering a name
+ * changes its semantics everywhere, and a host running Tailwind registers the
+ * same `--tw-*` names. Then the shield that keeps the host's own element
+ * rules off the admin (see `HOST_ELEMENT_SHIELD`): the passes before it keep
+ * the admin off the host, this keeps the host off the admin. Then a check
+ * that no style rule escaped the scope and none references a variant outside
+ * it, the shield's included, which throws naming the first offenders: an
+ * escaped rule restyles the host page, and an unconfined variant lets the
+ * host's own state reach in.
  *
  * The one sequence, for the admin's build (`packages/admin/scripts/
  * build-css.mjs`) and for an app that compiles the admin's source stylesheet
@@ -173,6 +181,13 @@ export function isolateAdminStylesheet(
   { prefix = ADMIN_NAME_PREFIX } = {}
 ) {
   let isolated = scopeCss(css);
+  // Scoping each rule's own selector is not the whole of isolation: `dark:`,
+  // `group-*:` and `peer-*:` compile to a reference to an ancestor class the
+  // rule does not own (`:where(.dark, .dark *)`), which the host's own
+  // `<html class="dark">` or `.group` satisfies inside the wrapper. Rewriting
+  // the reference to sit under .nextly-admin ties the variants to the wrapper
+  // the admin's own theme sync controls.
+  isolated = confineVariantClasses(isolated);
   isolated = prefixKeyframes(isolated, prefix);
   isolated = namespaceInternalProperties(isolated, prefix);
   // Last, so no pass above reads it: it names no keyframe and no property,
@@ -183,6 +198,14 @@ export function isolateAdminStylesheet(
     throw new Error(
       `${unscoped.length} style rule(s) escaped the .nextly-admin scope: ` +
         unscoped.slice(0, 5).join(" | ")
+    );
+  }
+  const unconfined = findUnconfinedVariants(isolated);
+  if (unconfined.length > 0) {
+    throw new Error(
+      `${unconfined.length} selector(s) reference a dark/group/peer variant ` +
+        `outside the .nextly-admin scope: ` +
+        unconfined.slice(0, 5).join(" | ")
     );
   }
   return isolated;
