@@ -115,6 +115,13 @@ export interface ProblemChecks {
    */
   servesRobots?: boolean;
   /**
+   * Whether the site serves a robots.txt of its own, which wins over the
+   * plugin's: then its rules block nothing either.
+   */
+  siteServesOwnRobots?: (
+    rules: Awaited<ReturnType<ReadRules>>
+  ) => Promise<boolean>;
+  /**
    * The pages the site's routes render from their own code, which the
    * sitemap lists beside the entries, where the site has any.
    */
@@ -143,15 +150,17 @@ function inSitemap(checks: ProblemChecks, type: string): boolean {
 /**
  * The robots.txt rule keeping search engines from a page the sitemap lists,
  * as page facts, where one does: judged over the file the plugin serves,
- * so nothing where it serves none or the sitemap leaves the page out.
+ * so nothing where it serves none, the site serves its own, or the sitemap
+ * leaves the page out.
  */
-function robotsBlockFor(
+async function robotsBlockFor(
   checks: ProblemChecks,
   type: string,
   rules: Awaited<ReturnType<ReadRules>>,
   ownAddress: string
-): { robotsBlock?: RobotsBlock } {
+): Promise<{ robotsBlock?: RobotsBlock }> {
   if (checks.servesRobots === false || !inSitemap(checks, type)) return {};
+  if ((await checks.siteServesOwnRobots?.(rules)) === true) return {};
   const robotsBlock = robotsBlockOf(
     servedGroups({
       aiCrawlers: rules.aiCrawlers ?? "all",
@@ -399,7 +408,7 @@ async function examine(
   const problems = pageProblems({
     subject,
     answer,
-    ...robotsBlockFor(checks, type, rules, ownAddress),
+    ...(await robotsBlockFor(checks, type, rules, ownAddress)),
     canonicalIsOwn: canonicalIsOwn(
       answer,
       productionAddresses[0] ?? NO_ORIGIN,

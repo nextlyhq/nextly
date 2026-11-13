@@ -50,6 +50,13 @@ export interface RobotsRulesCheckSetup {
    * sitemap lists every page; the plugin's own unless a test says else.
    */
   recordReady?: () => boolean;
+  /**
+   * Whether the site serves a robots.txt of its own, which wins over the
+   * plugin's, so the rules typed here are not what crawlers read.
+   */
+  siteServesOwnRobots?: (
+    rules: Awaited<ReturnType<ReadRules>>
+  ) => Promise<boolean>;
 }
 
 /**
@@ -139,6 +146,11 @@ export async function checkRobotsRules(
     });
   }
   const rules = await setup.readRules(ctx, undefined);
+  // A site serving its own robots.txt serves none of these rules, so they
+  // block nothing its sitemap lists.
+  if ((await setup.siteServesOwnRobots?.(rules)) === true) {
+    return { lines: [], pagesKey: blockedPagesKey([]) };
+  }
   const groups = servedGroups({
     aiCrawlers: rules.aiCrawlers ?? setup.aiCrawlers ?? "all",
     ownRules: asked.text,

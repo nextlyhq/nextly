@@ -529,15 +529,26 @@ function matchesEverything(pattern: string): boolean {
 }
 
 /**
- * The paths an allow pattern names: each wildcard as nothing, and as `~`,
- * and the first of them with a page name after it, which an allow of `/`
- * opens though it names no page itself.
+ * A character no rule can name: a control character, which reading the box
+ * refuses and the plugin's own lines never hold, and which a path keeps as
+ * it is when normalized. A path spelled with it matches a pattern only
+ * through that pattern's wildcards.
  */
-function witnessesOf(pattern: string): string[] {
-  const body = pattern.endsWith("$") ? pattern.slice(0, -1) : pattern;
+const NAMED_BY_NO_RULE = "\u0001";
+
+/**
+ * The most general page an allow pattern opens: its wildcards and, where it
+ * does not end with `$`, its end filled with a character no rule names. A
+ * rule matching this page matches every page the pattern names, since only
+ * its own wildcards can take that character; so where none longer closes
+ * it, the allow opens a page, and where one does, it opens none.
+ */
+function generalPageOf(pattern: string, fresh: string): string {
+  const anchored = pattern.endsWith("$");
+  const body = anchored ? pattern.slice(0, -1) : pattern;
   const rooted = body.startsWith("/") ? body : `/${body}`;
-  const bare = rooted.replace(/\*/g, "");
-  return [bare, rooted.replace(/\*/g, "~"), `${bare}a`];
+  const filled = rooted.replaceAll("*", fresh);
+  return anchored ? filled : `${filled}${fresh}`;
 }
 
 /**
@@ -557,16 +568,13 @@ function wholeSiteRule(
   const widest = everything.sort((a, b) => specificity(b) - specificity(a))[0];
   if (widest === undefined) return undefined;
   // An exception counts only where it leaves a page other than the home
-  // page open under the rules as crawlers apply them: tried at the paths
-  // its own pattern names, with each wildcard read as nothing and as a
-  // character. One a longer disallow overrides opens nothing.
-  const opened = rules.some(
-    rule =>
-      rule.allow &&
-      witnessesOf(rule.pattern).some(
-        path => path !== "/" && blockingRule(groups, agent, path) === undefined
-      )
-  );
+  // page open under the rules as crawlers apply them, judged at the most
+  // general page it names. One a longer disallow overrides opens nothing.
+  const opened = rules.some(rule => {
+    if (!rule.allow) return false;
+    const page = generalPageOf(rule.pattern, NAMED_BY_NO_RULE);
+    return page !== "/" && blockingRule(groups, agent, page) === undefined;
+  });
   return opened ? undefined : widest;
 }
 
