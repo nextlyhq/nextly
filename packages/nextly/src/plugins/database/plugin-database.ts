@@ -54,6 +54,7 @@ import { type ContentTarget, contentTarget } from "./content-target";
 import { type Increment, incrementBy, isIncrement } from "./increment";
 import { runInPluginTransactionFlow } from "./plugin-transaction-in-flow";
 import { linkPluginTransaction } from "./plugin-transaction-link";
+import { tableKeyColumn } from "./table-key";
 
 /** What a caller may narrow a read or a write with. */
 export interface PortableWhere<TResult> {
@@ -1742,9 +1743,9 @@ function contributedReach(
       },
     });
   }
-  const primary = Object.values(getColumns(runtime as Table)).find(
-    column => column.primary
-  );
+  // Wherever the table declares its key: on the column, or on the table as
+  // SQLite's field-group table does.
+  const primary = tableKeyColumn(runtime as Table);
   if (primary === undefined) {
     throw NextlyError.internal({
       logContext: {
