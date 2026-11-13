@@ -34,6 +34,8 @@ type Props = {
   onChange: (next: BuilderField) => void;
   /** Whether the field has been saved; a saved field's name no longer follows its label. */
   saved?: boolean;
+  /** Why the field's name cannot be saved, or `null`; shown beside the name. */
+  checkName?: (name: string) => string | null;
   /** The name a label gives a field. */
   deriveName?: (label: string) => string;
   /** Why the surface fixes the name, when it does. */
@@ -95,6 +97,7 @@ export function GeneralTab({
   readOnly = false,
   onChange,
   saved = false,
+  checkName,
   deriveName = toSnakeName,
   nameFixedReason,
   apiPath,
@@ -129,6 +132,7 @@ export function GeneralTab({
         field={field}
         readOnly={readOnly}
         saved={saved}
+        checkName={checkName}
         deriveName={deriveName}
         nameFixedReason={nameFixedReason}
         apiPath={apiPath}
@@ -188,6 +192,7 @@ function LabelAndName({
   field,
   readOnly,
   saved,
+  checkName,
   deriveName,
   nameFixedReason,
   apiPath,
@@ -196,6 +201,7 @@ function LabelAndName({
   field: BuilderField;
   readOnly: boolean;
   saved: boolean;
+  checkName?: (name: string) => string | null;
   deriveName: (label: string) => string;
   nameFixedReason?: string;
   apiPath?: string;
@@ -203,10 +209,18 @@ function LabelAndName({
 }): JSX.Element {
   const nameHelpId = useId();
   const pathId = useId();
+  const problemId = useId();
   // System fields (title, slug) keep their name whatever the surface says.
   const nameDisabled =
     readOnly || field.isSystem === true || nameFixedReason !== undefined;
-  const describedBy = apiPath ? `${nameHelpId} ${pathId}` : nameHelpId;
+  // A name the field cannot change is not the person's to fix, so it is not judged here. Every
+  // other name is, typed or followed from the label, before the input is left.
+  const problem = nameDisabled ? null : (checkName?.(field.name) ?? null);
+  const describedBy = [
+    nameHelpId,
+    ...(problem !== null ? [problemId] : []),
+    ...(apiPath ? [pathId] : []),
+  ].join(" ");
 
   return (
     <>
@@ -240,12 +254,18 @@ function LabelAndName({
             id="field-name"
             value={field.name}
             disabled={nameDisabled}
+            aria-invalid={problem !== null}
             aria-describedby={describedBy}
             onChange={e => onChange({ ...field, name: e.target.value })}
           />
           <p id={nameHelpId} className="text-xs text-muted-foreground">
             {nameHelpText(saved, nameFixedReason)}
           </p>
+          {problem !== null && (
+            <p id={problemId} role="alert" className="text-xs text-destructive">
+              {problem}
+            </p>
+          )}
         </div>
       </div>
 

@@ -41,6 +41,10 @@ import {
 import { Trash2 } from "@admin/components/icons";
 import { toSnakeName } from "@admin/lib/builder";
 import {
+  builderNameProblem,
+  nameSurfaceOf,
+} from "@admin/lib/builder/field-name-check";
+import {
   findFieldPlacement,
   type FieldPlacement,
 } from "@admin/lib/builder/field-placement";
@@ -50,6 +54,7 @@ import {
   placementReadOnlyReason,
   type ReadOnlyReason,
 } from "@admin/lib/builder/outline/outline-model";
+import { fieldsWithDeleted } from "@admin/lib/builder/outline/pending-rows";
 
 import { BUILDER_KIND_NOUN, type BuilderKind } from "./builder-config";
 import { AdvancedTab } from "./builder-field-settings/AdvancedTab";
@@ -125,7 +130,46 @@ type Props = {
   readOnlyReason?: ReadOnlyReason | null;
   /** Open a field group in its own editor. */
   onOpenFieldGroup?: (slug: string) => void;
+  /**
+   * The fields as last saved: the name a saved field already has, which keeps working, and the
+   * names pending deletes still hold until the save.
+   */
+  savedFields?: readonly BuilderField[];
+  /** Whether Draft/Published is on, as stored or as the pending settings set it. */
+  lifecycleEnabled?: boolean;
 };
+
+/**
+ * Why a name the field is given cannot be saved where it sits, judged by the save's own rules, or
+ * `null`. A name the field already has where it was saved is the save's to keep, not to judge.
+ */
+function nameCheckFor(
+  kind: BuilderKind,
+  placement: FieldPlacement,
+  fields: readonly BuilderField[],
+  savedFields: readonly BuilderField[] | undefined,
+  lifecycleEnabled: boolean
+): (name: string) => string | null {
+  const { field, ancestors, siblings } = placement;
+  const saved = savedFields ? findFieldPlacement(savedFields, field.id) : null;
+  // A pending delete still holds its name, so the siblings are read with them put back.
+  const held = savedFields
+    ? (findFieldPlacement(fieldsWithDeleted(fields, savedFields), field.id)
+        ?.siblings ?? siblings)
+    : siblings;
+  const place = {
+    surface: nameSurfaceOf(kind),
+    // Inside a named container the field is a key in its value; a container without a name is part
+    // of the level holding it.
+    nested: ancestors.some(ancestor => Boolean(ancestor.name)),
+    lifecycleEnabled,
+    siblingNames: held.map(other => other.name),
+  };
+  return name =>
+    saved !== null && saved.field.name === name
+      ? null
+      : builderNameProblem(name, place);
+}
 
 /**
  * The outline's own read-only rule, as the panel asks it: the answer the
@@ -189,6 +233,8 @@ export function BuilderFieldSettings({
   fallbackPlacement,
   readOnlyReason,
   onOpenFieldGroup,
+  savedFields,
+  lifecycleEnabled = false,
 }: Props): JSX.Element | null {
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const placement = findFieldPlacement(fields, fieldId) ?? fallbackPlacement;
@@ -212,6 +258,13 @@ export function BuilderFieldSettings({
       siblings={siblings}
       saved={savedFieldIds.has(field.id)}
       readOnly={fieldReadOnly}
+      checkName={nameCheckFor(
+        kind,
+        placement,
+        fields,
+        savedFields,
+        lifecycleEnabled
+      )}
       onChange={onFieldChange}
       onClose={onClose}
       actions={

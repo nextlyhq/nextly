@@ -64,6 +64,11 @@ export interface FieldPickerConfig {
   mostUsed?: readonly string[];
   /** The name a label gives a new field; empty when it gives none. */
   deriveName: (label: string) => string;
+  /**
+   * Why a derived name cannot be saved, in words for the person, or `null` when it can. While it
+   * says why, the field cannot be added, by button or by Enter.
+   */
+  nameProblem?: (name: string) => string | null;
   /** The type that embeds a field group, and the groups it may embed. */
   fieldGroups?: {
     type: string;
@@ -242,6 +247,7 @@ function PickerBody({
       initialLabel={initialLabel}
       offerAddAnother={offerAddAnother !== false}
       deriveName={config.deriveName}
+      nameProblem={config.nameProblem}
       onBack={() =>
         setStep(
           step.fieldGroup
@@ -492,6 +498,7 @@ function LabelStep({
   initialLabel,
   offerAddAnother,
   deriveName,
+  nameProblem,
   onBack,
   onAdd,
 }: {
@@ -500,6 +507,7 @@ function LabelStep({
   initialLabel?: string;
   offerAddAnother: boolean;
   deriveName: (label: string) => string;
+  nameProblem?: (name: string) => string | null;
   onBack: () => void;
   onAdd: (label: string, name: string, addAnother: boolean) => void;
 }) {
@@ -507,8 +515,12 @@ function LabelStep({
   const [label, setLabel] = useState(fieldGroup?.label ?? initialLabel ?? "");
   const trimmed = label.trim();
   const name = trimmed ? deriveName(trimmed) : "";
+  // Asked only of a name the label gave; with no label there is nothing to judge yet.
+  const problem = name ? (nameProblem?.(name) ?? null) : null;
+  const addable = name !== "" && problem === null;
+  const problemId = useId();
   const add = (addAnother: boolean) => {
-    if (name) onAdd(trimmed, name, addAnother);
+    if (addable) onAdd(trimmed, name, addAnother);
   };
 
   return (
@@ -527,6 +539,8 @@ function LabelStep({
           id={inputId}
           value={label}
           autoFocus
+          aria-invalid={problem !== null}
+          aria-describedby={problem !== null ? problemId : undefined}
           onChange={event => setLabel(event.target.value)}
           onKeyDown={event => {
             if (event.key === "Enter") {
@@ -538,17 +552,26 @@ function LabelStep({
         <p className="text-xs text-muted-foreground">
           Name: <code>{name || "—"}</code>
         </p>
+        {problem !== null && (
+          <p id={problemId} role="alert" className="text-xs text-destructive">
+            {problem}
+          </p>
+        )}
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onBack}>
           Back
         </Button>
         {offerAddAnother && (
-          <Button variant="outline" disabled={!name} onClick={() => add(true)}>
+          <Button
+            variant="outline"
+            disabled={!addable}
+            onClick={() => add(true)}
+          >
             Add and add another
           </Button>
         )}
-        <Button disabled={!name} onClick={() => add(false)}>
+        <Button disabled={!addable} onClick={() => add(false)}>
           Add field
         </Button>
       </DialogFooter>

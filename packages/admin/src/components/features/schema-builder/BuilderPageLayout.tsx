@@ -144,6 +144,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           onSettingsChange={onSettingsChange}
           readOnly={locked}
           storedHooks={storedHooks}
+          savedFields={pending.saved}
         />
 
         {children}
@@ -241,6 +242,8 @@ function EditedFieldSettings({
   savedFieldIds,
   locked,
   openFieldGroup,
+  pending,
+  settings,
 }: Pick<
   Props,
   | "active"
@@ -249,6 +252,8 @@ function EditedFieldSettings({
   | "builder"
   | "savedFieldIds"
   | "locked"
+  | "pending"
+  | "settings"
 > & {
   outline: readonly OutlineNode[];
   openFieldGroup: (slug: string) => void;
@@ -282,6 +287,10 @@ function EditedFieldSettings({
         node && !node.own ? nodePlacement(node, byId, outline) : undefined
       }
       onOpenFieldGroup={openFieldGroup}
+      // A name is judged as the save judges it: beside the names pending deletes still hold, under
+      // the Draft/Published setting the save sends.
+      savedFields={pending.saved}
+      lifecycleEnabled={settings.status === true}
       onFieldChange={builder.handleFieldUpdate}
       onFieldDelete={fieldId => {
         builder.handleFieldDelete(fieldId);

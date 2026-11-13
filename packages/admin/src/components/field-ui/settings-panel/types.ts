@@ -151,6 +151,12 @@ export interface FieldSettingsPanelProps {
   saved: boolean;
   /** Show every setting without letting any change. */
   readOnly?: boolean;
+  /**
+   * Why a name the field is given cannot be saved on this surface, in words for the person, or
+   * `null` when it can. Asked of the name as it is typed and as the label derives it, and shown
+   * beside it. Without it, names are not checked here.
+   */
+  checkName?: (name: string) => string | null;
   /** Called with the whole field after each change, at once. */
   onChange: (next: FieldSettingsField) => void;
   /** Closes the panel; a close button is shown only when it is given. */
