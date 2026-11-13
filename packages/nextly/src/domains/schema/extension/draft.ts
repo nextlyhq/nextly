@@ -384,6 +384,51 @@ export class SchemaDraftStore {
     return this.tables.get(name);
   }
 
+  /**
+   * The tables plugins' contributed keys and relations point at, judged once
+   * every hook has run (`assertContributedTargetsReachable`): the app
+   * declares its tables after every plugin, and a plugin may name a table a
+   * later plugin declares, so a lookup while the hook runs finds neither.
+   */
+  private readonly contributedTargets: ContributedTarget[] = [];
+
+  recordContributedTarget(target: ContributedTarget): void {
+    this.contributedTargets.push(target);
+  }
+
+  /**
+   * Refuse a plugin's contributed key or relation pointing at a table its
+   * migrations cannot rely on: the app's, whose stream runs after every
+   * plugin's, or another plugin's it does not depend on, which nothing orders
+   * before it or keeps installed. A core table, or one no hook declared, is
+   * judged by the compile and the database as any key's target is.
+   */
+  assertContributedTargetsReachable(): void {
+    for (const entry of this.contributedTargets) {
+      const target = this.tables.get(entry.target);
+      if (target === undefined) continue;
+      const path = `plugin.${entry.contributor}.schema.extendTable.${entry.table}`;
+      const lead = `The ${entry.element} plugin "${entry.contributor}" adds to "${entry.table}" points at "${entry.target}"`;
+      if (target.owner.kind === "app") {
+        refuse(
+          path,
+          `${lead}, which the app declares. The app's schema runs after every plugin's, so a plugin's ${entry.element} cannot rely on it.`
+        );
+      }
+      const dependsOn = this.input.dependencies?.get(entry.contributor);
+      if (
+        target.owner.kind === "plugin" &&
+        target.owner.id !== entry.contributor &&
+        dependsOn?.has(target.owner.id) !== true
+      ) {
+        refuse(
+          path,
+          `${lead}, which belongs to ${describeOwner(target.owner)}. Name it in dependsOn (or optionalDependsOn).`
+        );
+      }
+    }
+  }
+
   set(table: DraftTable): void {
     this.tables.set(table.name, table);
   }
@@ -740,6 +785,14 @@ function addIndexes(
   }
 }
 
+/** A plugin's contributed key or relation, and the table it points at. */
+interface ContributedTarget {
+  contributor: string;
+  table: string;
+  element: "foreign key" | "relation";
+  target: string;
+}
+
 /** What `extendTable` takes beyond columns and indexes. */
 interface ConstraintInputs {
   foreignKeys?: TableForeignKeyInput[];
@@ -781,42 +834,6 @@ function assertMayAddConstraints(table: DraftTable, scope: ExtendScope): void {
   );
 }
 
-/**
- * Refuse a plugin's contributed key or relation pointing at a table its
- * migrations cannot rely on: the app's, whose stream runs after every
- * plugin's, or another plugin's it does not depend on, which nothing orders
- * before it or keeps installed. A core table, or one this draft does not
- * hold, is judged by the compile and the database as any key's target is.
- */
-function assertContributedTargetReachable(
-  targetTable: string,
-  element: "foreign key" | "relation",
-  table: DraftTable,
-  scope: ExtendScope,
-  lookup: (name: string) => DraftTable | undefined
-): void {
-  if (scope.owner.kind !== "plugin") return;
-  const target = lookup(targetTable);
-  if (target === undefined) return;
-  const path = `${scope.ownerPath}.extendTable.${table.name}`;
-  if (target.owner.kind === "app") {
-    refuse(
-      path,
-      `The ${element} ${describeOwner(scope.owner)} adds to "${table.name}" points at "${targetTable}", which the app declares. The app's schema runs after every plugin's, so a plugin's ${element} cannot rely on it.`
-    );
-  }
-  if (
-    target.owner.kind === "plugin" &&
-    target.owner.id !== scope.owner.id &&
-    scope.mayIndexForeignTablesOf?.has(target.owner.id) !== true
-  ) {
-    refuse(
-      path,
-      `The ${element} ${describeOwner(scope.owner)} adds to "${table.name}" points at "${targetTable}", which belongs to ${describeOwner(target.owner)}. Name it in dependsOn (or optionalDependsOn).`
-    );
-  }
-}
-
 /** Refuse a relation whose name the table already gives a relation or a column. */
 function assertRelationNamesFree(
   table: DraftTable,
@@ -834,6 +851,9 @@ function assertRelationNamesFree(
         `"${table.name}" already has a relation or a column named "${relation.name}"; name the relation for what it points at.`
       );
     }
+    // Added as it is judged, so two relations of one name in the same call
+    // are refused too: the registry would keep only the last.
+    taken.add(relation.name);
   }
 }
 
@@ -848,13 +868,13 @@ function addConstraints(
   table: DraftTable,
   inputs: ConstraintInputs,
   scope: ExtendScope,
-  lookup: (name: string) => DraftTable | undefined
+  record: (target: ContributedTarget) => void
 ): void {
   if (constraintCount(inputs) === 0) return;
   assertMayAddConstraints(table, scope);
   const resolved = resolveTableConstraints(table.name, table.columns, inputs);
-  assertContributedKeysReach(resolved.foreignKeys, table, scope, lookup);
-  assertContributedRelationsReach(resolved.relations, table, scope, lookup);
+  assertContributedKeysReach(resolved.foreignKeys, table, scope, record);
+  assertContributedRelationsReach(resolved.relations, table, scope, record);
   assertRelationNamesFree(table, resolved.relations, scope);
   appendConstraints(table, resolved, scope);
 }
@@ -873,18 +893,17 @@ function assertContributedKeysReach(
   keys: readonly DeclaredForeignKey[],
   table: DraftTable,
   scope: ExtendScope,
-  lookup: (name: string) => DraftTable | undefined
+  record: (target: ContributedTarget) => void
 ): void {
   for (const fk of keys) {
     assertColumnsReachable(fk.columns, "foreign key", table, scope);
-    if (scope.isOwn) continue;
-    assertContributedTargetReachable(
-      fk.referencesTable,
-      "foreign key",
-      table,
-      scope,
-      lookup
-    );
+    if (scope.isOwn || scope.owner.kind !== "plugin") continue;
+    record({
+      contributor: scope.owner.id,
+      table: table.name,
+      element: "foreign key",
+      target: fk.referencesTable,
+    });
   }
 }
 
@@ -893,20 +912,19 @@ function assertContributedRelationsReach(
   relations: readonly TableRelationInput[],
   table: DraftTable,
   scope: ExtendScope,
-  lookup: (name: string) => DraftTable | undefined
+  record: (target: ContributedTarget) => void
 ): void {
   for (const relation of relations) {
     if (relation.fromColumn !== undefined) {
       assertColumnsReachable([relation.fromColumn], "relation", table, scope);
     }
-    if (scope.isOwn) continue;
-    assertContributedTargetReachable(
-      relation.targetTable,
-      "relation",
-      table,
-      scope,
-      lookup
-    );
+    if (scope.isOwn || scope.owner.kind !== "plugin") continue;
+    record({
+      contributor: scope.owner.id,
+      table: table.name,
+      element: "relation",
+      target: relation.targetTable,
+    });
   }
 }
 
@@ -1084,7 +1102,9 @@ export function createOwnerDraft(
       addColumns(table, ext.columns, scope);
       addIndexes(table, ext.indexes ?? [], scope);
       // After the columns, so a key may stand on a column added with it.
-      addConstraints(table, ext, scope, tableName => store.get(tableName));
+      addConstraints(table, ext, scope, target =>
+        store.recordContributedTarget(target)
+      );
     },
 
     getTable(name): DraftTableView | undefined {

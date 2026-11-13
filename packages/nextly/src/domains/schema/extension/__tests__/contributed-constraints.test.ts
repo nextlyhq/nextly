@@ -308,4 +308,105 @@ describe("what a contributed key, check or relation is refused for", () => {
     );
     expect(message).toMatch(/already has a relation or a column named "label"/);
   });
+
+  it("two relations of one name in the same call", async () => {
+    const message = await refusal(() =>
+      compile(({ schema }) =>
+        schema.extendTable("hs__items", {
+          relations: [
+            {
+              name: "owner",
+              kind: "one",
+              targetTable: "ad__marks",
+              fromColumn: "id",
+            },
+            {
+              name: "owner",
+              kind: "one",
+              targetTable: "ad__marks",
+              fromColumn: "id",
+            },
+          ],
+        })
+      )
+    );
+    expect(message).toMatch(/already has a relation or a column named "owner"/);
+  });
+
+  it("a key to an app table, which the app declares after every plugin", async () => {
+    const notes = defineTable("notes", { id: col.id() });
+    const message = await refusal(() =>
+      buildExtensionSchema({
+        dialect: "postgresql",
+        coreTableNames: ["users"],
+        entities: [],
+        pluginPrefixes: new Map([
+          [HOST, "hs"],
+          [ADDER, "ad"],
+        ]),
+        dependencies: new Map([[ADDER, new Set([HOST])]]),
+        plugins: [
+          { owner: { kind: "plugin", id: HOST }, tables: [items] },
+          {
+            owner: { kind: "plugin", id: ADDER },
+            tables: [marks],
+            extend: [
+              ({ schema }) =>
+                schema.extendTable("hs__items", {
+                  columns: { noteId: col.varchar(36, { nullable: true }) },
+                  foreignKeys: [
+                    {
+                      columns: ["noteId"],
+                      references: { table: "notes", columns: ["id"] },
+                    },
+                  ],
+                }),
+            ],
+          },
+        ],
+        app: { owner: { kind: "app" }, tables: [notes] },
+      })
+    );
+    expect(message).toMatch(/"notes", which the app declares/);
+  });
+
+  it("a key to a later plugin's table the contributor does not depend on", async () => {
+    const later = "@acme/later";
+    const message = await refusal(() =>
+      buildExtensionSchema({
+        dialect: "postgresql",
+        coreTableNames: ["users"],
+        entities: [],
+        pluginPrefixes: new Map([
+          [HOST, "hs"],
+          [ADDER, "ad"],
+          [later, "lt"],
+        ]),
+        dependencies: new Map([[ADDER, new Set([HOST])]]),
+        plugins: [
+          { owner: { kind: "plugin", id: HOST }, tables: [items] },
+          {
+            owner: { kind: "plugin", id: ADDER },
+            tables: [marks],
+            extend: [
+              ({ schema }) =>
+                schema.extendTable("hs__items", {
+                  columns: { otherId: col.varchar(36, { nullable: true }) },
+                  foreignKeys: [
+                    {
+                      columns: ["otherId"],
+                      references: { table: "lt__others", columns: ["id"] },
+                    },
+                  ],
+                }),
+            ],
+          },
+          { owner: { kind: "plugin", id: later }, tables: [others] },
+        ],
+      })
+    );
+    expect(message).toMatch(
+      /"lt__others", which belongs to plugin "@acme\/later"/
+    );
+  });
 });

@@ -867,6 +867,9 @@ export async function buildExtensionSchema(
   } else {
     await runHooksInto(store, input);
   }
+  // Once every hook has run, so a target declared after the contributor's
+  // hook (an app table, or a later plugin's) is judged by its real owner.
+  store.assertContributedTargetsReachable();
 
   const tables = extensionTablesOf(store);
   const elementOwners = collectElementOwners(tables, input.dialect);
