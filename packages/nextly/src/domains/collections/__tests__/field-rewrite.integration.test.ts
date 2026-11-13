@@ -74,7 +74,7 @@ async function boot(
         fields: [
           text({ name: "title" }),
           text({ name: "layout", maxLength: 12 }),
-          repeater({ name: "rows", fields: [text({ name: "label" })] }),
+          repeater({ name: "items", fields: [text({ name: "label" })] }),
         ],
       }),
       defineCollection({
@@ -320,11 +320,11 @@ describe.each(getConfiguredTestDialects())("a field rewrite (%s)", dialect => {
   it("gives a draft's new repeater rows their ids, as a save does", async () => {
     const t = await boot(dialect);
     const id = await create(t, PAGES, { layout: "wide", status: "published" });
-    await save(t, PAGES, id, { rows: [{ label: "old" }] });
+    await save(t, PAGES, id, { items: [{ label: "old" }] });
     await t.nextly.rewriteField({
       collection: PAGES,
       id,
-      field: "rows",
+      field: "items",
       expectedVersion: (await read(t, PAGES, id))._rev as string,
       set: {
         from: (current, copy) =>
@@ -332,7 +332,7 @@ describe.each(getConfiguredTestDialects())("a field rewrite (%s)", dialect => {
       },
       reason: REASON,
     });
-    const rows = (await read(t, PAGES, id, { draft: true })).rows as Array<{
+    const rows = (await read(t, PAGES, id, { draft: true })).items as Array<{
       id?: unknown;
       label?: unknown;
     }>;
