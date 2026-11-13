@@ -679,6 +679,115 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     expect(await states(id)).toEqual(before);
   });
 
+  // Without per-language storage a language's pending change carries its shared edits, and
+  // publishing it with the shared part shows them in every live language: they are validated in
+  // each, and asked of each language's field rules, as a shared draft's are.
+  const lockedPosts = (fieldAccess?: {
+    update: (args: { locale?: string }) => boolean;
+  }) =>
+    posts({
+      versions: { drafts: true },
+      fields: [
+        text({ name: "title", required: true }),
+        text({
+          name: "tagline",
+          localized: false,
+          validate: (
+            value: unknown,
+            { data }: { data: Record<string, unknown> }
+          ) =>
+            data.title !== "Locked" ||
+            value === "Shared" ||
+            "The tagline cannot change while the title is Locked.",
+          ...(fieldAccess ? { access: fieldAccess } : {}),
+        }),
+      ],
+    });
+
+  it("validates a language's shared edits in every live language when the shared part moves", async () => {
+    await boot(lockedPosts());
+    const id = await entry({ es: { title: "Locked" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    await t!.nextly.update({
+      collection: "posts",
+      id,
+      locale: "en",
+      data: { tagline: "Changed", _overwrite: true },
+    });
+
+    const refusal = await refusalOf(
+      t!.nextly.publish({
+        collection: "posts",
+        id,
+        locales: ["en"],
+        shared: true,
+        data: { _overwrite: true },
+      })
+    );
+    const [main] = await t!.adapter.executeQuery<{ tagline: string }>(
+      `SELECT ${q("tagline")} AS tagline FROM ${q("dc_posts")} WHERE ${q("id")} = '${id}'`
+    );
+
+    expect(refusal).toMatch(/tagline/);
+    expect(main?.tagline).toBe("Shared");
+  });
+
+  it("asks a language's shared edits of every live language's field rules when the shared part moves", async () => {
+    await boot(
+      posts({
+        versions: { drafts: true },
+        access: { read: () => true, update: () => true, publish: () => true },
+        fields: [
+          text({ name: "title", required: true }),
+          text({
+            name: "tagline",
+            localized: false,
+            access: { update: ({ locale }) => locale !== "es" },
+          }),
+        ],
+      })
+    );
+    const id = await entry({ es: { title: "Hola" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    await t!.nextly.update({
+      collection: "posts",
+      id,
+      locale: "en",
+      data: { tagline: "Changed", _overwrite: true },
+    });
+    const publisher = await userWhoMay(t!, "publisher", "publish", ["posts"]);
+    await grantTo(t!, publisher, "read", ["posts"]);
+    await grantTo(t!, publisher, "update", ["posts"]);
+
+    const refusal = await refusalOf(
+      t!.nextly.publish({
+        collection: "posts",
+        id,
+        locales: ["en"],
+        shared: true,
+        overrideAccess: false,
+        user: { id: publisher, email: "publisher@example.test", roles: [] },
+        data: { _overwrite: true },
+      })
+    );
+    const [main] = await t!.adapter.executeQuery<{ tagline: string }>(
+      `SELECT ${q("tagline")} AS tagline FROM ${q("dc_posts")} WHERE ${q("id")} = '${id}'`
+    );
+
+    expect(refusal).toMatch(/tagline/);
+    expect(main?.tagline).toBe("Shared");
+  });
+
   /** A gate holding back the parts `held` names: a language code, or "shared". */
   function holdBack(held: readonly string[]): void {
     container.registerSingleton<PublishGate>("publishGate", () => ({

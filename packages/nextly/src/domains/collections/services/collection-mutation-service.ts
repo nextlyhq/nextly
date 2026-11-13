@@ -11130,6 +11130,46 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The shared part's pending change a publish promotes, as the shared values it writes: the
+   * shared draft's, or, without per-language storage, where each language's change holds the
+   * shared values too, the shared fields those changes edit against the live row (a later save's
+   * value over an earlier one's). Undefined where the publish changes no shared value.
+   */
+  private sharedChangeOf(
+    args: Parameters<CollectionMutationService["promotionsJudgedOnTx"]>[1]
+  ): Record<string, unknown> | undefined {
+    const slot = args.pending.find(
+      change => change.locale === SHARED_DRAFT_SLOT
+    );
+    if (slot !== undefined) return snapshotRecord(slot.snapshot);
+    if (draftsKeptByPart()) return undefined;
+    const localized =
+      (args.collection as { localized?: boolean }).localized === true;
+    const fields = args.fields.flatMap(field =>
+      typeof field.name === "string"
+        ? [
+            {
+              name: field.name,
+              translatable: isFieldLocalized(
+                field as Parameters<typeof isFieldLocalized>[0],
+                localized
+              ),
+            },
+          ]
+        : []
+    );
+    const edited: Record<string, unknown> = {};
+    for (const change of args.pending) {
+      if (change.locale === null) continue;
+      const snapshot = snapshotRecord(change.snapshot);
+      for (const name of sharedFieldsEdited(fields, snapshot, args.row)) {
+        edited[name] = snapshot[name];
+      }
+    }
+    return Object.keys(edited).length > 0 ? edited : undefined;
+  }
+
+  /**
    * Refuses a publish whose shared draft changes a value the caller may not change in a language
    * that shows the shared part. The shared part's values show in every language it is live in, so
    * its field rules are asked in each of them, not only in the language whose change carries it:
@@ -11142,14 +11182,12 @@ export class CollectionMutationService extends BaseService {
     args: Parameters<CollectionMutationService["promotionsJudgedOnTx"]>[1],
     promotion: NonNullable<LifecycleAllLocalesReady["promotion"]>
   ): Promise<void> {
-    const sharedDraft = args.pending.find(
-      change => change.locale === SHARED_DRAFT_SLOT
-    );
+    const sharedChange = this.sharedChangeOf(args);
     const grants = promotion.grants;
     // Only a trusted caller skips the field rules, and a caller no field rule could ask: an API
     // key is judged like a person, whether or not a user comes with it.
     if (
-      sharedDraft === undefined ||
+      sharedChange === undefined ||
       args.caller.overrideAccess === true ||
       grants === undefined
     ) {
@@ -11176,7 +11214,7 @@ export class CollectionMutationService extends BaseService {
           this.promotionAccessIssues(promotion.context, {
             collectionName: args.collectionName,
             entryId: args.storedId,
-            snapshot: sharedDraft.snapshot,
+            snapshot: sharedChange,
             restoreCtx: promotion.restoreContext,
             live,
             user: args.caller.user,
@@ -11292,7 +11330,7 @@ export class CollectionMutationService extends BaseService {
     const sharedPromoted =
       args.caller.parts !== undefined &&
       movesShared(args.caller.parts) &&
-      args.pending.some(change => change.locale === SHARED_DRAFT_SLOT);
+      this.sharedChangeOf(args) !== undefined;
     await this.assertLanguagesGoLiveValid({
       parts: args.caller.parts,
       ...(sharedPromoted
