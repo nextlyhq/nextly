@@ -602,6 +602,83 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     expect(row?.status).toBe("draft");
   });
 
+  // Publishing every language asks each language's publish rule before any value rule: a caller
+  // refused in one language learns nothing of what the entry holds there.
+  it("asks each language's publish rule before judging what publishing every language puts live", async () => {
+    await boot(
+      posts({
+        requireEveryLanguage: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: ({ locale }) => locale !== "es",
+        },
+      })
+    );
+    const id = await entry({ es: { title: "" } });
+    const publisher = await userWhoMay(t!, "publisher", "publish", ["posts"]);
+    await grantTo(t!, publisher, "read", ["posts"]);
+    await grantTo(t!, publisher, "update", ["posts"]);
+    const handler = t!.getService("collectionsHandler") as unknown as {
+      publishAllLocales(params: Record<string, unknown>): Promise<{
+        success: boolean;
+        statusCode: number;
+      }>;
+    };
+
+    const everyLanguage = await handler.publishAllLocales({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: false,
+      user: { id: publisher, email: "publisher@example.test", roles: [] },
+      data: { _overwrite: true },
+    });
+
+    expect(everyLanguage.success).toBe(false);
+    expect(JSON.stringify(everyLanguage)).not.toMatch(
+      /title|REQUIRED_IN_LANGUAGE/
+    );
+  });
+
+  // A language the caller may not publish but that this publish does not put live (no row of its
+  // own) leaves the value rules standing for the languages it does put live.
+  it("keeps the value rules where only a language not going live is refused", async () => {
+    await boot(
+      posts({
+        requireEveryLanguage: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: ({ locale }) => locale !== "fr",
+        },
+      })
+    );
+    // Spanish has a row whose required title is empty; French has none.
+    const id = await entry({ es: { title: "" } });
+    const before = await states(id);
+    const publisher = await userWhoMay(t!, "publisher", "publish", ["posts"]);
+    await grantTo(t!, publisher, "read", ["posts"]);
+    await grantTo(t!, publisher, "update", ["posts"]);
+    const handler = t!.getService("collectionsHandler") as unknown as {
+      publishAllLocales(params: Record<string, unknown>): Promise<{
+        success: boolean;
+        message?: string;
+      }>;
+    };
+
+    const everyLanguage = await handler.publishAllLocales({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: false,
+      user: { id: publisher, email: "publisher@example.test", roles: [] },
+      data: { _overwrite: true },
+    });
+
+    expect(everyLanguage.success).toBe(false);
+    expect(everyLanguage.message).toMatch(/title/);
+    expect(await states(id)).toEqual(before);
+  });
+
   /** A gate holding back the parts `held` names: a language code, or "shared". */
   function holdBack(held: readonly string[]): void {
     container.registerSingleton<PublishGate>("publishGate", () => ({

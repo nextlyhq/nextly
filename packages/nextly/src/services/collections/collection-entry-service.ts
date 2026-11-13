@@ -1040,14 +1040,29 @@ export class CollectionEntryService extends BaseService {
     // what the entry holds.
     const read = await this.mutationService.publishPartsReads(params, {
       action: "publish",
-      locales: locales === "all" ? [] : locales,
+      // Each language's rule, in that language: every language for a publish of all of them.
+      locales,
       shared: locales === "all",
     });
     if ("answer" in read) return null;
-    if (read.sharedRefusal !== null || read.languageRefusals.size > 0) {
+    const { state } = read;
+    // The languages the value rules judge: each one written, or, for every language, each stored
+    // one not yet live. Where the caller may not publish one of them, the transition refuses it as
+    // access, and the value rules say nothing of what the entry holds there. A language refused
+    // that is not judged here is not one this publish puts live.
+    const judged =
+      locales === "all"
+        ? state.configured.filter(locale => {
+            const stored = state.languages.get(locale);
+            return stored !== undefined && !stored.live;
+          })
+        : locales;
+    if (
+      read.sharedRefusal !== null ||
+      judged.some(locale => read.languageRefusals.has(locale))
+    ) {
       return null;
     }
-    const { state } = read;
     if (written === undefined || locales === "all") {
       return publishValueRefusal(state, locales);
     }
