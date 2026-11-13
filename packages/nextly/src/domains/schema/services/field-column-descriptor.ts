@@ -420,6 +420,38 @@ export function getComponentRowColumnDescriptor(
 }
 
 /**
+ * The field as a Single's table stores it: a relationship or upload naming one entry is not
+ * required of the COLUMN, whatever the field says.
+ *
+ * A Single's one entry is created on its first read, from its fields' defaults, and a reference has
+ * none: it starts empty. So its column accepts NULL, and `required` is enforced when the entry is
+ * saved, from the registry's fields, which this never replaces. Every other field keeps its
+ * `required`: each has an empty value of its own kind to start from (`getDefaultValue`).
+ */
+export function asSingleRowColumnField(
+  field: FieldDefinition,
+  builtBy: ColumnOrigin
+): FieldDefinition {
+  return field.required === true &&
+    classifyFieldKind(field, builtBy) === "fkSingle"
+    ? { ...field, required: false }
+    : field;
+}
+
+/** A Single's column for `field` (`asSingleRowColumnField`). */
+export function getSingleRowColumnDescriptor(
+  field: FieldDefinition,
+  dialect: SupportedDialect,
+  builtBy: ColumnOrigin
+): ColumnDescriptor | null {
+  return getColumnDescriptor(
+    asSingleRowColumnField(field, builtBy),
+    dialect,
+    builtBy
+  );
+}
+
+/**
  * A column's kind and the sizes it states, each only where stated: what the
  * index, row and key rules weigh a column by, read the same way from a
  * field's descriptor, a system column's, or a seeded column.
@@ -460,9 +492,10 @@ export function getColumnDescriptor(
   // "skip" covers every column-less field type via fieldProducesColumn: a component
   // and a many-to-many, both of which keep their values in another table.
   const kind = classifyFieldKind(field, builtBy);
-  // FK columns are always created without NOT NULL in the DDL (both generateMigrationSQL
-  // and the Drizzle runtime builder). `required` is enforced at the application layer.
-  const nullable = kind === "fkSingle" ? true : field.required !== true;
+  // A relationship's column follows `required` like any other: the Builder's CREATE makes a
+  // required one NOT NULL, so a migration planned from here does too, and turning `required` on
+  // or off plans the change.
+  const nullable = field.required !== true;
 
   if (kind === "skip") return null;
 

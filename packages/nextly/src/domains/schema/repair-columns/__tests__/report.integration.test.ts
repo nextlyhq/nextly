@@ -37,21 +37,20 @@ const f = (field: Record<string, unknown>) =>
 
 const TABLE = "dc_rr_posts";
 
-/** A repeater, held as text before 0.0.2-alpha.67, and a required relationship, created NOT NULL. */
-const FIELDS: FieldDefinition[] = [
+const fieldsWithAuthor = (required: boolean): FieldDefinition[] => [
   f({ name: "title", type: "text" }),
   f({
     name: "links",
     type: "repeater",
     fields: [{ name: "url", type: "text" }],
   }),
-  f({
-    name: "author",
-    type: "relationship",
-    relationTo: "users",
-    required: true,
-  }),
+  f({ name: "author", type: "relationship", relationTo: "users", required }),
 ];
+
+/** A repeater, held as text before 0.0.2-alpha.67, and a relationship that is now optional. */
+const FIELDS = fieldsWithAuthor(false);
+/** The same table as it was created, while the relationship was required: `author` NOT NULL. */
+const CREATED_FIELDS = fieldsWithAuthor(true);
 
 /** Fields whose columns the current generator creates exactly as their descriptors name them. */
 const MATCHING_FIELDS: FieldDefinition[] = [f({ name: "title", type: "text" })];
@@ -176,7 +175,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("a dry run changes nothing", async () => {
-      await createTable(FIELDS, true);
+      await createTable(CREATED_FIELDS, true);
       await insertRows(ROWS);
       const before = await fingerprint();
 
@@ -194,7 +193,7 @@ describe.each(getConfiguredTestDialects())(
     describe("shows the statements and the rewrite for a type change and a NOT NULL drop", () => {
       /** Each column's record from a legacy table holding ROWS rows. */
       async function legacyRecords() {
-        await createTable(FIELDS, true);
+        await createTable(CREATED_FIELDS, true);
         await insertRows(ROWS);
         return (await report()).result?.records ?? [];
       }
@@ -239,7 +238,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("counts a table's rows once for all the columns whose conversion rewrites it", async () => {
-      await createTable(FIELDS, true);
+      await createTable(CREATED_FIELDS, true);
       await insertRows(ROWS);
       // The handle the report reads through, with each row count it sends counted.
       let counts = 0;
@@ -275,7 +274,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("reports while the schema lock is held by another process", async () => {
-      await createTable(FIELDS, true);
+      await createTable(CREATED_FIELDS, true);
       await insertRows(1);
 
       const free = await report();
@@ -318,7 +317,7 @@ describe.each(getConfiguredTestDialects())(
       expect(none).toMatchObject({ ok: true, exitCode: 0 });
 
       await run(`DROP TABLE IF EXISTS ${q(TABLE)}`);
-      await createTable(FIELDS, true);
+      await createTable(CREATED_FIELDS, true);
       const remain = await report();
       expect(remain).toMatchObject({ ok: false, exitCode: 2 });
 

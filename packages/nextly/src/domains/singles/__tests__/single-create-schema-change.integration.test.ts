@@ -161,21 +161,27 @@ for (const dialect of getConfiguredTestDialects()) {
         slug: `${plain}_bad`,
         label: "Bad",
         fields: [
-          // `target` is the key the generator's relationship branch reads; the referenced
-          // collection need not exist, because the refusal happens while the DDL is still being
-          // rendered and no statement is ever run.
+          // A decimal with no digits, which the generator refuses while the DDL is still being
+          // rendered, so no statement is ever run.
           {
-            name: "author",
-            type: "relationship",
-            required: true,
-            options: { target: "authors", onDelete: "set null" },
+            name: "price",
+            type: "number",
+            dbType: "decimal",
+            precision: 0,
+            scale: 0,
           },
         ],
       };
 
       await expect(
         dispatchSingles("createSingle", {}, rejected)
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({
+        publicData: {
+          errors: [
+            expect.objectContaining({ code: "DECIMAL_PRECISION_INVALID" }),
+          ],
+        },
+      });
 
       // Nothing persisted, so the corrected retry is a fresh create rather than a slug collision.
       expect(await registryRow(current, rejected.slug)).toBeUndefined();

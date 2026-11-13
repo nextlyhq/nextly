@@ -752,38 +752,6 @@ export class DynamicCollectionService extends BaseService {
    * would not.
    */
   /**
-   * Refuse a junction move whose destination name the database already holds.
-   *
-   * @throws NextlyError (validation, `JUNCTION_TABLE_IN_USE`) naming the table
-   */
-  private async refuseJunctionMovesOntoLiveTables(
-    tableName: string,
-    oldFields: FieldDefinition[],
-    newFields: FieldDefinition[]
-  ): Promise<void> {
-    for (const move of this.schemaService.junctionMoves(
-      tableName,
-      oldFields,
-      newFields
-    )) {
-      if (!(await this.adapter.tableExists(move.to.table))) continue;
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: "fields",
-            code: "JUNCTION_TABLE_IN_USE",
-            message:
-              `Junction table "${move.from.table}" cannot move to ` +
-              `"${move.to.table}": a table of that name already exists in the ` +
-              `database. Choose another name, or drop that table first.`,
-          },
-        ],
-        logContext: { from: move.from.table, to: move.to.table },
-      });
-    }
-  }
-
-  /**
    * The fields a save defines itself, validated: the reserved fields dropped,
    * every name checked by the column it becomes, and no two many-to-many fields
    * sharing one junction table — asked through the schema service's own naming,
@@ -1586,10 +1554,11 @@ export class DynamicCollectionService extends BaseService {
       // migration is invisible to it, and the rename would meet that table at
       // apply time — in production, where a migration can no longer be
       // refused and the registry has already recorded the new name.
-      await this.refuseJunctionMovesOntoLiveTables(
+      await this.schemaService.refuseJunctionMovesOntoLiveTables(
         collection.tableName,
         oldUserFields,
-        userDefinedFields
+        userDefinedFields,
+        table => this.adapter.tableExists(table)
       );
       // A field renamed onto a column that is already there is refused before anything here is
       // written: the archive write just below is the first.
