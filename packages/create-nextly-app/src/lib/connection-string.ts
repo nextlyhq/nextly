@@ -20,29 +20,47 @@ const SHORTEST_BARE_QUERY_VALUE = 3;
  */
 function splitConnection(url: string) {
   const slashes = url.indexOf("//");
-  const scheme = slashes >= 0 ? url.slice(0, slashes) : "";
-  const rest = slashes >= 0 ? url.slice(slashes + 2) : url;
+  const hasAuthority = slashes >= 0;
+  const rest = hasAuthority ? url.slice(slashes + 2) : url;
+  const parts = authorityParts(rest);
+  return {
+    scheme: hasAuthority ? url.slice(0, slashes) : "",
+    rest,
+    ...parts,
+    // An `@` after the query's start, or a host that is no `host[:port]`
+    // (`alice:swordfish` with the `@` left out), may hold credentials.
+    ambiguous:
+      parts.atAfterQuery || (hasAuthority && !PLAIN_HOST.test(parts.host)),
+  };
+}
+
+/** What follows `//`: credentials, host, path and query, read by position. */
+function authorityParts(rest: string) {
   const firstAt = rest.indexOf("@");
   const queryFrom = rest.indexOf("?", Math.max(firstAt, 0));
   const authorityEnd = queryFrom < 0 ? rest.length : queryFrom;
   const at = firstAt < 0 ? -1 : rest.lastIndexOf("@", authorityEnd);
+  const hostAndPath = rest.slice(at + 1, authorityEnd);
   return {
-    scheme,
-    rest,
     userinfo: at > 0 ? rest.slice(0, at) : "",
-    hostAndPath: rest.slice(at + 1, authorityEnd),
+    host: hostAndPath.split("/")[0] ?? "",
+    hostAndPath,
     query: queryFrom < 0 ? "" : rest.slice(queryFrom + 1),
-    ambiguous: rest.lastIndexOf("@") > authorityEnd,
+    atAfterQuery: rest.lastIndexOf("@") > authorityEnd,
   };
 }
+
+/** `host`, `host:5432`, `[::1]:5432`, or nothing (`file:` and a socket path). */
+const PLAIN_HOST = /^(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._~%-]*)(?::\d*)?$/;
 
 /** The parts of `url` that must never be printed, longest first. */
 export function connectionSecrets(url: string | undefined): string[] {
   if (!url) return [];
-  const { rest, userinfo, query, ambiguous } = splitConnection(url);
-  // Where the credentials' end is ambiguous, both readings are secret.
+  const { rest, userinfo, host, query, ambiguous } = splitConnection(url);
+  // Where the credentials' end is ambiguous, every reading is secret,
+  // a host that may be `user:password` with its `@` left out among them.
   const userinfos = ambiguous
-    ? [userinfo, rest.slice(0, rest.lastIndexOf("@"))]
+    ? [userinfo, rest.slice(0, rest.lastIndexOf("@")), host]
     : [userinfo];
   const secrets = new Set<string>([
     url,
@@ -111,6 +129,7 @@ export function redactConnection(
 export function safeConnection(url: string): string {
   const { scheme, userinfo, hostAndPath, query, ambiguous } =
     splitConnection(url);
+  // Not even the scheme is known to be one when there is no `//`.
   if (!scheme) return MASK;
   if (ambiguous) return `${scheme}//${MASK}`;
   return `${scheme}//${userinfo ? `${MASK}@` : ""}${hostAndPath}${query ? `?${MASK}` : ""}`;

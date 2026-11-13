@@ -328,6 +328,17 @@ describe("scrubbing printed text", () => {
     expect(said).not.toMatch(/pa@ss|ss\?word|word@/);
   });
 
+  it("masks the whole of a URL whose @ was left out, keeping file: messages intact", () => {
+    const url = "postgresql://alice:swordfish/db";
+    expect(safeConnection(url)).toBe("postgresql://***");
+    const said = redactConnection(`connect to ${url} failed for alice`, url);
+    expect(said).not.toMatch(/alice|swordfish/);
+    const file = "file:./data/nextly.db";
+    expect(redactConnection(`file not found: ${file}`, file)).toBe(
+      "file not found: ***"
+    );
+  });
+
   it("reduces every URL in a message to its safe form", () => {
     expect(
       redactUrlsIn(

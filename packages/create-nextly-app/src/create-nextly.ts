@@ -78,18 +78,16 @@ import type {
   ProjectType,
 } from "./types";
 import {
-  declaredAppPackageManager,
   detectAppPackageManager,
   detectPackageManager,
   detectPluginPackage,
   detectProject,
-  installedAppPackageManager,
+  packageManagerSignals,
 } from "./utils/detect";
 import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
 import { scriptRunner } from "./utils/package-manager-commands";
 import { pluginNodeRefusal } from "./utils/plugin-node";
 import { copyTemplate, resolveTemplatePath } from "./utils/template";
-import { findWorkspaceRoot } from "./utils/workspace";
 
 /**
  * Pick a safe project name when the user has chosen "install in cwd".
@@ -124,6 +122,40 @@ function stopAtConfig(
     duration_ms: Date.now() - startedAt,
   });
   p.cancel(redactConnection((error as Error).message, databaseUrl));
+  process.exit(1);
+}
+
+/**
+ * Stop, with nothing written, when anything says the project at `appDir` (or
+ * the workspace it joins) is set up for another manager than `selected`:
+ * installing with a second one leaves two lockfiles, or is refused part-way by
+ * Corepack where a manager is declared. Each signal is checked on its own, so
+ * a stale lockfile beside another is as mixed as either disagreeing.
+ */
+async function refuseMixedManagers(
+  appDir: string,
+  selected: PackageManager,
+  startedAt: number
+): Promise<void> {
+  const signals = await packageManagerSignals(appDir);
+  if (signals.every(signal => signal.manager === selected)) return;
+  telemetry.capture("scaffold_failed", {
+    stage: "detect",
+    error_code: "unknown",
+    duration_ms: Date.now() - startedAt,
+  });
+  const setUp = signals
+    .map(signal => `${signal.manager} (${signal.what})`)
+    .join(" and ");
+  const managers = [...new Set(signals.map(signal => signal.manager))];
+  const remedy =
+    managers.length === 1
+      ? `Leave out --package-manager, or pass --package-manager ${managers[0]}.`
+      : "Make the project use one manager, then pass that one to --package-manager, or leave the flag out.";
+  p.cancel(
+    `This project is set up for ${setUp}; installing it with ${selected} ` +
+      `would mix package managers. ${remedy} Nothing was written.`
+  );
   process.exit(1);
 }
 
@@ -233,52 +265,6 @@ export async function createNextly(
     }
   }
 
-  // An app already set up for one manager keeps it: installing with another
-  // leaves two lockfiles, or is refused part-way by Corepack where the app
-  // declares its manager, so it is refused here with nothing written.
-  if (existingProject && options.packageManager) {
-    // Each signal on its own: a stale lockfile beside a declaration for
-    // another manager is as mixed as either disagreeing with the flag.
-    const workspace = await findWorkspaceRoot(cwd);
-    const signals = [
-      { manager: await installedAppPackageManager(cwd), what: "its lockfile" },
-      {
-        manager: await declaredAppPackageManager(cwd),
-        what: "its package.json",
-      },
-      // Corepack applies the workspace root's declaration to its members.
-      {
-        manager: workspace
-          ? await declaredAppPackageManager(workspace.dir)
-          : undefined,
-        what: "its workspace's package.json",
-      },
-    ].filter(signal => signal.manager !== undefined);
-    const disagreeing = signals.filter(
-      signal => signal.manager !== options.packageManager
-    );
-    if (disagreeing.length > 0) {
-      telemetry.capture("scaffold_failed", {
-        stage: "detect",
-        error_code: "unknown",
-        duration_ms: Date.now() - overallStartedAt,
-      });
-      const setUp = signals
-        .map(signal => `${signal.manager} (${signal.what})`)
-        .join(" and ");
-      const managers = [...new Set(signals.map(signal => signal.manager))];
-      const remedy =
-        managers.length === 1
-          ? `Leave out --package-manager, or pass --package-manager ${managers[0]}.`
-          : "Make the app use one manager, then pass that one to --package-manager, or leave the flag out.";
-      p.cancel(
-        `This app is set up for ${setUp}; installing it with ${options.packageManager} ` +
-          `would mix package managers. ${remedy} Nothing was written.`
-      );
-      process.exit(1);
-    }
-  }
-
   if (existingProject) {
     p.log.success(`${pc.green("Next.js")} project detected`);
 
@@ -343,6 +329,26 @@ export async function createNextly(
     }
 
     isFreshProject = true;
+  }
+
+  // --- One package manager per project ---
+  //
+  // Now that the folder is known, before anything is written: a project, or
+  // the workspace a new one joins, already set up for one manager keeps it.
+  if (options.packageManager) {
+    const appDir =
+      existingProject || installInCwd
+        ? cwd
+        : projectName
+          ? path.join(cwd, projectName)
+          : undefined;
+    if (appDir) {
+      await refuseMixedManagers(
+        appDir,
+        options.packageManager,
+        overallStartedAt
+      );
+    }
   }
 
   // --- Step 1b: Directory-conflict recovery ---

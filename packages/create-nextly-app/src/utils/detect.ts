@@ -6,7 +6,11 @@ import { PACKAGE_MANAGERS } from "../lib/choices";
 import type { PackageManager, ProjectInfo } from "../types";
 
 import { detectPmFromUserAgent } from "./detect-pm-from-user-agent";
-import { findWorkspaceRoot, lockfileManager } from "./workspace";
+import {
+  findWorkspaceRoot,
+  lockfileManager,
+  lockfileManagers,
+} from "./workspace";
 
 /**
  * Detect the package manager used in the project.
@@ -44,11 +48,60 @@ export async function detectAppPackageManager(
  * The manager an existing app was installed with, from its own lockfile or
  * its workspace's; undefined when it has none, where the launcher decides.
  */
-export async function installedAppPackageManager(
+async function installedAppPackageManager(
   cwd: string
 ): Promise<PackageManager | undefined> {
   return (
     (await lockfileManager(cwd)) ?? (await findWorkspaceRoot(cwd))?.manager
+  );
+}
+
+/** One thing that says which manager a project is set up for. */
+export interface PackageManagerSignal {
+  manager: PackageManager;
+  /** Where it was read, for a message: "its lockfile", "its workspace's package.json". */
+  what: string;
+}
+
+/**
+ * Everything that says which manager the project at `appDir` is set up for,
+ * each on its own: every lockfile in it and in the workspace that lists it,
+ * and the `packageManager`/`devEngines` declarations of both, which Corepack
+ * enforces. `appDir` need not exist yet, so a new member of a workspace gets
+ * its workspace's signals. Agreeing signals name one manager; any other is
+ * the mix a second manager would add to.
+ */
+export async function packageManagerSignals(
+  appDir: string
+): Promise<PackageManagerSignal[]> {
+  const workspace = await findWorkspaceRoot(appDir);
+  const rootLockfiles = workspace ? await lockfileManagers(workspace.dir) : [];
+  const rootDeclared = workspace
+    ? await declaredAppPackageManager(workspace.dir)
+    : undefined;
+  const signals: Array<{ manager: PackageManager | undefined; what: string }> =
+    [
+      ...(await lockfileManagers(appDir)).map(manager => ({
+        manager,
+        what: "its lockfile",
+      })),
+      {
+        manager: await declaredAppPackageManager(appDir),
+        what: "its package.json",
+      },
+      ...rootLockfiles.map(manager => ({
+        manager,
+        what: "its workspace's lockfile",
+      })),
+      // A pnpm workspace not installed yet names pnpm by its workspace file.
+      {
+        manager: rootLockfiles.length === 0 ? workspace?.manager : undefined,
+        what: "its workspace",
+      },
+      { manager: rootDeclared, what: "its workspace's package.json" },
+    ];
+  return signals.filter(
+    (signal): signal is PackageManagerSignal => signal.manager !== undefined
   );
 }
 
@@ -57,7 +110,7 @@ export async function installedAppPackageManager(
  * or by `devEngines.packageManager`, which Corepack enforces: installing with
  * another fails part-way. Undefined when it declares none.
  */
-export async function declaredAppPackageManager(
+async function declaredAppPackageManager(
   cwd: string
 ): Promise<PackageManager | undefined> {
   let manifest: {

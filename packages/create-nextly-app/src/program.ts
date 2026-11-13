@@ -17,11 +17,7 @@ import { redactConnection, redactUrlsIn } from "./lib/connection-string";
 import { packageVersion } from "./lib/package-version";
 import { invalidChoiceMessage } from "./lib/suggest";
 import { getAvailableTemplateNames } from "./lib/templates";
-import type {
-  CreateNextlyOptions,
-  DatabaseType,
-  ProjectType,
-} from "./types";
+import type { CreateNextlyOptions, DatabaseType, ProjectType } from "./types";
 
 /** What the program runs against; tests replace the standard input. */
 export interface ProgramDeps {

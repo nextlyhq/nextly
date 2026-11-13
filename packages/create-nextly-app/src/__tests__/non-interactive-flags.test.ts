@@ -158,7 +158,11 @@ describe("create-nextly-app without a terminal", () => {
     await mkdir(path.join(app, "src", "app"), { recursive: true });
     const manifest = JSON.stringify({
       name: "app",
-      dependencies: { next: "16.0.0", react: "19.2.0", "react-dom": "19.2.0" },
+      dependencies: {
+        next: "^16.4.1",
+        react: "^19.3.0",
+        "react-dom": "^19.3.0",
+      },
     });
     await writeFile(path.join(app, "package.json"), manifest);
     await writeFile(
@@ -186,7 +190,11 @@ describe("create-nextly-app without a terminal", () => {
     const manifest = JSON.stringify({
       name: "app",
       packageManager: "yarn@4.9.2",
-      dependencies: { next: "16.0.0", react: "19.2.0", "react-dom": "19.2.0" },
+      dependencies: {
+        next: "^16.4.1",
+        react: "^19.3.0",
+        "react-dom": "^19.3.0",
+      },
     });
     await writeFile(path.join(app, "package.json"), manifest);
     await writeFile(
@@ -207,6 +215,62 @@ describe("create-nextly-app without a terminal", () => {
     expect(allOutput()).toContain(
       "pnpm (its lockfile) and yarn (its package.json)"
     );
+  });
+
+  it("an app with a stale lockfile beside pnpm's is refused --package-manager pnpm, untouched", async () => {
+    const app = path.join(dir, "app");
+    await mkdir(path.join(app, "src", "app"), { recursive: true });
+    await writeFile(
+      path.join(app, "package.json"),
+      JSON.stringify({
+        name: "app",
+        dependencies: {
+          next: "^16.4.1",
+          react: "^19.3.0",
+          "react-dom": "^19.3.0",
+        },
+      })
+    );
+    await writeFile(
+      path.join(app, "pnpm-lock.yaml"),
+      "lockfileVersion: '9.0'\n"
+    );
+    await writeFile(path.join(app, "yarn.lock"), "# stale\n");
+    await writeFile(path.join(app, "next.config.ts"), "export default {};\n");
+    const before = (await readdir(app)).sort();
+
+    const code = await runCli(
+      [".", "--package-manager", "pnpm", "--yes", ...HERMETIC],
+      { cwd: app }
+    );
+
+    expect(code).toBe(1);
+    expect((await readdir(app)).sort()).toEqual(before);
+    expect(await fakes.calls()).toEqual([]);
+    expect(allOutput()).toContain(
+      "pnpm (its lockfile) and yarn (its lockfile)"
+    );
+  });
+
+  it("a new project inside a yarn workspace is refused --package-manager npm, nothing written", async () => {
+    const root = path.join(dir, "repo");
+    const apps = path.join(root, "apps");
+    await mkdir(apps, { recursive: true });
+    await writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ private: true, workspaces: ["apps/*"] })
+    );
+    await writeFile(path.join(root, "yarn.lock"), "# yarn\n");
+
+    const code = await runCli(
+      ["site", "--package-manager", "npm", "--yes", ...HERMETIC],
+      { cwd: apps }
+    );
+
+    expect(code).toBe(1);
+    expect(await readdir(apps)).toEqual([]);
+    expect(await fakes.calls()).toEqual([]);
+    expect(allOutput()).toContain("yarn (its workspace's lockfile)");
   });
 
   it("a workspace root declaring yarn is refused --package-manager pnpm in a member, untouched", async () => {
@@ -230,9 +294,9 @@ describe("create-nextly-app without a terminal", () => {
       JSON.stringify({
         name: "app",
         dependencies: {
-          next: "16.0.0",
-          react: "19.2.0",
-          "react-dom": "19.2.0",
+          next: "^16.4.1",
+          react: "^19.3.0",
+          "react-dom": "^19.3.0",
         },
       })
     );
@@ -256,7 +320,11 @@ describe("create-nextly-app without a terminal", () => {
     const manifest = JSON.stringify({
       name: "app",
       packageManager: "pnpm@10.18.0",
-      dependencies: { next: "16.0.0", react: "19.2.0", "react-dom": "19.2.0" },
+      dependencies: {
+        next: "^16.4.1",
+        react: "^19.3.0",
+        "react-dom": "^19.3.0",
+      },
     });
     await writeFile(path.join(app, "package.json"), manifest);
     await writeFile(path.join(app, "next.config.ts"), "export default {};\n");
