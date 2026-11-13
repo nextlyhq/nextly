@@ -101,9 +101,18 @@ const iconMap = Icons as unknown as Record<string, LucideIcon>;
 export interface IconPickerProps {
   value?: string;
   onChange: (iconName: string) => void;
+  /**
+   * The trigger's accessible name, where its label alone would not say what it
+   * picks (beside a name field, "Icon: Package" rather than "Package").
+   */
+  accessibleName?: string;
 }
 
-export function IconPicker({ value, onChange }: IconPickerProps): JSX.Element {
+export function IconPicker({
+  value,
+  onChange,
+  accessibleName,
+}: IconPickerProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
 
@@ -136,6 +145,7 @@ export function IconPicker({ value, onChange }: IconPickerProps): JSX.Element {
           type="button"
           variant="outline"
           className="w-full h-10 justify-start gap-2 border-input font-normal"
+          aria-label={accessibleName}
         >
           <SelectedIconComponent className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm">

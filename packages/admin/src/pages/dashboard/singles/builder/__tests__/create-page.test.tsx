@@ -11,14 +11,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder";
 
 let submit: ((values: BuilderSettingsValues) => void) | undefined;
-vi.mock("@admin/components/features/schema-builder", () => ({
-  BuilderSettingsModal: (props: {
-    onSubmit: (values: BuilderSettingsValues) => void;
-  }) => {
-    submit = props.onSubmit;
-    return null;
-  },
-}));
+vi.mock(
+  "@admin/components/features/schema-builder/new-entity/NewEntityDialog",
+  () => ({
+    NewEntityDialog: (props: {
+      onCreate: (values: BuilderSettingsValues) => void;
+    }) => {
+      submit = props.onCreate;
+      return null;
+    },
+  })
+);
 
 const mockCreate = vi.fn();
 vi.mock("@admin/hooks/queries", () => ({

@@ -11,12 +11,12 @@ import type { BuilderSettingsValues } from "@admin/components/features/schema-bu
 
 let submit: ((values: BuilderSettingsValues) => void) | undefined;
 vi.mock(
-  "@admin/components/features/schema-builder/BuilderSettingsModal",
+  "@admin/components/features/schema-builder/new-entity/NewEntityDialog",
   () => ({
-    BuilderSettingsModal: (props: {
-      onSubmit: (values: BuilderSettingsValues) => void;
+    NewEntityDialog: (props: {
+      onCreate: (values: BuilderSettingsValues) => void;
     }) => {
-      submit = props.onSubmit;
+      submit = props.onCreate;
       return null;
     },
   })
