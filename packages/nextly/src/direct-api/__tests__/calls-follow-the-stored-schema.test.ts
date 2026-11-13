@@ -75,6 +75,23 @@ describe("a Direct API call and the stored schema version", () => {
     }
   });
 
+  it("checks it before a release operation made on its own through the instance", async () => {
+    const setup = setupTestNextly();
+    try {
+      let checkedBefore = false;
+      container.registerSingleton("releasesService", () => ({
+        readiness: async () => {
+          checkedBefore = served.mock.calls.length === 1;
+          return { ready: true, members: [] };
+        },
+      }));
+      await setup.nextly.releases.readiness({ releaseId: "r1" });
+      expect(checkedBefore).toBe(true);
+    } finally {
+      setup.cleanup();
+    }
+  });
+
   it("checks it once for a call and any call made inside it", async () => {
     await runAsCaller({}, {}, async () => {
       await runAsCaller({}, {}, async () => null);

@@ -150,18 +150,28 @@ export function withLanguagesPinned<N extends object>(namespace: N): N {
   return Object.fromEntries(
     members.map(([name, member]) => [
       name,
-      typeof member === "function"
-        ? (...args: unknown[]) =>
-            // Every method of these namespaces returns a promise; wrapped, a value one returned
-            // directly still reaches the caller as a resolved promise.
-            withServedSchema(() =>
-              withCurrentLanguages(() =>
-                Promise.resolve(member.apply(namespace, args))
+      // A namespace inside a namespace (`media.folders`) is pinned the same way.
+      isPlainNamespace(member)
+        ? withLanguagesPinned(member)
+        : typeof member === "function"
+          ? (...args: unknown[]) =>
+              // Every method of these namespaces returns a promise; wrapped, a value one returned
+              // directly still reaches the caller as a resolved promise.
+              withServedSchema(() =>
+                withCurrentLanguages(() =>
+                  Promise.resolve(member.apply(namespace, args))
+                )
               )
-            )
-        : member,
+          : member,
     ])
   ) as N;
+}
+
+/** Whether `value` is a plain object of methods, as a namespace inside a namespace is. */
+function isPlainNamespace(value: unknown): value is object {
+  if (typeof value !== "object" || value === null) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function runAsCallerInMemo<A extends DirectAPIConfig & RunAsPrincipal, R>(
