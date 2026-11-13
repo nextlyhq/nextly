@@ -377,6 +377,20 @@ describe("which columns an override reaches", () => {
     await expect(declared(col.varchar(100))).resolves.toBeDefined();
   });
 
+  it("refuses a row past MySQL's limit whichever comes first, the override or a hook's column", async () => {
+    const message = await refusal(() =>
+      buildExtensionSchema(
+        input(({ schema }) => {
+          schema.overrideColumn(TABLE, "city", col.varchar(15000));
+          schema.extendTable(TABLE, {
+            columns: { note: col.varchar(2000, { nullable: true }) },
+          });
+        })
+      )
+    );
+    expect(message).toMatch(/mysql limits a row/);
+  });
+
   it("leaves the table as it was when refused", async () => {
     const schema = await buildExtensionSchema(
       input(({ schema: draft }) => {

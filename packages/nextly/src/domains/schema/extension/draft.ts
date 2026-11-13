@@ -495,6 +495,25 @@ export class SchemaDraftStore {
     }
   }
 
+  /**
+   * Refuse an entity table whose row MySQL cannot hold, judged once every
+   * hook has run, so the order a hook overrides a column and adds another in
+   * does not decide it. Weighed over the columns the seed types, the app's
+   * overrides and the hidden columns hooks added included: a column known by
+   * name only (a component's own) is left out, so the sum is the least the
+   * row can be, and a refusal here is one MySQL would make too.
+   */
+  assertEntityRowsFit(): void {
+    for (const table of this.tables.values()) {
+      if (table.owner.kind !== "entity") continue;
+      const opaque = table.opaqueColumns ?? new Set<string>();
+      assertMysqlRowFits({
+        name: table.name,
+        columns: table.columns.filter(column => !opaque.has(column.name)),
+      });
+    }
+  }
+
   set(table: DraftTable): void {
     this.tables.set(table.name, table);
   }
@@ -1111,7 +1130,6 @@ function overrideColumn(
     ...kindAndSizes({ ...target, kind: target.kind }),
   };
   assertOverriddenIndexesBuildable(table, replaced);
-  assertOverriddenRowFits(table, replaced);
   store.recordOverride(name, { column: sqlName, ...target, owner });
   table.columns[at] = replaced;
 }
@@ -1164,27 +1182,6 @@ function assertOverridable(
       `Column "${column.name}" is referenced by a foreign key on "${referencedBy.name}", whose column must keep the storage it points at.`
     );
   }
-}
-
-/**
- * Refuse an override that leaves the entity's row wider than MySQL holds.
- *
- * Weighed over the columns the seed types, the overridden one at its new
- * width: a column known by name only (a component's own) is left out, so
- * the sum is the least the row can be, and a refusal here is one MySQL
- * would make too.
- */
-function assertOverriddenRowFits(
-  table: DraftTable,
-  replaced: ExtensionColumn
-): void {
-  const opaque = table.opaqueColumns ?? new Set<string>();
-  assertMysqlRowFits({
-    name: table.name,
-    columns: table.columns
-      .filter(existing => !opaque.has(existing.name))
-      .map(existing => (existing.name === replaced.name ? replaced : existing)),
-  });
 }
 
 /**

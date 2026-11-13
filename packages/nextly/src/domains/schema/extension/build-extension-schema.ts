@@ -922,6 +922,9 @@ export async function buildExtensionSchema(
   // Each table whole, its own columns and every one a hook added, so a row
   // only MySQL cannot hold is refused on every dialect alike.
   for (const table of tables) assertMysqlRowFits(table);
+  // And each entity's, whose row hooks may have widened: the app's overrides
+  // and the hidden columns added to it.
+  store.assertEntityRowsFit();
   const { compiled, owners } = compileDrizzleTables(tables, input.dialect);
   const protectedTables = protectedTableNames(input, store);
 
