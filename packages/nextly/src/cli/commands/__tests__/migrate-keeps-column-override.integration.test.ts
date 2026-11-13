@@ -52,14 +52,20 @@ import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
 import { runMigrate } from "../migrate";
 import { runMigrateCreate } from "../migrate-create";
+import { runRepairColumns } from "../repair-columns";
 
 /** The config the commands load, set by each step before it runs them. */
 const loaded = vi.hoisted(() => ({
   config: undefined as unknown,
+  projectRoot: "",
 }));
 vi.mock("../../utils/config-loader", async importOriginal => ({
   ...(await importOriginal<typeof import("../../utils/config-loader")>()),
-  loadConfig: async () => ({ config: loaded.config, dependencies: [] }),
+  loadConfig: async () => ({
+    config: loaded.config,
+    dependencies: [],
+    projectRoot: loaded.projectRoot,
+  }),
 }));
 
 const POSTS_TABLE = "dc_mo_posts";
@@ -127,6 +133,7 @@ let clock = 0;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "nextly-column-override-"));
   mkdirSync(join(dir, "migrations"));
+  loaded.projectRoot = dir;
   previousDialect = process.env.DB_DIALECT;
   previousUrl = process.env.DATABASE_URL;
   // Each migration file is named by the clock; two runs inside one
@@ -299,6 +306,21 @@ async function insertRow(
   );
 }
 
+/**
+ * `nextly repair-columns`, a dry run, over `config`: each finding it reports
+ * about an overridden column, as `<table>.<column> <outcome>`.
+ */
+async function repairFindings(config: unknown): Promise<string[]> {
+  loaded.config = config;
+  const { context } = command();
+  const { document, error } = await runRepairColumns({ cwd: dir }, context);
+  expect(document.result, String(error)).not.toBeNull();
+  const overridden = new Set([...Object.values(OVERRIDDEN), "views"]);
+  return document
+    .result!.records.filter(record => overridden.has(record.column))
+    .map(record => `${record.table}.${record.column} ${record.outcome}`);
+}
+
 describeEachDialect(
   "the app's override of a generated column, through migrations",
   dialect => {
@@ -308,6 +330,9 @@ describeEachDialect(
       await migrate(appConfig(true, false));
       const before = await live(dialect);
       expectOverridden(dialect, before);
+      // `repair-columns` judges an overridden column against the override,
+      // not the field's own storage, so it finds nothing to repair.
+      expect(await repairFindings(appConfig(true, false))).toEqual([]);
 
       // Within the width, and a number a 32-bit integer cannot hold.
       const posts = before.get(POSTS_TABLE)!;
@@ -338,6 +363,7 @@ describeEachDialect(
           ?.nullable
       ).toBe(true);
       expectOverridden(dialect, after);
+      expect(await repairFindings(appConfig(false, true))).toEqual([]);
       const rows = await instance.adapter.executeQuery<Record<string, unknown>>(
         `SELECT ${q(dialect, "city")} AS city, ${q(dialect, "views")} AS views FROM ${q(dialect, POSTS_TABLE)} WHERE ${q(dialect, "id")} = 'r1'`
       );

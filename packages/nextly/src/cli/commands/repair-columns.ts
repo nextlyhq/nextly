@@ -128,12 +128,17 @@ async function report(
     debug: options.verbose === true && options.json !== true,
   });
 
-  const [{ readRepairEntities }, { dryRunReport }, { applyRepairs }] =
-    await Promise.all([
-      import("../../domains/schema/repair-columns/read-entities"),
-      import("../../domains/schema/repair-columns/run-report"),
-      import("../../domains/schema/repair-columns/apply"),
-    ]);
+  const [
+    { readRepairEntities },
+    { dryRunReport },
+    { applyRepairs },
+    { compileExtensionSchema },
+  ] = await Promise.all([
+    import("../../domains/schema/repair-columns/read-entities"),
+    import("../../domains/schema/repair-columns/run-report"),
+    import("../../domains/schema/repair-columns/apply"),
+    import("../../domains/schema/extension/publish"),
+  ]);
 
   const adapter = (await createCliAdapter({
     dialect,
@@ -146,8 +151,21 @@ async function report(
     // log here is a finding, so it goes to debug output.
     const debug = (message: string) => logger.debug(message);
     // An apply reads them once it holds the schema lock; a dry run takes no lock and reads now.
+    // The app's overrides of its entities' columns, from its schema hooks: a column it overrides is
+    // judged against that storage, not the field's own.
+    const extensionSchema = await compileExtensionSchema({
+      dialect,
+      plugins: config.plugins ?? [],
+      config,
+      logger: { warn: debug },
+    });
+    const overrides =
+      extensionSchema === undefined
+        ? undefined
+        : { byTable: extensionSchema.columnOverrides, dialect };
     const readEntities = () =>
       readRepairEntities({
+        ...(overrides !== undefined ? { overrides } : {}),
         adapter,
         dialect,
         config,

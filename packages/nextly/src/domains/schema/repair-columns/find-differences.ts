@@ -24,6 +24,7 @@ import {
   getComponentRowColumnDescriptor,
   type SupportedDialect,
 } from "../services/field-column-descriptor";
+import { withColumnOverride } from "../services/runtime-schema-generator";
 import { keyedByOf, type KeyedBy } from "../value-conversion/read-values";
 
 import { classifyDifference, planDifference } from "./classify";
@@ -63,24 +64,30 @@ interface NamedColumn {
  */
 function describeColumn(
   entity: RepairEntity,
-  origin: RepairColumnOrigin,
+  definition: EntityDefinition,
   field: FieldDefinition,
   translation: boolean,
   dialect: SupportedDialect
 ): (ColumnState & { name: string }) | null {
+  const origin = definition.origin;
   if (origin === "userFields") return userFieldColumn(field, dialect);
   const describe =
     entity.kind === "fieldGroup" && !translation
       ? getComponentRowColumnDescriptor
       : getColumnDescriptor;
-  const descriptor = describe(field, dialect, origin);
-  return descriptor === null
-    ? null
-    : {
-        name: descriptor.name,
-        type: descriptor.dialectType,
-        nullable: descriptor.nullable,
-      };
+  const described = describe(field, dialect, origin);
+  if (described === null) return null;
+  // An override the app made of the column's storage is what the column should have: the entity's
+  // own table carries it, through the descriptor the runtime table is built with. A translation
+  // table is not an entity table an override reaches.
+  const descriptor = translation
+    ? described
+    : withColumnOverride(described, definition.columnOverrides ?? [], dialect);
+  return {
+    name: descriptor.name,
+    type: descriptor.dialectType,
+    nullable: descriptor.nullable,
+  };
 }
 
 /**
@@ -89,12 +96,18 @@ function describeColumn(
  */
 function namedColumn(
   entity: RepairEntity,
-  origin: RepairColumnOrigin,
+  definition: EntityDefinition,
   field: FieldDefinition,
   translation: boolean,
   dialect: SupportedDialect
 ): NamedColumn | null {
-  const column = describeColumn(entity, origin, field, translation, dialect);
+  const column = describeColumn(
+    entity,
+    definition,
+    field,
+    translation,
+    dialect
+  );
   if (column === null) return null;
   return {
     location: {
@@ -137,7 +150,7 @@ function columnsNamedBy(
     if (typeof field?.name !== "string" || field.name === "") continue;
     const column = namedColumn(
       entity,
-      definition.origin,
+      definition,
       field,
       translatable.has(field.name),
       dialect

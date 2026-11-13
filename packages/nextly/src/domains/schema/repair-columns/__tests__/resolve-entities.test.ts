@@ -297,3 +297,61 @@ describe("resolveRepairEntities: user fields", () => {
     ).toEqual([]);
   });
 });
+
+describe("resolveRepairEntities: the app's column overrides", () => {
+  const city = {
+    column: "title",
+    kind: "shortText" as const,
+    length: 10,
+    owner: { kind: "app" as const },
+  };
+  const overrides = {
+    byTable: new Map([["dc_posts", [city]]]),
+    dialect: "postgresql" as const,
+  };
+
+  it("judges both definitions by an override the applied snapshot recorded", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured()],
+        registry: [registry()],
+        snapshots: [
+          snapshot({
+            table: "dc_posts",
+            columnTypes: { title: "varchar(10)" },
+          }),
+        ],
+        overrides,
+      })
+    );
+    expect(entity?.applied?.columnOverrides).toEqual([city]);
+    expect(entity?.configured?.columnOverrides).toEqual([city]);
+  });
+
+  it("leaves an override no applied migration recorded as a change still pending", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured()],
+        registry: [registry()],
+        snapshots: [
+          snapshot({ table: "dc_posts", columnTypes: { title: "text" } }),
+        ],
+        overrides,
+      })
+    );
+    expect(entity?.applied?.columnOverrides).toBeUndefined();
+    expect(entity?.configured?.columnOverrides).toEqual([city]);
+  });
+
+  it("takes the configuration's where only a registry row says what was applied", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured()],
+        registry: [registry()],
+        snapshots: [],
+        overrides,
+      })
+    );
+    expect(entity?.applied?.columnOverrides).toEqual([city]);
+  });
+});
