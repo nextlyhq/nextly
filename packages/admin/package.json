@@ -7,11 +7,17 @@
   "main": "dist/index.mjs",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
+  "//": "./kit is internal and unstable: it exists for @nextlyhq/plugin-sdk/admin, which is the path plugins import, and its exports change in any release. Applications import the root.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./kit": {
+      "types": "./dist/kit.d.ts",
+      "import": "./dist/kit.mjs",
+      "default": "./dist/kit.mjs"
     },
     "./testing": {
       "types": "./dist/testing.d.ts",
@@ -31,7 +37,8 @@
     "./style.css": "./dist/styles/globals.css"
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/bundle-modules.json"
   ],
   "scripts": {
     "build": "tsdown && node scripts/build-css.mjs && node scripts/stamp-dist.mjs",

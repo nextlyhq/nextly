@@ -13,7 +13,7 @@ import { Button } from "@nextlyhq/ui";
 
 import type { RowAddressRefusal } from "@admin/lib/plugins/field-address";
 
-import type { ViewFieldRefusal } from "./document-view-field-gate";
+import type { ViewFieldRefusal } from "./document-view-field-refusal";
 
 const REASONS: Record<ViewFieldRefusal | RowAddressRefusal, string> = {
   hidden:

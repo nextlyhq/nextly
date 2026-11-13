@@ -856,9 +856,12 @@ describe("a foreign key's column types", () => {
           },
         ],
         pluginPrefixes: new Map([["fx", "fx"]]),
-        plugins: [
-          { owner: { kind: "plugin" as const, id: "fx" }, tables: [child] },
-        ],
+        plugins: [],
+        // The app, not a plugin: an entity table is created by the app's own
+        // migration stream, and a key to it from a plugin — an earlier
+        // stream — is refused. The column-type judgement this fixture exists
+        // for is the same either way.
+        app: { owner: { kind: "app" as const }, tables: [child] },
       });
       return undefined;
     } catch (error) {
