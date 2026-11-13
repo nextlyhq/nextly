@@ -1506,6 +1506,13 @@ exports[`each code, as a command ends with it > PLUGIN_SCHEMA_BEHIND 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-behind  (PLUGIN_SCHEMA_BEHIND)"
 `;
 
+exports[`each code, as a command ends with it > PLUGIN_SCHEMA_PREFIX_CHANGED 1`] = `
+"✗ The plugin "@acme/seo" now has the schema prefix "acme_seo", but its tables were created under "seo" (seo__redirects).
+  Why:  A plugin's prefix is fixed once its tables exist, since the rows cannot move to new names.
+  Next: Declare contributes.schema.prefix: "seo" to keep its tables.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-prefix-changed  (PLUGIN_SCHEMA_PREFIX_CHANGED)"
+`;
+
 exports[`each code, as a command ends with it > PLUGIN_SCHEMA_UNINSTALLED 1`] = `
 "✗ The plugin "@acme/seo" has been uninstalled but is still listed in your config.
   Why:  Started again, it would run over tables its uninstall removed, and a development push would create them again, so it is refused in every environment.

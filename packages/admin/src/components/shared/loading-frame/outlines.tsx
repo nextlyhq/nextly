@@ -106,6 +106,12 @@ function OutlineBar({
  * The wait of one screen (or one part of a screen): reported to the frame while
  * mounted, and drawn as `children` from 0.4 s. Hidden from assistive technology,
  * since the frame's status line is what speaks for a long wait.
+ *
+ * Before 0.4 s the outline is laid out but not drawn, so it holds the place its
+ * parts will take from the first paint: whatever a page draws after a part
+ * that answers late (a plugin's block after the dashboard's cards, a plugin's
+ * content after a list) stands where it will stay, rather than being drawn up
+ * into the empty place and pushed back down when the part arrives.
  */
 export function ScreenOutline({
   children,
@@ -121,9 +127,9 @@ export function ScreenOutline({
       data-testid="screen-outline"
       data-outline-shown={shown ? "" : undefined}
       aria-hidden="true"
-      className={className}
+      className={cn(className, !shown && "invisible")}
     >
-      {shown ? children : null}
+      {children}
     </div>
   );
 }

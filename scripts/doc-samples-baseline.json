@@ -65,7 +65,7 @@
       "compiled": 3
     },
     "docs/database/coming-from-payload.mdx": {
-      "samples": 21,
+      "samples": 22,
       "compiled": 21
     },
     "docs/database/encrypted-connections.mdx": {
@@ -73,8 +73,8 @@
       "compiled": 2
     },
     "docs/database/extending-the-schema.mdx": {
-      "samples": 13,
-      "compiled": 6
+      "samples": 14,
+      "compiled": 7
     },
     "docs/database/index.mdx": {
       "samples": 1,
@@ -245,8 +245,8 @@
       "compiled": 2
     },
     "docs/plugins/public-addresses.mdx": {
-      "samples": 3,
-      "compiled": 2
+      "samples": 4,
+      "compiled": 3
     },
     "docs/plugins/routes.mdx": {
       "samples": 13,
@@ -377,7 +377,7 @@
       "compiled": 1
     },
     "packages/storage-vercel-blob/README.md": {
-      "samples": 2,
+      "samples": 1,
       "compiled": 1
     },
     "packages/ui/README.md": {
@@ -446,10 +446,10 @@
       "suppressed #44 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
       "suppressed #44 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
       "suppressed #44 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1,
-      "suppressed #10 error TS2322: Type 'unknown' is not assignable to type 'string'.": 1,
-      "suppressed #14 error TS2322: Type 'unknown' is not assignable to type 'string'.": 1,
-      "suppressed #15 error TS2322: Type 'unknown' is not assignable to type 'string'.": 1,
-      "suppressed #9 error TS2322: Type 'unknown' is not assignable to type 'string'.": 1,
+      "suppressed #10 error TS2322: Type 'unknown' is not assignable to type 'string'.": 2,
+      "suppressed #14 error TS2322: Type 'unknown' is not assignable to type 'string'.": 2,
+      "suppressed #15 error TS2322: Type 'unknown' is not assignable to type 'string'.": 2,
+      "suppressed #9 error TS2322: Type 'unknown' is not assignable to type 'string'.": 2,
       "context #9 error TS18004: No value exists in scope for the shorthand property 'id'. Either declare one or provide an initializer.": 2,
       "context #9 error TS18047: 'page' is possibly 'null'.": 1,
       "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
@@ -568,6 +568,9 @@
       "reader-file #1 error TS2307: Cannot find module './src/singles/site-settings' or its corresponding type declarations.": 1,
       "reader-file #1 error TS2307: Cannot find module './src/singles/header' or its corresponding type declarations.": 1,
       "reader-file #1 error TS2307: Cannot find module './src/singles/footer' or its corresponding type declarations.": 1
+    },
+    "docs/database/extending-the-schema.mdx": {
+      "reader-file #12 error TS2307: Cannot find module './collections/posts' or its corresponding type declarations.": 1
     },
     "docs/getting-started/installation.mdx": {
       "reader-file #3 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
