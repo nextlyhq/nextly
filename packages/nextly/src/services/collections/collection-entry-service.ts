@@ -41,7 +41,10 @@ import type { LifecycleParts } from "../../domains/collections/services/all-loca
 import { CollectionAccessService } from "../../domains/collections/services/collection-access-service";
 import { CollectionBulkService } from "../../domains/collections/services/collection-bulk-service";
 import { CollectionHookService } from "../../domains/collections/services/collection-hook-service";
-import { CollectionMutationService } from "../../domains/collections/services/collection-mutation-service";
+import {
+  CollectionMutationService,
+  type FieldRewriteCall,
+} from "../../domains/collections/services/collection-mutation-service";
 import { CollectionQueryService } from "../../domains/collections/services/collection-query-service";
 import type {
   CollectionServiceResult,
@@ -882,6 +885,27 @@ export class CollectionEntryService extends BaseService {
       writeLanguagesFor(this.localization, params.locale ?? undefined),
       () => this.mutationService.takeLiveSharedValues(params)
     );
+  }
+
+  /**
+   * Rewrite one field of an entry on its live copy and on every pending draft
+   * that holds it, without publishing. See the mutation service.
+   *
+   * @experimental
+   */
+  async rewriteField(
+    call: FieldRewriteCall
+  ): ReturnType<CollectionMutationService["rewriteField"]> {
+    // Judged as an update in the language it writes: a translated field's
+    // language, or every rule's default for a shared one.
+    const result = await withRuleLanguage(
+      writeLanguagesFor(this.localization, call.request.locale),
+      () => this.mutationService.rewriteField(call)
+    );
+    // The live copy changed, so its pages revalidate and its event is
+    // delivered, as an update of it does.
+    await this.afterWriteIfRecorded(result);
+    return result;
   }
 
   /**
