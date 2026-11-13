@@ -61,7 +61,7 @@ export function kitRouteConstraintStatements(
 
   const atomic =
     dialect === "mysql"
-      ? mysqlCheckReplacements(ops)
+      ? mysqlCheckReplacements(ops, "push")
       : {
           pairedDrops: new Set<DropCheckOp>(),
           pairedAdds: new Set<AddCheckOp>(),

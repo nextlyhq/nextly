@@ -49,17 +49,46 @@ export interface MysqlCheckReplacements {
   statementFor: Map<AddCheckOp, string>;
 }
 
+/**
+ * Where the replacements are written. An apply's own statements (`push`) run
+ * a rename that MySQL refuses while a check uses the column, so a check on a
+ * column the apply renames or alters is dropped ahead, on its own. A migration
+ * file's (`file`) rename carries the column's checks across in its one
+ * statement (`mysql-live-restate.ts`), and a type, nullability or default
+ * change leaves them in force, so there only a column or table the file drops
+ * takes its check's drop ahead with it.
+ */
+export type ReplacementRoute = "push" | "file";
+
 interface AlteredScope {
   droppedTables: Set<string>;
   tablesWithAlteredColumns: Set<string>;
   alteredColumns: Set<string>;
+  /** Table and old column name, lower-cased, to the name a rename gives it. */
+  renamedTo: Map<string, string>;
 }
 
-/** Collects tables and columns modified by the apply, which a live check could block. */
-function collectAlteredScope(ops: readonly Operation[]): AlteredScope {
+/** Whether `op` changes a column so that a check on it must be dropped first. */
+function blocksDeferral(op: Operation, route: ReplacementRoute): boolean {
+  if (op.type === "drop_column") return true;
+  if (route === "file") return false;
+  return (
+    op.type === "change_column_type" ||
+    op.type === "change_column_nullable" ||
+    op.type === "change_column_default" ||
+    op.type === "rename_column"
+  );
+}
+
+/** Collects tables and columns modified by the operations, which a live check could block. */
+function collectAlteredScope(
+  ops: readonly Operation[],
+  route: ReplacementRoute
+): AlteredScope {
   const droppedTables = new Set<string>();
   const tablesWithAlteredColumns = new Set<string>();
   const alteredColumns = new Set<string>();
+  const renamedTo = new Map<string, string>();
   const markColumn = (table: string, column: string) => {
     const t = table.toLowerCase();
     tablesWithAlteredColumns.add(t);
@@ -68,19 +97,20 @@ function collectAlteredScope(ops: readonly Operation[]): AlteredScope {
   for (const op of ops) {
     if (op.type === "drop_table") {
       droppedTables.add(op.tableName.toLowerCase());
-    } else if (
-      op.type === "drop_column" ||
-      op.type === "change_column_type" ||
-      op.type === "change_column_nullable" ||
-      op.type === "change_column_default"
-    ) {
-      markColumn(op.tableName, op.columnName);
     } else if (op.type === "rename_column") {
-      markColumn(op.tableName, op.fromColumn);
-      markColumn(op.tableName, op.toColumn);
+      renamedTo.set(
+        `${op.tableName.toLowerCase()}.${op.fromColumn.toLowerCase()}`,
+        op.toColumn.toLowerCase()
+      );
+      if (blocksDeferral(op, route)) {
+        markColumn(op.tableName, op.fromColumn);
+        markColumn(op.tableName, op.toColumn);
+      }
+    } else if ("columnName" in op && blocksDeferral(op, route)) {
+      markColumn(op.tableName, op.columnName);
     }
   }
-  return { droppedTables, tablesWithAlteredColumns, alteredColumns };
+  return { droppedTables, tablesWithAlteredColumns, alteredColumns, renamedTo };
 }
 
 /** Whether `drop` can stay in place until its replacement is added. */
@@ -97,15 +127,23 @@ function canDeferDrop(
   return !scope.tablesWithAlteredColumns.has(tableKey);
 }
 
-/** Finds an unpaired `add_check` replacing `drop` on the same table and column, or name. */
+/**
+ * Finds an unpaired `add_check` replacing `drop` on the same table: one on the
+ * same column, followed through a rename of it, or else one of the same name.
+ */
 function findMatchingAdd(
   drop: DropCheckOp,
   dropColumn: string | null,
   adds: readonly AddCheckOp[],
-  pairedAdds: ReadonlySet<AddCheckOp>
+  pairedAdds: ReadonlySet<AddCheckOp>,
+  scope: AlteredScope
 ): AddCheckOp | undefined {
   const tableKey = drop.tableName.toLowerCase();
-  const targetColumn = dropColumn?.toLowerCase();
+  const liveColumn = dropColumn?.toLowerCase();
+  const targetColumn =
+    liveColumn === undefined
+      ? undefined
+      : (scope.renamedTo.get(`${tableKey}.${liveColumn}`) ?? liveColumn);
   const targetName = drop.check.name.toLowerCase();
   return adds.find(add => {
     if (pairedAdds.has(add) || add.tableName.toLowerCase() !== tableKey) {
@@ -137,14 +175,15 @@ function replaceMysqlChecksSql(
 }
 
 /**
- * Pairs each `drop_check` with the `add_check` replacing it, where neither the
- * table nor the constrained column is dropped, renamed or altered in the same
- * operations, and renders each table's pairs as one statement.
+ * Pairs each `drop_check` with the `add_check` replacing it, where the route
+ * lets the drop wait for the add (`ReplacementRoute`), and renders each
+ * table's pairs as one statement.
  */
 export function mysqlCheckReplacements(
-  ops: readonly Operation[]
+  ops: readonly Operation[],
+  route: ReplacementRoute
 ): MysqlCheckReplacements {
-  const scope = collectAlteredScope(ops);
+  const scope = collectAlteredScope(ops, route);
   const drops = ops.filter((op): op is DropCheckOp => op.type === "drop_check");
   const adds = ops.filter((op): op is AddCheckOp => op.type === "add_check");
 
@@ -155,7 +194,7 @@ export function mysqlCheckReplacements(
   for (const drop of drops) {
     const dropColumn = enumColumnIn(drop.check.sql);
     if (!canDeferDrop(drop, dropColumn, scope)) continue;
-    const match = findMatchingAdd(drop, dropColumn, adds, pairedAdds);
+    const match = findMatchingAdd(drop, dropColumn, adds, pairedAdds, scope);
     if (match === undefined) continue;
     pairedDrops.add(drop);
     pairedAdds.add(match);
@@ -185,15 +224,15 @@ export function mysqlCheckReplacements(
 }
 
 /**
- * A MySQL migration's statements with every pairable check replacement folded
- * into its table's one statement, placed where the table's first paired add
- * stood; `render` renders every other operation as before.
+ * A MySQL migration file's statements with every pairable check replacement
+ * folded into its table's one statement, placed where the table's first paired
+ * add stood; `render` renders every other operation as before.
  */
 export function withMysqlCheckReplacements(
   ops: readonly Operation[],
   render: (op: Operation) => string[]
 ): string[] {
-  const replacements = mysqlCheckReplacements(ops);
+  const replacements = mysqlCheckReplacements(ops, "file");
   const emitted = new Set<string>();
   return ops.flatMap(op => {
     if (op.type === "drop_check" && replacements.pairedDrops.has(op)) return [];

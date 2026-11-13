@@ -104,9 +104,9 @@ describe("generateStatements: MySQL check replacement", () => {
     expect(statements[1]).toContain("idx_cx__items_state");
   });
 
-  it("leaves a drop and add apart where the column itself changes type", () => {
-    // The type change needs the old check gone first, so it cannot wait for
-    // the add: the pair stays two statements around the change.
+  it("keeps the old check through a type change of its column, replacing it after", () => {
+    // MODIFY leaves a check in force, so the old one holds through the change
+    // and the replacement after it fails whole over a row it refuses.
     const retyped: Operation[] = [
       narrowing[0] as Operation,
       {
@@ -119,8 +119,60 @@ describe("generateStatements: MySQL check replacement", () => {
       narrowing[1] as Operation,
     ];
     const statements = generateStatements(retyped, "mysql", [items]);
+    expect(statements).toHaveLength(2);
+    expect(statements[0]).toContain("MODIFY COLUMN `state` varchar(32)");
+    expect(statements[1]).toBe(
+      "ALTER TABLE `cx__items` DROP CHECK `ck_state`, ADD CONSTRAINT `ck_state` CHECK (`state` IN ('draft'))"
+    );
+  });
+
+  it("keeps the old check through a rename of its column, which carries it across", () => {
+    // The file's rename drops and re-adds the column's checks around RENAME
+    // COLUMN in one statement, so the old check reaches the new name and is
+    // replaced after it, never dropped on its own ahead.
+    const renamed: Operation[] = [
+      narrowing[0] as Operation,
+      {
+        type: "rename_column",
+        tableName: "cx__items",
+        fromColumn: "state",
+        toColumn: "status",
+        fromType: "varchar(16)",
+        toType: "varchar(16)",
+      },
+      {
+        type: "add_check",
+        tableName: "cx__items",
+        check: { name: "ck_status", sql: "`status` IN ('draft')" },
+      },
+    ];
+    const statements = generateStatements(renamed, "mysql", [items]);
+    expect(
+      statements.some(s =>
+        /^ALTER TABLE `cx__items` DROP CHECK `ck_state`$/.test(s)
+      )
+    ).toBe(false);
+    expect(statements.at(-1)).toBe(
+      "ALTER TABLE `cx__items` DROP CHECK `ck_state`, ADD CONSTRAINT `ck_status` CHECK (`status` IN ('draft'))"
+    );
+  });
+
+  it("drops the check ahead of a drop of its column, which MySQL requires", () => {
+    const statements = generateStatements(
+      [
+        narrowing[0] as Operation,
+        {
+          type: "drop_column",
+          tableName: "cx__items",
+          columnName: "state",
+          columnType: "varchar(16)",
+        },
+        narrowing[1] as Operation,
+      ],
+      "mysql",
+      [items]
+    );
     expect(statements[0]).toBe("ALTER TABLE `cx__items` DROP CHECK `ck_state`");
-    expect(statements.at(-1)).toContain("ADD CONSTRAINT `ck_state`");
     expect(statements.some(s => s.includes("DROP CHECK `ck_state`, "))).toBe(
       false
     );
