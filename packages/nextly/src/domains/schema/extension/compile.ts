@@ -140,8 +140,8 @@ export function resolveIndexName(table: string, index: ExtensionIndex): string {
  * kit table that creates the constraint — so the constraint is created under
  * exactly the name the diff will look for.
  */
-function resolveForeignKeyName(
-  table: ExtensionTable,
+export function resolveForeignKeyName(
+  table: Pick<ExtensionTable, "name">,
   fk: NonNullable<ExtensionTable["foreignKeys"]>[number]
 ): string {
   return fk.name ?? foreignKeyNameForColumns(table.name, fk.columns);
@@ -404,10 +404,15 @@ export function toTableSpec(
   // both are always TRACKED — an empty list when none is declared, never
   // absent. Absent reads as "not tracked" to the diff, which then plans no
   // drop: removing a table's last check or key would leave it in place.
-  const foreignKeys = (table.foreignKeys ?? []).map(fk => ({
-    ...fk,
-    name: resolveForeignKeyName(table, fk),
-  }));
+  // `contributedBy` stays out: who added a key is recorded per element, and
+  // the live side the diff compares against never carries it, so a spec
+  // holding it would read as a changed key on every comparison.
+  const foreignKeys = (table.foreignKeys ?? []).map(
+    ({ contributedBy: _contributedBy, ...fk }) => ({
+      ...fk,
+      name: resolveForeignKeyName(table, fk),
+    })
+  );
   // Declared checks, plus the one each enum column implies. Concatenated
   // rather than kept apart because they are the same thing to everything
   // downstream: the diff compares checks by name, and an enum's constraint is

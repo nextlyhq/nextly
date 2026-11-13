@@ -28,8 +28,14 @@ import {
 } from "../../media/retired-image-sizes-constants";
 import { kindAndSizes, toSnakeCase } from "../services/field-column-descriptor";
 
-import type { TableRelationInput, ColumnBuilder, TableDefinition } from "./dsl";
-import { defineTable } from "./dsl";
+import type {
+  ColumnBuilder,
+  TableCheckInput,
+  TableDefinition,
+  TableForeignKeyInput,
+  TableRelationInput,
+} from "./dsl";
+import { defineTable, resolveTableConstraints } from "./dsl";
 import {
   assertAddableToExistingRows,
   assertMayAddColumns,
@@ -106,12 +112,20 @@ export interface SchemaDraft {
    * owned by the plugin, so there is nothing for it to adopt.
    */
   adoptTable(def: TableDefinition): void;
-  /** Adds columns (own tables only) and indexes (own and entity tables). */
+  /**
+   * Adds columns and indexes to a table, and foreign keys, checks and
+   * relations to a plugin's or the app's own: the caller's own, or another
+   * owner's for the app or a plugin naming the owner in `dependsOn`. Each
+   * element added to someone else's table is recorded as the caller's.
+   */
   extendTable(
     name: string,
     ext: {
       columns?: Record<string, ColumnBuilder>;
       indexes?: { columns: string[]; unique?: boolean; name?: string }[];
+      foreignKeys?: TableForeignKeyInput[];
+      checks?: TableCheckInput[];
+      relations?: TableRelationInput[];
     }
   ): void;
   getTable(name: string): DraftTableView | undefined;
@@ -513,22 +527,24 @@ function assertMayExtendEntity(table: DraftTable, scope: ExtendScope): void {
 }
 
 /**
- * Refuse a plugin's index over a column a THIRD owner contributed, unless the
- * plugin names that contributor among its dependencies.
+ * Refuse a plugin's element over a column a THIRD owner contributed — an
+ * index, a foreign key or a relation — unless the plugin names that
+ * contributor among its dependencies.
  *
  * The column exists only while its contributor is installed, and arrives in
  * the contributor's migrations. Without the dependency nothing orders the two
- * plugins, so the index could be created before the column it names, and the
- * contributor could be uninstalled from under it. The app is exempt: its
+ * plugins, so the element could be created before the column it names, and
+ * the contributor could be uninstalled from under it. The app is exempt: its
  * stream runs after every plugin's, and it may build on anything.
  */
-function assertIndexColumnsReachable(
-  index: ExtensionIndex,
+function assertColumnsReachable(
+  columns: readonly string[],
+  element: "index" | "foreign key" | "relation",
   table: DraftTable,
   scope: ExtendScope
 ): void {
   if (scope.owner.kind !== "plugin") return;
-  for (const name of index.columns) {
+  for (const name of columns) {
     const contributor = table.columns.find(
       column => column.name === name
     )?.contributedBy;
@@ -543,7 +559,7 @@ function assertIndexColumnsReachable(
     }
     refuse(
       `${scope.ownerPath}.extendTable.${table.name}`,
-      `${describeOwner(scope.owner)} may not index the column "${name}" on "${table.name}": ${describeOwner(contributor)} contributed it. Name it in dependsOn (or optionalDependsOn), so its migrations run first and it can't be uninstalled from under the index.`
+      `The ${element} ${describeOwner(scope.owner)} adds to "${table.name}" uses the column "${name}", which ${describeOwner(contributor)} contributed. Name it in dependsOn (or optionalDependsOn), so its migrations run first and it can't be uninstalled from under the ${element}.`
     );
   }
 }
@@ -718,9 +734,203 @@ function addIndexes(
       );
     }
     const resolved = contributedIndexOf(index, scope);
-    assertIndexColumnsReachable(resolved, table, scope);
+    assertColumnsReachable(resolved.columns, "index", table, scope);
     assertSeededIndexBuildable(resolved, table);
     table.indexes.push(resolved);
+  }
+}
+
+/** What `extendTable` takes beyond columns and indexes. */
+interface ConstraintInputs {
+  foreignKeys?: TableForeignKeyInput[];
+  checks?: TableCheckInput[];
+  relations?: TableRelationInput[];
+}
+
+/**
+ * Refuse foreign keys, checks and relations on a table this caller may not
+ * give them to.
+ *
+ * Only a plugin's or the app's own table takes them: an entity's or a core
+ * table's elements ride the app's stream whoever adds them, and a key or a
+ * check there would constrain rows the entity's own writes do not expect.
+ * On those tables a hidden column and an index stay the way to extend.
+ * Otherwise the column rule applies: the owner, the app on a plugin's table,
+ * or a plugin naming the owner in `dependsOn`.
+ */
+function assertMayAddConstraints(table: DraftTable, scope: ExtendScope): void {
+  const path = `${scope.ownerPath}.extendTable.${table.name}`;
+  if (table.owner.kind === "entity" || table.owner.kind === "core") {
+    refuse(
+      path,
+      `Foreign keys, checks and relations can be added only to a plugin's or the app's own tables; "${table.name}" belongs to ${describeOwner(table.owner)}. Add a hidden column or an index there instead.`
+    );
+  }
+  const appOnPluginTable =
+    scope.owner.kind === "app" && table.owner.kind === "plugin";
+  if (
+    scope.isOwn ||
+    appOnPluginTable ||
+    isPluginOnDependencyTable(table, scope)
+  ) {
+    return;
+  }
+  refuse(
+    path,
+    `${describeOwner(scope.owner)} may not add foreign keys, checks or relations to "${table.name}", which belongs to ${describeOwner(table.owner)}. Name the owner in dependsOn (or optionalDependsOn) to extend its tables.`
+  );
+}
+
+/**
+ * Refuse a plugin's contributed key or relation pointing at a table its
+ * migrations cannot rely on: the app's, whose stream runs after every
+ * plugin's, or another plugin's it does not depend on, which nothing orders
+ * before it or keeps installed. A core table, or one this draft does not
+ * hold, is judged by the compile and the database as any key's target is.
+ */
+function assertContributedTargetReachable(
+  targetTable: string,
+  element: "foreign key" | "relation",
+  table: DraftTable,
+  scope: ExtendScope,
+  lookup: (name: string) => DraftTable | undefined
+): void {
+  if (scope.owner.kind !== "plugin") return;
+  const target = lookup(targetTable);
+  if (target === undefined) return;
+  const path = `${scope.ownerPath}.extendTable.${table.name}`;
+  if (target.owner.kind === "app") {
+    refuse(
+      path,
+      `The ${element} ${describeOwner(scope.owner)} adds to "${table.name}" points at "${targetTable}", which the app declares. The app's schema runs after every plugin's, so a plugin's ${element} cannot rely on it.`
+    );
+  }
+  if (
+    target.owner.kind === "plugin" &&
+    target.owner.id !== scope.owner.id &&
+    scope.mayIndexForeignTablesOf?.has(target.owner.id) !== true
+  ) {
+    refuse(
+      path,
+      `The ${element} ${describeOwner(scope.owner)} adds to "${table.name}" points at "${targetTable}", which belongs to ${describeOwner(target.owner)}. Name it in dependsOn (or optionalDependsOn).`
+    );
+  }
+}
+
+/** Refuse a relation whose name the table already gives a relation or a column. */
+function assertRelationNamesFree(
+  table: DraftTable,
+  relations: readonly TableRelationInput[],
+  scope: ExtendScope
+): void {
+  const taken = new Set([
+    ...(table.relations ?? []).map(relation => relation.name),
+    ...table.columns.map(column => column.key),
+  ]);
+  for (const relation of relations) {
+    if (taken.has(relation.name)) {
+      refuse(
+        `${scope.ownerPath}.extendTable.${table.name}`,
+        `"${table.name}" already has a relation or a column named "${relation.name}"; name the relation for what it points at.`
+      );
+    }
+  }
+}
+
+/**
+ * Add foreign keys, checks and relations, validated as a declared table's
+ * are (`resolveTableConstraints`), each recorded as the caller's when the
+ * table is someone else's. A key or check so recorded travels in the
+ * caller's migrations and is owned per element, so the table's owner never
+ * sees it as drift and the caller's uninstall removes only what it added.
+ */
+function addConstraints(
+  table: DraftTable,
+  inputs: ConstraintInputs,
+  scope: ExtendScope,
+  lookup: (name: string) => DraftTable | undefined
+): void {
+  if (constraintCount(inputs) === 0) return;
+  assertMayAddConstraints(table, scope);
+  const resolved = resolveTableConstraints(table.name, table.columns, inputs);
+  assertContributedKeysReach(resolved.foreignKeys, table, scope, lookup);
+  assertContributedRelationsReach(resolved.relations, table, scope, lookup);
+  assertRelationNamesFree(table, resolved.relations, scope);
+  appendConstraints(table, resolved, scope);
+}
+
+/** How many keys, checks and relations a call asks for. */
+function constraintCount(inputs: ConstraintInputs): number {
+  return (
+    (inputs.foreignKeys?.length ?? 0) +
+    (inputs.checks?.length ?? 0) +
+    (inputs.relations?.length ?? 0)
+  );
+}
+
+/** Each key's columns, and a contributed key's target, as the caller may use them. */
+function assertContributedKeysReach(
+  keys: readonly DeclaredForeignKey[],
+  table: DraftTable,
+  scope: ExtendScope,
+  lookup: (name: string) => DraftTable | undefined
+): void {
+  for (const fk of keys) {
+    assertColumnsReachable(fk.columns, "foreign key", table, scope);
+    if (scope.isOwn) continue;
+    assertContributedTargetReachable(
+      fk.referencesTable,
+      "foreign key",
+      table,
+      scope,
+      lookup
+    );
+  }
+}
+
+/** Each relation's column, and a contributed relation's target, likewise. */
+function assertContributedRelationsReach(
+  relations: readonly TableRelationInput[],
+  table: DraftTable,
+  scope: ExtendScope,
+  lookup: (name: string) => DraftTable | undefined
+): void {
+  for (const relation of relations) {
+    if (relation.fromColumn !== undefined) {
+      assertColumnsReachable([relation.fromColumn], "relation", table, scope);
+    }
+    if (scope.isOwn) continue;
+    assertContributedTargetReachable(
+      relation.targetTable,
+      "relation",
+      table,
+      scope,
+      lookup
+    );
+  }
+}
+
+/** Put the resolved elements on the table, each the caller's when it is foreign. */
+function appendConstraints(
+  table: DraftTable,
+  resolved: ReturnType<typeof resolveTableConstraints>,
+  scope: ExtendScope
+): void {
+  const by = scope.isOwn ? {} : { contributedBy: scope.owner };
+  if (resolved.foreignKeys.length > 0) {
+    table.foreignKeys = [
+      ...(table.foreignKeys ?? []),
+      ...resolved.foreignKeys.map(fk => ({ ...fk, ...by })),
+    ];
+  }
+  if (resolved.checks.length > 0) {
+    table.checks = [
+      ...(table.checks ?? []),
+      ...resolved.checks.map(check => ({ ...check, ...by })),
+    ];
+  }
+  if (resolved.relations.length > 0) {
+    table.relations = [...(table.relations ?? []), ...resolved.relations];
   }
 }
 
@@ -873,6 +1083,8 @@ export function createOwnerDraft(
       if (contributes) assertMayExtendEntity(table, scope);
       addColumns(table, ext.columns, scope);
       addIndexes(table, ext.indexes ?? [], scope);
+      // After the columns, so a key may stand on a column added with it.
+      addConstraints(table, ext, scope, tableName => store.get(tableName));
     },
 
     getTable(name): DraftTableView | undefined {

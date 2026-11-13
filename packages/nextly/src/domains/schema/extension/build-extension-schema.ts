@@ -27,6 +27,7 @@ import {
 import { NextlyError } from "../../../errors/nextly-error";
 import { drizzleTableToTableSpec } from "../../../schemas/_internal/drizzle-to-tablespec";
 import type { TableSpec } from "../pipeline/diff/types";
+import { checkConstraintName } from "../services/index-name";
 
 import { getActiveExtensionSchema } from "./active-schema";
 import {
@@ -42,6 +43,7 @@ import {
   assertSetNullColumnsNullable,
   authoredKeyOf,
   referenceTableStub,
+  resolveForeignKeyName,
   resolveIndexName,
   toDrizzleTable,
   toTableSpec,
@@ -338,6 +340,39 @@ function extensionTablesOf(store: SchemaDraftStore): ExtensionTable[] {
   }));
 }
 
+/**
+ * The foreign keys and checks a foreign contributor added to one table, under
+ * the names the table's spec gives them (`toTableSpec`), from the same naming
+ * rules: a name recorded here that the spec does not use would name an
+ * element the table never has, and the contributor's diff would add it again
+ * forever.
+ */
+function contributedConstraintElements(table: ExtensionTable): ElementOwner[] {
+  const keys = (table.foreignKeys ?? []).flatMap(fk =>
+    fk.contributedBy === undefined
+      ? []
+      : [
+          {
+            elementKind: "fk" as const,
+            elementName: resolveForeignKeyName(table, fk),
+            owner: fk.contributedBy,
+          },
+        ]
+  );
+  const checks = (table.checks ?? []).flatMap(check =>
+    check.contributedBy === undefined
+      ? []
+      : [
+          {
+            elementKind: "check" as const,
+            elementName: checkConstraintName(table.name, check.name),
+            owner: check.contributedBy,
+          },
+        ]
+  );
+  return [...keys, ...checks];
+}
+
 /** The elements a foreign contributor added to one table, in table order. */
 function elementsContributedTo(
   table: ExtensionTable,
@@ -358,6 +393,7 @@ function elementsContributedTo(
       owner: index.contributedBy,
     });
   }
+  elements.push(...contributedConstraintElements(table));
   // Hidden columns a foreign contributor added, element-recorded the same
   // way: the column rides the contributor's stream, and the table owner's
   // reconcile excludes it.
