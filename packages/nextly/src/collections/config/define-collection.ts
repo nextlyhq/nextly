@@ -36,6 +36,7 @@ import type { BeforeOperationHandler, HookHandler } from "@nextly/hooks/types";
 import type { CollectionAccessControl } from "../../domains/auth/services/access-control-types";
 import type { CollectionDbOptions } from "../../domains/collections/services/collection-db-options";
 import type { PreviewViewportsDeclaration } from "../../domains/collections/services/preview-viewports";
+import { ownAddressOf } from "../../domains/public-addresses/public-address-template";
 import { columnsDeclaredBy } from "../../domains/schema/services/field-column-descriptor";
 import type { WebhookEventType } from "../../domains/webhooks/types";
 import type { Workflow } from "../../domains/workflows/types";
@@ -44,6 +45,7 @@ import type { VersionsConfig } from "../../schemas/versions/types";
 import { simplePluralize } from "../../shared/lib/pluralization";
 import type { CollectionFilterRuleInput } from "../../shared/types/rule-filter";
 import type { AuthorableFieldConfig, FieldConfig } from "../fields/types";
+import type { TextFieldConfig } from "../fields/types/text";
 
 import { asDeclaredFields, toTitleCase } from "./declared-config";
 // Import validation conditionally - only in server environments
@@ -803,6 +805,23 @@ export interface CollectionConfig {
   publicAddress?: string;
 
   /**
+   * @experimental A text field whose value, where an entry has one, is that
+   * entry's own public address, for a collection whose entries are not all
+   * served under one pattern: most at `/features/{slug}`, one at
+   * `/brand-voice`. An entry whose field is empty is served at
+   * `publicAddress`, which this needs.
+   *
+   * The value is judged as a template's result is: an address on this site
+   * from its root (`/brand-voice`), with no other host, query, fragment or
+   * trailing `/`, and nothing under a path the runtime keeps. A save with
+   * any other value is refused on the field. Changing it moves the entry's
+   * address, as changing its slug would.
+   *
+   * @example "address"
+   */
+  publicAddressField?: string;
+
+  /**
    * @experimental Internal/private storage (D30). The collection stays in the
    * merged schema — relatable and accessible via `ctx.services` / `ctx.db.raw` —
    * but is hidden from the content-admin navigation (implies `admin.hidden`).
@@ -1197,6 +1216,32 @@ export type CollectionConfigInput<
   };
 };
 
+/**
+ * `fields`, the one `publicAddressField` names judged on every save as an
+ * entry's own address, before any rule of its own: so a value no visitor
+ * could be served at is refused on the field, in the words the address
+ * itself is judged by.
+ */
+function withOwnAddressRule(
+  fields: FieldConfig[],
+  name: string | undefined
+): FieldConfig[] {
+  if (name === undefined) return fields;
+  return fields.map(field => {
+    if (field.type !== "text" || field.name !== name) return field;
+    const own = field.validate;
+    const text: TextFieldConfig = {
+      ...field,
+      validate: (value, context) => {
+        const address = ownAddressOf(value);
+        if (address.status === "invalid") return address.problem;
+        return own === undefined ? true : own(value, context);
+      },
+    };
+    return text;
+  });
+}
+
 export function defineCollection<
   const Fields extends
     readonly AuthorableFieldConfig[] = AuthorableFieldConfig[],
@@ -1272,10 +1317,10 @@ export function defineCollection<
   }
 
   // Prepend system fields so they appear first in the form
-  const fieldsWithSystem = [
-    ...systemFields,
-    ...asDeclaredFields(config.fields),
-  ];
+  const fieldsWithSystem = withOwnAddressRule(
+    [...systemFields, ...asDeclaredFields(config.fields)],
+    config.publicAddressField
+  );
 
   // ============================================================
   // Apply Defaults
