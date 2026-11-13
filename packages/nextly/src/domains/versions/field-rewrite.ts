@@ -25,6 +25,7 @@ import { z } from "zod";
 import { isVirtualField } from "../../collections/fields/virtual";
 import { NextlyError } from "../../errors";
 import { DOCUMENT_VERSION_KEY } from "../../lib/system-columns";
+import type { ValidationIssue } from "../../shared/lib/entry-validation";
 import type { SanitizedLocalizationConfig } from "../i18n/config/types";
 import { isLocaleSelector } from "../i18n/locale-selector";
 import { isValidLocale } from "../i18n/resolve-locale";
@@ -415,6 +416,23 @@ function computesFromCurrent(
 export function copyWords(copy: FieldRewriteCopy): string {
   if (copy.form === "live") return "live copy";
   return copy.locale === null ? "draft" : `${copy.locale} draft`;
+}
+
+/**
+ * Refuse a copy's new value with the issues a save's checks found in it, each
+ * naming the copy it was for; nothing when there are none.
+ */
+export function refuseRewrittenValue(
+  issues: readonly ValidationIssue[],
+  copy: FieldRewriteCopy
+): void {
+  if (issues.length === 0) return;
+  throw NextlyError.validation({
+    errors: issues.map(issue => ({
+      ...issue,
+      message: `${issue.message} (the ${copyWords(copy)})`,
+    })),
+  });
 }
 
 /** A copy as history's payload names it: `live`, `draft` or `draft:<language>`. */

@@ -1092,9 +1092,6 @@ export class CollectionService extends BaseService {
    *   history. Passed only by a plugin's own services, from its identity.
    * @throws NextlyError if it is refused
    */
-  // Reached only through a plugin's services, by name (`PLUGIN_COLLECTION_METHODS`),
-  // which the dead-code gate cannot trace.
-  // fallow-ignore-next-line unused-class-member
   async rewriteField(
     input: unknown,
     context: RequestContext,

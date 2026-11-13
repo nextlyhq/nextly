@@ -325,7 +325,7 @@ import {
 } from "../../versions/entity-teardown";
 import {
   assertRewritableField,
-  copyWords,
+  refuseRewrittenValue,
   rewriteLocaleFor,
   versionBodyOf,
   type EntryFieldRewriteRequest,
@@ -7236,14 +7236,7 @@ export class CollectionMutationService extends BaseService {
       tx,
       ...(copy.locale === null ? {} : { writeLocale: copy.locale, localeCtx }),
     });
-    if (issues.length > 0) {
-      throw NextlyError.validation({
-        errors: issues.map(issue => ({
-          ...issue,
-          message: `${issue.message} (the ${copyWords(copy)})`,
-        })),
-      });
-    }
+    refuseRewrittenValue(issues, copy);
   }
 
   /**
