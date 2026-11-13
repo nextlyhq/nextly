@@ -347,6 +347,16 @@ describe("the tabs", () => {
     );
   });
 
+  it("says beside the AI choices that OpenAI's ads checker is never asked to stay away", () => {
+    serving({ _rev: "1", setupStep: 3 });
+    window.history.replaceState(null, "", `${SETTINGS}?tab=crawlers`);
+    render(<SeoSettingsPage />);
+    expect(isOpen("Search engines and AI")).toBe(true);
+    expect(screen.getByText(/OAI-AdsBot/).textContent).toContain(
+      "No choice asks OpenAI's ads checker, OAI-AdsBot, to stay away: it visits only pages you submitted as ads in ChatGPT."
+    );
+  });
+
   it("opens the tab the address names, and moves the address with each tab", () => {
     serving({ _rev: "1", setupStep: 3 });
     window.history.replaceState(null, "", `${SETTINGS}?tab=brand`);
