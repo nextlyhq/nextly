@@ -427,6 +427,20 @@ describe("the tabs", () => {
 });
 
 describe("the General tab", () => {
+  it("describes an address it can't take by what is wrong with it", () => {
+    serving({ _rev: "1", siteName: "Nextly", setupStep: 3 });
+    render(<SeoSettingsPage />);
+    const address = screen.getByRole("textbox", {
+      name: "Production address",
+    });
+    fireEvent.change(address, { target: { value: "nextlyhq.com" } });
+    expect(address.getAttribute("aria-invalid")).toBe("true");
+    const describedBy = address.getAttribute("aria-describedby") ?? "";
+    expect(document.getElementById(describedBy)?.textContent).toBe(
+      "Start the address with https://, for example https://example.com."
+    );
+  });
+
   it("shows the production address the server sets, read-only, and saves none", async () => {
     serving({ _rev: "1", siteName: "Nextly", setupStep: 3 }, "seo-settings", [
       "https://nextlyhq.com",

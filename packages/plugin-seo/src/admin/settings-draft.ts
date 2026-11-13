@@ -489,21 +489,23 @@ function rebasedEntries<T>(
 }
 
 /**
- * A list moved item by item, items told apart by value: what was added or
- * taken out here, on the newer one.
+ * A list moved item by item, items told apart by value. Unedited here, it
+ * is the newer list as it is, in its order (the first production address is
+ * the main one). Edited here, it is the list as edited, in its order, less
+ * what was taken out elsewhere, then what was added elsewhere.
  */
 function rebasedSet<T>(
   draft: readonly T[],
   before: readonly T[],
   after: readonly T[]
 ): T[] {
+  if (same(draft, before)) return [...after];
   const has = (list: readonly T[], item: T) =>
     list.some(each => same(each, item));
-  const added = draft.filter(item => !has(before, item));
-  const removed = before.filter(item => !has(draft, item));
+  const removedElsewhere = (item: T) => has(before, item) && !has(after, item);
   return [
-    ...after.filter(item => !has(removed, item)),
-    ...added.filter(item => !has(after, item)),
+    ...draft.filter(item => !removedElsewhere(item)),
+    ...after.filter(item => !has(before, item) && !has(draft, item)),
   ];
 }
 
