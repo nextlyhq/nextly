@@ -65,24 +65,32 @@ const checkable = (text: string): boolean =>
 
 /**
  * Which sitemap pages the box's text blocks, asked once typing pauses and
- * again on `retry`. The answer is for the text it was asked with, so an
- * answer for older text is never read as this one's.
+ * again on `retry`, with the content types the draft hides, since they
+ * decide what the sitemap will list once the draft is saved. The answer is
+ * for the text and the types it was asked with: an answer for either as it
+ * was before is never read as this one's.
  */
-export function useRobotsRulesCheck(text: string): {
+export function useRobotsRulesCheck(
+  text: string,
+  hiddenTypes: readonly string[] = []
+): {
   check: RulesCheck;
   retry: () => void;
 } {
+  const hidden = JSON.stringify([...hiddenTypes].sort());
   const [check, setCheck] = useState<RulesCheck>({ state: "idle" });
+  const [askedHidden, setAskedHidden] = useState(hidden);
   const asking = useRef<AbortController | null>(null);
-  const ask = useCallback((asked: string) => {
+  const ask = useCallback((asked: string, hiddenNow: string) => {
     asking.current?.abort();
     const controller = new AbortController();
     asking.current = controller;
+    setAskedHidden(hiddenNow);
     setCheck({ state: "checking", text: asked });
     writePluginRoute<RobotsRulesCheckBody>({
       plugin: SEO_PLUGIN_NAME,
       path: ROBOTS_RULES_CHECK_ROUTE_PATH,
-      body: { text: asked },
+      body: { text: asked, hiddenTypes: JSON.parse(hiddenNow) as string[] },
       signal: controller.signal,
     }).then(
       body => {
@@ -107,11 +115,16 @@ export function useRobotsRulesCheck(text: string): {
       return undefined;
     }
     setCheck({ state: "checking", text: kept(text) });
-    const timer = setTimeout(() => ask(kept(text)), CHECK_AFTER_MS);
+    const timer = setTimeout(() => ask(kept(text), hidden), CHECK_AFTER_MS);
     return () => clearTimeout(timer);
-  }, [text, ask]);
+  }, [text, hidden, ask]);
   useEffect(() => () => asking.current?.abort(), []);
-  return { check, retry: () => ask(kept(text)) };
+  // An answer for the types as they were is waiting for this one.
+  const current: RulesCheck =
+    check.state !== "idle" && askedHidden !== hidden
+      ? { state: "checking", text: kept(text) }
+      : check;
+  return { check: current, retry: () => ask(kept(text), hidden) };
 }
 
 /** How many sitemap pages the check found blocked, across every line. */

@@ -37,8 +37,13 @@ export interface RobotsRulesCheckSetup {
   readRules: ReadRules;
   /** What robots.txt asks AI crawlers until the settings choose. */
   aiCrawlers?: AiCrawlerChoice | undefined;
-  /** The paths of every page the sitemap lists. */
-  listPaths: (ctx: PluginContext) => Promise<string[]>;
+  /** The paths of every page the sitemap lists, read with `readRules`. */
+  listPaths: (ctx: PluginContext, readRules: ReadRules) => Promise<string[]>;
+  /**
+   * Whether the plugin serves both robots.txt and the sitemap: where it
+   * serves either not, its rules cannot block a page its sitemap lists.
+   */
+  servesBoth: boolean;
 }
 
 /**
@@ -68,12 +73,23 @@ export async function listingOrigins(
   return [originOf(baseUrl) ?? "http://localhost"];
 }
 
-const CHECK_BODY = z
-  .object({ text: z.string().max(MAX_OWN_RULE_LINES * 501) })
+/** What the screen asks the check about: the rules, and the types the draft hides. */
+interface RobotsRulesAsk {
+  text: string;
+  hiddenTypes?: string[] | undefined;
+}
+
+const CHECK_BODY: z.ZodType<RobotsRulesAsk> = z
+  .object({
+    text: z.string().max(MAX_OWN_RULE_LINES * 501),
+    // The content types the draft being saved hides from search, which
+    // decide what the sitemap will list once it is saved.
+    hiddenTypes: z.array(z.string().max(200)).max(1000).optional(),
+  })
   .strict();
 
 /** The request's body, parsed, or a refusal. */
-async function bodyOf(req: Request): Promise<z.infer<typeof CHECK_BODY>> {
+async function bodyOf(req: Request): Promise<RobotsRulesAsk> {
   let raw: unknown;
   try {
     raw = await req.json();
@@ -90,24 +106,36 @@ async function bodyOf(req: Request): Promise<z.infer<typeof CHECK_BODY>> {
   return parsed.data;
 }
 
-/** Which sitemap pages `text` blocks, by line, and their key. */
-async function checkRobotsRules(
+/**
+ * Which sitemap pages the rules in `asked` block, by line, and their key:
+ * the sitemap listed as the draft being saved would have it, with the
+ * content types it hides.
+ */
+export async function checkRobotsRules(
   ctx: PluginContext,
-  text: string,
+  asked: RobotsRulesAsk,
   setup: RobotsRulesCheckSetup
 ): Promise<RobotsRulesCheckBody> {
-  // Rules the screen refuses are never served, so they block nothing.
-  if (readOwnRules(text).refused) {
+  // Rules the screen refuses are never served, so they block nothing; and
+  // where the plugin serves no robots.txt or no sitemap, none of its rules
+  // blocks a page its sitemap lists.
+  if (!setup.servesBoth || readOwnRules(asked.text).refused) {
     return { lines: [], pagesKey: blockedPagesKey([]) };
   }
   const rules = await setup.readRules(ctx, undefined);
   const groups = servedGroups({
     aiCrawlers: rules.aiCrawlers ?? setup.aiCrawlers ?? "all",
-    ownRules: text,
+    ownRules: asked.text,
+  });
+  const drafted: ReadRules = async (context, locale) => ({
+    ...(await setup.readRules(context, locale)),
+    ...(asked.hiddenTypes === undefined
+      ? {}
+      : { hiddenTypes: asked.hiddenTypes }),
   });
   const { lines, paths } = blockedByOwnRules(
     groups,
-    await setup.listPaths(ctx)
+    await setup.listPaths(ctx, drafted)
   );
   return { lines, pagesKey: blockedPagesKey(paths) };
 }
@@ -121,8 +149,9 @@ export function robotsRulesCheckRoute(
     path: ROBOTS_RULES_CHECK_ROUTE_PATH,
     requiredPermission: MANAGE_SEO_PERMISSION,
     handler: async (req, ctx) => {
-      const { text } = await bodyOf(req);
-      return Response.json(await checkRobotsRules(ctx, text, setup));
+      return Response.json(
+        await checkRobotsRules(ctx, await bodyOf(req), setup)
+      );
     },
   };
 }

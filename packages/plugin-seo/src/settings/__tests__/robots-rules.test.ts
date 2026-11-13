@@ -265,3 +265,18 @@ describe("round two of reading rules", () => {
     ).toContain("away from the home page");
   });
 });
+
+describe("crawler names as crawlers read them", () => {
+  it.each(["Googlebot*", "Googlebot/2.1", "googlebot "])(
+    "reads %j as Googlebot",
+    agent => {
+      expect(
+        refusals(`User-agent: ${agent}\nDisallow: /`)[0]?.message
+      ).toContain("would keep Googlebot away from the whole site");
+    }
+  );
+
+  it("keeps a crawler with a longer name apart", () => {
+    expect(refusals("User-agent: Googlebot-Image\nDisallow: /")).toEqual([]);
+  });
+});

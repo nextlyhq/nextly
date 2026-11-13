@@ -172,6 +172,18 @@ function addToGroups(groups: RuleGroup[], read: ReadLine): void {
 }
 
 /**
+ * The crawler a User-agent line names, as crawlers match it: its product
+ * token, the leading letters, `_` and `-`, in lower case (RFC 9309), so
+ * `Googlebot*` and `Googlebot/2.1` both name Googlebot, as Google reads
+ * them; `*` names every crawler.
+ */
+function productToken(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("*")) return "*";
+  return (/^[A-Za-z_-]+/.exec(trimmed)?.[0] ?? "").toLowerCase();
+}
+
+/**
  * A crawler's name: added to the last group while it has no rules yet, else
  * starting a group of its own.
  */
@@ -186,7 +198,7 @@ function addAgent(
     groups.push(group);
   }
   const written = read.value ?? "";
-  const agent = written.toLowerCase();
+  const agent = productToken(written);
   if (agent === "") return;
   group.agents.push(agent);
   group.agentLines.push({ agent, written, line: read.line });

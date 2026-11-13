@@ -591,6 +591,49 @@ function siteFileRoutes(
 }
 
 /**
+ * The route behind "Block these N pages anyway": the sitemap listed at each
+ * of the site's origins with the rules the draft reads by, and judged only
+ * where the plugin serves both robots.txt and the sitemap.
+ */
+function ownRulesCheckRoute(
+  options: SeoPluginOptions,
+  readers: {
+    readRules: ReadRules;
+    readStructuredDataRules: ReadStructuredDataRules;
+    codeRoutes: () => readonly CodeRoute[];
+    sitemapSubset: readonly string[] | undefined;
+  }
+): PluginRoute {
+  const { codeRoutes, sitemapSubset } = readers;
+  return robotsRulesCheckRoute({
+    readRules: readers.readRules,
+    aiCrawlers: options.aiCrawlers,
+    servesBoth: options.robots !== false && options.sitemap !== false,
+    listPaths: async (ctx, readRules) => {
+      const paths: string[] = [];
+      // Each origin's sitemap, as the root sitemap answers on that host.
+      for (const origin of await listingOrigins(
+        ctx,
+        readRules,
+        options.baseUrl
+      )) {
+        const { pages } = await listPages(ctx, {
+          origin,
+          readRules,
+          readStructuredDataRules: readers.readStructuredDataRules,
+          codeRoutes,
+          ...(sitemapSubset === undefined
+            ? {}
+            : { collections: sitemapSubset }),
+        });
+        paths.push(...sitemapPaths(pages));
+      }
+      return paths;
+    },
+  });
+}
+
+/**
  * Create the SEO plugin. Register it directly in your config — no unwrapping:
  *
  * @example
@@ -973,31 +1016,11 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // Single holds the settings.
     contentTypesRoute(types),
     // Which sitemap pages the own robots.txt rules being typed would block.
-    robotsRulesCheckRoute({
+    ownRulesCheckRoute(options, {
       readRules,
-      aiCrawlers: options.aiCrawlers,
-      listPaths: async ctx => {
-        const paths: string[] = [];
-        // Each origin's sitemap, as the root sitemap answers on that host.
-        for (const origin of await listingOrigins(
-          ctx,
-          readRules,
-          options.baseUrl
-        )) {
-          const { pages } = await listPages(ctx, {
-            origin,
-            readRules,
-            readStructuredDataRules:
-              problemChecks.readers.readStructuredDataRules,
-            codeRoutes,
-            ...(sitemapSubset === undefined
-              ? {}
-              : { collections: sitemapSubset }),
-          });
-          paths.push(...sitemapPaths(pages));
-        }
-        return paths;
-      },
+      readStructuredDataRules: problemChecks.readers.readStructuredDataRules,
+      codeRoutes,
+      sitemapSubset,
     }),
     settingsDocumentRoute(),
     // What the redirects screen reads and writes.

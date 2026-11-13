@@ -3,9 +3,14 @@
  * addresses as listed, in each language at the address it is served at, not
  * the record's path a language prefix is added to.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { listingOrigins, sitemapPaths } from "../robots-rules-route";
+import {
+  checkRobotsRules,
+  listingOrigins,
+  sitemapPaths,
+} from "../robots-rules-route";
+import { blockedPagesKey } from "../robots-rules-stored";
 
 describe("sitemapPaths", () => {
   it("is each listed page's path as the sitemap lists it", () => {
@@ -41,5 +46,45 @@ describe("listingOrigins", () => {
     expect(await listingOrigins(ctx, reading([]), undefined)).toEqual([
       "http://localhost",
     ]);
+  });
+});
+
+describe("checkRobotsRules", () => {
+  const ctx = {} as never;
+  const text = "User-agent: *\nDisallow: /blog";
+
+  it("finds nothing to confirm where the plugin serves no robots.txt or no sitemap", async () => {
+    const listPaths = vi.fn(async () => ["/blog/a"]);
+    const base = {
+      readRules: () => Promise.resolve({ patterns: {} }),
+      listPaths,
+    };
+    expect(
+      await checkRobotsRules(ctx, { text }, { ...base, servesBoth: false })
+    ).toEqual({ lines: [], pagesKey: blockedPagesKey([]) });
+    expect(listPaths).not.toHaveBeenCalled();
+    expect(
+      (await checkRobotsRules(ctx, { text }, { ...base, servesBoth: true }))
+        .lines
+    ).toHaveLength(1);
+  });
+
+  it("lists the sitemap with the types the draft hides, not the saved ones", async () => {
+    const listPaths = vi.fn(async () => ["/blog/a"]);
+    await checkRobotsRules(
+      ctx,
+      { text, hiddenTypes: [] },
+      {
+        readRules: () =>
+          Promise.resolve({ patterns: {}, hiddenTypes: ["posts"] }),
+        listPaths,
+        servesBoth: true,
+      }
+    );
+    const readRules = listPaths.mock.calls[0]?.[1] as (
+      ctx: never,
+      locale: undefined
+    ) => Promise<{ hiddenTypes?: readonly string[] }>;
+    expect((await readRules(ctx, undefined)).hiddenTypes).toEqual([]);
   });
 });

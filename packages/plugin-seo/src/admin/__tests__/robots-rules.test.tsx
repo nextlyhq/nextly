@@ -129,6 +129,8 @@ const saveButton = () =>
 /** What the sitemap check answers for each text, unless a test says else. */
 let answers: Record<string, RobotsRulesCheckBody>;
 let asked: string[];
+/** The hidden types each check was asked with. */
+let askedHidden: unknown[];
 /** Whether the site's robots.txt carries the plugin's header. */
 let servedByPlugin: boolean;
 
@@ -136,11 +138,13 @@ beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   answers = {};
   asked = [];
+  askedHidden = [];
   servedByPlugin = true;
   vi.mocked(writePluginRoute).mockImplementation((async (request: {
-    body: { text: string };
+    body: { text: string; hiddenTypes?: unknown };
   }) => {
     asked.push(request.body.text);
+    askedHidden.push(request.body.hiddenTypes);
     return answers[request.body.text] ?? { lines: [], pagesKey: "0:811c9dc5" };
   }) as unknown as typeof writePluginRoute);
   vi.stubGlobal(
@@ -423,5 +427,14 @@ describe("which tools the AI choice covers", () => {
     expect(answers()).toContain("Allowed");
     fireEvent.click(screen.getByRole("radio", { name: /Block all AI tools/ }));
     expect(answers()).toContain("Asked to stay away");
+  });
+});
+
+describe("the check and the draft's other settings", () => {
+  it("asks with the content types the draft hides, and again when they change", async () => {
+    openCrawlers({ hiddenTypes: ["posts"] });
+    type("User-agent: *\nDisallow: /blog");
+    await pause();
+    expect(askedHidden).toEqual([["posts"]]);
   });
 });

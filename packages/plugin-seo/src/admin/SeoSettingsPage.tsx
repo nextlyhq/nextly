@@ -662,7 +662,10 @@ function SettingsScreen({
     () => !finished && !draft.setupDismissed
   );
   const changes = changesOf(stored, draft, defaults);
-  const rulesCheck = useRobotsRulesCheck(draft.robotsRules.text);
+  const rulesCheck = useRobotsRulesCheck(
+    draft.robotsRules.text,
+    draft.hiddenTypes
+  );
   const problem =
     draftProblem(draft, types, serverAddresses) ??
     ownRulesSaveProblem(
