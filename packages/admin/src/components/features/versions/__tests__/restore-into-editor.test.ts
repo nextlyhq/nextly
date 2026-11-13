@@ -15,7 +15,13 @@ vi.mock("@admin/components/ui", () => ({ toast: { success: toastSuccess } }));
 function editorWith(extra: Partial<EditorRestoreSurface> = {}) {
   const apply = vi.fn(() => ({ undo: vi.fn() }));
   const editor = {
-    restore: { apply, restoredFromForSave: vi.fn(), saved: vi.fn() },
+    restore: {
+      apply,
+      restoredFromForSave: vi.fn(),
+      saved: vi.fn(),
+      formReset: vi.fn(),
+      holds: vi.fn(() => false),
+    },
     fields: [],
     currentValues: () => ({}),
     dirtyFields: () => new Set<string>(),

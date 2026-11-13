@@ -28,7 +28,7 @@ import { formFieldsOf } from "./snapshot-to-form-values";
 export function useFormRestore<T extends FieldValues>(
   form: UseFormReturn<T>
 ): EditorRestore {
-  return useMemo(
+  const restore = useMemo(
     () =>
       createEditorRestore({
         getValues: () => form.getValues(),
@@ -37,6 +37,29 @@ export function useFormRestore<T extends FieldValues>(
       }),
     [form]
   );
+  // Every reset of the form, wherever the editor makes it, hands it new
+  // default values: each is told to the restore, which keeps only what the
+  // reset kept as an unsaved edit.
+  useEffect(() => {
+    let defaults: unknown = form.formState.defaultValues;
+    return form.subscribe({
+      formState: { defaultValues: true, dirtyFields: true },
+      callback: state => {
+        if (
+          state.defaultValues === undefined ||
+          state.defaultValues === defaults
+        ) {
+          return;
+        }
+        defaults = state.defaultValues;
+        restore.formReset(
+          form.getValues(),
+          new Set(Object.keys(state.dirtyFields ?? form.formState.dirtyFields))
+        );
+      },
+    });
+  }, [form, restore]);
+  return restore;
 }
 
 export function useEditorRestoreSurface<T extends FieldValues>({

@@ -222,7 +222,13 @@ function fakeEditor() {
   const undo = vi.fn();
   const apply = vi.fn(() => ({ undo }));
   const editor: EditorRestoreSurface = {
-    restore: { apply, restoredFromForSave: vi.fn(), saved: vi.fn() },
+    restore: {
+      apply,
+      restoredFromForSave: vi.fn(),
+      saved: vi.fn(),
+      formReset: vi.fn(),
+      holds: vi.fn(() => false),
+    },
     fields: [{ name: "title", type: "text", label: "Title" } as FieldConfig],
     currentValues: () => ({ title: "Now" }),
     dirtyFields: () => new Set<string>(),

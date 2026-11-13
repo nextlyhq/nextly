@@ -58,7 +58,13 @@ import {
   type ViewedVersion,
 } from "./document-history-context";
 import { restoreIntoEditor } from "./restore-into-editor";
-import { removedFieldsOf, restorePlan, restoresInEditor } from "./restore-plan";
+import {
+  removedFieldsOf,
+  restorePlan,
+  restoreRowReason,
+  restoresInEditor,
+  type RestoreRow,
+} from "./restore-plan";
 import { snapshotToFormValues } from "./snapshot-to-form-values";
 import { useChangeNavigation } from "./useChangeNavigation";
 import {
@@ -636,19 +642,49 @@ function useFieldRestore(
   }, [offered, editor, viewing, changes]);
   return useMemo(() => {
     if (!rows || !editor) return undefined;
-    const byName = new Map(rows.map(row => [row.name, row]));
-    return {
-      rowFor: name => byName.get(name),
-      restore: name =>
-        restoreIntoEditor({
-          editor,
-          rows,
-          names: [name],
-          versionNo: viewing.versionNo,
-          savedAt: viewing.about?.createdAt ?? null,
-        }),
-    };
+    return fieldRestoreOf(rows, editor, {
+      versionNo: viewing.versionNo,
+      savedAt: viewing.about?.createdAt ?? null,
+    });
   }, [rows, editor, viewing.versionNo, viewing.about]);
+}
+
+/**
+ * "Restore this field" over the rows judged when the version was shown, with
+ * whether the person may still change each field judged again as it is read
+ * and as it is restored: the document can turn read-only after it was shown
+ * (another editor takes it), and the field's restore is then withdrawn as
+ * "Restore…" is.
+ */
+export function fieldRestoreOf(
+  rows: RestoreRow[],
+  editor: EditorRestoreSurface,
+  version: { versionNo: number; savedAt: string | null }
+): VersionFieldRestore {
+  const byName = new Map(rows.map(row => [row.name, row]));
+  const rowNow = (name: string): RestoreRow | undefined => {
+    const row = byName.get(name);
+    if (!row || row.disabled || editor.canEdit(name)) return row;
+    return {
+      ...row,
+      chosen: false,
+      disabled: "read-only",
+      reason: restoreRowReason("read-only"),
+    };
+  };
+  return {
+    rowFor: rowNow,
+    restore: name => {
+      if (rowNow(name)?.chosen !== true) return;
+      restoreIntoEditor({
+        editor,
+        rows,
+        names: [name],
+        versionNo: version.versionNo,
+        savedAt: version.savedAt,
+      });
+    },
+  };
 }
 
 /**

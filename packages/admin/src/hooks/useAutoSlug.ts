@@ -33,6 +33,7 @@ import {
   type UseFormReturn,
 } from "react-hook-form";
 
+import type { EditorRestore } from "@admin/components/features/versions/editor-restore";
 import { slugify } from "@admin/lib/utils";
 
 export interface UseAutoSlugOptions<TValues extends FieldValues = FieldValues> {
@@ -80,6 +81,12 @@ export interface UseAutoSlugOptions<TValues extends FieldValues = FieldValues> {
    * @default false
    */
   frozen?: boolean;
+  /**
+   * The editor's restore. While the title holds a value a restore put back,
+   * the slug is left as it is: a restore changes only the fields chosen, and
+   * a slug the person did not choose stays the one they had.
+   */
+  restore?: Pick<EditorRestore, "holds">;
 }
 
 /**
@@ -106,6 +113,7 @@ export function useAutoSlug<TValues extends FieldValues = FieldValues>({
   slugFieldName,
   enabled = true,
   frozen = false,
+  restore,
 }: UseAutoSlugOptions<TValues>): void {
   const titleValue = useWatch({
     control: form.control,
@@ -162,6 +170,9 @@ export function useAutoSlug<TValues extends FieldValues = FieldValues>({
     // the top of the effect so the baseline is still established: the write is what must not
     // happen, not the bookkeeping that decides whether a later value was hand-edited.
     if (frozen) return;
+    // A title a restore put back is not an edit to follow; once the person
+    // edits it, the slug follows again as before.
+    if (restore?.holds(titleFieldName)) return;
 
     if (isStillAuto && generatedSlug !== currentSlug) {
       // shouldDirty stays false on the very first auto-write so we
@@ -183,5 +194,6 @@ export function useAutoSlug<TValues extends FieldValues = FieldValues>({
     slugFieldName,
     titleValue,
     slugValue,
+    restore,
   ]);
 }
