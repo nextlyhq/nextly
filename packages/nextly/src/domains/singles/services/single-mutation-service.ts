@@ -6022,7 +6022,7 @@ export class SingleMutationService extends BaseService {
     } catch (error) {
       // Out of date: answered after the rollback, from the Single as it is now.
       if (staleWrite.at && locked.id && check.kind === "judge") {
-        return buildSingleErrorResult(
+        const refused = buildSingleErrorResult(
           await staleVersionErrorFor(poolRevisionReader(this.adapter), {
             dialect: this.adapter.dialect,
             scopeKind: "single",
@@ -6038,6 +6038,7 @@ export class SingleMutationService extends BaseService {
           }),
           "Failed to rewrite the field"
         );
+        return { ...refused, data: undefined };
       }
       rethrowIfRuleCouldNotRun(error);
       // A refusal thrown inside the transaction comes back wrapped by the
@@ -6054,6 +6055,7 @@ export class SingleMutationService extends BaseService {
           ),
           "Failed to rewrite the field"
         ),
+        data: undefined,
         committed,
       };
     }

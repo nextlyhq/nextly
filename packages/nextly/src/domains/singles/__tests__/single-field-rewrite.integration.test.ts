@@ -94,7 +94,7 @@ async function boot(
       defineSingle({
         slug: SECRET,
         status: true,
-        versions: { enabled: true },
+        versions: true,
         fields: [text({ name: "layout" }), password({ name: "secret" })],
       }),
       ...(localized
