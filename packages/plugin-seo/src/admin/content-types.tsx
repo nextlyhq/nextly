@@ -11,19 +11,26 @@
  * @module admin/content-types
  */
 import {
+  Alert,
+  AlertDescription,
+  Badge,
   Button,
   Input,
+  SegmentedChoice,
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-  SettingsRowGroup,
   Switch,
 } from "@nextlyhq/plugin-sdk/admin";
-import { useId, useRef, useState, type JSX } from "react";
+import { ChevronRight, CircleCheck, Info, Lock, Search } from "lucide-react";
+import { useId, useRef, useState, type JSX, type ReactNode } from "react";
+
+import { IMPORT_PAGE_HREF } from "../overview/contract";
 
 import type {
+  ContentTypeSource,
   MappableField,
   SeoContentType,
   SwitchedOffType,
@@ -46,6 +53,7 @@ import {
   FROM_THE_PAGE,
   holdsField,
   isHidden,
+  isSeoOn,
   mappingOf,
   missingDetails,
   patternOf,
@@ -54,8 +62,10 @@ import {
   structuredTypeOf,
   withDetailField,
   withHidden,
+  withSeoOn,
   withStructuredType,
 } from "./settings-draft";
+import { AdminLink } from "./section";
 import { ControlNote, SettingsCard } from "./settings-parts";
 import type { TabProps } from "./tabs";
 
@@ -614,8 +624,8 @@ function StructuredData({
   );
 }
 
-/** One content type's row: its title pattern, hiding, and structured data. */
-function TypeRow({
+/** One content type's settings: its title pattern, hiding, and structured data. */
+function TypeSettings({
   type,
   draft,
   change,
@@ -624,105 +634,440 @@ function TypeRow({
   const hidden = isHidden(draft, type.key);
   const hideId = useId();
   return (
-    <SettingsRowGroup label={type.label} description={typeSummary(type)}>
-      <div className="grid gap-5">
-        <PatternEditor type={type} draft={draft} change={change} />
-        <div className="flex items-start gap-3">
-          <Switch
-            id={hideId}
-            checked={hidden}
-            aria-label={`Hide all ${type.label} from search`}
-            onCheckedChange={checked =>
-              change(current => withHidden(current, type.key, checked))
-            }
-          />
-          <label htmlFor={hideId} className="grid gap-0.5">
-            <span className="text-sm font-medium text-foreground">
-              Hide the whole group from search
-            </span>
-            <span className="text-xs text-muted-foreground">
-              Its pages stay out of search, whatever each page says.
-            </span>
-          </label>
-        </div>
-        <StructuredData
-          type={type}
-          draft={draft}
-          change={change}
-          mapping={mapping}
-          setMapping={setMapping}
+    <div className="grid gap-5">
+      <PatternEditor type={type} draft={draft} change={change} />
+      <div className="flex items-start gap-3">
+        <Switch
+          id={hideId}
+          checked={hidden}
+          aria-label={`Hide all ${type.label} from search`}
+          onCheckedChange={checked =>
+            change(current => withHidden(current, type.key, checked))
+          }
         />
+        <label htmlFor={hideId} className="grid gap-0.5">
+          <span className="text-sm font-medium text-foreground">
+            Hide the whole group from search
+          </span>
+          <span className="text-xs text-muted-foreground">
+            Its pages stay out of search, whatever each page says.
+          </span>
+        </label>
       </div>
-    </SettingsRowGroup>
+      <StructuredData
+        type={type}
+        draft={draft}
+        change={change}
+        mapping={mapping}
+        setMapping={setMapping}
+      />
+    </div>
   );
 }
 
-/** The site's types its code gives no SEO, greyed, with nothing to set. */
-function SwitchedOffRow({
-  types,
+/** Where a type was made, as its chip says. */
+const SOURCE_TEXT: Readonly<Record<ContentTypeSource, string>> = {
+  code: "In code",
+  builder: "Schema Builder",
+};
+
+/** A type's name, the chip saying where it was made, and any other chip. */
+function TypeName({
+  type,
+  hidden = false,
 }: {
-  types: readonly SwitchedOffType[];
+  type: SeoContentType | SwitchedOffType;
+  hidden?: boolean;
 }): JSX.Element {
   return (
-    <SettingsRowGroup
-      label="Without SEO"
-      description="Switched off in the site's code by a developer."
-    >
-      <ul className="grid gap-1.5">
-        {types.map(type => {
-          const count = countText(type.count);
-          return (
-            <li
-              key={type.key}
-              className="flex flex-wrap items-baseline gap-x-2 text-sm text-muted-foreground"
-            >
-              <span className="font-medium">{type.label}</span>
-              <span className="text-xs">
-                {[
-                  count,
-                  type.public ? "Public, without SEO" : "No public pages",
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
-    </SettingsRowGroup>
+    <span className="flex flex-wrap items-center gap-2">
+      <span className="text-sm font-semibold">{type.label}</span>
+      {type.source === undefined ? null : (
+        <Badge variant="outline">{SOURCE_TEXT[type.source]}</Badge>
+      )}
+      {hidden ? <Badge variant="default">Hidden from search</Badge> : null}
+    </span>
   );
 }
 
-/** Where each kind of page lives and how its titles are made. */
+/** What a row with SEO says under its name. */
+function rowSummary(
+  type: SeoContentType,
+  savedOff: boolean,
+  on: boolean
+): string {
+  if (type.kind === "single") {
+    const where = !type.public
+      ? "No page of its own"
+      : type.example?.address !== undefined
+        ? type.example.address
+        : "Address set in code";
+    return savedOff && !on
+      ? "Single · SEO off · its SEO values are kept"
+      : `Single · ${where}`;
+  }
+  if (savedOff && !on) {
+    return [countText(type.count), "SEO off · their SEO values are kept"]
+      .filter(Boolean)
+      .join(" · ");
+  }
+  return typeSummary(type);
+}
+
+/** What changes once a switch is saved: off, or back on. */
+function SwitchNote({
+  type,
+  on,
+  savedOff,
+}: {
+  type: SeoContentType;
+  on: boolean;
+  savedOff: boolean;
+}): JSX.Element | null {
+  if (!on && !savedOff) {
+    // Counted only where the type has entries: "saved on no entries" says
+    // nothing true.
+    const entries =
+      type.count === undefined || type.count === 0
+        ? undefined
+        : countText(type.count)?.toLowerCase();
+    return (
+      <Alert variant="info" role="note">
+        <Info aria-hidden="true" />
+        <AlertDescription>
+          <p>
+            <b className="font-semibold">
+              SEO is off for {type.label} once you save.
+            </b>{" "}
+            {type.kind === "single"
+              ? "It loses its SEO tab, and its page leaves the sitemap and llms.txt and gets no title, description or structured data from Nextly."
+              : "Their entries lose the SEO tab, and their pages leave the sitemap and llms.txt and get no titles, descriptions or structured data from Nextly."}{" "}
+            The values saved{entries === undefined ? "" : ` on ${entries}`} are
+            kept; switch it back on and they return as they were.
+          </p>
+          <p className="mt-2">
+            Off doesn&apos;t hide these pages from search. To do that, leave SEO
+            on and use{" "}
+            <b className="font-semibold">Hide the whole group from search</b>.
+          </p>
+        </AlertDescription>
+      </Alert>
+    );
+  }
+  if (on && savedOff) {
+    return (
+      <Alert variant="success" role="status">
+        <CircleCheck aria-hidden="true" />
+        <AlertDescription>
+          SEO is back on for {type.label} once you save. The values saved on its
+          entries are used again.
+        </AlertDescription>
+      </Alert>
+    );
+  }
+  return null;
+}
+
+/**
+ * One content type with SEO: its name, where it was made and what it holds,
+ * its switch, and, opened, its settings. A switch-off says what it does
+ * before it is saved, and deletes nothing.
+ */
+function TypeRow({
+  type,
+  draft,
+  change,
+  open,
+  toggle,
+  savedOff,
+  canChange,
+}: TabProps & {
+  type: SeoContentType;
+  open: boolean;
+  toggle: () => void;
+  savedOff: boolean;
+  canChange: boolean;
+}): JSX.Element {
+  const on = isSeoOn(draft, type.key);
+  const panelId = useId();
+  return (
+    <div
+      role="group"
+      aria-label={type.label}
+      className="border-b border-border px-4 py-3 last:border-b-0"
+    >
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-start gap-3 rounded-sm text-left text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-expanded={open}
+          aria-controls={panelId}
+          onClick={toggle}
+        >
+          <ChevronRight
+            aria-hidden="true"
+            className={`mt-0.5 size-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`}
+          />
+          <span className="grid min-w-0 gap-1">
+            <TypeName type={type} hidden={on && isHidden(draft, type.key)} />
+            <span className="text-xs text-muted-foreground">
+              {rowSummary(type, savedOff, on)}
+            </span>
+          </span>
+        </button>
+        <Switch
+          checked={on}
+          disabled={!canChange}
+          aria-label={`SEO for ${type.label}`}
+          onCheckedChange={checked =>
+            change(current => withSeoOn(current, type.key, checked))
+          }
+        />
+      </div>
+      <div className="mt-3 pl-7 empty:hidden">
+        <SwitchNote type={type} on={on} savedOff={savedOff} />
+      </div>
+      {open ? (
+        <div id={panelId} className="mt-4 pl-7">
+          <TypeSettings type={type} draft={draft} change={change} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * A site's own type the code gives no SEO, greyed with the reason in place
+ * of the switch: left out by a developer, or holding its own `seo` field,
+ * whose values can be imported.
+ */
+function LockedRow({ type }: { type: SwitchedOffType }): JSX.Element {
+  const count = countText(type.count);
+  const ownSeo = type.reason === "own-seo";
+  const summary = ownSeo
+    ? [count, "Has its own field named seo, so Nextly leaves it as it is"]
+    : [count, type.public ? "Public, without SEO" : "No public pages"];
+  return (
+    <div
+      role="group"
+      aria-label={type.label}
+      className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
+    >
+      <span className="grid min-w-0 flex-1 gap-1 pl-7 text-muted-foreground">
+        <TypeName type={type} />
+        <span className="text-xs">{summary.filter(Boolean).join(" · ")}</span>
+      </span>
+      {ownSeo ? (
+        <AdminLink
+          href={IMPORT_PAGE_HREF}
+          className="text-xs font-medium text-foreground underline underline-offset-2 hover:decoration-2"
+        >
+          Import its values
+        </AdminLink>
+      ) : (
+        <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <Lock aria-hidden="true" className="size-3.5" />
+          Left out in the site&apos;s code
+        </span>
+      )}
+      <Switch checked={false} disabled aria-hidden="true" tabIndex={-1} />
+    </div>
+  );
+}
+
+/** Which types the list shows by their switch. */
+type SwitchFilter = "all" | "on" | "off";
+
+/** How many types bring the search and the filter. */
+const SEARCH_FROM = 11;
+
+/** A group of rows (Collections or Singles) under its heading. */
+function TypeGroup({
+  heading,
+  children,
+}: {
+  heading: string;
+  children: ReactNode;
+}): JSX.Element {
+  const id = useId();
+  return (
+    <section aria-labelledby={id} className="grid gap-2">
+      <h3 id={id} className="text-sm font-medium text-foreground">
+        {heading}
+      </h3>
+      <div className="overflow-hidden rounded-md border border-border bg-card">
+        <div className="flex justify-between border-b border-border bg-muted/40 px-4 py-2 text-xs font-medium text-muted-foreground">
+          <span className="pl-7">Type</span>
+          <span>SEO</span>
+        </div>
+        {children}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Every content type and its SEO switch, collections then Singles, each
+ * opening to its title pattern, hiding and structured data; then the types
+ * the site's code gives no SEO, greyed.
+ */
 export function ContentTypesTab({
   draft,
   change,
   types,
   switchedOff = [],
+  savedOff = [],
+  canChange = true,
 }: TabProps & {
   types: readonly SeoContentType[];
   /** The site's other types, which the site's code gives no SEO. */
   switchedOff?: readonly SwitchedOffType[];
+  /** The types whose SEO is off in the saved settings. */
+  savedOff?: readonly string[];
+  /** Whether the reader may change the settings, and so the switches. */
+  canChange?: boolean;
 }): JSX.Element {
-  if (types.length === 0) {
+  const [open, setOpen] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<SwitchFilter>("all");
+  const total = types.length + switchedOff.length;
+  if (total === 0) {
     return (
       <SettingsCard>
-        <p className="text-sm text-muted-foreground">
-          No content type has SEO yet. A developer chooses which do in the
-          site&apos;s configuration.
-        </p>
-        {switchedOff.length === 0 ? null : (
-          <SwitchedOffRow types={switchedOff} />
-        )}
+        <div className="grid gap-1.5 p-4">
+          <p className="text-sm font-semibold text-foreground">
+            No content types yet
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Each type you add, in code or in the Schema Builder, shows here with
+            SEO already on. Users, Media and plugins&apos; own collections never
+            get SEO.
+          </p>
+        </div>
       </SettingsCard>
     );
   }
+  const searching = total >= SEARCH_FROM;
+  const words = query.trim().toLowerCase();
+  const matches = (type: SeoContentType | SwitchedOffType) =>
+    !searching || words === "" || type.label.toLowerCase().includes(words);
+  const onCount = types.filter(type => isSeoOn(draft, type.key)).length;
+  const shownTypes = types.filter(
+    type =>
+      matches(type) &&
+      (!searching ||
+        filter === "all" ||
+        isSeoOn(draft, type.key) === (filter === "on"))
+  );
+  // A type without SEO counts as off in the filter.
+  const shownLocked = switchedOff.filter(
+    type => matches(type) && (!searching || filter !== "on")
+  );
+  const rowOf = (type: SeoContentType) => (
+    <TypeRow
+      key={type.key}
+      type={type}
+      draft={draft}
+      change={change}
+      open={open === type.key}
+      toggle={() =>
+        setOpen(current => (current === type.key ? null : type.key))
+      }
+      savedOff={savedOff.includes(type.key)}
+      canChange={canChange}
+    />
+  );
+  const collections = shownTypes.filter(type => type.kind !== "single");
+  const singles = shownTypes.filter(type => type.kind === "single");
+  const lockedCollections = shownLocked.filter(type => type.kind !== "single");
+  const lockedSingles = shownLocked.filter(type => type.kind === "single");
+  const nothingShown = shownTypes.length === 0 && shownLocked.length === 0;
   return (
-    <SettingsCard>
-      {types.map(type => (
-        <TypeRow key={type.key} type={type} draft={draft} change={change} />
-      ))}
-      {switchedOff.length === 0 ? null : <SwitchedOffRow types={switchedOff} />}
-    </SettingsCard>
+    <div className="grid gap-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-sm text-muted-foreground">
+          Every content type gets SEO, including ones made in the Schema
+          Builder. Switch it off for a type that isn&apos;t web pages.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {total} {total === 1 ? "type" : "types"} · {onCount} with SEO after
+          saving
+        </p>
+      </div>
+      {searching ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative w-full sm:w-64">
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              type="search"
+              aria-label="Find a type"
+              placeholder="Find a type"
+              className="pl-8"
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+            />
+          </div>
+          <SegmentedChoice
+            aria-label="Show types"
+            size="bordered"
+            options={[
+              { value: "all", label: `All ${total}` },
+              { value: "on", label: `SEO on ${onCount}` },
+              { value: "off", label: `SEO off ${total - onCount}` },
+            ]}
+            value={filter}
+            onSelect={next =>
+              setFilter(next === "on" || next === "off" ? next : "all")
+            }
+          />
+        </div>
+      ) : null}
+      {nothingShown ? (
+        <div className="rounded-md border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
+          {words === "" ? (
+            "No type is shown by this filter."
+          ) : (
+            <>
+              No type matches &quot;{query.trim()}&quot;.{" "}
+              <button
+                type="button"
+                className="font-medium text-foreground underline underline-offset-2 hover:decoration-2"
+                onClick={() => setQuery("")}
+              >
+                Clear the search
+              </button>
+            </>
+          )}
+        </div>
+      ) : null}
+      {collections.length + lockedCollections.length === 0 ? null : (
+        <TypeGroup heading="Collections">
+          {collections.map(rowOf)}
+          {lockedCollections.map(type => (
+            <LockedRow key={type.key} type={type} />
+          ))}
+        </TypeGroup>
+      )}
+      {singles.length + lockedSingles.length === 0 ? null : (
+        <TypeGroup heading="Singles">
+          {singles.map(rowOf)}
+          {lockedSingles.map(type => (
+            <LockedRow key={type.key} type={type} />
+          ))}
+        </TypeGroup>
+      )}
+      <div className="grid gap-1 text-xs text-muted-foreground">
+        {canChange ? null : (
+          <p>
+            Only people who can change the site&apos;s SEO settings can switch
+            SEO on or off for a type.
+          </p>
+        )}
+        <p>Users, Media and plugins&apos; own collections never get SEO.</p>
+      </div>
+    </div>
   );
 }

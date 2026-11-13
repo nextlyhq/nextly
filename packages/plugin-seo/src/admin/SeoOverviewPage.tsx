@@ -464,6 +464,18 @@ function PagesCard(): JSX.Element {
                 end={<b>{coverage.bothWorkedOut}</b>}
               />
               <Line name="One of each" end={<b>{coverage.oneOfEach}</b>} />
+              {coverage.seoOff === 0 ? null : (
+                // Their pages get nothing from the plugin, so they are
+                // counted apart and listed in Pages, marked SEO off.
+                <Line
+                  name={
+                    <TextLink href={`${PAGES_PAGE_HREF}?status=seo-off`}>
+                      Types with SEO off
+                    </TextLink>
+                  }
+                  end={<b>{coverage.seoOff}</b>}
+                />
+              )}
             </ul>
             <p className="text-xs text-muted-foreground">
               &ldquo;Set&rdquo; means typed for the page or given by its code.

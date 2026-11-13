@@ -91,6 +91,11 @@ export interface SettingsDraft {
   setupDismissed: boolean;
   /** The content types hidden from search as a whole, by key. */
   hiddenTypes: string[];
+  /**
+   * The content types whose SEO is switched off, by key. Every type is on
+   * until listed, and off deletes nothing.
+   */
+  typesWithSeoOff: string[];
   /** Each content type's structured data choice and detail mapping, by key. */
   structuredData: Record<string, StructuredDataTypeRule>;
   /** Whether IndexNow is told of changed pages. */
@@ -276,6 +281,12 @@ export function draftOf(
           (key): key is string => typeof key === "string"
         )
       : [...(defaults.hiddenTypes ?? [])],
+    // Every type is on until the site switches it off.
+    typesWithSeoOff: Array.isArray(stored.typesWithSeoOff)
+      ? stored.typesWithSeoOff.filter(
+          (key): key is string => typeof key === "string"
+        )
+      : [],
     // The rules in force: the site's own for a type it chose for, else the
     // plugin's, as the page's markup reads them.
     structuredData: {
@@ -318,6 +329,46 @@ export function withHidden(
 ): SettingsDraft {
   const others = draft.hiddenTypes.filter(each => each !== key);
   return { ...draft, hiddenTypes: hidden ? [...others, key] : others };
+}
+
+/** Whether the type `key` has SEO: every type does until switched off. */
+export function isSeoOn(draft: SettingsDraft, key: string): boolean {
+  return !draft.typesWithSeoOff.includes(key);
+}
+
+/** `draft` with SEO switched on or off for the type `key`. */
+export function withSeoOn(
+  draft: SettingsDraft,
+  key: string,
+  on: boolean
+): SettingsDraft {
+  const others = draft.typesWithSeoOff.filter(each => each !== key);
+  return { ...draft, typesWithSeoOff: on ? others : [...others, key] };
+}
+
+/**
+ * The switches `draft` changes from `before`, said in plain words under the
+ * Save button ("1 change: SEO off for Authors"), each type by its name in
+ * `labels`; null where no switch changed.
+ */
+export function switchChangesText(
+  before: SettingsDraft,
+  draft: SettingsDraft,
+  labels: ReadonlyMap<string, string>
+): string | null {
+  const keys = [
+    ...new Set([...before.typesWithSeoOff, ...draft.typesWithSeoOff]),
+  ];
+  const said = keys
+    .filter(key => isSeoOn(before, key) !== isSeoOn(draft, key))
+    .map(key => ({ key, label: labels.get(key) ?? key }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+    .map(
+      ({ key, label }) =>
+        `SEO ${isSeoOn(draft, key) ? "on" : "off"} for ${label}`
+    );
+  if (said.length === 0) return null;
+  return `${said.length} ${said.length === 1 ? "change" : "changes"}: ${said.join(", ")}`;
 }
 
 /** The structured data type the type `key` chose, or none: automatic. */
@@ -548,6 +599,11 @@ export function rebasedDraft(
       before.hiddenTypes,
       after.hiddenTypes
     ),
+    typesWithSeoOff: rebasedSet(
+      draft.typesWithSeoOff,
+      before.typesWithSeoOff,
+      after.typesWithSeoOff
+    ),
     productionAddresses: rebasedSet(
       draft.productionAddresses,
       before.productionAddresses,
@@ -593,6 +649,7 @@ const MOVED_BY_PART: ReadonlySet<keyof SettingsDraft> = new Set([
   "patterns",
   "structuredData",
   "hiddenTypes",
+  "typesWithSeoOff",
   "productionAddresses",
   "socialProfiles",
   "verificationCodes",

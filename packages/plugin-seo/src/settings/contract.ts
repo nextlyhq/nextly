@@ -50,6 +50,12 @@ export interface SettingsDocumentBody {
    * the settings' own are used.
    */
   serverAddresses: string[];
+  /**
+   * Whether the reader may change the settings (the Single's update), which
+   * the Content types tab's switches need; without it they show their state
+   * and cannot be changed.
+   */
+  canChange?: boolean;
 }
 
 /** Where the settings screen reads its content types, under the plugin's routes. */
@@ -96,10 +102,23 @@ export interface PatternExample {
 }
 
 /** One content type, as the SEO settings screen lists it. */
+/**
+ * Where a content type was made: in the site's code, or in the Schema
+ * Builder.
+ */
+export type ContentTypeSource = "code" | "builder";
+
 export interface SeoContentType {
-  /** Its key in the settings' patterns: the collection's slug. */
+  /**
+   * Its key in the settings' patterns: the collection's slug, or
+   * `single:<slug>` for a Single.
+   */
   key: string;
   label: string;
+  /** Whether it is a collection or a Single. */
+  kind?: "collection" | "single";
+  /** Where it was made, where core says. */
+  source?: ContentTypeSource;
   /** The fields its title pattern may name. */
   fields: PatternField[];
   /** The newest page of the type, where the reader may see one. */
@@ -119,6 +138,13 @@ export interface SeoContentType {
 export interface SwitchedOffType {
   key: string;
   label: string;
+  kind?: "collection" | "single";
+  source?: ContentTypeSource;
+  /**
+   * Why it has no SEO: a developer left it out in the site's code, or it has
+   * its own field named `seo`, which the plugin never writes over.
+   */
+  reason?: "left-out" | "own-seo";
   /** How many entries of the type the reader may read. */
   count?: number;
   /** Whether its pages have a public address, with SEO or without. */
