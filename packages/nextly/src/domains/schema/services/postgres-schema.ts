@@ -95,7 +95,7 @@ export function resolvePostgresSchema(
  * Read only by {@link refuseMovedInstallation}. Once the new schema holds its
  * own history the flag is no longer consulted, so it never needs removing.
  */
-export const NEW_SCHEMA_INSTALL_ENV = "NEXTLY_POSTGRES_SCHEMA_NEW_INSTALL";
+const NEW_SCHEMA_INSTALL_ENV = "NEXTLY_POSTGRES_SCHEMA_NEW_INSTALL";
 
 /** The table whose presence marks a schema as holding a Nextly installation. */
 const INSTALLATION_MARKER_TABLE = "nextly_schema_events";
@@ -108,7 +108,7 @@ const INSTALLATION_MARKER_TABLE = "nextly_schema_events";
  * where an installation is OTHER than the configured schema, which a query
  * resolved through the path cannot see.
  */
-export async function schemasHoldingAnInstallation(db: {
+async function schemasHoldingAnInstallation(db: {
   execute(query: SQL): Promise<unknown>;
 }): Promise<string[]> {
   const result = await db.execute(

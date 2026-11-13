@@ -52,32 +52,38 @@ export function unqualifySchema(statement: string, schema: string): string {
   let out = "";
   let i = 0;
   while (i < statement.length) {
-    const ch = statement[i];
-    if (ch === "'") {
+    if (statement[i] === "'") {
       // Copy the literal whole, its doubled quotes included.
-      let end = i + 1;
-      while (end < statement.length) {
-        if (statement[end] === "'") {
-          if (statement[end + 1] === "'") {
-            end += 2;
-            continue;
-          }
-          break;
-        }
-        end++;
-      }
-      out += statement.slice(i, end + 1);
-      i = end + 1;
-      continue;
-    }
-    if (statement.startsWith(qualifier, i)) {
+      const end = literalEnd(statement, i);
+      out += statement.slice(i, end);
+      i = end;
+    } else if (statement.startsWith(qualifier, i)) {
       i += qualifier.length;
-      continue;
+    } else {
+      out += statement[i];
+      i++;
     }
-    out += ch;
-    i++;
   }
   return out;
+}
+
+/**
+ * Where the single-quoted literal opening at `start` ends: the index just past
+ * its closing quote, a doubled quote inside it read as part of it. An
+ * unterminated literal runs to the end of the statement.
+ */
+function literalEnd(statement: string, start: number): number {
+  let end = start + 1;
+  while (end < statement.length) {
+    if (statement[end] !== "'") {
+      end++;
+    } else if (statement[end + 1] === "'") {
+      end += 2;
+    } else {
+      return end + 1;
+    }
+  }
+  return statement.length;
 }
 
 /**

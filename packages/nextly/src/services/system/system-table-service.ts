@@ -87,12 +87,10 @@ export interface SystemMigrationSQL {
 }
 
 const POSTGRES_SQL = {
+  // Resolved through `search_path`, as every statement on the connection is,
+  // so a table in the installation's own schema is found wherever that is.
   checkTable: `
-    SELECT EXISTS (
-      SELECT FROM information_schema.tables
-      WHERE table_schema = current_schema()
-      AND table_name = $1
-    ) AS exists
+    SELECT to_regclass(quote_ident($1)) IS NOT NULL AS exists
   `,
 
   createDynamicCollections: `
