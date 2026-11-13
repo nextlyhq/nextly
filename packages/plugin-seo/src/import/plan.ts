@@ -65,13 +65,14 @@ import { SEPARATORS } from "../settings/patterns";
 import { SEO_GROUP, typedPageLevel } from "../tab/typed";
 
 import type { ImportActor } from "./actor";
-import type {
-  TypeWithOwnSeo,
-  DryRunBody,
-  ImportGroup,
-  ImportReportEntry,
-  ImportSource,
-  ImportTarget,
+import {
+  IMPORT_PARTLY_APPLIED,
+  type TypeWithOwnSeo,
+  type DryRunBody,
+  type ImportGroup,
+  type ImportReportEntry,
+  type ImportSource,
+  type ImportTarget,
 } from "./contract";
 import { declaresOtherGroups, groupsOf, OWN_FIELDS, readGroup } from "./group";
 import { readFile } from "./read-file";
@@ -250,12 +251,14 @@ const LISTED_AT_ONCE = 100;
  * The site's own types, other than those SEO is added to, that hold a field
  * of their own named `seo`: the plugin's group can't join one until that
  * field has another name, after which its values are imported from it. A
- * type SEO is added to can't hold one, since the two would clash.
+ * type SEO is added to can't hold one, since the two would clash. Only
+ * types the actor may read are named, so none is revealed to someone who
+ * can't see it.
  */
 export async function typesWithOwnSeo(
-  ctx: PluginContext,
-  targets: readonly string[]
+  engine: ImportEngine
 ): Promise<TypeWithOwnSeo[]> {
+  const { ctx, actor, setup } = engine;
   const found: TypeWithOwnSeo[] = [];
   for (let page = 1; ; page += 1) {
     const listed = await ctx.services.collections.listCollections(
@@ -264,7 +267,8 @@ export async function typesWithOwnSeo(
     );
     for (const row of listed.data) {
       const type = ownSeoOf(row);
-      if (type !== undefined && !targets.includes(type.slug)) found.push(type);
+      if (type === undefined || setup.targets.includes(type.slug)) continue;
+      if (await actor.mayRead(type.slug)) found.push(type);
     }
     if (!listed.pagination.hasMore) return found;
   }
@@ -683,18 +687,12 @@ function neverServed(
   return fromCode !== undefined && !same(fromCode, value);
 }
 
-/**
- * Notes the title or description the source holds for the report, and
- * whether `value` is left out as never served, recorded on the page.
- */
+/** Whether `value` is left out as never served, recorded on the page. */
 function leftAsNeverServed(
   at: Deciding,
   place: (typeof TEXT_PLACES)[number],
   value: string
 ): boolean {
-  if (place === "title" || place === "description") {
-    at.decision.values[place] = value;
-  }
   if (!neverServed(at, place, value)) return false;
   at.decision.neverServed.push(place);
   return true;
@@ -716,7 +714,10 @@ function decideText(at: Deciding, place: (typeof TEXT_PLACES)[number]): void {
     at.tally.unfilled++;
     return;
   }
-  if (leftAsNeverServed(at, place, value)) return;
+  // The title and description the source holds, for the report.
+  if (place === "title" || place === "description") {
+    at.decision.values[place] = value;
+  }
   if (at.unreadable.has(STORED[place])) {
     keep(at, place);
     return;
@@ -724,10 +725,13 @@ function decideText(at: Deciding, place: (typeof TEXT_PLACES)[number]): void {
   const current = textValue(at.page.seo[STORED[place]]);
   if (current !== undefined) {
     // Typed already: kept as typed, whether or not the source holds the
-    // same value. Never reported as the same as automatic, which it is not.
+    // same value. Never reported as the same as automatic, which it is not,
+    // nor as never served: a typed value wins over the route's code, so it
+    // is what the page shows.
     keep(at, place);
     return;
   }
+  if (leftAsNeverServed(at, place, value)) return;
   const automatic =
     place === "canonical"
       ? ownAddress(value, at.page, at.origins)
@@ -810,8 +814,15 @@ function decideHidden(at: Deciding): void {
   } else if (current && hidden !== undefined) {
     // Hidden by a person: kept so, whatever the source says.
     keep(at, "hidden");
-  } else if (hidden === false) {
-    // Shown, as a page is unless hidden: the same as automatic.
+  } else if (
+    hidden === false &&
+    at.page.levels.typeHidden !== true &&
+    at.page.levels.code.hidden !== true
+  ) {
+    // Shown, as a page is where nothing hides it: the same as automatic.
+    // A page its type or its route's code hides stays hidden, which the
+    // import can't change, so it is not counted as the same.
+    at.tally.same++;
     at.decision.same.push("hidden");
   }
 }
@@ -1520,7 +1531,8 @@ async function restoreSingles(
   ctx: PluginContext,
   written: readonly WrittenSingle[],
   locale: string
-): Promise<void> {
+): Promise<boolean> {
+  let restored = true;
   for (const single of [...written].reverse()) {
     try {
       await restoreSingleSeo(
@@ -1530,14 +1542,33 @@ async function restoreSingles(
         single.rev
       );
     } catch (error) {
-      // Logged rather than thrown, so the refusal that undid the import is
-      // the one the person reads.
+      // Logged, and answered as not put back, so the refusal says part of
+      // the import may be in place rather than that nothing was written.
       ctx.logger.error("An imported Single could not be put back", {
         error,
         single: single.type,
       });
+      restored = false;
     }
   }
+  return restored;
+}
+
+/**
+ * What an import refused part-way throws once its Singles were put back:
+ * the refusal itself where every one was, else one saying part of it may be
+ * in place, the refusal as its cause.
+ */
+export function refusalAfterUndo(error: unknown, restored: boolean): unknown {
+  if (restored) return error;
+  return new NextlyError({
+    code: IMPORT_PARTLY_APPLIED,
+    statusCode: 500,
+    publicMessage:
+      "The import stopped part-way, and a Single it had written could not be put back.",
+    logContext: { reason: "seo-import-singles-not-restored" },
+    ...(error instanceof Error ? { cause: error } : {}),
+  });
 }
 
 /**
@@ -1564,8 +1595,10 @@ async function writeSingles(
       );
       written.push({ type: page.type, before: entry[SEO_GROUP], rev });
     } catch (error) {
-      await restoreSingles(ctx, written, plan.locale);
-      throw error;
+      throw refusalAfterUndo(
+        error,
+        await restoreSingles(ctx, written, plan.locale)
+      );
     }
   }
   return written;
@@ -1625,8 +1658,10 @@ export async function applyImport(
       writeAll(transaction, plan, stored)
     );
   } catch (error) {
-    await restoreSingles(ctx, singles, plan.locale);
-    throw error;
+    throw refusalAfterUndo(
+      error,
+      await restoreSingles(ctx, singles, plan.locale)
+    );
   }
   // Committed: each changed page is checked again for the problem list.
   for (const page of plan.pages) {

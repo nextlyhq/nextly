@@ -733,6 +733,14 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     expect(again.status, await again.clone().text()).toBe(200);
     after = await seoBySlug(t, "pages");
     expect(after.changelog?.metaTitle).toBe("Old changelog title");
+
+    // Typed now, they win over the route's code, so checking again reports
+    // them as kept, not as never served.
+    const checked = await dryRun(staff.importer, source);
+    const typed = checked.documents.find(entry => entry.label === "Changelog");
+    expect(typed?.kept).toEqual(["title", "description"]);
+    expect(typed?.neverServed).toEqual([]);
+    expect(checked.neverServed).toBe(0);
   });
 
   it("makes the earlier plugin's typed values that match the automatic ones automatic, and keeps the rest", async () => {
@@ -1070,6 +1078,13 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       slug: "tag",
       pageSeo: { noIndex: true, metaDescription: "A tag." },
     });
+    // Listed at its source, but its type hides it here: not the same as
+    // the automatic value, which keeps it hidden.
+    await page(t, {
+      title: "Listed tag",
+      slug: "listed-tag",
+      pageSeo: { noIndex: false },
+    });
     const source: ImportSource = {
       kind: "group",
       field: "pageSeo",
@@ -1077,6 +1092,9 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     };
     const dry = await dryRun(staff.importer, source);
     expect(dry).toMatchObject({ pages: 1, same: 1 });
+    expect(
+      dry.documents.find(entry => entry.label === "Listed tag")?.same ?? []
+    ).not.toContain("hidden");
     const applied = await apply(staff.importer, source, dry.plan);
     expect(applied.status, await applied.clone().text()).toBe(200);
     expect((await seoBySlug(t, "pages")).tag?.noindex ?? false).toBe(false);
