@@ -538,10 +538,11 @@ describeEachDialect("a shared field that becomes translated", dialect => {
         ? JSON.parse(registry.fields)
         : registry?.fields
     ) as { name: string; localized?: unknown }[];
-    // Recorded, and recorded shared: a field missing from the record is another state.
+    // Recorded, and recorded shared as the seed declared it: a field missing from the record, or
+    // recorded with no answer either way, is another state.
     const heading = recorded.find(f => f.name === "heading");
     expect(heading).toBeDefined();
-    expect(heading?.localized).not.toBe(true);
+    expect(heading?.localized).toBe(false);
 
     await dialog.change(TRANSLATED);
 
