@@ -493,6 +493,34 @@ describe.each(getConfiguredTestDialects())(
       expect(await drafts(id)).toEqual({});
     }, 90_000);
 
+    // Taking one language down leaves the entry live, so the version it records says so.
+    it("records the entry still published when one language alone is unpublished", async () => {
+      const entries = await boot(dialect);
+      const id = await publishedInBoth(entries, TRANSLATED);
+
+      const unpublished = await entries.publishParts(
+        {
+          collectionName: TRANSLATED,
+          entryId: id,
+          overrideAccess: true,
+          data: { _overwrite: true },
+        },
+        { direction: "unpublish", locales: ["es"] }
+      );
+
+      expect(unpublished.success, JSON.stringify(unpublished)).toBe(true);
+      const versions = await handle!.adapter.select<{
+        versionNo: number | null;
+        status: string;
+      }>("nextly_versions", {
+        where: { and: [{ column: "entryId", op: "=", value: id }] },
+      });
+      const newest = versions
+        .filter(version => version.versionNo !== null)
+        .sort((a, b) => Number(b.versionNo) - Number(a.versionNo))[0];
+      expect(newest?.status).toBe("published");
+    }, 90_000);
+
     // The shared part shows in every live language, so publishing it asks its fields' rules in
     // each of them: a shared value the caller may not change in Spanish is not put live by a
     // publish chosen in English while Spanish is live.

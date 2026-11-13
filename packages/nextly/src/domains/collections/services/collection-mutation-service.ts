@@ -9660,6 +9660,12 @@ export class CollectionMutationService extends BaseService {
         inTransactionHandlers,
         versionConflictRetries()
       );
+      // The entry's own status once the move is done: the direction's where the shared part moves,
+      // else the one the row held under the lock, which a move of chosen languages leaves as it is.
+      const entryStatusAfter = () =>
+        movesShared(params.parts)
+          ? direction.nextStatus
+          : (lockedPreviousStatus ?? direction.nextStatus);
       await this.adapter.transaction(async tx => {
         // Lock the main row up front. One read serves three needs: it is the
         // liveness check (a row deleted between the pre-transaction read and
@@ -10227,7 +10233,7 @@ export class CollectionMutationService extends BaseService {
                 scopeSlug: params.collectionName,
                 entryId: params.entryId,
               },
-              contentStatus: direction.nextStatus,
+              contentStatus: entryStatusAfter(),
               // Tagged like every other capture: a snapshot records which
               // component its values came from, whichever path produced it.
               parts: await this.snapshotPartsFor(
@@ -10262,7 +10268,7 @@ export class CollectionMutationService extends BaseService {
         const publishedDocument = this.readShapeEventDocument(
           {
             ...(publishedParentRow ?? preImageRow),
-            status: direction.nextStatus,
+            status: entryStatusAfter(),
           },
           fields,
           tableName,
@@ -10323,7 +10329,7 @@ export class CollectionMutationService extends BaseService {
           fields: publishEventFields,
           actor: publishActor,
           publication: {
-            statusAfter: direction.nextStatus,
+            statusAfter: entryStatusAfter(),
             statusBefore: statusBeforeEveryLanguage,
             // A promotion leaves a live language published, so whether
             // this publish put pending edits live cannot be read from the
@@ -10931,7 +10937,7 @@ export class CollectionMutationService extends BaseService {
         data: withDocumentVersion(
           {
             id: params.entryId,
-            status: direction.nextStatus,
+            status: entryStatusAfter(),
             // What the publish did to each configured language, as its preview
             // says it would.
             ...(publishes ? { languages: publishLanguages } : {}),
