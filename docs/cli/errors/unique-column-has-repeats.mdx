@@ -1,0 +1,25 @@
+---
+title: UNIQUE_COLUMN_HAS_REPEATS
+description: "A migration, or `nextly migrate`'s own step, would make a column unique while its entries repeat a value."
+---
+
+## Cause
+
+A migration, or `nextly migrate`'s own step, would make a column unique while its entries repeat a value.
+
+Before a migration runs, `nextly migrate` reads the values each statement that makes a column unique would meet. A column is made unique when a field is marked Unique, or when a relationship becomes one-to-one; `nextly migrate` also makes a one-to-one unique that an earlier release left without its uniqueness. Entries that hold no value never count as repeats. The Why line names each collection, Single or table, the field or column, and how many values repeat: for a relationship, the first repeated values with how many entries hold each, and for any other field only how many entries hold the most repeated one, since its values may be private.
+
+Nothing of the migration, or of the step, was applied.
+
+## Fix
+
+Give each entry its own value, or clear the repeats, then run `nextly migrate` again. For a relationship that should allow repeats, make it many-to-one rather than one-to-one.
+
+## Example
+
+```text
+✗ `20261111_120000_profiles.sql` was not applied.
+  Why:  Collection 'profiles': field 'person' cannot become unique while 1 value repeats: "3f2c9a1e-7b44-4d2a-9c61-0e5d8b7a2f10" (2 entries).
+  Next: Give each entry its own value, or clear the repeats, then run `nextly migrate` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/unique-column-has-repeats  (UNIQUE_COLUMN_HAS_REPEATS)
+```

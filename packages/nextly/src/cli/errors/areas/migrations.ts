@@ -6,7 +6,9 @@
  */
 
 import type { DataLossVerdict } from "../../../domains/schema/migrate/data-loss-consent";
+import { UNIQUE_INDEX_NAME_HELD_ADVICE } from "../../../domains/schema/migrate/one-to-one-uniques";
 import { PLAN_CHANGED_AFTER_CONSENT } from "../../../domains/schema/migrate/plan-changed-after-consent";
+import { UNIQUE_REPEATS_ADVICE } from "../../../domains/schema/migrate/unique-column-guard";
 import { NextlyError } from "../../../errors/nextly-error";
 import { builderMigrationRemedy } from "../../utils/migration-discovery";
 import { CliError, type CliErrorParts } from "../cli-error";
@@ -623,6 +625,56 @@ export const MIGRATION_CODES = defineCodes({
             what: "A column could not be made required, because the rows in its way could not be counted.",
             why: issue?.message ?? error.publicMessage,
             next: "Check the database connection and that the table can be read, then run the command again.",
+          };
+        },
+      },
+    ],
+  },
+  UNIQUE_COLUMN_HAS_REPEATS: {
+    cause:
+      "A migration, or `nextly migrate`'s own step, would make a column unique while its entries repeat a value.",
+    from: [
+      {
+        // The refusal names what was not applied (`logContext.source`: a migration file or the
+        // run's own step) in its first sentence, then each column, each line ending in the advice.
+        code: "CONFLICT",
+        reason: "unique-column-over-repeats",
+        describe: error => {
+          const [what, rest] = splitFirst(error.publicMessage);
+          const source = String(error.logContext?.source);
+          return {
+            what: what.startsWith(source)
+              ? `\`${source}\`${what.slice(source.length)}`
+              : what,
+            why: rest.split(` ${UNIQUE_REPEATS_ADVICE}`).join("").trim(),
+            next: UNIQUE_REPEATS_ADVICE,
+          };
+        },
+      },
+    ],
+  },
+  UNIQUE_INDEX_NAME_TAKEN: {
+    cause:
+      "`nextly migrate` would make a one-to-one relationship unique under an index name another object already holds.",
+    from: [
+      {
+        // The refusal names the step, then each field with its index name and what holds it.
+        code: "CONFLICT",
+        reason: "unique-index-name-held",
+        describe: error => {
+          const message = error.publicMessage;
+          const split = message.indexOf(": ");
+          const listed =
+            split === -1
+              ? message
+              : message
+                  .slice(split + 2)
+                  .split(` ${UNIQUE_INDEX_NAME_HELD_ADVICE}`)
+                  .join("");
+          return {
+            what: `${split === -1 ? message : message.slice(0, split)}.`,
+            why: listed.trim(),
+            next: UNIQUE_INDEX_NAME_HELD_ADVICE,
           };
         },
       },
