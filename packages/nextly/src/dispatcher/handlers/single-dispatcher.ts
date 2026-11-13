@@ -1112,7 +1112,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (b.fields !== undefined) {
         // Same rules as the ui-schema.json mirror (see api/fields-payload). A field name the
         // Single already holds keeps working whatever its case.
-        assertValidFieldsPayload(b.fields, { stored: existing.fields ?? [] });
+        // A new field may not take a name the lifecycle declares, judged as the Single will be
+        // once this save lands.
+        assertValidFieldsPayload(b.fields, {
+          kind: "single",
+          stored: existing.fields ?? [],
+          lifecycleEnabled: hasStatus,
+        });
         updateData.fields = b.fields;
         updateData.schemaHash = calculateSchemaHash(b.fields);
         schemaFields = b.fields as unknown as FieldDefinition[];
@@ -1170,7 +1176,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       // A field name the Single already holds keeps working whatever its case.
-      assertValidFieldsPayload(fields, { stored: single.fields ?? [] });
+      assertValidFieldsPayload(fields, {
+        kind: "single",
+        stored: single.fields ?? [],
+        // The lifecycle as stored: this save carries fields only.
+        lifecycleEnabled: single.status === true,
+      });
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
       assertNoNewSiblingClashes(
@@ -1292,7 +1303,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           refuseChangeDefinedInCode(single, "Single", slug);
           // A field name the Single already holds keeps working whatever its case; one this save
           // creates is the Builder's own. Judged against the row as stored now.
-          assertBuilderFieldNames(fields, single.fields ?? []);
+          // A new field may not take a name the stored lifecycle declares itself.
+          assertBuilderFieldNames(fields, single.fields ?? [], {
+            surface: "single",
+            lifecycleEnabled: single.status === true,
+          });
           // A pair of sibling fields this save would create is refused before any statement or archive
           // write; one the entity already holds keeps working. Asked here because this road reaches its
           // DDL through no shared service that could ask it.

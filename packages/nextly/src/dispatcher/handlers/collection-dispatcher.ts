@@ -780,6 +780,8 @@ const COLLECTIONS_METHODS: Record<
       assertValidFieldsPayload(fields, {
         kind: "collection",
         stored: collection.fields ?? [],
+        // The lifecycle as stored: this save carries fields only.
+        lifecycleEnabled: collection.status === true,
       });
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
@@ -980,7 +982,11 @@ const COLLECTIONS_METHODS: Record<
           refuseChangeDefinedInCode(collection, "collection", p.collectionName);
           // A field name the collection already holds keeps working whatever its case; one this
           // save creates is the Builder's own. Judged against the row as stored now.
-          assertBuilderFieldNames(fields, collection.fields ?? []);
+          // A new field may not take a name the stored lifecycle declares itself.
+          assertBuilderFieldNames(fields, collection.fields ?? [], {
+            surface: "collection",
+            lifecycleEnabled: collection.status === true,
+          });
           // A pair of sibling fields this save would create is refused before any statement or
           // archive write; one the entity already holds keeps working. Asked here because this
           // road reaches its DDL through no shared service that could ask it.

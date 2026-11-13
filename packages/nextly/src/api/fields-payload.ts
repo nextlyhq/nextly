@@ -16,22 +16,16 @@
  */
 import { z } from "zod";
 
-import { NextlyError } from "../errors/nextly-error";
 import {
-  BUILDER_FIELD_NAME_RE,
-  uiSchemaFieldSchema,
-} from "../schemas/_zod/ui-schema";
+  fieldNameProblem,
+  type FieldNameSurface,
+  isCollectionOnlyFieldName,
+} from "../domains/dynamic-collections/field-name-rule";
+import { NextlyError } from "../errors/nextly-error";
+import { uiSchemaFieldSchema } from "../schemas/_zod/ui-schema";
 import { pluginFieldOptionIssues } from "../shared/lib/plugin-field-options";
 
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
-
-/**
- * The collection owner column (`created_by`) — plus the camelCase alias config
- * validation accepts, which snake-cases to the same column. Reserved only for
- * collections: single/component tables have no owner column, so these are legal
- * field names there.
- */
-const COLLECTION_OWNER_RESERVED = new Set(["created_by", "createdBy"]);
 
 // Whether two fields clash is not judged here. A payload alone cannot say
 // whether a pair of sibling fields is new or one the entity already holds,
@@ -108,12 +102,16 @@ export function assertValidPluginFieldOptions(fields: unknown): void {
  *   held to the Builder's own. `"under-lock"` leaves the names to the caller,
  *   which reads the stored fields only once it holds the schema lock and asks
  *   `assertBuilderFieldNames` there, before any write.
+ * @param opts.lifecycleEnabled - Whether the collection's or Single's
+ *   Draft/Published lifecycle is on once the save lands, so a new field may not
+ *   take one of the lifecycle's own names.
  */
 export function assertValidFieldsPayload(
   fields: unknown,
   opts: {
     kind?: "collection" | "single" | "component";
     stored?: readonly unknown[] | "under-lock";
+    lifecycleEnabled?: boolean;
   } = {}
 ): void {
   const parsed = fieldsArraySchema.safeParse(fields);
@@ -122,12 +120,17 @@ export function assertValidFieldsPayload(
   }
   assertValidPluginFieldOptions(fields);
   if (opts.stored !== "under-lock") {
-    assertBuilderFieldNames(fields, opts.stored ?? []);
+    assertBuilderFieldNames(fields, opts.stored ?? [], {
+      surface: surfaceOf(opts.kind),
+      lifecycleEnabled: opts.lifecycleEnabled,
+    });
   }
+  // Every name, kept ones included: a collection's own system column is never
+  // a field of it, whenever the field was saved.
   if (opts.kind === "collection" && Array.isArray(fields)) {
     fields.forEach((field, index) => {
       const name = (field as { name?: unknown } | null)?.name;
-      if (typeof name === "string" && COLLECTION_OWNER_RESERVED.has(name)) {
+      if (typeof name === "string" && isCollectionOnlyFieldName(name)) {
         throw NextlyError.validation({
           errors: [
             {
@@ -140,6 +143,23 @@ export function assertValidFieldsPayload(
       }
     });
   }
+}
+
+/** The name rule's surface for a payload's entity kind; absent stays absent. */
+function surfaceOf(
+  kind: "collection" | "single" | "component" | undefined
+): FieldNameSurface | undefined {
+  return kind === "component" ? "fieldGroup" : kind;
+}
+
+/**
+ * The entity a payload's names are judged for: its kind and whether its
+ * Draft/Published lifecycle is on. Unstated, only the rules every kind of
+ * entity shares are asked.
+ */
+export interface FieldNamesEntity {
+  surface?: FieldNameSurface;
+  lifecycleEnabled?: boolean;
 }
 
 /** A field as its name and nested fields are read here. */
@@ -159,16 +179,22 @@ function fieldNames(list: unknown): readonly FieldName[] {
 }
 
 /**
- * Refuses a field, at any depth, whose name is neither the Builder's own
- * (`BUILDER_FIELD_NAME_RE`) nor one `stored` already holds at the same place.
- * The definition file takes a camelCase name a plugin or the API declared, and
- * the admin sends every field the entity has on each save, so such a name
- * keeps working where it is stored; a name the save creates, or one moved to
- * another place, is the Builder's and so is snake case.
+ * Refuses a field, at any depth, whose name is new at its place (not one
+ * `stored` already holds there) and breaks the Builder's name rule for that
+ * place (`fieldNameProblem`): its spelling, a column longer than the database
+ * keeps whole, a system column's name, or a name the entity's lifecycle owns.
+ *
+ * A name the entity already holds keeps working where it is stored. The
+ * definition file takes a camelCase name a plugin or the API declared, and a
+ * `status` field may predate the lifecycle being turned on; the admin sends
+ * every field the entity has on each save, so refusing those would refuse
+ * every later edit. A name the save creates, renames to, or moves to another
+ * place is the Builder's, and is held to the whole rule.
  */
 export function assertBuilderFieldNames(
   fields: unknown,
   stored: readonly unknown[],
+  entity: FieldNamesEntity = {},
   path = ""
 ): void {
   const held = new Map<string, FieldName>();
@@ -179,18 +205,18 @@ export function assertBuilderFieldNames(
     const at = `${path}${index}`;
     const kept =
       typeof field.name === "string" ? held.get(field.name) : undefined;
-    if (
-      typeof field.name === "string" &&
-      kept === undefined &&
-      !BUILDER_FIELD_NAME_RE.test(field.name)
-    ) {
+    const problem =
+      typeof field.name === "string" && kept === undefined
+        ? fieldNameProblem(field.name, {
+            surface: entity.surface,
+            nested: path !== "",
+            lifecycleEnabled: entity.lifecycleEnabled,
+          })
+        : null;
+    if (problem !== null) {
       throw NextlyError.validation({
         errors: [
-          {
-            path: `${at}.name`,
-            code: "INVALID_FIELD_NAME",
-            message: `field name must match ${BUILDER_FIELD_NAME_RE.source}`,
-          },
+          { path: `${at}.name`, code: problem.code, message: problem.message },
         ],
       });
     }
@@ -198,6 +224,7 @@ export function assertBuilderFieldNames(
       assertBuilderFieldNames(
         field.fields,
         fieldNames(kept?.fields),
+        entity,
         `${at}.fields.`
       );
     }

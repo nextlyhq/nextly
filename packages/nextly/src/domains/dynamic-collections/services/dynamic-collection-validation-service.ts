@@ -22,6 +22,11 @@ import {
   toSnakeCase,
   usesJunctionTable,
 } from "../../schema/services/field-column-descriptor";
+import {
+  fieldNameProblem,
+  type FieldNameProblemKind,
+  MAX_FIELD_COLUMN_LENGTH,
+} from "../field-name-rule";
 
 const MAX_REGEX_PATTERN_LENGTH = 200;
 
@@ -65,34 +70,48 @@ export const RESERVED_FIELD_NAMES: readonly string[] =
 export const collectionNameSchema = addressSchema("collection");
 
 /**
- * The longest identifier every supported database keeps whole: PostgreSQL
- * truncates past 63 characters, so a longer column name would not be the one
- * the write path asks for.
+ * How this road words each rule the shared field-name rule reports. The rule decides; the wording
+ * stays the one this road has always answered with.
  */
-const MAX_COLUMN_NAME_LENGTH = 63;
+const FIELD_NAME_MESSAGES: Record<FieldNameProblemKind, string> = {
+  spelling:
+    "Field name must start with a lowercase letter and contain only letters, numbers, and underscores",
+  "column-too-long": `Field name's column would be longer than ${MAX_FIELD_COLUMN_LENGTH} characters`,
+  reserved: "Field name is reserved",
+  lifecycle: "Field name is reserved",
+};
 
 // A field keeps the name it is given, camelCase included, as on every other
 // road; its column is `toSnakeCase(name)`. So each rule that protects a column
 // is checked against that column, not only against the name as written.
+//
+// The spelling, the column's length and the system columns' names are the
+// shared field-name rule's (`field-name-rule`), asked for a collection's top
+// level with the camelCase this road accepts. The length cap, the wider
+// reserved list and the SQL keywords are this road's own: the Builder's field
+// save takes those names, so they are not part of the shared rule.
 export const fieldNameSchema = z
   .string()
   .min(1, "Field name cannot be empty")
   .max(50, "Field name must be 50 characters or less")
-  .regex(
-    /^[a-z][a-zA-Z0-9_]*$/,
-    "Field name must start with a lowercase letter and contain only letters, numbers, and underscores"
-  )
+  .superRefine((name, ctx) => {
+    const problem = fieldNameProblem(name, {
+      surface: "collection",
+      nested: false,
+      spelling: "declared",
+    });
+    if (problem !== null) {
+      ctx.addIssue({
+        code: "custom",
+        message: FIELD_NAME_MESSAGES[problem.kind],
+      });
+    }
+  })
   .refine(
     (name: string) =>
       !RESERVED_FIELD_NAMES.includes(name) &&
       !RESERVED_FIELD_NAMES.includes(toSnakeCase(name)),
     { message: "Field name is reserved" }
-  )
-  .refine(
-    (name: string) => toSnakeCase(name).length <= MAX_COLUMN_NAME_LENGTH,
-    {
-      message: `Field name's column would be longer than ${MAX_COLUMN_NAME_LENGTH} characters`,
-    }
   )
   .refine(
     (name: string) => !SQL_KEYWORDS.includes(name.toLowerCase() as never),

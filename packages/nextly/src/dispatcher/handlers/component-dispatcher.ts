@@ -527,7 +527,10 @@ export const COMPONENTS_METHODS: Record<
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       // A field name the field group already holds keeps working whatever its case.
-      assertValidFieldsPayload(fields, { stored: component.fields ?? [] });
+      assertValidFieldsPayload(fields, {
+        kind: "component",
+        stored: component.fields ?? [],
+      });
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
       assertNoNewSiblingClashes(
@@ -672,7 +675,9 @@ export const COMPONENTS_METHODS: Record<
           assertNotDiverged(slug, component);
           // A field name the field group already holds keeps working whatever its case; one this
           // save creates is the Builder's own. Judged against the fields as stored now.
-          assertBuilderFieldNames(fields, component.fields ?? []);
+          assertBuilderFieldNames(fields, component.fields ?? [], {
+            surface: "fieldGroup",
+          });
           // A pair of sibling fields this save would create is refused before any statement or
           // archive write, against the fields as stored now; one the field group already holds keeps
           // working. Asked here because this road reaches its DDL through no shared service.
