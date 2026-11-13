@@ -59,8 +59,6 @@ const BANNER = "rwsitebanner";
 const TARGETS = "rwtargets";
 /** A field group, placed inside a group of the Single under test. */
 const HERO = "rwsitehero";
-/** Translated, versions kept, with no drafts. */
-const TAGLINED = "rwtaglinesite";
 const PLUGIN = "@test/single-rewriter";
 const REASON = "Layout 'Wide' was deleted";
 const EDITOR = { id: "rw-single-editor" };
@@ -854,25 +852,25 @@ describe.each(getConfiguredTestDialects())(
 
     it("records a shared rewrite in the default language where its translation row is blank", async () => {
       const t = await boot(dialect, true);
-      await save(
-        t,
-        TAGLINED,
-        { layout: "wide", tagline: null, status: "published" },
-        "en"
-      );
+      // English's row is written with the status alone: its title is blank.
+      await save(t, LOCALIZED, { layout: "wide", status: "published" }, "en");
+      // POPULATION CONTROL: the translation row holds no value.
+      expect(
+        (await read(t, LOCALIZED, { locale: "en" })).title ?? null
+      ).toBeNull();
       await t.nextly.rewriteField({
-        single: TAGLINED,
+        single: LOCALIZED,
         field: "layout",
-        expectedVersion: await versionOf(t, TAGLINED, "en"),
+        expectedVersion: await versionOf(t, LOCALIZED, "en"),
         set: { value: "narrow" },
         reason: REASON,
       });
       const { items } = await t.nextly.versions.list({
-        single: TAGLINED,
+        single: LOCALIZED,
       } as never);
       const newest = items[0] as { versionNo: number; locale?: string | null };
       const version = await t.nextly.versions.get({
-        single: TAGLINED,
+        single: LOCALIZED,
         versionNo: newest.versionNo,
       } as never);
       const snapshot = (

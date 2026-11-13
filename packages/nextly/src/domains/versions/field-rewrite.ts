@@ -264,7 +264,7 @@ export interface RewritableFieldShape {
   readonly name?: string;
   readonly type: string;
   /** A group's or repeater's own fields. */
-  readonly fields?: readonly RewritableFieldShape[];
+  readonly fields?: RewritableFieldShape[];
   readonly unique?: boolean;
   readonly virtual?: boolean;
   readonly hasMany?: boolean;
