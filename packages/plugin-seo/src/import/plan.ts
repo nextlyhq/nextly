@@ -1993,45 +1993,17 @@ async function putBack(plan: ImportPlan, written: Written): Promise<boolean> {
   let restored = true;
   for (const page of [...written].reverse()) {
     try {
-      // Read again, as stored: put back at the revision it is at now, and
-      // only while it still holds what the import wrote, so a save someone
-      // made since is never undone.
-      // A draft made since waits beside it: putting its live row back would
-      // publish the draft, so it is left, and said to be left.
-      if (page.write === "live" && (await draftWaitsNow(page))) {
-        plan.engine.ctx.logger.warn(
-          "An imported version has a draft waiting now, so it is not put back",
-          { type: page.type, id: page.id, locale: page.locale }
-        );
+      const left = await leftWhereItIs(page);
+      if (left !== undefined) {
+        plan.engine.ctx.logger.warn(left, {
+          type: page.type,
+          id: page.id,
+          locale: page.locale,
+        });
         restored = false;
         continue;
       }
-      const now = await storedVersion(page);
-      // A draft published or discarded since is no draft to put back: a
-      // save now would make a new one.
-      if (
-        page.write === "held" &&
-        !(isRecord(now) && now._isWorkingDraft === true)
-      ) {
-        plan.engine.ctx.logger.warn(
-          "An imported draft is no longer a draft, so it is not put back",
-          { type: page.type, id: page.id, locale: page.locale }
-        );
-        restored = false;
-        continue;
-      }
-      const rev = isRecord(now) ? now._rev : undefined;
-      const back = undoneGroup(now, page);
-      // Nothing of the import's is there any more: someone changed every
-      // place since, or the write kept none of it.
-      if (back === undefined) continue;
-      await writeVersion(
-        plan,
-        page,
-        back,
-        typeof rev === "string" ? rev : undefined,
-        "site"
-      );
+      await putOneBack(plan, page);
     } catch (error) {
       // Logged, and answered as not put back, so the refusal says part of
       // the import may be in place rather than that nothing was written.
@@ -2049,6 +2021,44 @@ async function putBack(plan: ImportPlan, written: Written): Promise<boolean> {
     }
   }
   return restored;
+}
+
+/**
+ * Why a written version can't be put back now without changing more than
+ * the import did, or none: a draft made since beside a published version
+ * (putting its live row back would publish the draft), or a draft
+ * published or discarded since (a save now would make a new one).
+ */
+async function leftWhereItIs(page: PlannedPage): Promise<string | undefined> {
+  if (page.write === "live" && (await draftWaitsNow(page))) {
+    return "An imported version has a draft waiting now, so it is not put back";
+  }
+  if (page.write !== "held") return undefined;
+  const now = await storedVersion(page);
+  return isRecord(now) && now._isWorkingDraft === true
+    ? undefined
+    : "An imported draft is no longer a draft, so it is not put back";
+}
+
+/**
+ * Put one written version back, read again as stored: at the revision it
+ * is at now, and only in the places still holding what the import wrote,
+ * so a save someone made since is never undone.
+ */
+async function putOneBack(plan: ImportPlan, page: PlannedPage): Promise<void> {
+  const now = await storedVersion(page);
+  const back = undoneGroup(now, page);
+  // Nothing of the import's is there any more: someone changed every place
+  // since, or the write kept none of it.
+  if (back === undefined) return;
+  const rev = isRecord(now) ? now._rev : undefined;
+  await writeVersion(
+    plan,
+    page,
+    back,
+    typeof rev === "string" ? rev : undefined,
+    "site"
+  );
 }
 
 /**
