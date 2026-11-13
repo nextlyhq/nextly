@@ -665,6 +665,42 @@ describe.each(LOCK_DIALECTS)(
       120_000
     );
 
+    it.runIf(dialect === "postgresql")(
+      "adopts no unique index a failed concurrent build left the database unable to use",
+      async () => {
+        await run([profile("p1", "ada"), profile("p2", "ada")]);
+        // A file's concurrent build over a repeat fails and leaves its index behind, marked
+        // invalid; the same statement is what the file holds when it is run again.
+        const statement = `CREATE UNIQUE INDEX CONCURRENTLY ${q(UNIQUE)} ON ${q(PROFILES)} (${q("person")})`;
+        const failed = await run([statement]).then(
+          () => false,
+          () => true
+        );
+        expect(failed).toBe(true);
+        await run([`DELETE FROM ${q(PROFILES)} WHERE ${q("id")} = 'p2'`]);
+        // The live snapshot still reads it as the unique index the file creates.
+        const live = await introspectLiveSnapshot(
+          adapter.getDrizzle(),
+          dialect,
+          [PROFILES]
+        );
+        expect(
+          live.tables[0]?.indexes?.some(
+            index => index.name === UNIQUE && index.unique
+          )
+        ).toBe(true);
+
+        const adoption = await adoptUniqueIndexesAlreadyThere(
+          adapter.getDrizzle(),
+          dialect,
+          [statement]
+        );
+
+        expect(adoption).toEqual({ statements: [statement], adopted: [] });
+      },
+      120_000
+    );
+
     it("counts no blank as a repeat where the index leaves blanks out", async () => {
       const codes = "dc_unique_codes";
       await run([

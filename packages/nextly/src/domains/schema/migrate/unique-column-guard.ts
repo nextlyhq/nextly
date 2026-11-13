@@ -32,6 +32,7 @@ import {
   introspectLiveColumns,
   introspectLiveSnapshot,
   introspectTableNames,
+  introspectUnusableIndexes,
 } from "../pipeline/diff/introspect-live";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { readUniqueColumns } from "../pipeline/live-table-facts";
@@ -773,7 +774,8 @@ function dropsTableOrIndex(
  * the file creates as new is adopted: not one it re-creates after an earlier statement of its own
  * drops the table or the index (a SQLite rebuild re-creates every index of the table it rebuilds),
  * and not one the file's snapshot before it records. A table the database does not have yet
- * carries nothing to adopt.
+ * carries nothing to adopt, and an index the database cannot use (not valid or not ready) is not
+ * adopted.
  *
  * @param recordedBefore the schema the file's own snapshot says it starts from, where it has one
  */
@@ -804,6 +806,12 @@ export async function adoptUniqueIndexesAlreadyThere(
       continue;
     }
     const live = await introspectLiveSnapshot(db, dialect, [created.table]);
+    // PostgreSQL keeps the index a failed or interrupted `CREATE INDEX CONCURRENTLY` left behind,
+    // under its name, but checks no value against it: such an index is not the file's, and the
+    // file's create runs and meets it.
+    const unusable = await introspectUnusableIndexes(db, dialect, [
+      created.table,
+    ]);
     // Only an index holding the whole column, as the file's does: one with a predicate or over an
     // expression leaves values outside it free to repeat.
     const there = live.tables[0]?.indexes?.some(
@@ -811,6 +819,7 @@ export async function adoptUniqueIndexesAlreadyThere(
         index.unique &&
         index.where === undefined &&
         index.expression === undefined &&
+        !unusable.has(index.name.toLowerCase()) &&
         index.name.toLowerCase() === created.name &&
         index.columns.length === 1 &&
         index.columns[0].toLowerCase() === created.columns[0]
