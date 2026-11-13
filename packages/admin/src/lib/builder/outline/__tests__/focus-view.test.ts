@@ -6,7 +6,12 @@ import {
   nestedFixtureFields,
 } from "@admin/components/features/schema-builder/__fixtures__/nested-fixture";
 
-import { canFocus, focusFallback, focusView } from "../focus-view";
+import {
+  canFocus,
+  focusFallback,
+  focusHolding,
+  focusView,
+} from "../focus-view";
 import {
   buildOutline,
   flattenOutline,
@@ -118,5 +123,17 @@ describe("focusFallback", () => {
 
   it("returns null when none of the crumbs is there", () => {
     expect(focusFallback(outline(), ["f-gone", "f-also-gone"])).toBeNull();
+  });
+});
+
+describe("focusHolding", () => {
+  it("is the nearest container above a field that may be focused", () => {
+    expect(focusHolding(outline(), "f-cta-label")).toBe("f-items-cta");
+    expect(focusHolding(outline(), "f-meta-title")).toBe("f-meta");
+  });
+
+  it("is null for a top-level field or one no longer there", () => {
+    expect(focusHolding(outline(), "f-summary-a")).toBeNull();
+    expect(focusHolding(outline(), "f-gone")).toBeNull();
   });
 });

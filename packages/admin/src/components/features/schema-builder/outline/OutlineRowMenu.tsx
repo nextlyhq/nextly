@@ -20,6 +20,7 @@ import { extractFieldGroupReferences } from "nextly/field-group-type";
 import type { JSX } from "react";
 
 import { MoreHorizontal } from "@admin/components/icons";
+import { canFocus } from "@admin/lib/builder/outline/focus-view";
 import {
   describeReadOnly,
   type OutlineNode,
@@ -99,6 +100,13 @@ export function OutlineRowMenu({
         {group && (
           <DropdownMenuItem onSelect={() => actions.openFieldGroup(group.slug)}>
             Open the field group {group.label}
+          </DropdownMenuItem>
+        )}
+        {/* Showing a container on its own changes nothing, so a read-only
+            one offers it too. */}
+        {actions.focusContainer && canFocus(node) && (
+          <DropdownMenuItem onSelect={() => actions.focusContainer?.(id)}>
+            Focus
           </DropdownMenuItem>
         )}
         {readOnly ? (

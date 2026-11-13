@@ -21,6 +21,7 @@ import { useCallback, useEffect, useId, useMemo, useState } from "react";
 
 import { usePersistedStringSet } from "@admin/hooks/usePersistedState";
 import type { BuilderFieldError } from "@admin/lib/builder/field-validators";
+import { focusHolding } from "@admin/lib/builder/outline/focus-view";
 import {
   containerPaths,
   flattenOutline,
@@ -33,8 +34,9 @@ import type { BuilderKind } from "../builder-config";
 import { EmptyState } from "../builder-field-list/EmptyState";
 import type { BuilderField } from "../types";
 
+import { FocusCrumbs } from "./FocusCrumbs";
 import { MoveToDialog } from "./MoveToDialog";
-import type { OutlineCallbacks } from "./outline-types";
+import type { OutlineActions, OutlineCallbacks } from "./outline-types";
 import { OutlineToolbar } from "./OutlineToolbar";
 import { OutlineTree } from "./OutlineTree";
 import { SystemFieldsContainer } from "./SystemFieldsContainer";
@@ -44,6 +46,7 @@ import {
   type OutlineActionState,
 } from "./useOutlineActions";
 import { useOutlineDrag } from "./useOutlineDrag";
+import { useOutlineFocus, type OutlineFocus } from "./useOutlineFocus";
 import { rowIdOf, useTreeKeyDown } from "./useTreeKeyDown";
 
 export type { OutlineCallbacks } from "./outline-types";
@@ -97,7 +100,8 @@ function useRefocusAfterMove(
   rows: readonly VisibleRow[],
   nodes: readonly OutlineNode[],
   folded: ReadonlySet<string>,
-  setFolded: (update: (prev: Set<string>) => Set<string>) => void
+  setFolded: (update: (prev: Set<string>) => Set<string>) => void,
+  focus: OutlineFocus
 ): void {
   useEffect(() => {
     const drawn = (id: string) => rows.some(row => row.node.id === id);
@@ -105,6 +109,18 @@ function useRefocusAfterMove(
     if (id === null) return;
     if (drawn(id)) {
       state.focusRow(id, true);
+      return;
+    }
+    // A move took the field out of the focused container: Focus follows it to
+    // the container holding it now, or ends at the top level, so the field
+    // stays in view and keeps focus. The asked-for refocus waits for that.
+    const { focused } = focus.view;
+    if (
+      focused &&
+      !flattenOutline(focused.children).some(node => node.id === id) &&
+      flattenOutline(nodes).some(node => node.id === id)
+    ) {
+      focus.show(focusHolding(nodes, id));
       return;
     }
     const closed = ancestorPaths(nodes, id).filter(path => folded.has(path));
@@ -117,6 +133,20 @@ function useRefocusAfterMove(
       for (const path of closed) next.delete(path);
       return next;
     });
+  });
+}
+
+/** Keyboard focus on the row a change of Focus asked for, once it is drawn. */
+function useReturnAfterFocus(
+  focus: OutlineFocus,
+  rows: readonly VisibleRow[],
+  state: OutlineActionState
+): void {
+  useEffect(() => {
+    const id = focus.takeReturn(target =>
+      rows.some(row => row.node.id === target)
+    );
+    if (id !== null) state.focusRow(id, true);
   });
 }
 
@@ -151,14 +181,30 @@ function useOutlineView(
   const [query, setQuery] = useState("");
   const [preview, setPreview] = useState(false);
   const state = useOutlineActions(nodes, callbacks);
+  const focus = useOutlineFocus(nodes);
+  const { view: shown } = focus;
   const rows = useMemo(
-    () => visibleRows(nodes, folded, query, typeLabel),
-    [nodes, folded, query, typeLabel]
+    () => visibleRows(shown.nodes, folded, query, typeLabel, shown.rootLevel),
+    [shown, folded, query, typeLabel]
   );
-  useRefocusAfterMove(state, rows, nodes, folded, setFolded);
+  // Focus is one more action on a row: once a container is shown on its own,
+  // its first field takes keyboard focus, since its own row is not drawn.
+  const actions = useMemo<OutlineActions>(
+    () => ({
+      ...state.actions,
+      focusContainer: id =>
+        focus.show(id, [
+          flattenOutline(nodes).find(node => node.id === id)?.children[0]?.id ??
+            null,
+        ]),
+    }),
+    [state.actions, focus, nodes]
+  );
+  useRefocusAfterMove(state, rows, nodes, folded, setFolded, focus);
+  useReturnAfterFocus(focus, rows, state);
   const onKeyDown = useTreeKeyDown({
     rows,
-    actions: state.actions,
+    actions,
     focusRow: state.focusRow,
     toggle,
   });
@@ -177,6 +223,8 @@ function useOutlineView(
     preview,
     setPreview,
     state,
+    actions,
+    focus,
     rows,
     finding: query.trim() !== "",
     onKeyDown,
@@ -209,7 +257,7 @@ export function Outline({
       selectedId={selectedId}
       tabStopId={tabStopOf(rows, state.focusedId, selectedId)}
       menuFor={state.menuFor}
-      actions={state.actions}
+      actions={view.actions}
       registerRow={state.registerRow}
       onToggle={view.toggle}
       onAddAt={callbacks.addAt}
@@ -230,6 +278,25 @@ export function Outline({
         preview={view.preview}
         onPreviewChange={view.setPreview}
       />
+      {view.focus.view.focused && (
+        <FocusCrumbs
+          crumbs={view.focus.view.crumbs}
+          // Back with the selection kept: focus goes to the selected field if
+          // that level draws it, else to the container that was focused.
+          onGo={id =>
+            view.focus.show(id, [
+              selectedId,
+              view.focus.view.focused?.id ?? null,
+            ])
+          }
+          onExit={() =>
+            view.focus.show(null, [
+              selectedId,
+              view.focus.view.focused?.id ?? null,
+            ])
+          }
+        />
+      )}
       <OutlineBody
         kind={kind}
         preview={view.preview}
@@ -240,7 +307,12 @@ export function Outline({
         onAddAtEnd={() => callbacks.addAt({})}
         tree={tree}
       />
-      <OutlineMoves state={state} fields={callbacks.fields} keysId={movesId} />
+      <OutlineMoves
+        state={state}
+        actions={view.actions}
+        fields={callbacks.fields}
+        keysId={movesId}
+      />
       {/* Mounted from the start, so a screen reader is already watching it
           when a move is announced. */}
       <div aria-live="polite" className="sr-only">
@@ -256,14 +328,16 @@ export function Outline({
  */
 function OutlineMoves({
   state,
+  actions,
   fields,
   keysId,
 }: {
   state: OutlineActionState;
+  actions: OutlineActions;
   fields: OutlineCallbacks["fields"];
   keysId: string;
 }): JSX.Element {
-  const refusedHere = useOutlineDrag(state.actions);
+  const refusedHere = useOutlineDrag(actions);
   return (
     <>
       {refusedHere && <p className="text-sm text-destructive">{refusedHere}</p>}
@@ -276,7 +350,7 @@ function OutlineMoves({
         <MoveToDialog
           fieldId={state.moveToFor}
           fields={fields}
-          actions={state.actions}
+          actions={actions}
           onClose={state.closeMoveTo}
         />
       )}

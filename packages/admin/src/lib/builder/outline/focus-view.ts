@@ -83,3 +83,20 @@ export function focusFallback(
   }
   return null;
 }
+
+/**
+ * The focus that keeps `id` in view: the nearest container above it that may be focused, or null
+ * for the top level. After a move takes a field out of the focused container, Focus steps here so
+ * the field stays drawn and keeps focus.
+ */
+export function focusHolding(
+  nodes: readonly OutlineNode[],
+  id: string
+): string | null {
+  const chain = chainTo(nodes, id);
+  if (!chain) return null;
+  for (let at = chain.length - 2; at >= 0; at--) {
+    if (canFocus(chain[at])) return chain[at].id;
+  }
+  return null;
+}
