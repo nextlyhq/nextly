@@ -122,7 +122,10 @@ import {
   settingsDocumentRoute,
 } from "./settings/content-types-route";
 import { SETTINGS_PAGE, SETTINGS_PAGE_HREF } from "./settings/contract";
-import { robotsRulesCheckRoute } from "./settings/robots-rules-route";
+import {
+  robotsRulesCheckRoute,
+  sitemapPaths,
+} from "./settings/robots-rules-route";
 import {
   readBrandFacts,
   readSeoRules,
@@ -679,6 +682,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const problemChecks = {
     targets,
     singles: singleTargets,
+    // Whether the plugin serves robots.txt, so its rules can block a page.
+    servesRobots: options.robots !== false,
     readers: {
       readRules,
       readStructuredDataRules: structuredDataFromSettings(
@@ -922,19 +927,21 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       readRules,
       aiCrawlers: options.aiCrawlers,
       listPaths: async ctx =>
-        (
-          await listPages(ctx, {
-            // Only the paths are read, so any origin makes them absolute.
-            origin: "http://localhost",
-            readRules,
-            readStructuredDataRules:
-              problemChecks.readers.readStructuredDataRules,
-            codeRoutes,
-            ...(sitemapSubset === undefined
-              ? {}
-              : { collections: sitemapSubset }),
-          })
-        ).pages.map(page => page.path),
+        sitemapPaths(
+          (
+            await listPages(ctx, {
+              // Only each address's path is read, which no origin changes.
+              origin: "http://localhost",
+              readRules,
+              readStructuredDataRules:
+                problemChecks.readers.readStructuredDataRules,
+              codeRoutes,
+              ...(sitemapSubset === undefined
+                ? {}
+                : { collections: sitemapSubset }),
+            })
+          ).pages
+        ),
     }),
     settingsDocumentRoute(),
     // What the redirects screen reads and writes.

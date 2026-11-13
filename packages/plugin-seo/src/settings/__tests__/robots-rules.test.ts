@@ -211,3 +211,36 @@ describe("blockingRule", () => {
     expect(blockingRule(file, "GPTBot", "/blog")?.line).toBe(2);
   });
 });
+
+describe("reading rules as crawlers do, at any size", () => {
+  it("judges a rule of many wildcards at once, never by backtracking", () => {
+    const text = `User-agent: *\nDisallow: /${"*".repeat(98)}z`;
+    const started = performance.now();
+    const read = readOwnRules(text);
+    expect(performance.now() - started).toBeLessThan(200);
+    expect(read.refused).toBe(false);
+    const file = groupsOf(`User-agent: *\nDisallow: /${"*a".repeat(200)}z`);
+    const again = performance.now();
+    expect(blockingRule(file, "x", `/${"a".repeat(400)}`)).toBeUndefined();
+    expect(performance.now() - again).toBeLessThan(200);
+  });
+
+  it("ends a run of User-agent lines at any rule, an empty one included", () => {
+    const text =
+      "User-agent: Googlebot\nDisallow:\nUser-agent: GPTBot\nDisallow: /";
+    expect(refusals(text)).toEqual([]);
+    expect(blockingRule(groupsOf(text), "googlebot", "/a")).toBeUndefined();
+    expect(blockingRule(groupsOf(text), "gptbot", "/a")?.line).toBe(4);
+  });
+
+  it("compares paths and rules with their encodings made one", () => {
+    const file = groupsOf("User-agent: *\nDisallow: /café\nDisallow: /%62log");
+    expect(blockingRule(file, "x", "/caf%C3%A9/menu")?.line).toBe(2);
+    expect(blockingRule(file, "x", "/caf%c3%a9")?.line).toBe(2);
+    expect(blockingRule(file, "x", "/blog/a")?.line).toBe(3);
+    // A reserved character keeps its meaning: %2F is not a path's slash.
+    expect(
+      blockingRule(groupsOf("User-agent: *\nDisallow: /a/b"), "x", "/a%2Fb")
+    ).toBeUndefined();
+  });
+});

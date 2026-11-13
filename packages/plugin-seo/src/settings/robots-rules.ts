@@ -47,6 +47,11 @@ export interface RuleGroup {
   /** The line of each name, by name, for what is said about it. */
   agentLines: { agent: string; written: string; line: number }[];
   rules: PathRule[];
+  /**
+   * Whether an allow or disallow line followed its names, an empty one
+   * included: a name after that starts a group of its own.
+   */
+  ruled?: boolean;
 }
 
 /** One line read as a `name: value` field, where it is one. */
@@ -156,9 +161,14 @@ function addToGroups(groups: RuleGroup[], read: ReadLine): void {
     addAgent(groups, current, read);
     return;
   }
-  // An empty rule allows everything, which is no rule at all; a rule before
-  // any group belongs to none.
-  if ((field === "allow" || field === "disallow") && current && value !== "") {
+  // A rule before any group belongs to none.
+  if ((field !== "allow" && field !== "disallow") || current === undefined) {
+    return;
+  }
+  // Any rule ends the group's names, an empty one too, though an empty rule
+  // allows everything and so adds nothing to match.
+  current.ruled = true;
+  if (value !== "") {
     current.rules.push({
       allow: field === "allow",
       pattern: value,
@@ -177,7 +187,7 @@ function addAgent(
   read: ReadLine
 ): void {
   let group = current;
-  if (group === undefined || group.rules.length > 0) {
+  if (group === undefined || group.ruled === true) {
     group = { agents: [], agentLines: [], rules: [] };
     groups.push(group);
   }
@@ -188,15 +198,72 @@ function addAgent(
   group.agentLines.push({ agent, written, line: read.line });
 }
 
-/** Whether `pattern` matches `path`, `*` matching any run and `$` the end. */
+/** The characters a path may spell either way, encoded or not (RFC 3986). */
+const UNRESERVED = /[A-Za-z0-9\-._~]/;
+
+/**
+ * A path or a rule's pattern with its encodings made one, as RFC 9309 asks
+ * before they are compared: an encoded unreserved character decoded, every
+ * other encoding in upper case, and any character beyond ASCII encoded as
+ * UTF-8. A reserved character keeps the form it was written in, so `%2F` is
+ * never a path's `/`. `*` and `$` are ASCII and pass as written.
+ */
+export function normalizedPath(value: string): string {
+  let out = "";
+  for (let at = 0; at < value.length; at++) {
+    const char = value[at] ?? "";
+    const hex = value.slice(at + 1, at + 3);
+    if (char === "%" && /^[0-9A-Fa-f]{2}$/.test(hex)) {
+      const decoded = String.fromCharCode(Number.parseInt(hex, 16));
+      out += UNRESERVED.test(decoded) ? decoded : `%${hex.toUpperCase()}`;
+      at += 2;
+      continue;
+    }
+    const code = char.codePointAt(0) ?? 0;
+    if (code > 0x7e) {
+      const whole = String.fromCodePoint(code);
+      out += encodeURIComponent(whole);
+      if (whole.length > 1) at += 1;
+      continue;
+    }
+    out += char;
+  }
+  return out;
+}
+
+/**
+ * Whether `pattern` matches `path`: from its start, `*` matching any run of
+ * characters and a closing `$` its end. Both are normalized first. Matched
+ * by the greedy two-pointer walk, which backs up only to the last `*`, so a
+ * pattern of many wildcards costs at most the product of the two lengths,
+ * never the exponential time a backtracking regular expression can take.
+ */
 function matches(pattern: string, path: string): boolean {
   const anchored = pattern.endsWith("$");
-  const body = anchored ? pattern.slice(0, -1) : pattern;
-  const source = body
-    .split("*")
-    .map(part => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
-    .join(".*");
-  return new RegExp(`^${source}${anchored ? "$" : ""}`).test(path);
+  const glob = normalizedPath(anchored ? pattern.slice(0, -1) : pattern);
+  // A pattern not anchored at the end matches any path it begins.
+  const wanted = anchored ? glob : `${glob}*`;
+  const text = normalizedPath(path);
+  let p = 0;
+  let t = 0;
+  let star = -1;
+  let resume = 0;
+  while (t < text.length) {
+    if (p < wanted.length && wanted[p] !== "*" && wanted[p] === text[t]) {
+      p++;
+      t++;
+    } else if (p < wanted.length && wanted[p] === "*") {
+      star = p++;
+      resume = t;
+    } else if (star !== -1) {
+      p = star + 1;
+      t = ++resume;
+    } else {
+      return false;
+    }
+  }
+  while (p < wanted.length && wanted[p] === "*") p++;
+  return p === wanted.length;
 }
 
 /**
@@ -213,6 +280,11 @@ function rulesFor(groups: readonly RuleGroup[], agent: string): PathRule[] {
   return followed.flatMap(group => group.rules);
 }
 
+/** How specific a rule is: the length of its pattern once normalized. */
+function specificity(rule: PathRule): number {
+  return normalizedPath(rule.pattern).length;
+}
+
 /**
  * The rule that keeps `agent` away from `path`, where one does: of the rules
  * it follows, the longest that matches decides, an allow winning a tie.
@@ -227,8 +299,8 @@ export function blockingRule(
     if (!matches(rule.pattern, path)) continue;
     if (
       deciding === undefined ||
-      rule.pattern.length > deciding.pattern.length ||
-      (rule.pattern.length === deciding.pattern.length && rule.allow)
+      specificity(rule) > specificity(deciding) ||
+      (specificity(rule) === specificity(deciding) && rule.allow)
     ) {
       deciding = rule;
     }

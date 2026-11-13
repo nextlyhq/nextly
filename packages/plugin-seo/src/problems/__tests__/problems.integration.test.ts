@@ -864,6 +864,12 @@ describe.each(getConfiguredTestDialects())(
         }
       );
 
+      // A site that serves its own robots.txt, the plugin's switched off,
+      // is not told the plugin's rules block anything.
+      await checkSite(ctx, { ...CHECKS, servesRobots: false });
+      list = await problemList(ctx, CHECKS, everything);
+      expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
+
       await t.nextly.updateSingle({
         slug: SEO_SETTINGS_SLUG,
         data: { _overwrite: true, robotsRules: null },

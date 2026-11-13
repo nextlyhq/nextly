@@ -17,7 +17,11 @@ import { MANAGE_SEO_PERMISSION } from "../permissions";
 import type { ReadRules } from "../resolver/provider";
 
 import type { AiCrawlerChoice } from "./contract";
-import { blockedByOwnRules, servedGroups } from "./robots-blocks";
+import {
+  blockedByOwnRules,
+  crawledPathOf,
+  servedGroups,
+} from "./robots-blocks";
 import {
   MAX_OWN_RULE_LINES,
   readOwnRules,
@@ -33,6 +37,16 @@ export interface RobotsRulesCheckSetup {
   aiCrawlers?: AiCrawlerChoice | undefined;
   /** The paths of every page the sitemap lists. */
   listPaths: (ctx: PluginContext) => Promise<string[]>;
+}
+
+/**
+ * The paths crawlers ask for the sitemap's pages at: each page's listed
+ * address, in its language at the address that language is served at.
+ */
+export function sitemapPaths(
+  pages: readonly { loc: string; path: string }[]
+): string[] {
+  return pages.map(page => crawledPathOf(page.loc));
 }
 
 const CHECK_BODY = z

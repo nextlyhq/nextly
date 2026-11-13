@@ -100,6 +100,11 @@ export interface ProblemChecks {
   /** The Singles SEO is added to. */
   singles: readonly string[];
   readers: CheckReaders;
+  /**
+   * Whether the plugin serves the site's robots.txt: where it does not, its
+   * rules block nothing, and no page is said to be blocked by them.
+   */
+  servesRobots?: boolean;
 }
 
 /** Every type the checks read pages of, by its kept key. */
@@ -334,15 +339,18 @@ async function examine(
     detail: ownAddress,
     ...(locale === undefined ? {} : { locale }),
   };
-  const robotsBlock = robotsBlockOf(
-    servedGroups({
-      aiCrawlers: rules.aiCrawlers ?? "all",
-      ...(rules.robotsRules === undefined
-        ? {}
-        : { ownRules: rules.robotsRules.text }),
-    }),
-    crawledPathOf(ownAddress)
-  );
+  const robotsBlock =
+    checks.servesRobots === false
+      ? undefined
+      : robotsBlockOf(
+          servedGroups({
+            aiCrawlers: rules.aiCrawlers ?? "all",
+            ...(rules.robotsRules === undefined
+              ? {}
+              : { ownRules: rules.robotsRules.text }),
+          }),
+          crawledPathOf(ownAddress)
+        );
   const problems = pageProblems({
     subject,
     answer,
