@@ -142,7 +142,7 @@ export function checklistItemText(item: ChecklistItemState): ChecklistItemText {
       return {
         label: "Add a default share image",
         action: "Add",
-        href: `${SETTINGS_PAGE_HREF}?tab=general`,
+        href: `${SETTINGS_PAGE_HREF}?tab=images`,
       };
     case "brand":
       return {

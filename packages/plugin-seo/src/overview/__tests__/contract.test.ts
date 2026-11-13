@@ -34,7 +34,7 @@ describe("checklistItemText", () => {
     expect(hrefs).toEqual({
       site: `${SECTION}/settings?tab=general`,
       patterns: `${SECTION}/settings?tab=types`,
-      shareImage: `${SECTION}/settings?tab=general`,
+      shareImage: `${SECTION}/settings?tab=images`,
       brand: `${SECTION}/settings?tab=brand`,
       import: `${SECTION}/pages/import`,
       searchConsole: `${SECTION}/settings?tab=connections`,

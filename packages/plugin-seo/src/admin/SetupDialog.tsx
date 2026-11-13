@@ -11,12 +11,17 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
+  DialogHeader,
   DialogTitle,
+  FieldShell,
   Input,
+  Stepper,
 } from "@nextlyhq/plugin-sdk/admin";
+import { CheckCircle2, CircleAlert } from "lucide-react";
 import { useId, useState, type JSX } from "react";
 
-import { SETUP_STEPS, type SeoContentType } from "../settings/contract";
+import type { SeoContentType } from "../settings/contract";
 import { productionAddressProblem } from "../settings/production-addresses";
 
 import {
@@ -27,7 +32,7 @@ import {
 } from "./choices";
 import { MediaChoice } from "./MediaChoice";
 import { attentionItems, type SettingsDraft } from "./settings-draft";
-import { Icon, ROOT } from "./styles";
+import { ControlNote } from "./settings-parts";
 import type { TabId, TabProps } from "./tabs";
 
 /** The step the dialog is on: one of the three, or the end. */
@@ -39,6 +44,8 @@ export interface SetupDialogProps extends TabProps {
   /** The step to start on: the first not yet answered. */
   firstStep: Step;
   types: readonly SeoContentType[];
+  /** The production addresses the server names, which win where set. */
+  serverAddresses: readonly string[];
   /** Saves the draft as it stands, and resolves once it is stored. */
   save: (next: SettingsDraft) => Promise<boolean>;
   /** Why the last save failed, said in the dialog too; null when none did. */
@@ -68,64 +75,73 @@ const TITLES: Record<Step, { title: string; lead: string }> = {
   },
 };
 
+/** Each step's name, as the stepper shows it. */
+const STEP_LABELS = ["Name", "Kind of site", "Images"] as const;
+
 /** The step after `step`, and how many steps that counts as done. */
 const nextOf = (step: 1 | 2 | 3): Step =>
   step === 3 ? "done" : ((step + 1) as 2 | 3);
 
 /** The first step: the site's name and its production address. */
-function NameStep({ draft, change }: TabProps): JSX.Element {
-  const nameId = useId();
-  const addressId = useId();
+function NameStep({
+  draft,
+  change,
+  serverAddresses,
+}: TabProps & { serverAddresses: readonly string[] }): JSX.Element {
   const address = draft.productionAddresses[0] ?? "";
   const problem =
     address.trim() === "" ? null : productionAddressProblem(address);
   return (
     <>
-      <div className="nx-seo-field">
-        <label className="nx-seo-label" htmlFor={nameId}>
-          Site name
-        </label>
+      <FieldShell
+        label="Site name"
+        description="Used at the end of titles and when pages are shared."
+        width="fill"
+      >
         <Input
-          id={nameId}
           value={draft.siteName}
-          aria-describedby={`${nameId}-help`}
           onChange={event => {
             const siteName = event.target.value;
             change(current => ({ ...current, siteName }));
           }}
         />
-        <p className="nx-seo-help" id={`${nameId}-help`}>
-          Used at the end of titles and when pages are shared.
-        </p>
-      </div>
-      <div className="nx-seo-field">
-        <label className="nx-seo-label" htmlFor={addressId}>
-          Production address
-        </label>
-        <Input
-          id={addressId}
-          className="nx-seo-mono"
-          value={address}
-          placeholder="https://"
-          aria-invalid={problem !== null}
-          aria-describedby={`${addressId}-help`}
-          onChange={event => {
-            const first = event.target.value;
-            change(current => ({
-              ...current,
-              productionAddresses: [
-                first,
-                ...current.productionAddresses.slice(1),
-              ],
-            }));
-          }}
-        />
-        {problem === null ? null : <p className="nx-seo-error">{problem}</p>}
-        <p className="nx-seo-help" id={`${addressId}-help`}>
-          The address people visit. Any other address, like a preview or a test
-          copy, is kept out of search.
-        </p>
-      </div>
+      </FieldShell>
+      {serverAddresses.length > 0 ? (
+        <FieldShell
+          label="Production address"
+          description="Set by NEXTLY_PRODUCTION_ADDRESSES on the server."
+          width="fill"
+        >
+          <Input
+            className="bg-muted font-mono text-[13px]"
+            value={serverAddresses.join(", ")}
+            readOnly
+          />
+        </FieldShell>
+      ) : (
+        <FieldShell
+          label="Production address"
+          description="The address people visit. Any other address, like a preview or a test copy, is kept out of search."
+          error={problem ?? undefined}
+          width="fill"
+        >
+          <Input
+            className="font-mono text-[13px]"
+            value={address}
+            placeholder="https://"
+            onChange={event => {
+              const first = event.target.value;
+              change(current => ({
+                ...current,
+                productionAddresses: [
+                  first,
+                  ...current.productionAddresses.slice(1),
+                ],
+              }));
+            }}
+          />
+        </FieldShell>
+      )}
     </>
   );
 }
@@ -143,8 +159,8 @@ function KindStep({ draft, change }: TabProps): JSX.Element {
         columns={2}
         onChange={siteKind => change(current => ({ ...current, siteKind }))}
       />
-      <div className="nx-seo-field" role="group" aria-labelledby={aiId}>
-        <span className="nx-seo-label" id={aiId}>
+      <div className="grid gap-2" role="group" aria-labelledby={aiId}>
+        <span className="text-sm font-semibold text-foreground" id={aiId}>
           AI tools reading your site
         </span>
         <ChoiceCards
@@ -156,7 +172,7 @@ function KindStep({ draft, change }: TabProps): JSX.Element {
             change(current => ({ ...current, aiCrawlers }))
           }
         />
-        <p className="nx-seo-help">{AI_CHOICES_NOTE}</p>
+        <ControlNote>{AI_CHOICES_NOTE}</ControlNote>
       </div>
     </>
   );
@@ -167,6 +183,7 @@ function ImagesStep({ draft, change }: TabProps): JSX.Element {
   return (
     <>
       <MediaChoice
+        layout="stacked"
         label="Logo"
         shape="square"
         value={draft.logo}
@@ -174,6 +191,7 @@ function ImagesStep({ draft, change }: TabProps): JSX.Element {
         emptyHelp="Square works best, at least 112 × 112."
       />
       <MediaChoice
+        layout="stacked"
         label="Default share image"
         value={draft.image}
         onChange={image => change(current => ({ ...current, image }))}
@@ -187,33 +205,32 @@ function ImagesStep({ draft, change }: TabProps): JSX.Element {
 function AttentionList({
   draft,
   types,
+  serverAddresses,
   close,
 }: {
   draft: SettingsDraft;
   types: readonly SeoContentType[];
+  serverAddresses: readonly string[];
   close: (tab?: TabId) => void;
 }): JSX.Element {
-  const items = attentionItems(draft, types);
+  const items = attentionItems(draft, types, serverAddresses);
   if (items.length === 0) {
     return (
-      <div className="nx-seo-minilist">
-        <div>
-          <span className="nx-seo-okc">
-            <Icon name="check" />
-          </span>
-          <span className="grow">Nothing needs attention right now.</span>
-        </div>
-      </div>
+      <p className="flex items-center gap-2 text-sm text-foreground">
+        <CheckCircle2 className="size-4 text-success-text" aria-hidden="true" />
+        Nothing needs attention right now.
+      </p>
     );
   }
   return (
-    <div className="nx-seo-minilist">
+    <ul className="divide-y divide-border rounded-md border border-border">
       {items.map(item => (
-        <div key={item.text}>
-          <span className="nx-seo-warnc">
-            <Icon name="warn" />
-          </span>
-          <span className="grow">{item.text}</span>
+        <li key={item.text} className="flex items-center gap-3 px-3 py-2.5">
+          <CircleAlert
+            className="size-4 shrink-0 text-warning-text"
+            aria-hidden="true"
+          />
+          <span className="grow text-sm text-foreground">{item.text}</span>
           <Button
             type="button"
             variant="outline"
@@ -222,9 +239,9 @@ function AttentionList({
           >
             {item.fix}
           </Button>
-        </div>
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }
 
@@ -234,19 +251,34 @@ function StepBody({
   draft,
   change,
   types,
+  serverAddresses,
   close,
 }: TabProps & {
   step: Step;
   types: readonly SeoContentType[];
+  serverAddresses: readonly string[];
   close: (tab?: TabId) => void;
 }): JSX.Element {
-  if (step === 1) return <NameStep draft={draft} change={change} />;
+  if (step === 1) {
+    return (
+      <NameStep
+        draft={draft}
+        change={change}
+        serverAddresses={serverAddresses}
+      />
+    );
+  }
   if (step === 2) return <KindStep draft={draft} change={change} />;
   if (step === 3) return <ImagesStep draft={draft} change={change} />;
   return (
     <>
-      <AttentionList draft={draft} types={types} close={close} />
-      <p className="nx-seo-help">Nothing here stops you publishing.</p>
+      <AttentionList
+        draft={draft}
+        types={types}
+        serverAddresses={serverAddresses}
+        close={close}
+      />
+      <ControlNote>Nothing here stops you publishing.</ControlNote>
     </>
   );
 }
@@ -289,10 +321,7 @@ function StepFooter({
       >
         Back
       </Button>
-      <span className="nx-seo-help">
-        Step {step} of {SETUP_STEPS}
-      </span>
-      <div className="nx-seo-row">
+      <div className="ml-auto flex items-center gap-2">
         {step === 3 ? (
           <Button
             type="button"
@@ -322,6 +351,7 @@ export function SetupDialog({
   draft,
   change,
   types,
+  serverAddresses,
   save,
   failure,
   close,
@@ -333,6 +363,7 @@ export function SetupDialog({
   const address = draft.productionAddresses[0] ?? "";
   const blocked =
     step === 1 &&
+    serverAddresses.length === 0 &&
     address.trim() !== "" &&
     productionAddressProblem(address) !== null;
 
@@ -365,25 +396,26 @@ export function SetupDialog({
         if (!next) void finishLater();
       }}
     >
-      <DialogContent size="lg" className={`${ROOT} nx-seo-dialog`}>
-        <div className="nx-seo-dlg-head">
-          <DialogTitle asChild>
-            <h2>{shown.title}</h2>
-          </DialogTitle>
-          <DialogDescription asChild>
-            <p>{shown.lead}</p>
-          </DialogDescription>
-        </div>
+      {/* Held within the screen's height, scrolling inside, so a step taller
+          than a phone's screen still reaches its buttons. */}
+      <DialogContent
+        size="lg"
+        className="max-h-[calc(100dvh-2rem)] overflow-y-auto"
+      >
+        <DialogHeader>
+          <DialogTitle>{shown.title}</DialogTitle>
+          <DialogDescription>{shown.lead}</DialogDescription>
+        </DialogHeader>
         {step === "done" ? null : (
-          <div className="nx-seo-steps" aria-hidden="true">
-            {Array.from({ length: SETUP_STEPS }, (_, index) => (
-              <span key={index} className={index < step ? "on" : undefined} />
-            ))}
-          </div>
+          <Stepper
+            aria-label="Setup steps"
+            current={step - 1}
+            steps={STEP_LABELS.map(label => ({ label }))}
+          />
         )}
-        <div className="nx-seo-dlg-body">
+        <div className="grid gap-5">
           {failure === null ? null : (
-            <p className="nx-seo-error" role="alert">
+            <p className="text-sm font-medium text-danger-text" role="alert">
               Not saved. {failure}
             </p>
           )}
@@ -392,10 +424,11 @@ export function SetupDialog({
             draft={draft}
             change={change}
             types={types}
+            serverAddresses={serverAddresses}
             close={close}
           />
         </div>
-        <div className="nx-seo-dlg-foot">
+        <DialogFooter className="items-center sm:justify-between">
           <StepFooter
             step={step}
             saving={saving}
@@ -404,7 +437,7 @@ export function SetupDialog({
             advance={from => void advance(from)}
             finish={finish}
           />
-        </div>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
