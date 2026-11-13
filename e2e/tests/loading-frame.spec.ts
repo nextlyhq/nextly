@@ -327,13 +327,23 @@ async function recordShifts(page: Page): Promise<void> {
           value: entry.value,
           at: entry.startTime,
           sources: entry.sources.map(source => {
-            const node = source.node;
-            if (!(node instanceof Element)) return "removed";
+            // A run of text shifts as a text node, named by its words and
+            // the element that holds it; a node already gone has no name.
+            const text =
+              source.node instanceof Text
+                ? `"${(source.node.textContent ?? "").trim().slice(0, 40)}" in `
+                : "";
+            const node =
+              source.node instanceof Text
+                ? source.node.parentElement
+                : source.node;
+            if (!(node instanceof Element))
+              return `removed ${text}${box(source.previousRect)} -> ${box(source.currentRect)}`;
             const where = node.closest("main") ? "main" : "shell";
             const name =
               node.getAttribute("data-testid") ??
               node.className.toString().split(" ").slice(0, 3).join(".");
-            return `${where}:${node.tagName.toLowerCase()}(${name}) ${box(source.previousRect)} -> ${box(source.currentRect)}`;
+            return `${text}${where}:${node.tagName.toLowerCase()}(${name}) ${box(source.previousRect)} -> ${box(source.currentRect)}`;
           }),
         });
       }
@@ -810,6 +820,25 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
           await expectStillLoad(page, "/users", mode, { revisit: true });
         });
       }
+
+      test.describe("a form's history", () => {
+        // A further account per width: the screens above spend their own
+        // account's request budget, and these loads would meet its limit.
+        ownSeat(WIDTHS.length + index + 1);
+
+        for (const mode of ["held", "unheld"] as const) {
+          test(`moves no part of a form's history, ${mode}`, async ({
+            page,
+          }) => {
+            test.setTimeout(90_000);
+            // The forms collection folds its editor's panel; its history is
+            // a page of its own, which keeps the panel, and so must its
+            // outline.
+            const path = `${await ownForm(page, made)}/versions`;
+            await expectStillLoad(page, path, mode);
+          });
+        }
+      });
     });
   });
 });
