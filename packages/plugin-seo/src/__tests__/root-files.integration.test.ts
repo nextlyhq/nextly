@@ -206,6 +206,35 @@ async function create(
   return String(created.item.id);
 }
 
+/**
+ * Settings a site saved before an upgrade, none of them a default: a reader
+ * that dropped every stored setting when one column is missing would lose
+ * each of them.
+ */
+async function saveSettingsToKeep(
+  t: TestNextly,
+  more: Record<string, unknown> = {}
+) {
+  await t.nextly.updateSingle({
+    slug: SEO_SETTINGS_SLUG,
+    data: {
+      _overwrite: true,
+      siteName: "Acme",
+      llmsTxt: true,
+      robotsRules: { text: "User-agent: *\nDisallow: /search" },
+      ...more,
+    },
+  });
+}
+
+/** A head's title as the browser shows it. */
+function titleOf(head: { title?: unknown }): unknown {
+  const title = head.title;
+  return typeof title === "object" && title !== null && "absolute" in title
+    ? title.absolute
+    : title;
+}
+
 /** The head a public route serves for the entry at `slug` of `collection`. */
 async function headOf(t: TestNextly, collection: string, slug: string) {
   const route = createPublicContentRoute({
@@ -812,26 +841,24 @@ describe.each(getConfiguredTestDialects())(
         slug: "hello",
         status: "published",
       });
-      const before = await rootFile("robots.txt");
-      const headBefore = await headOf(t, "posts", "hello");
-      // A database the upgrade has not been migrated for: the settings'
-      // newest column is missing, so core refuses every read of them.
+      const pluginLines = (await rootFile("robots.txt")).body;
+      await saveSettingsToKeep(t);
+      // A database the upgrade has not been migrated for: the own rules'
+      // column is missing, so core refuses a read that asks for it.
       await t.adapter.executeQuery(
         "ALTER TABLE single_seo_settings DROP COLUMN robots_rules"
       );
+      // The own rules read as unset: the plugin's lines alone.
       const robots = await rootFile("robots.txt");
       expect(robots.status).toBe(200);
-      expect(robots.body).toBe(before.body);
+      expect(robots.body).toBe(pluginLines);
       const sitemap = await rootFile("sitemap.xml");
       expect(sitemap.status).toBe(200);
       expect(sitemap.body).toContain(`<loc>${SITE}/blog/hello</loc>`);
-      // Off until switched on, as for a site with nothing set.
-      expect((await rootFile("llms.txt")).status).toBe(404);
-      // The page's head is still the plugin's answer, read from the rest of
-      // the settings.
-      expect((await headOf(t, "posts", "hello")).title).toEqual(
-        headBefore.title
-      );
+      // The rest as stored: llms.txt stays on, and the head keeps the site's
+      // name.
+      expect((await rootFile("llms.txt")).status).toBe(200);
+      expect(titleOf(await headOf(t, "posts", "hello"))).toBe("Hello | Acme");
     });
 
     it("keeps answering robots.txt and the home page's head until the verification codes' column is migrated", async () => {
@@ -841,21 +868,22 @@ describe.each(getConfiguredTestDialects())(
         slug: "hello",
         status: "published",
       });
-      const before = await rootFile("robots.txt");
-      const headBefore = await headOf(t, "posts", "hello");
+      await saveSettingsToKeep(t, {
+        verificationCodes: { bing: "8A2F61C4D0E9B7A35F0C19D2E6B4A7C9" },
+      });
+      const withOwnRules = (await rootFile("robots.txt")).body;
+      expect(withOwnRules).toContain("Disallow: /search");
       // A database the upgrade has not been migrated for: the verification
-      // codes' column is missing, so it reads as unset, the rest as stored.
+      // codes' column is missing, so they read as unset, the rest as stored.
       await t.adapter.executeQuery(
         "ALTER TABLE single_seo_settings DROP COLUMN verification_codes"
       );
       const robots = await rootFile("robots.txt");
       expect(robots.status).toBe(200);
-      expect(robots.body).toBe(before.body);
-      const home = await seoMetadata("/");
-      expect(home.verification).toBeUndefined();
-      expect((await headOf(t, "posts", "hello")).title).toEqual(
-        headBefore.title
-      );
+      expect(robots.body).toBe(withOwnRules);
+      expect((await rootFile("llms.txt")).status).toBe(200);
+      expect((await seoMetadata("/")).verification).toBeUndefined();
+      expect(titleOf(await headOf(t, "posts", "hello"))).toBe("Hello | Acme");
     });
   }
 );
