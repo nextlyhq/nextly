@@ -3004,11 +3004,13 @@ export function createPluginContext(
   return {
     services: {
       // Bound to this plugin's boot name, so what its services record names
-      // it, whatever the plugin itself says.
+      // it, whatever the plugin itself says. A rewrite of a Single goes to
+      // the Singles service, resolved on its first use.
       collections: wrapCollectionsForPlugin(
         collectionService,
         undefined,
-        pluginName
+        pluginName,
+        () => getServiceFn("singleEntryService")
       ),
       // The Singles service is resolved on the first own-Single read, for
       // the same reason `versions` and `singles` below are resolved on

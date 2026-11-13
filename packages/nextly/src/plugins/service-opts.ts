@@ -20,9 +20,12 @@ import { withCurrentLanguages } from "../domains/i18n/configured-locales";
 import { isLocaleSelector } from "../domains/i18n/locale-selector";
 import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
 import type { SingleDocument } from "../domains/singles/types";
-import type {
-  FieldRewriteRequest,
-  FieldRewriteResult,
+import {
+  parseFieldRewrite,
+  rewriteCallerOf,
+  rewritesSingle,
+  type DocumentFieldRewriteRequest,
+  type FieldRewriteResult,
 } from "../domains/versions/field-rewrite";
 import { holdsFieldOfType } from "../domains/versions/tag-component-types";
 import { NextlyError } from "../errors/nextly-error";
@@ -610,25 +613,26 @@ export type PluginCollectionService = Pick<
   >]: ReplaceTrailingContext<CollectionService[K]>;
 } & {
   /**
-   * @experimental Rewrite one field of an entry on its live copy and on every
-   * pending draft that holds it, in one transaction, without publishing: each
-   * draft stays a draft and the entry's status is unchanged. Applied only if
-   * the entry is still at `expectedVersion`, the version the plugin read;
-   * otherwise refused with `STALE_VERSION` and nothing changes. There is no
-   * overwrite: read again and decide again.
+   * @experimental Rewrite one field of an entry (`{ collection, id, ... }`)
+   * or of a Single (`{ single, ... }`) on its live copy and on every pending
+   * draft that holds it, in one transaction, without publishing: each draft
+   * stays a draft and the status is unchanged. Applied only if the document
+   * is still at `expectedVersion`, the version the plugin read; otherwise
+   * refused with `STALE_VERSION` and nothing changes. There is no overwrite:
+   * read again and decide again.
    *
-   * Runs no save hooks and no in-transaction handlers. The entry's history
+   * Runs no save hooks and no in-transaction handlers. The document's history
    * records one "rewritten" event naming this plugin (or, with `as: "user"`,
    * the person, with this plugin named beside them) and the `reason`. The
-   * live change records the `entry.updated` event and revalidates the entry's
-   * pages once it commits.
+   * live change records the `entry.updated` (or `single.updated`) event and
+   * revalidates the document's pages once it commits.
    *
    * Made as a person (`as: "user"`), it needs their permission to update the
-   * entry and, where the collection has a publish lifecycle, to publish it,
-   * and every field rule that applies to their own update.
+   * document and, where it has a publish lifecycle, to publish it, and every
+   * field rule that applies to their own update.
    */
   rewriteField(
-    request: FieldRewriteRequest,
+    request: DocumentFieldRewriteRequest,
     opts?: ServiceOpts
   ): Promise<FieldRewriteResult>;
 } & {
@@ -811,12 +815,31 @@ export function wrapCollectionsForPlugin(
    * The plugin these services belong to, by the name it booted under: a
    * rewrite it makes names it in history. Absent for services no plugin owns.
    */
-  pluginName?: string
+  pluginName?: string,
+  /**
+   * The Singles service a rewrite of a Single goes to, resolved on its first
+   * use. Absent where no Single can be rewritten through these services.
+   */
+  singles?: () => SingleEntryService
 ): PluginCollectionService {
-  const translated = translateServiceOpts(collections, deps, undefined, {
+  const trusted = {
     rewriteField: pluginName === undefined ? [] : [pluginName],
-  });
+  };
+  const translated = translateServiceOpts(
+    collections,
+    deps,
+    undefined,
+    trusted
+  );
   const facade = methodFacade(translated, PLUGIN_COLLECTION_METHODS);
+  // One `rewriteField` for an entry and a Single, its caller resolved by the
+  // same translation as every other method's.
+  const rewrites = translateServiceOpts(
+    rewriteRouter(collections, singles) as unknown as CollectionService,
+    deps,
+    undefined,
+    trusted
+  );
   // The transaction a plugin's work receives is a token, mapped back to the
   // adapter's transaction where a method needs it. Async, so an unknown or
   // finished token is a rejection like every other failure of these methods,
@@ -859,6 +882,7 @@ export function wrapCollectionsForPlugin(
     createCollection: schemaChange("createCollection"),
     updateCollection: schemaChange("updateCollection"),
     deleteCollection: schemaChange("deleteCollection"),
+    rewriteField: rewrites.rewriteField.bind(rewrites),
     withTransaction: <T>(
       work: (tx: PluginCollectionTransaction) => Promise<T>
     ): Promise<T> =>
@@ -945,6 +969,35 @@ export function wrapCollectionsForPlugin(
       );
     },
   }) as unknown as PluginCollectionService;
+}
+
+/**
+ * Where a plugin's field rewrite goes: a Single's to the Singles service, an
+ * entry's to the collection service. Takes the arguments the collection
+ * service's `rewriteField` takes, so the caller is translated alike for both.
+ */
+function rewriteRouter(
+  collections: CollectionService,
+  singles: (() => SingleEntryService) | undefined
+): Pick<CollectionService, "rewriteField"> {
+  return {
+    rewriteField: async (
+      input: unknown,
+      context: RequestContext,
+      plugin?: string
+    ): Promise<FieldRewriteResult> => {
+      const request = parseFieldRewrite(input);
+      if (!rewritesSingle(request) || singles === undefined) {
+        return collections.rewriteField(request, context, plugin);
+      }
+      const result = await singles().rewriteField({
+        request,
+        ...rewriteCallerOf(context, plugin),
+      });
+      if (!result.success) throw createErrorFromSingleResult(result);
+      return result.data as FieldRewriteResult;
+    },
+  };
 }
 
 /**
