@@ -178,17 +178,35 @@ export function fieldNameProblem(
   // Only a collection and a Single have the lifecycle; a field group never does.
   if (
     (place.surface === "collection" || place.surface === "single") &&
-    lifecycleReservesDeclaredName(
-      name,
-      place.surface,
-      place.lifecycleEnabled === true
-    )
+    lifecycleOwns(name, place.surface, place)
   ) {
     return {
       kind: "lifecycle",
       code: "RESERVED",
-      message: lifecycleDeclaredNameMessage(name),
+      // The Builder saves its fields before its settings, so turning the lifecycle off in the same
+      // save does not clear the way: the person saves that first.
+      message:
+        `${lifecycleDeclaredNameMessage(name)}. Turning it off takes a save of its own, before ` +
+        "the field is added",
     };
   }
   return null;
+}
+
+/**
+ * Whether the lifecycle owns the field's name: the declared name, the member it emits, and, for a
+ * field that becomes a column, the column it reaches (`firstPublishedAt` reaches
+ * `first_published_at`), as the code-first validators ask both.
+ */
+function lifecycleOwns(
+  name: string,
+  entity: "collection" | "single",
+  place: FieldNamePlace
+): boolean {
+  const enabled = place.lifecycleEnabled === true;
+  if (lifecycleReservesDeclaredName(name, entity, enabled)) return true;
+  return (
+    place.producesColumn !== false &&
+    lifecycleReservesDeclaredName(toSnakeCase(name), entity, enabled)
+  );
 }

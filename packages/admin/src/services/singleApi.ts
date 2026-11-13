@@ -112,7 +112,8 @@ type SingleApiType = {
   readonly previewSchemaChanges: (
     slug: string,
     fields: unknown[],
-    localized?: boolean
+    localized?: boolean,
+    status?: boolean
   ) => Promise<SchemaPreviewResponse>;
   readonly applySchemaChanges: (
     slug: string,
@@ -120,7 +121,8 @@ type SingleApiType = {
     schemaVersion: number,
     resolutions?: Record<string, FieldResolution>,
     renameResolutions?: SchemaRenameResolution[],
-    localized?: boolean
+    localized?: boolean,
+    status?: boolean
   ) => Promise<SchemaApplyResponse>;
   readonly remove: (slug: string) => Promise<{ message: string }>;
   readonly getDocument: (

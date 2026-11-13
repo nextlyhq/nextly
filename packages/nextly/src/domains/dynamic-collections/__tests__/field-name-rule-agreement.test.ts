@@ -140,6 +140,41 @@ describe("the panel's check and the save's rule", () => {
     }
   });
 
+  // A camelCase name reaches the lifecycle's column where it becomes one, as the code-first
+  // validators find; a field with no column keeps it, its member being a different name.
+  it("refuse a declared name whose column the lifecycle owns, where it becomes a column", () => {
+    const place = {
+      surface: "collection",
+      nested: false,
+      lifecycleEnabled: true,
+      spelling: "declared",
+    } as const;
+    expect(fieldNameProblem("firstPublishedAt", place)).toMatchObject({
+      kind: "lifecycle",
+    });
+    expect(
+      fieldNameProblem("firstPublishedAt", { ...place, producesColumn: false })
+    ).toBeNull();
+    expect(
+      fieldNameProblem("firstPublishedAt", {
+        ...place,
+        lifecycleEnabled: false,
+      })
+    ).toBeNull();
+  });
+
+  it("tell the person to turn the lifecycle off in a save of its own first", () => {
+    expect(
+      fieldNameProblem("status", {
+        surface: "single",
+        nested: false,
+        lifecycleEnabled: true,
+      })?.message
+    ).toMatch(
+      /Turning it off takes a save of its own, before the field is added/
+    );
+  });
+
   it("refuse a collection's owner column on a collection only", () => {
     expect(
       fieldNameProblem("created_by", { surface: "collection", nested: false })
