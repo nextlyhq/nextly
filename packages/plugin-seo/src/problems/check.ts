@@ -47,6 +47,12 @@ import { designLevelOf } from "../resolver/design-level";
 import { addressOf } from "../resolver/page-levels";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
 import { readRouteValues, routeValuesKey } from "../route-values/store";
+import {
+  crawledPathOf,
+  robotsBlockOf,
+  servedGroups,
+  type RobotsBlock,
+} from "../settings/robots-blocks";
 import type { ReadSocialCardRules } from "../social/card";
 import { shareImageProblems } from "../social/problems";
 import { readStanding } from "../staging/guard";
@@ -104,6 +110,18 @@ export interface ProblemChecks {
   singles: readonly string[];
   readers: CheckReaders;
   /**
+   * Whether the plugin serves the site's robots.txt: where it does not, its
+   * rules block nothing, and no page is said to be blocked by them.
+   */
+  servesRobots?: boolean;
+  /**
+   * Whether the site serves a robots.txt of its own, which wins over the
+   * plugin's: then its rules block nothing either.
+   */
+  siteServesOwnRobots?: (
+    rules: Awaited<ReturnType<ReadRules>>
+  ) => Promise<boolean>;
+  /**
    * The pages the site's routes render from their own code, which the
    * sitemap lists beside the entries, where the site has any.
    */
@@ -113,6 +131,46 @@ export interface ProblemChecks {
    * where it names only some.
    */
   sitemap?: { collections?: readonly string[] };
+}
+
+/**
+ * Whether the sitemap lists pages of `type`: none where no sitemap is
+ * served, a Single's always, a collection's where the sitemap names none or
+ * names it.
+ */
+function inSitemap(checks: ProblemChecks, type: string): boolean {
+  const sitemap = checks.sitemap;
+  if (sitemap === undefined) return false;
+  if (sitemap.collections === undefined) return true;
+  return (
+    pageTypeOf(type).kind === "single" || sitemap.collections.includes(type)
+  );
+}
+
+/**
+ * The robots.txt rule keeping search engines from a page the sitemap lists,
+ * as page facts, where one does: judged over the file the plugin serves,
+ * so nothing where it serves none, the site serves its own, or the sitemap
+ * leaves the page out.
+ */
+async function robotsBlockFor(
+  checks: ProblemChecks,
+  type: string,
+  rules: Awaited<ReturnType<ReadRules>>,
+  ownAddress: string
+): Promise<{ robotsBlock?: RobotsBlock }> {
+  if (checks.servesRobots === false || !inSitemap(checks, type)) return {};
+  if ((await checks.siteServesOwnRobots?.(rules)) === true) return {};
+  const robotsBlock = robotsBlockOf(
+    servedGroups({
+      aiCrawlers: rules.aiCrawlers ?? "all",
+      ...(rules.robotsRules === undefined
+        ? {}
+        : { ownRules: rules.robotsRules.text }),
+    }),
+    crawledPathOf(ownAddress)
+  );
+  return robotsBlock === undefined ? {} : { robotsBlock };
 }
 
 /** Every type the checks read pages of, by its kept key. */
@@ -350,6 +408,7 @@ async function examine(
   const problems = pageProblems({
     subject,
     answer,
+    ...(await robotsBlockFor(checks, type, rules, ownAddress)),
     canonicalIsOwn: canonicalIsOwn(
       answer,
       productionAddresses[0] ?? NO_ORIGIN,

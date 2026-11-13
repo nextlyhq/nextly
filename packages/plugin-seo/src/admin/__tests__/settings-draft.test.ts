@@ -83,6 +83,7 @@ describe("the form's values, from the stored settings", () => {
       indexNow: false,
       llmsTxt: false,
       plainTextCopies: true,
+      robotsRules: { text: "" },
       verificationCodes: {
         google: "",
         bing: "",
@@ -115,6 +116,7 @@ describe("the form's values, from the stored settings", () => {
       indexNow: false,
       llmsTxt: false,
       plainTextCopies: false,
+      robotsRules: { text: "" },
       verificationCodes: {
         google: "",
         bing: "",

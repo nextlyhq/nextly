@@ -29,7 +29,20 @@ reads the page, so a later start is a slower screen even when no count moves.
 `timings` also carries the most statements any of the five loads sent
 (`mostStatements`). The pins hold the fewest, which a burst in one load does
 not move, so the most is what shows one: requests arriving together each
-reading what one read would have answered.
+reading what one read would have answered. `eachStatements` lists every
+load's count, in order.
+
+Each counted load starts once every read the server makes on a timer rather
+than per request has its interval run out: the stored schema version and the
+general settings row (each read at most once per two seconds), each cache
+tag's expiry and the session's standing (at most once per five), and a
+collection's registry row. The wait is read from those constants' own sources
+(`TIMED_READS` in `measure.mjs`), so every load pays each of those reads once,
+whatever the machine. Without it a load paid them only when the loads before
+it had run slowly enough, and the same commit counted two statements more on a
+slower machine. Reads kept for thirty seconds or more are not waited out: one
+lands in one of the five loads at most, and the fewest leaves it out, as it
+leaves out the first load's cold reads.
 
 On PostgreSQL it also starts the server with every round trip held 100 ms, and
 with 45 more collections, and pins how many statements each adds to the start
@@ -68,12 +81,6 @@ fixed.
 - **Admin page sent different pages, or forbids keeping it**: two fetches of
   `/admin` with no session, once the start is quiet, must get the same bytes and
   headers a shared cache may keep. The admin route is no longer prebuilt.
-
-Each counted load begins at least 2.5 s after the last admin request. The
-server reads the stored schema version at most once every 2 s and the RBAC
-epoch at most once a second, so a load begun sooner reuses the previous load's
-reads, and its count would turn on how fast that load ended; after the gap,
-every load pays both reads, as a visit arriving cold does.
 
 Each screen is loaded five times, and its requests are pinned by kind (method
 and path, with ids made generic), each kind counting the fewest times any of

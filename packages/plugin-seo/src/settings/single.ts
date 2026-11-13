@@ -30,6 +30,7 @@ import { holdsManageSeo } from "../permissions";
 import { SEO_PLUGIN_NAME, SEO_SETTINGS_SLUG, SETUP_STEPS } from "./contract";
 import { SEPARATORS } from "./patterns";
 import { productionAddressesProblem } from "./production-addresses";
+import { robotsRulesProblem } from "./robots-rules-stored";
 import {
   hiddenTypesProblem,
   patternsProblem,
@@ -134,6 +135,14 @@ export function seoSettingsSingle(): SingleConfig {
         name: "structuredData",
         label: "Structured data",
         validate: refusing(structuredDataSettingsProblem),
+      }),
+      // The site's own robots.txt lines, served after the plugin's, and the
+      // person's confirmation of the sitemap pages they block. A line that
+      // would keep every crawler from the whole site is refused here too.
+      json({
+        name: "robotsRules",
+        label: "Your own robots.txt rules",
+        validate: refusing(robotsRulesProblem),
       }),
       // The codes other services read from the home page's head to confirm
       // the site is the owner's: only codes, each checked on the way in.

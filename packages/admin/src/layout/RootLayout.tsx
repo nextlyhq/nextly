@@ -230,7 +230,9 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
               endpoint gated by settings permissions, so on the signed-out
               screens (login, register, forgot password, setup) the query
               can only fail and retry once while the form waits on nothing
-              it needs. It renders nothing and sits beside the subtree
+              it needs. The sign-in form drawn in place on a private route
+              mounts it too, so the query itself also waits for a signed-in
+              session (`useGeneralSettings`). It renders nothing and sits beside the subtree
               rather than around it, for the load-bearing reasons recorded
               on GeneralSettingsSync itself. */}
             {routeType !== "public" && <GeneralSettingsSync />}

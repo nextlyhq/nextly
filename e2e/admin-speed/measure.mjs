@@ -65,10 +65,10 @@ const SECRET = "admin-speed-check-secret-not-for-production-0123456789";
 const USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 
 /**
- * How far a start's or a screen's statements may move from their pin. What
- * still moves between runs of one commit is reads on a timer (the stored
- * schema version, the permissions epoch, the cache tags, a session check)
- * landing inside a load or not, a few statements on any screen.
+ * How far a start's or a screen's statements may move from their pin. Every
+ * screen load pays the reads on a timer (`TIMED_READS`); what still moves
+ * between runs of one commit is the start's, and background work (a job
+ * poll, a webhook drain) landing inside a load or not.
  */
 const STATEMENT_SLACK = 0.05;
 /** The least a growth pin allows either way, as two starts differ by a few. */
@@ -91,22 +91,67 @@ const FIRST_BYTE_LIMIT_MS = 10_000;
 const FIRST_BYTE_OVER_SERVER_MS = 1000;
 const EXTRA_COLLECTIONS = 45;
 const QUIET_MS = 1500;
-/**
- * How long after the last admin request a counted load begins at the
- * earliest. The server reads the stored schema version at most once every
- * 2 s (`SCHEMA_VERSION_READ_INTERVAL_MS`) and the RBAC epoch at most once a
- * second (`EPOCH_TTL_MS`), so a load begun inside either interval reuses the
- * previous load's read, and whether it does turned on how fast that load
- * ended: the sign-in screen counted 5 or 6 from run to run. At 2.5 s, above
- * both intervals, every load reads both afresh, as a visit arriving cold does.
- */
-const SETTLE_MS = 2500;
 /** How long an open request is waited for once nothing else happens. */
 const OPEN_WAIT_MS = 10_000;
 /** How many times each screen is loaded; see `steady`. */
 const SAMPLES = 5;
 /** How long the database must be quiet before a start counts as finished. */
 const START_QUIET_MS = 4000;
+
+/**
+ * The reads the server makes at most once per interval rather than once per
+ * request, each named by the source constant that sets its interval: the
+ * stored schema version, the general settings row, the expiry of each cache
+ * tag served, the session's standing and a collection's registry row. A load
+ * that starts within one of these intervals of the last read skips it, so
+ * whether a load paid it depended on how fast the machine ran the loads
+ * before it: they ran about two seconds apart, right at the two-second
+ * intervals. Read from the source, so a changed interval cannot leave the
+ * wait behind.
+ *
+ * Reads kept for thirty seconds or more (permissions, a companion table's
+ * readiness, pending release transitions) are not waited out: five loads span
+ * less than that, so such a read lands in one load at most, and the fewest
+ * any load took leaves it out.
+ */
+const TIMED_READS = [
+  [
+    "packages/nextly/src/domains/schema/stored-schema-seq.ts",
+    "SCHEMA_VERSION_READ_INTERVAL_MS",
+  ],
+  [
+    "packages/nextly/src/services/general-settings/general-settings-service.ts",
+    "GENERAL_SETTINGS_READ_INTERVAL_MS",
+  ],
+  ["packages/nextly/src/runtime/cache/tag-expiry-view.ts", "TAG_LOOKUP_TTL_MS"],
+  [
+    "packages/nextly/src/auth/session/session-standing.ts",
+    "SESSION_STANDING_TTL_MS",
+  ],
+  [
+    "packages/nextly/src/domains/dynamic-collections/services/collection-row-cache.ts",
+    "COLLECTION_ROW_LIFETIME_MS",
+  ],
+];
+/** How far past the longest interval a load starts, so timer jitter cannot put it just inside. */
+const TIMED_READ_MARGIN_MS = 250;
+
+/** A numeric `export const` of a source file; throws when it is not there. */
+function sourceConstant(file, name) {
+  const text = fs.readFileSync(path.join(ROOT, file), "utf8");
+  const match = text.match(new RegExp(`export const ${name} = ([0-9_]+);`));
+  if (!match) throw new Error(`${name} is no longer a number in ${file}`);
+  return Number(match[1].replaceAll("_", ""));
+}
+
+/**
+ * How long each counted load waits, after everything before it has fallen
+ * quiet, so it pays every timed read: the same reads on every load and every
+ * machine, rather than whichever intervals happened to have run out.
+ */
+const TIMED_READ_WAIT_MS =
+  Math.max(...TIMED_READS.map(([file, name]) => sourceConstant(file, name))) +
+  TIMED_READ_MARGIN_MS;
 
 const argv = process.argv.slice(2);
 const flag = name => argv.includes(`--${name}`);
@@ -344,12 +389,6 @@ function roundsOf(requests) {
   return Math.max(0, ...depth.values());
 }
 
-/**
- * When an admin request last started or answered, in any watched tab: a
- * counted load waits until `SETTLE_MS` after it.
- */
-let lastAdminRequestAt = 0;
-
 /** Watches one page's admin requests until none has started for `QUIET_MS`. */
 function watch(page) {
   const requests = [];
@@ -372,14 +411,12 @@ function watch(page) {
     request.__speed = entry;
     requests.push(entry);
     lastStart = entry.start;
-    lastAdminRequestAt = entry.start;
   });
   let lastEnd = Date.now();
   const end = request => {
     if (!request.__speed) return;
     request.__speed.end = Date.now();
     lastEnd = request.__speed.end;
-    lastAdminRequestAt = Math.max(lastAdminRequestAt, lastEnd);
   };
   page.on("requestfinished", end);
   page.on("requestfailed", end);
@@ -431,9 +468,8 @@ async function sample(context, log, load, before) {
     await watcher.quiet();
     watcher.requests.length = 0;
   }
-  // Begun once the server's short read intervals have passed since the last
-  // admin request, this tab's own above included (`SETTLE_MS`).
-  await sleep(Math.max(0, lastAdminRequestAt + SETTLE_MS - Date.now()));
+  // Every timed read's interval has run out, so this load pays each of them.
+  await sleep(TIMED_READ_WAIT_MS);
   const from = Date.now();
   const kept = await load(page);
   const to = await watcher.quiet();
@@ -512,6 +548,7 @@ async function steady(context, log, load, { fresh, before } = {}) {
     kept: samples[0].kept,
     startupStartsMs: median(samples.map(x => x.startupStartsMs)),
     mostStatements: Math.max(...samples.map(x => x.statements)),
+    eachStatements: samples.map(x => x.statements),
     result: {
       requests: Object.values(kinds).reduce((a, b) => a + b, 0),
       rounds: Math.min(...samples.map(x => x.rounds)),
@@ -548,6 +585,7 @@ async function measureDialect(dialect, dir) {
     out.timings[name] = {
       startupStartsMs: measured.startupStartsMs,
       mostStatements: measured.mostStatements,
+      eachStatements: measured.eachStatements,
     };
     return measured.result;
   };
@@ -612,9 +650,6 @@ async function measureDialect(dialect, dir) {
 
     // The signed-in browser whose fresh tabs open the remaining screens.
     const first = await context.newPage();
-    // Watched only so its requests count as the last ones a load settles
-    // after (`SETTLE_MS`); nothing it sends is counted.
-    watch(first);
     await openForm(first);
     await signIn(first);
     await first.close();

@@ -84,6 +84,9 @@ export async function findSingle<
       ? {}
       : { createIfMissing: args.createIfMissing }),
     ...(args.whenAbsent === undefined ? {} : { whenAbsent: args.whenAbsent }),
+    // The fields to answer with, which the service also reads alone where it
+    // can, so a read naming its fields does not depend on the others' columns.
+    ...(args.select === undefined ? {} : { select: args.select }),
     ...accessOptions(config),
     context: config.context,
   });

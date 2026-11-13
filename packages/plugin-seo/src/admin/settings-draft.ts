@@ -46,6 +46,16 @@ export interface ProfileDraft {
   url: string;
 }
 
+/**
+ * The site's own robots.txt lines as the form holds them: the box's text,
+ * and the confirmation of the sitemap pages its rules block, saved with the
+ * text and the pages it confirmed.
+ */
+export interface RobotsRulesDraft {
+  text: string;
+  confirmed?: { text: string; pages: string };
+}
+
 /** One other service's tag, as the form holds it while a person types. */
 export interface OtherTagDraft {
   name: string;
@@ -88,6 +98,8 @@ export interface SettingsDraft {
   llmsTxt: boolean;
   /** Whether each listed page has a plain-text copy. */
   plainTextCopies: boolean;
+  /** The site's own robots.txt lines. */
+  robotsRules: RobotsRulesDraft;
   /** The codes other services verify the site with. */
   verificationCodes: VerificationDraft;
 }
@@ -131,6 +143,42 @@ function patternsOf(value: unknown): SettingsDraft["patterns"] {
     };
   }
   return patterns;
+}
+
+/**
+ * The stored own robots.txt lines as the form holds them: the box empty
+ * where nothing is stored, as before the field existed.
+ */
+export function robotsRulesDraftOf(value: unknown): RobotsRulesDraft {
+  if (!isRecord(value)) return { text: "" };
+  const confirmed = isRecord(value.confirmed) ? value.confirmed : undefined;
+  return {
+    text: text(value.text),
+    ...(confirmed === undefined
+      ? {}
+      : {
+          confirmed: {
+            text: text(confirmed.text),
+            pages: text(confirmed.pages),
+          },
+        }),
+  };
+}
+
+/**
+ * The own lines as they are stored: the text without the blank lines at its
+ * end, the confirmation only while it is for that text, and null for an
+ * empty box, so clearing it clears the value.
+ */
+function storedRobotsRules(draft: RobotsRulesDraft): RobotsRulesDraft | null {
+  const kept = draft.text.replace(/\s+$/, "");
+  if (kept.trim() === "") return null;
+  const confirmed =
+    draft.confirmed !== undefined &&
+    draft.confirmed.text.replace(/\s+$/, "") === kept
+      ? { text: kept, pages: draft.confirmed.pages }
+      : undefined;
+  return confirmed === undefined ? { text: kept } : { text: kept, confirmed };
 }
 
 /**
@@ -235,6 +283,7 @@ export function draftOf(
     indexNow: stored.indexNow === true,
     llmsTxt: stored.llmsTxt === true,
     plainTextCopies: stored.plainTextCopies === true,
+    robotsRules: robotsRulesDraftOf(stored.robotsRules),
     verificationCodes: verificationDraftOf(stored.verificationCodes),
   };
 }
@@ -442,6 +491,7 @@ function storedForm(
   return {
     ...draft,
     structuredData: savedRules(draft.structuredData, defaults),
+    robotsRules: storedRobotsRules(draft.robotsRules),
     verificationCodes: storedVerification(draft.verificationCodes),
     productionAddresses: draft.productionAddresses
       .map(address => address.trim())

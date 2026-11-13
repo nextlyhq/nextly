@@ -58,12 +58,14 @@ import { useAddressParam } from "./address";
 import { ConnectionsTab } from "./connections";
 import { ContentTypesTab } from "./content-types";
 import { useLeaveWarning } from "./leave-warning";
+import { ownRulesSaveProblem, useRobotsRulesCheck } from "./robots-rules";
 import { AdminLink, SeoTrail } from "./section";
 import {
   changesOf,
   verificationDraftOf,
   draftOf,
   rebasedDraft,
+  robotsRulesDraftOf,
   structuredDataOf,
   type SettingsDefaults,
   type SettingsDraft,
@@ -483,10 +485,13 @@ function SettingsPanel({
   switchedOff,
   typesFailed,
   serverAddresses,
+  rulesCheck,
   stored,
 }: {
   tab: TabId;
   tabProps: TabProps;
+  /** Which sitemap pages the own robots.txt rules being typed block. */
+  rulesCheck: ReturnType<typeof useRobotsRulesCheck>;
   /** The settings as stored, which what was saved is read from. */
   stored: StoredSettings;
   types: readonly SeoContentType[];
@@ -502,7 +507,14 @@ function SettingsPanel({
     case "brand":
       return <BrandTab {...tabProps} />;
     case "crawlers":
-      return <CrawlersTab {...tabProps} serverAddresses={serverAddresses} />;
+      return (
+        <CrawlersTab
+          {...tabProps}
+          serverAddresses={serverAddresses}
+          rulesCheck={rulesCheck.check}
+          retryRulesCheck={rulesCheck.retry}
+        />
+      );
     case "connections":
       return (
         <ConnectionsTab
@@ -650,7 +662,17 @@ function SettingsScreen({
     () => !finished && !draft.setupDismissed
   );
   const changes = changesOf(stored, draft, defaults);
-  const problem = draftProblem(draft, types, serverAddresses);
+  const rulesCheck = useRobotsRulesCheck(
+    draft.robotsRules.text,
+    draft.hiddenTypes
+  );
+  const problem =
+    draftProblem(draft, types, serverAddresses) ??
+    ownRulesSaveProblem(
+      draft.robotsRules,
+      robotsRulesDraftOf(stored.robotsRules).text,
+      rulesCheck.check
+    );
   useLeaveWarning(changes !== null);
   useHeldDraft(slug, stored, draft, changes !== null);
 
@@ -681,6 +703,7 @@ function SettingsScreen({
         switchedOff={switchedOff}
         typesFailed={typesFailed}
         serverAddresses={serverAddresses}
+        rulesCheck={rulesCheck}
         stored={stored}
       />
       <SaveBar
