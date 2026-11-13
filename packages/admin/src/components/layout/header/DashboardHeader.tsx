@@ -9,6 +9,7 @@ import { useSuppressedChrome } from "../ChromeSuppression";
 import { usePanelFold } from "../PanelFold";
 import { RailAccount } from "../sidebar/RailAccount";
 
+import { END_PLACE_ROOM } from "./bar-fold";
 import { pluginHeaderItems } from "./header-visibility";
 import { HeaderTrail } from "./HeaderTrail";
 import { STAND_IN_PLACE, TopBarPlaceTarget } from "./TopBarPlaces";
@@ -90,8 +91,11 @@ export function DashboardHeader({
         // Holding only a page's stand-in (an editor's outline) it has no box,
         // so the box first appears with the page and its trail together, and
         // the trail never pushes it (`STAND_IN_PLACE`).
+        // From a bar wide enough for every control, the part keeps their
+        // 32rem and the trail gives way (`bar-fold`).
         className={cn(
           "@container/toolbar flex min-w-0 flex-1 items-center justify-end gap-2 empty:hidden",
+          END_PLACE_ROOM,
           STAND_IN_PLACE
         )}
       />

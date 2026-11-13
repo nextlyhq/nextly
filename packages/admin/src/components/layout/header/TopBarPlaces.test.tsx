@@ -18,6 +18,7 @@ import {
   within,
 } from "@testing-library/react";
 import { useState } from "react";
+import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Breadcrumbs } from "@admin/components/shared/breadcrumbs";
@@ -28,7 +29,11 @@ vi.mock("@admin/context/providers/BrandingProvider", () => ({
 
 import { DashboardHeader } from "./DashboardHeader";
 import { HeaderTrailProvider } from "./HeaderTrail";
-import { TopBarPlace, TopBarPlacesProvider } from "./TopBarPlaces";
+import {
+  TopBarPlace,
+  TopBarPlacesProvider,
+  useTopBarWidth,
+} from "./TopBarPlaces";
 
 function Shell({
   children,
@@ -198,5 +203,56 @@ describe("a page's breadcrumb", () => {
     );
     expect(within(main()).getByRole("navigation")).toBeTruthy();
     expect(within(bar()).queryByRole("navigation")).toBeNull();
+  });
+});
+
+describe("the bar's width, as a page reads it", () => {
+  it("is known in the first frame drawn, before the browser paints", async () => {
+    // The bar is 400 px wide. React applies what a layout effect sets in the
+    // same task as the commit, before the browser paints; what a passive
+    // effect sets lands in a later task. The first DOM the page shows, as a
+    // mutation observer sees it at the end of that task, must already say
+    // the width.
+    const rect = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockReturnValue(
+        DOMRect.fromRect({ x: 0, y: 0, width: 400, height: 52 })
+      );
+    const acting = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    const wasActing = acting.IS_REACT_ACT_ENVIRONMENT;
+    acting.IS_REACT_ACT_ENVIRONMENT = false;
+    function Reader() {
+      const width = useTopBarWidth();
+      return <span data-testid="bar-width">{width ?? "none"}</span>;
+    }
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      const firstDrawn = new Promise<string>(resolve => {
+        const observer = new MutationObserver(() => {
+          const shown = container.querySelector('[data-testid="bar-width"]');
+          if (shown === null) return;
+          observer.disconnect();
+          resolve(shown.textContent ?? "");
+        });
+        observer.observe(container, {
+          subtree: true,
+          childList: true,
+          characterData: true,
+        });
+      });
+      root.render(
+        <Shell>
+          <Reader />
+        </Shell>
+      );
+      expect(await firstDrawn).toBe("400");
+    } finally {
+      root.unmount();
+      container.remove();
+      acting.IS_REACT_ACT_ENVIRONMENT = wasActing;
+      rect.mockRestore();
+    }
   });
 });

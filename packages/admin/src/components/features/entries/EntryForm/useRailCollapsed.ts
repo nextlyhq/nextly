@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useLayoutEffect, useState } from "react";
 
 import {
   recallPreference,
@@ -22,7 +22,10 @@ export function useRailCollapsed(): {
 } {
   const [collapsed, setCollapsedState] = useState(false);
 
-  useEffect(() => {
+  // Before the first paint, so an editor whose reader folded its panel is
+  // never drawn with it open for a frame, and the editor's outline, which
+  // reads it the same way, is drawn as the editor will be.
+  useLayoutEffect(() => {
     if (typeof window === "undefined") return;
     // Read through the device memory, which guards storage that throws
     // (privacy modes, quota): nothing read means expanded.

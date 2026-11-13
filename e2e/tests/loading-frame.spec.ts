@@ -868,11 +868,10 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
 
 /**
  * The widths an editor is held to: 1366, where the editor docks its side panel
- * with the menu panel open, and either side of it. At 1024 the bar's own
- * controls still fold a frame after they are drawn, which the bar's change
- * holds to this promise.
+ * with the menu panel open, either side of it, and 1024, where the bar folds
+ * its controls into More.
  */
-const EDITOR_WIDTHS = [1280, 1366, 1440] as const;
+const EDITOR_WIDTHS = [1024, 1280, 1366, 1440] as const;
 
 /** A post of the test's own, which no other test opens or holds. */
 async function ownPost(page: Page, made: string[]): Promise<string> {

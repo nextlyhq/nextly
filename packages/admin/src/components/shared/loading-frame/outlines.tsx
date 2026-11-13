@@ -59,6 +59,12 @@ import {
 } from "@admin/components/features/widgets/sizes";
 import { MoreHorizontal, PanelRight } from "@admin/components/icons";
 import {
+  DOCKED_PANEL_COLUMN,
+  DOCKED_PANEL_ROW,
+} from "@admin/components/features/entries/EntryForm/document-panel-mode";
+import { useRailCollapsed } from "@admin/components/features/entries/EntryForm/useRailCollapsed";
+import { UNFOLDED_BAR_ONLY } from "@admin/components/layout/header/bar-fold";
+import {
   STAND_IN_ATTRIBUTE,
   TopBarPlace,
 } from "@admin/components/layout/header/TopBarPlaces";
@@ -734,10 +740,13 @@ function EditorBarOutline({ creating }: { creating: boolean }): JSX.Element {
               disabled
               aria-disabled="true"
               aria-label="More actions"
+              data-frame-part="bar-more"
             >
               <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
             </Button>
-            <span className="contents max-lg:hidden">
+            {/* Drawn only where the bar keeps its controls unfolded, by the
+                bar's own width, as the bar decides it (`bar-fold`). */}
+            <span className={cn("contents", UNFOLDED_BAR_ONLY)}>
               <span className={PANEL_TOGGLE_RULE} aria-hidden="true" />
               <Button
                 type="button"
@@ -777,40 +786,57 @@ export function EditorOutline({
   /** The editor's field column measure, from the editor itself. */
   columnStyle?: CSSProperties;
 }): JSX.Element {
+  // The panel this reader folded away stays folded on the next document, so
+  // the outline draws none either, read as the editor reads it.
+  const panelFolded = useRailCollapsed().collapsed;
   return (
     <>
       <EditorBarOutline creating={creating} />
       <ScreenOutline>
         <PageContainer type="editor">
-          <div className="flex flex-col items-stretch lg:min-h-[calc(100vh-var(--admin-bar-height))] lg:flex-row">
+          {/* Sized by the editor's frame, as the editor decides whether its
+              panel docks (`document-panel-mode`), not by the window. */}
+          <div className="@container/editor">
             <div
               className={cn(
-                "mx-auto w-full min-w-0 flex-1 pt-6 lg:pt-8",
-                columnClassName
+                "flex flex-col items-stretch lg:min-h-[calc(100vh-var(--admin-bar-height))]",
+                DOCKED_PANEL_ROW
               )}
-              style={columnStyle}
             >
-              {/* The document's title line and its address under it, then
+              <div
+                className={cn(
+                  "mx-auto w-full min-w-0 flex-1 pt-6 lg:pt-8",
+                  columnClassName
+                )}
+                style={columnStyle}
+              >
+                {/* The document's title line and its address under it, then
                   its fields' card, as the editor draws them. */}
-              <OutlineBar className="h-10 w-2/3 max-w-[480px]" />
-              <OutlineBar className="mt-3 h-3 w-48" />
-              <div className="mt-8">
-                <FieldsOutline />
+                <OutlineBar className="h-10 w-2/3 max-w-[480px]" />
+                <OutlineBar className="mt-3 h-3 w-48" />
+                <div className="mt-8">
+                  <FieldsOutline />
+                </div>
               </div>
-            </div>
-            <div
-              // Beside the fields from the wide layout up; below it the
-              // editor folds its panel into a sheet, so none is drawn.
-              className="hidden w-full shrink-0 flex-col border-border bg-card p-6 lg:flex lg:w-(--editor-side-width) lg:border-l"
-              style={
-                { "--editor-side-width": `${sideWidth}px` } as CSSProperties
-              }
-            >
-              <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
-                <OutlineBar className="h-3.5 w-[60px]" />
-                <OutlineBar soft className="h-3 w-full" />
-                <OutlineBar soft className="h-3 w-4/5" />
-              </div>
+              {panelFolded ? null : (
+                <div
+                  // Beside the fields only where the editor docks its panel; a
+                  // narrower editor floats it closed, so none is drawn.
+                  className={cn(
+                    "w-full shrink-0 flex-col border-border bg-card p-6",
+                    DOCKED_PANEL_COLUMN
+                  )}
+                  style={
+                    { "--editor-side-width": `${sideWidth}px` } as CSSProperties
+                  }
+                >
+                  <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4">
+                    <OutlineBar className="h-3.5 w-[60px]" />
+                    <OutlineBar soft className="h-3 w-full" />
+                    <OutlineBar soft className="h-3 w-4/5" />
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </PageContainer>
