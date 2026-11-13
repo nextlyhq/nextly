@@ -48,6 +48,10 @@ import { NextlyError } from "../errors";
 
 import { BaseService } from "./base-service";
 import { canonicalJson } from "./lib/canonical-json";
+import {
+  registryPage,
+  warnIfRegistryListingLarge,
+} from "./lib/registry-listing-page";
 import type { Logger } from "./types";
 
 // ============================================================
@@ -400,43 +404,20 @@ export abstract class BaseRegistryService<
 
   /**
    * Every record as stored, oldest first, handed to `view` and answered with
-   * what it returns: the one listing every narrower read of the whole
-   * registry derives from, so they cannot come to disagree.
-   *
-   * Outside a transaction it comes from the registry cache
-   * (`cachedRegistryListing`), read again only once the registry has changed:
-   * a change this process makes clears it, and one made elsewhere is seen once
-   * the stored count of registry writes is read again. Inside a transaction,
-   * or through an adapter that cannot say whether one is open, it is read
-   * every time, on the transaction where the read is routed to one. So is a
-   * read that decides a write (`forWrite`): one listing up to a read interval
-   * old would let a write on this instance miss a change another made a
-   * moment before, as `findRecordForWrite` keeps a row's.
+   * what it returns: this registry's listing, from the registry cache outside
+   * a transaction (`listStoredRegistry`, which says when it is read as
+   * stored instead).
    */
   protected async listStored<T>(
     view: (rows: readonly Readonly<Record<string, unknown>>[]) => T,
-    { forWrite = false }: { forWrite?: boolean } = {}
+    options: { forWrite?: boolean } = {}
   ): Promise<T> {
-    try {
-      const table = await this.resolveRegistryTableName();
-      const read = (): Promise<Record<string, unknown>[]> =>
-        this.adapter.select<Record<string, unknown>>(table, {
-          orderBy: [{ column: "createdAt", direction: "asc" }],
-        });
-      const adapter = this.adapter as Partial<
-        Pick<DrizzleAdapter, "transactionOpenInFlow">
-      >;
-      const cached =
-        !forWrite &&
-        typeof adapter.transactionOpenInFlow === "function" &&
-        !adapter.transactionOpenInFlow();
-      return cached
-        ? await cachedRegistryListing(this.adapter, table, read, view)
-        : view(await read());
-    } catch (error) {
-      if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
-    }
+    const table = await this.resolveRegistryTableName().catch(
+      (error: unknown) => {
+        throw registryReadError(this.dialect, error);
+      }
+    );
+    return listStoredRegistry(this.adapter, this.dialect, table, view, options);
   }
 
   /**
@@ -577,69 +558,80 @@ export abstract class BaseRegistryService<
 
   /**
    * List records with pagination, search, and total count.
+   *
+   * Derived from the listing (`listStored`), in memory: the registry is the
+   * documented exception to paging in the database
+   * (`shared/lib/registry-listing-page`). The filters, the allowlist and the
+   * denylist apply before the total is counted, so it counts only the rows
+   * the caller may see, and the page and its total come from one snapshot.
    */
   protected async listRecords(
     options?: BaseListOptions
   ): Promise<BaseListResult<TRecord>> {
     this.assertPaginationIsComplete(options);
-    // Short-circuit when the caller passed an explicit empty allowlist
-    // (e.g. a user with no read permissions on any record). Returning early
-    // keeps `total` honest, avoids hitting the DB with a no-op query, and
-    // sidesteps the dialect-specific footgun of emitting `WHERE slug IN ()`.
+    // An explicit empty allowlist (a user with no read permissions on any
+    // record) sees nothing.
     if (options?.slugAllowlist && options.slugAllowlist.length === 0) {
       return { data: [], total: 0 };
     }
-    try {
-      const conditions = this.buildFilterConditions(options);
-
-      // Add search filter (searches columns returned by getSearchColumns())
-      if (options?.search) {
-        // The text as typed: `ICONTAINS` matches it literally, without regard to case,
-        // so a typed `%` or `_` is a character to find rather than a wildcard.
-        const searchColumns = this.getSearchColumns();
-        conditions.push({
-          or: searchColumns.map(column => ({
-            column,
-            op: "ICONTAINS" as const,
-            value: options.search,
-          })),
-        });
-      }
-
-      const whereClause =
-        conditions.length > 0 ? { and: conditions } : undefined;
-
-      // Get total count (without pagination)
-      const allResults = await this.adapter.select<{ id: string }>(
-        await this.resolveRegistryTableName(),
-        {
-          where: whereClause,
-          columns: ["id"],
-        }
+    return this.listStored(rows => {
+      warnIfRegistryListingLarge(this.resourceType, rows.length, message =>
+        this.logger.warn(message)
       );
-      const total = allResults.length;
-
-      // Get paginated results
-      const results = await this.adapter.select<TRecord>(
-        await this.resolveRegistryTableName(),
-        {
-          where: whereClause,
-          orderBy: [{ column: "createdAt", direction: "asc" }],
-          limit: options?.limit,
-          offset: options?.offset,
-        }
-      );
-
+      const page = registryPage(rows, {
+        include: row => this.rowMatches(row, options),
+        ...(options?.search
+          ? {
+              search: {
+                text: options.search,
+                columns: this.getSearchColumns(),
+              },
+            }
+          : {}),
+        orderBy: "createdAt",
+        direction: "asc",
+        ...(options?.offset === undefined ? {} : { offset: options.offset }),
+        ...(options?.limit === undefined ? {} : { limit: options.limit }),
+      });
       return {
-        data: results.map(record => this.deserializeRecord(record)),
-        total,
+        data: page.rows.map(row =>
+          this.deserializeRecord(
+            structuredClone(row) as Record<string, unknown>
+          )
+        ),
+        total: page.total,
       };
-    } catch (error) {
-      if (NextlyError.is(error)) throw error;
-      // Normalise raw driver errors so listRecords surfaces the correct
-      // NextlyError kind instead of a generic 500.
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    });
+  }
+
+  /**
+   * Whether a stored row passes `options`' filters: the same conditions
+   * {@link buildFilterConditions} puts in a query, applied to a row the
+   * listing holds.
+   */
+  private rowMatches(
+    row: Readonly<Record<string, unknown>>,
+    options: BaseListOptions | undefined
+  ): boolean {
+    if (options?.source && row.source !== options.source) return false;
+    if (
+      options?.migrationStatus &&
+      row.migrationStatus !== options.migrationStatus
+    ) {
+      return false;
     }
+    if (
+      options?.locked !== undefined &&
+      (row.locked === true || row.locked === 1) !== options.locked
+    ) {
+      return false;
+    }
+    const slug = String(row.slug);
+    if (options?.slugAllowlist && !options.slugAllowlist.includes(slug)) {
+      return false;
+    }
+    if (options?.slugDenylist?.includes(slug)) return false;
+    return true;
   }
 
   // ============================================================
@@ -982,4 +974,60 @@ export abstract class BaseRegistryService<
 
     return conditions;
   }
+}
+
+/**
+ * Every row of the registry table `table` as stored, oldest first, handed to
+ * `view` and answered with what it returns: the one listing every narrower
+ * read of the whole registry derives from, so they cannot come to disagree.
+ *
+ * Outside a transaction it comes from the registry cache
+ * (`cachedRegistryListing`), read again only once the registry has changed:
+ * a change this process makes clears it, and one made elsewhere is seen once
+ * the stored count of registry writes is read again. Inside a transaction,
+ * or through an adapter that cannot say whether one is open, it is read
+ * every time, on the transaction where the read is routed to one. So is a
+ * read that decides a write (`forWrite`): one listing up to a read interval
+ * old would let a write on this instance miss a change another made a
+ * moment before, as `findRecordForWrite` keeps a row's.
+ *
+ * The registry services read it as `listStored`; a service that is not one
+ * of them but reads a registry table (the dynamic collections' registry)
+ * reads it here, through the same cache.
+ */
+export async function listStoredRegistry<T>(
+  adapter: DrizzleAdapter,
+  dialect: "postgresql" | "mysql" | "sqlite",
+  table: string,
+  view: (rows: readonly Readonly<Record<string, unknown>>[]) => T,
+  { forWrite = false }: { forWrite?: boolean } = {}
+): Promise<T> {
+  try {
+    const read = (): Promise<Record<string, unknown>[]> =>
+      adapter.select<Record<string, unknown>>(table, {
+        orderBy: [{ column: "createdAt", direction: "asc" }],
+      });
+    const flow = adapter as Partial<
+      Pick<DrizzleAdapter, "transactionOpenInFlow">
+    >;
+    const cached =
+      !forWrite &&
+      typeof flow.transactionOpenInFlow === "function" &&
+      !flow.transactionOpenInFlow();
+    return cached
+      ? await cachedRegistryListing(adapter, table, read, view)
+      : view(await read());
+  } catch (error) {
+    throw registryReadError(dialect, error);
+  }
+}
+
+/** A failed registry read as the error a caller is answered with. */
+function registryReadError(
+  dialect: "postgresql" | "mysql" | "sqlite",
+  error: unknown
+): NextlyError {
+  return NextlyError.is(error)
+    ? error
+    : NextlyError.fromDatabaseError(toDbError(dialect, error));
 }

@@ -1,5 +1,6 @@
-// The permission allowlist has to be a CONDITION on the query, because the
-// `total` this returns is what a client pages by.
+// The permission allowlist has to decide which rows are counted, before the
+// total is taken and the page cut, because the `total` this returns is what a
+// client pages by.
 //
 // Filtering the returned page in application code instead makes the rows and
 // the meta describe different sets: the total becomes the count of one
@@ -9,6 +10,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import Database from "better-sqlite3";
+import { asc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { describe, expect, it, afterEach, beforeEach } from "vitest";
 
@@ -93,7 +95,19 @@ describe("DynamicCollectionRegistryService.listCollections — slugAllowlist", (
         maxParamsPerQuery: 999,
         maxIdentifierLength: 128,
       }),
-    } satisfies Pick<DrizzleAdapter, "getDrizzle" | "getCapabilities">;
+      // The registry's listing, which the list's pages, totals and order are
+      // derived from (`listStoredRegistry`): every row, oldest first, as the
+      // real adapter's `select` answers it. With no `transactionOpenInFlow`
+      // the listing is read on every call rather than cached, so each case
+      // reads what it seeded.
+      select: async () =>
+        db
+          .select()
+          .from(dynamicCollectionsSqlite)
+          .orderBy(asc(dynamicCollectionsSqlite.createdAt)),
+    } satisfies Pick<DrizzleAdapter, "getDrizzle" | "getCapabilities"> & {
+      select: () => Promise<unknown[]>;
+    };
 
     // `satisfies` checks the two members the registry reaches for against the
     // adapter's own declarations, so a signature change fails here rather than
