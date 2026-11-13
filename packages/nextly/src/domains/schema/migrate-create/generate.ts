@@ -31,6 +31,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import type { JoinRetries } from "../../i18n/migration/archive-preflight";
+import { carriedDefinition } from "../../i18n/migration/carried-definition";
 import {
   type CompanionHistory,
   companionHistoryKey,
@@ -2060,12 +2061,28 @@ function planCompanionMigrations(
         ? prevTable !== undefined && !hadLocalizedColumns
         : previous.companion;
 
+    // Each companion column created from a main column takes what that column carries
+    // (`carriedDefinition`), as the previous snapshot records it.
+    const carriedSpec = prevTable
+      ? {
+          ...spec,
+          columns: spec.columns.map(col => {
+            const carried = carriedDefinition(
+              prevTable.columns.find(main => main.name === col.name),
+              col,
+              dialect
+            );
+            return carried ? { ...col, carried } : col;
+          }),
+        }
+      : spec;
     const plan = planCompanionMigration({
-      spec,
+      spec: carriedSpec,
       prevMainColumnNames,
       companionExisted,
     });
-    if (plan.kind !== "none") entries.push({ spec, plan, entity: entityKind });
+    if (plan.kind !== "none")
+      entries.push({ spec: carriedSpec, plan, entity: entityKind });
     // A companion that was there and stays: the translated fields it gains.
     const adds = companionExisted
       ? addsEntryFor(

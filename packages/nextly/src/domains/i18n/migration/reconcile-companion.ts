@@ -701,6 +701,12 @@ export interface CompanionTransitionArgs {
    */
   liveCompanionColumns?: readonly string[];
   /**
+   * Each companion column's default as this database has it, by column. A column turning
+   * translation off restores to the main table takes its default back (`CarriedDefinition`).
+   * Describes one database only, like `liveCompanionColumns`.
+   */
+  liveCompanionDefaults?: Readonly<Record<string, string>>;
+  /**
    * The companion's index names as this database has them, so a per-language unique index is
    * created only where missing and dropped only where present. Left out, they are planned from
    * the fields before the change, which is what a migration file, replayed elsewhere, must be.
@@ -941,6 +947,13 @@ export function buildCompanionTransitionStatements(
     spec.liveness = copyLiveness(
       args.languageOrder,
       args.companionHasStatus ?? args.wasStatus
+    );
+    // A restored main column takes back the default its companion column has.
+    const defaults = args.liveCompanionDefaults ?? {};
+    spec.columns = spec.columns.map(c =>
+      defaults[c.name] === undefined
+        ? c
+        : { ...c, carried: { default: defaults[c.name] } }
     );
     return {
       statements: buildLocalizationDownStatements(spec, {

@@ -450,7 +450,12 @@ export function buildLocalizationDownStatements(
   for (const c of onMain) {
     if (alreadyPresent.has(c.name)) continue;
     stmts.push(
-      `ALTER TABLE ${q(mainTable, dialect)} ADD COLUMN ${q(c.name, dialect)} ${restoreTargetType(c, dialect)}`
+      // The widest type the values could need (`restoreTargetType`), with the default the column
+      // they come from carries, which the restored column takes back.
+      `ALTER TABLE ${q(mainTable, dialect)} ADD COLUMN ${q(c.name, dialect)} ${restoreTargetType(c, dialect)}` +
+        (c.carried?.default === undefined
+          ? ""
+          : ` DEFAULT ${c.carried.default}`)
     );
   }
 
