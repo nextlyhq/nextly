@@ -208,7 +208,7 @@ const UNRESERVED = /[A-Za-z0-9\-._~]/;
  * UTF-8. A reserved character keeps the form it was written in, so `%2F` is
  * never a path's `/`. `*` and `$` are ASCII and pass as written.
  */
-export function normalizedPath(value: string): string {
+function normalizedPath(value: string): string {
   let out = "";
   for (let at = 0; at < value.length; at++) {
     const char = value[at] ?? "";
