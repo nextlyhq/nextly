@@ -11,7 +11,8 @@
  * the database no longer has.
  *
  * - **Read rarely, and once for everyone.** The stored version is read at most
- *   once per {@link SCHEMA_VERSION_READ_INTERVAL_MS} per process, by the first
+ *   once per {@link SCHEMA_VERSION_READ_INTERVAL_MS} per process (through
+ *   `stored-schema-seq`, the read the registry row cache follows too), by the first
  *   request to find the last read too old; every request arriving while that
  *   read runs waits for it rather than reading again. Every other request
  *   reads nothing. One indexed read of one row, every couple of seconds while
@@ -45,15 +46,18 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { container } from "../di/container";
 import { isServicesRegistered } from "../di/service-access";
+import {
+  markSchemaChanged,
+  SCHEMA_VERSION_READ_INTERVAL_MS,
+  storedSchemaSeq,
+} from "../domains/schema/stored-schema-seq";
 import type { CollectionsHandler } from "../services/collections-handler";
 import { isWithinLifetime, monotonicNow } from "../shared/lib/lifetime";
 
-/**
- * How long one read of the stored schema version is reused by this process:
- * the bound, with the reload after it, on how long another copy's schema
- * change goes unserved here.
- */
-export const SCHEMA_VERSION_READ_INTERVAL_MS = 2000;
+// The interval the stored version is read at, kept beside the read itself
+// (`stored-schema-seq`) and named here, where the served version's callers
+// have always found it.
+export { SCHEMA_VERSION_READ_INTERVAL_MS };
 
 /** What this process knows of the schema version. */
 interface ServedSchema {
@@ -157,28 +161,27 @@ async function followStoredVersion(
   // Cleared as the read begins: a change marked while it runs marks it again.
   state.stale = false;
   const known = state.database === adapter ? state.seq : undefined;
-  try {
-    const { readSchemaVersion } = await import(
-      "../domains/schema/schema-version"
-    );
-    const stored = await readSchemaVersion(
-      adapter.getDrizzle(),
-      adapter.getCapabilities().dialect
-    );
-    // No stored version: no registry write has recorded one yet.
-    const seq = stored.present ? (stored.version?.seq ?? 0) : 0;
-    // A reload that did not register every entity leaves the version served
-    // where it was and marks the definitions out of step, so the next read
-    // tries again, whether or not the stored version moved meanwhile.
-    if (seq !== known || !state.inSync) {
-      state.inSync = await loadDefinitionsAgain();
-      if (state.inSync) state.seq = seq;
-      else if (state.database !== adapter) state.seq = undefined;
-    }
-  } catch {
+  // Read now, through the one read the process shares (`stored-schema-seq`),
+  // so the registry row cache files what it reads under the count this read
+  // found rather than reading it again. It never throws.
+  const seq = await storedSchemaSeq(adapter, { fresh: true });
+  if (seq === undefined) {
     // The version could not be read (a database `nextly migrate` has not
     // prepared, a dropped connection): this copy keeps serving what it has.
     if (state.database !== adapter) state.seq = undefined;
+  } else if (seq !== known || !state.inSync) {
+    // A reload that did not register every entity leaves the version served
+    // where it was and marks the definitions out of step, so the next read
+    // tries again, whether or not the stored version moved meanwhile.
+    try {
+      state.inSync = await loadDefinitionsAgain();
+      if (state.inSync) state.seq = seq;
+      else if (state.database !== adapter) state.seq = undefined;
+    } catch {
+      // The reload could not run at all: kept as a failed read, served as
+      // before and tried again after the interval.
+      if (state.database !== adapter) state.seq = undefined;
+    }
   }
   state.database = adapter;
   state.readAt = monotonicNow();
@@ -214,5 +217,8 @@ async function loadDefinitionsAgain(): Promise<boolean> {
 export function bumpSchemaVersion(): number {
   const state = served();
   state.stale = true;
+  // The shared read too, so the cached registry rows follow the new count
+  // from the next read on rather than after the interval.
+  markSchemaChanged();
   return state.seq ?? 0;
 }

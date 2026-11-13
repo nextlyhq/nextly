@@ -10,9 +10,9 @@ vi.mock("../../../direct-api/nextly", () => ({
 // query a collection outside the caller's scope" below, which needs the real
 // `filterByResource` call to run rather than a stub that already decided the
 // answer.
-const getAllCollections = vi.fn();
+const getAllCollectionsForRead = vi.fn();
 vi.mock("../../../di/container", () => ({
-  container: { get: () => ({ getAllCollections }) },
+  container: { get: () => ({ getAllCollectionsForRead }) },
 }));
 
 import { DashboardService } from "../dashboard-service";
@@ -36,7 +36,7 @@ function makeService() {
 beforeEach(() => {
   vi.clearAllMocks();
   find.mockResolvedValue({ items: [] });
-  getAllCollections.mockResolvedValue([]);
+  getAllCollectionsForRead.mockResolvedValue([]);
 });
 
 describe("recent entries", () => {
@@ -144,7 +144,7 @@ describe("recent entries", () => {
     // scope filter be deleted without this test noticing. The registry
     // returns three collections; only "posts" is in scope, so only "posts"
     // may reach `find`.
-    getAllCollections.mockResolvedValue([
+    getAllCollectionsForRead.mockResolvedValue([
       {
         slug: "posts",
         tableName: "posts",

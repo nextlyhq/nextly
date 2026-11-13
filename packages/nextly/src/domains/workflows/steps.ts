@@ -117,6 +117,7 @@ import {
   type ReviewState,
   type ReviewStateChange,
 } from "./review-state-repository";
+import { recordStageChanged, webhookActorOfEvent } from "./stage-changed";
 // Shared with the request for changes' notice, which keeps the comment the step accepted.
 import { MAX_STEP_COMMENT_LENGTH } from "./step-comment";
 import type { ResolvedWorkflowStep, Workflow, WorkflowStepKind } from "./types";
@@ -1157,10 +1158,34 @@ async function moveParts(
         revision,
       });
       await pinMoved(tx, c, entry, recorded.get(entry.part));
+      await recordStepStageChange(tx, c, entry);
     }
   }
   if (stale.length > 0) throw staleRefusal(stale);
   return moved;
+}
+
+/**
+ * The part's move as an outbox event, on the step's transaction and right after its write, so a
+ * part refused later in the same step rolls the event back with the move. Leaving a stage that
+ * allows publishing withdraws the approval the part held there (`stepChange`).
+ */
+function recordStepStageChange(
+  tx: TransactionContext,
+  c: StepContext,
+  entry: ReadPart
+): Promise<void> {
+  return recordStageChanged(tx, {
+    document: c.input.document,
+    part: entry.part,
+    from: entry.stage,
+    to: c.step.to,
+    cause: "step",
+    approvalWithdrawn:
+      Boolean(entry.state?.approval) && allowsPublish(c.workflow, entry.stage),
+    definitionHash: c.definitionHash,
+    actor: webhookActorOfEvent(c.caller.event),
+  });
 }
 
 /**

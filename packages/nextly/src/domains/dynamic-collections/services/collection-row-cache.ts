@@ -1,16 +1,34 @@
 /**
- * Registry rows, kept for a second: collections' as
- * `DynamicCollectionRegistryService.getCollection` reads them, and Singles' and
- * components' as their registry services' `getRecordBySlug` does.
+ * Registry rows, kept while the registry has not changed: collections' as
+ * `DynamicCollectionRegistryService.getCollection` reads them, Singles' and
+ * components' as their registry services' `getRecordBySlug` does, and each
+ * registry table's whole listing as the registry services' reads for
+ * presentation derive from it (`cachedRegistryListing`).
  *
- * A single read of an entry looks its collection up several times, and every
- * lookup was a round trip. Here the first read of a slug goes to the database
- * and the reads within the next second are answered from memory.
+ * A single read of an entry looks its collection up several times, and one
+ * admin screen asks for the registry's slugs and records many times over; every
+ * lookup was a round trip. Here the first read goes to the database and later
+ * ones are answered from memory.
  *
- * Every registry change this process makes clears the cache at once, so the
- * process that made it never serves the old row. A change made elsewhere (by
- * another instance, the CLI or a migration) is seen once the cached row's
- * second is up: that lifetime is the bound on how long it can go unseen.
+ * Freshness follows the registry, not the clock. Each row is filed under the
+ * count of registry writes the database stored when its read began
+ * (`storedSchemaSeq`), and is served only while that count is the same. Every
+ * registry write moves the count in its own transaction, whoever makes it, so:
+ * - every registry change this process makes clears the cache at once, so the
+ *   process that made it never serves the old row;
+ * - a change made elsewhere (by another instance, the CLI or a migration) is
+ *   seen once this process reads the count again: at most
+ *   `SCHEMA_VERSION_READ_INTERVAL_MS` after its last read, the bound the
+ *   served schema definitions follow too (`route-handler/schema-version`);
+ * - while the count stays, nothing is read again, however long a request runs.
+ *
+ * The count is followed once this process has read it for the database (the
+ * served schema version reads it on every server request), and read again
+ * here whenever that read is older than the interval. Until then, and where
+ * the count cannot be read (a database handle that is not an adapter, a
+ * database without the stored version's table, a failed read), a row is
+ * served for `COLLECTION_ROW_LIFETIME_MS` after its read, as before the count
+ * was followed: a start, a CLI command or a script reads nothing more.
  *
  * Each caller gets its own copy, so an edit to what it was handed cannot reach
  * the next caller.
@@ -43,18 +61,41 @@ import type { TransactionInFlow } from "@nextlyhq/adapter-drizzle/types";
 
 import { isWithinLifetime, monotonicNow } from "../../../shared/lib/lifetime";
 import { readExecutorOfView } from "../../../shared/lib/read-transaction-scope";
+import {
+  markSchemaChanged,
+  SCHEMA_VERSION_READ_INTERVAL_MS,
+  storedSchemaSeq,
+} from "../../schema/stored-schema-seq";
 
 /**
- * How long a cached row is served before it is read again: the bound on how
- * long a change made outside this process goes unseen.
+ * How long a cached row is served before it is read again where the stored
+ * count of registry writes cannot be read: the bound, there, on how long a
+ * change made outside this process goes unseen.
  */
 export const COLLECTION_ROW_LIFETIME_MS = 1000;
 
+/**
+ * How long after a registry change made elsewhere commits this process may
+ * still serve a row from before it: the interval the stored count is read at,
+ * or the lifetime where the count cannot be read, whichever is longer.
+ */
+export const REGISTRY_ROW_STALENESS_MS = Math.max(
+  COLLECTION_ROW_LIFETIME_MS,
+  SCHEMA_VERSION_READ_INTERVAL_MS
+);
+
 interface CachedRow {
-  row: Record<string, unknown>;
+  /** A row, or a registry table's whole listing (`cachedRegistryListing`). */
+  row: Record<string, unknown> | Record<string, unknown>[];
   readAt: number;
   /** The cache's generation when the read began: served only while current. */
   generation: number;
+  /**
+   * The stored count of registry writes when the read began: served only
+   * while the count read now is the same. Undefined where it could not be
+   * read, and then served by `readAt` alone.
+   */
+  seq: number | undefined;
 }
 
 /** A row a transaction read, held for the rest of it (`registryRowOnTransaction`). */
@@ -101,6 +142,11 @@ function cacheState(): CacheState {
 /** Forget every cached row: a collection's, a Single's or a component's registry row changed. */
 export function clearRegistryRowCache(): void {
   cacheState().generation += 1;
+  // A registry write moves the stored count, and every write clears here
+  // once it has committed: the count is read again by the next read, so what
+  // it reads is filed under the count the write left rather than the one
+  // before it, which would be read again once the interval ran out.
+  markSchemaChanged();
 }
 
 /** A collection's registry row, cached as `cachedRegistryRow` caches any. */
@@ -113,11 +159,11 @@ export async function cachedCollectionRow(
 }
 
 /**
- * The row for `slug` in the registry table `table` on `database`: a copy of the cached one while it is
- * within its lifetime and no clear has happened since its read began,
- * otherwise `read()`'s, which is then kept. A read a clear overtakes may hold
- * the row from before the change: it is kept under the generation it began
- * in, so it is never served.
+ * The row for `slug` in the registry table `table` on `database`: a copy of
+ * the cached one while it is fresh (`isFresh`), otherwise `read()`'s, which
+ * is then kept. A read a clear or a moved count overtakes may hold the row
+ * from before the change: it is kept under the generation and the count it
+ * began in, so it is never served.
  */
 export async function cachedRegistryRow<
   T extends Record<string, unknown> | null,
@@ -128,29 +174,106 @@ export async function cachedRegistryRow<
   read: () => Promise<T>
 ): Promise<T> {
   const key = `${table}\u0000${slug}`;
+  const cached = await cachedRead(database, key, read);
+  return cached as T;
+}
+
+/**
+ * Every row of the registry table `table` on `database`, as `read()` lists
+ * them, kept and refreshed as a row is, handed to `view` and answered with
+ * what it returns. `view` is given the rows held for every caller: it derives
+ * what its caller needs (the slugs, some columns, whole records) without
+ * changing them, and hands out nothing of theirs that a caller could change,
+ * copying what it keeps whole. One listing per table serves every narrower
+ * view of it, so the views cannot come to disagree.
+ */
+export async function cachedRegistryListing<T>(
+  database: object,
+  table: string,
+  read: () => Promise<Record<string, unknown>[]>,
+  view: (rows: readonly Readonly<Record<string, unknown>>[]) => T
+): Promise<T> {
+  const key = `${table}\u0000\u0000listing`;
+  const { hit, seq } = await freshHit(database, key);
+  if (hit !== undefined) return view(hit.row as Record<string, unknown>[]);
+  return view(await readAndKeep(database, key, seq, read));
+}
+
+/**
+ * What is cached under `key` on `database`, where it may still be served, and
+ * the stored count read now, which a fresh read is filed under.
+ */
+async function freshHit(
+  database: object,
+  key: string
+): Promise<{ hit: CachedRow | undefined; seq: number | undefined }> {
+  const seq = await storedSchemaSeq(database, { followedOnly: true });
   const cache = cacheState();
-  let rows = cache.byDatabase.get(database);
-  const hit = rows?.get(key);
-  if (
-    hit !== undefined &&
-    hit.generation === cache.generation &&
-    isWithinLifetime(hit.readAt, COLLECTION_ROW_LIFETIME_MS)
-  ) {
-    return structuredClone(hit.row) as T;
+  const hit = cache.byDatabase.get(database)?.get(key);
+  return {
+    hit:
+      hit !== undefined && isFresh(hit, cache.generation, seq)
+        ? hit
+        : undefined,
+    seq,
+  };
+}
+
+/** Whether `hit` may be served, the count read now being `seq`. */
+function isFresh(
+  hit: CachedRow,
+  generation: number,
+  seq: number | undefined
+): boolean {
+  if (hit.generation !== generation) return false;
+  // The count followed where it can be read; the lifetime where it cannot.
+  return seq !== undefined
+    ? hit.seq === seq
+    : isWithinLifetime(hit.readAt, COLLECTION_ROW_LIFETIME_MS);
+}
+
+/** A copy of the row cached under `key` while fresh, otherwise `read()`'s, kept. */
+async function cachedRead(
+  database: object,
+  key: string,
+  read: () => Promise<Record<string, unknown> | null>
+): Promise<Record<string, unknown> | null> {
+  const { hit, seq } = await freshHit(database, key);
+  if (hit !== undefined) {
+    return structuredClone(hit.row as Record<string, unknown>);
   }
+  // The caller's own: the kept one is a copy.
+  return readAndKeep(database, key, seq, read);
+}
+
+/**
+ * Run `read` and keep what it answers under `key`, filed under the cache's
+ * generation and the count `seq` as they were when it began, so a clear or
+ * a moved count that overtakes it leaves it unserved. A missing row is never
+ * kept: a register committing a moment later must be seen at once, however
+ * its clear and its commit fall around this read.
+ */
+async function readAndKeep<
+  T extends Record<string, unknown> | Record<string, unknown>[] | null,
+>(
+  database: object,
+  key: string,
+  seq: number | undefined,
+  read: () => Promise<T>
+): Promise<T> {
+  const cache = cacheState();
   const generation = cache.generation;
   // Timed from before the read, so the lifetime never outlasts the moment the
   // database answered.
   const readAt = monotonicNow();
   const row = await read();
-  // A missing row is never kept: a register committing a moment later must be seen at once,
-  // however its clear and its commit fall around this read.
   if (row === null) return row;
+  let rows = cache.byDatabase.get(database);
   if (rows === undefined) {
     rows = new Map();
     cache.byDatabase.set(database, rows);
   }
-  rows.set(key, { row: structuredClone(row), readAt, generation });
+  rows.set(key, { row: structuredClone(row), readAt, generation, seq });
   return row;
 }
 

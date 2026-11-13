@@ -9,8 +9,8 @@
  *   `=` and a longer one with `IN`.
  * - A warm Single or component read sends no registry statement, and answers as a cold one does.
  * - Every registry write a registry service makes is seen at once; a change made elsewhere once
- *   the cached row's second is up, and not before; and a read inside a transaction never comes
- *   from the cache.
+ *   this process reads the stored count of registry writes again, and not before; and a read
+ *   inside a transaction never comes from the cache.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -90,10 +90,12 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import { storeSchemaVersion } from "../../schema/schema-version";
 import {
-  clearRegistryRowCache,
-  COLLECTION_ROW_LIFETIME_MS,
-} from "../../dynamic-collections/services/collection-row-cache";
+  SCHEMA_VERSION_READ_INTERVAL_MS,
+  storedSchemaSeq,
+} from "../../schema/stored-schema-seq";
 
 let current: TestNextly | undefined;
 
@@ -415,23 +417,33 @@ describe.each(getConfiguredTestDialects())(
       expect(await fieldNames()).toEqual(["note", "extra"]);
     });
 
-    it("sees a Single changed elsewhere once the cached row's second is up, and not before", async () => {
+    it("sees a Single changed elsewhere once the stored count is read again, and not before", async () => {
       const { t } = await bootSite(dialect);
       const singles = t.getService("singleRegistryService") as {
         getSingleBySlug(slug: string): Promise<{ label?: string } | null>;
       };
       vi.useFakeTimers({ toFake: ["performance"] });
-      // Rows cached while the site booted were timed on the real clock.
+      // Rows cached, and the count read, while the site booted were timed on
+      // the real clock.
       clearRegistryRowCache();
+      // The count read now, on the faked clock, as a server's first request
+      // reads it: the cache follows it from here.
+      await storedSchemaSeq(t.adapter, { fresh: true });
       const before = (await singles.getSingleBySlug("site"))?.label;
 
-      // Past the registry services, as another process writes.
-      await t.adapter.update(
-        "dynamic_singles",
-        { label: "Elsewhere" },
-        { and: [{ column: "slug", op: "=", value: "site" }] }
-      );
-      vi.advanceTimersByTime(COLLECTION_ROW_LIFETIME_MS - 1);
+      // Past the registry services, as another process writes: the row and
+      // the stored count of registry writes in one transaction.
+      await t.adapter.transaction(async tx => {
+        await tx.update(
+          "dynamic_singles",
+          { label: "Elsewhere" },
+          { and: [{ column: "slug", op: "=", value: "site" }] }
+        );
+        await storeSchemaVersion(tx.getDrizzle(), t.adapter.dialect, {
+          wrote: true,
+        });
+      });
+      vi.advanceTimersByTime(SCHEMA_VERSION_READ_INTERVAL_MS - 1);
       expect((await singles.getSingleBySlug("site"))?.label).toBe(before);
 
       vi.advanceTimersByTime(1);
