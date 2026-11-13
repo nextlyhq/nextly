@@ -177,6 +177,7 @@ import { parseSqlSections } from "../../domains/schema/migrate/sql-sections";
 import { readLiveSchema } from "../../domains/schema/migrate/statement-judgement";
 import {
   adoptUniqueIndexesAlreadyThere,
+  type AdoptedUniqueIndex,
   refuseUniqueIndexesOverRepeats,
   withoutAdoptedIndexes,
 } from "../../domains/schema/migrate/unique-column-guard";
@@ -3889,8 +3890,9 @@ function assertRunsAsJudged(
 /**
  * The file's UP less each unique index the database already carries under the file's name for it
  * (`adoptUniqueIndexesAlreadyThere`), made by the run's own one-to-one step or a Builder save before
- * the file was written. A file with a snapshot of its own is judged against the schema that snapshot
- * says it starts from (`before`); one without is judged on the live table alone.
+ * the file was written, with the indexes it left out, which the file's drift check reads the live
+ * table without. A file with a snapshot of its own is judged against the schema that snapshot says
+ * it starts from (`before`); one without is judged on the live table alone.
  */
 async function upWithoutUniquesAlreadyThere(
   db: unknown,
@@ -3900,17 +3902,20 @@ async function upWithoutUniquesAlreadyThere(
     target: NextlySchemaSnapshot | null;
     before: NextlySchemaSnapshot;
   }
-): Promise<string> {
+): Promise<{ upSql: string; adopted: AdoptedUniqueIndex[] }> {
   const adoption = await adoptUniqueIndexesAlreadyThere(
     db,
     dialect,
     splitSqlStatements(m.upSql, dialect, m),
     snapshots.target ? snapshots.before : undefined
   );
-  if (adoption.adopted.length === 0) return m.upSql;
-  return adoption.statements
-    .map(statement => `${statement};`)
-    .join("\n--> statement-breakpoint\n");
+  if (adoption.adopted.length === 0) return { upSql: m.upSql, adopted: [] };
+  return {
+    upSql: adoption.statements
+      .map(statement => `${statement};`)
+      .join("\n--> statement-breakpoint\n"),
+    adopted: adoption.adopted,
+  };
 }
 
 /** An app migration file `runFileMigrations` has just applied, with the point before it. */
@@ -4107,10 +4112,11 @@ export async function runFileMigrations(args: {
         filename
       );
       // A unique index the database already carries under the file's name for it is left out.
-      m.upSql = await upWithoutUniquesAlreadyThere(db, dialect, m, {
+      const adoption = await upWithoutUniquesAlreadyThere(db, dialect, m, {
         target,
         before,
       });
+      m.upSql = adoption.upSql;
       // The caller's last word before the file applies, every refusal of it passed.
       await args.beforeApply?.(m.name);
 
