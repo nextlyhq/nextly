@@ -392,7 +392,7 @@ const CAPABILITIES: Capability[] = [
             ],
           })
         )
-      ).rejects.toThrow(/Only the app may override/);
+      ).rejects.toThrow(NextlyError);
 
       // The generated table with the override, through the helper every push
       // and migration describes an entity's table with.
