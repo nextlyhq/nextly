@@ -297,6 +297,7 @@ async function boot(
       importer: await keyHolding([
         ...content,
         "read-media",
+        "read-legacy",
         MANAGE_SEO_PERMISSION,
       ]),
       editorOnly: await keyHolding(content),
@@ -517,7 +518,8 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       checked: 5,
       fromFile: false,
       pages: 4,
-      same: 2,
+      // Jasper's title, and its `index`: listed, as it is automatically.
+      same: 3,
       kept: 1,
       redirects: 0,
       left: ["twitterCard", "keywords"],
@@ -611,7 +613,9 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       },
     };
     const dry = await dryRun(staff.importer, source);
-    expect(dry).toMatchObject({ checked: 5, pages: 3, same: 1 });
+    // One value the same as automatic, and four pages listed, as they are
+    // automatically: the group's noIndex left off.
+    expect(dry).toMatchObject({ checked: 5, pages: 3, same: 5 });
     expect(dry.warnings.join(" ")).toContain(
       "1 official address (canonical) is on another site"
     );
@@ -695,6 +699,13 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     expect(body.ownSeo).toEqual([
       { slug: "legacy", label: "Legacy pages", definedIn: "code" },
     ]);
+    // Never to someone who may not read that type.
+    const unseen = await call(
+      staff.importerWithoutMedia,
+      "GET",
+      "/import/groups"
+    );
+    expect(((await unseen.json()) as ImportGroupsBody).ownSeo).toEqual([]);
     const fields = offered?.fields;
     expect(fields?.find(field => field.name === "metaTitle")?.example).toMatch(
       /^(Nextly pricing|Old changelog title)$/
@@ -733,6 +744,14 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     expect(again.status, await again.clone().text()).toBe(200);
     after = await seoBySlug(t, "pages");
     expect(after.changelog?.metaTitle).toBe("Old changelog title");
+
+    // Typed now, they win over the route's code, so checking again reports
+    // them as kept, not as never served.
+    const checked = await dryRun(staff.importer, source);
+    const typed = checked.documents.find(entry => entry.label === "Changelog");
+    expect(typed?.kept).toEqual(["title", "description"]);
+    expect(typed?.neverServed).toEqual([]);
+    expect(checked.neverServed).toBe(0);
   });
 
   it("makes the earlier plugin's typed values that match the automatic ones automatic, and keeps the rest", async () => {
@@ -1070,6 +1089,13 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       slug: "tag",
       pageSeo: { noIndex: true, metaDescription: "A tag." },
     });
+    // Listed at its source, but its type hides it here: not the same as
+    // the automatic value, which keeps it hidden.
+    await page(t, {
+      title: "Listed tag",
+      slug: "listed-tag",
+      pageSeo: { noIndex: false },
+    });
     const source: ImportSource = {
       kind: "group",
       field: "pageSeo",
@@ -1077,6 +1103,9 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     };
     const dry = await dryRun(staff.importer, source);
     expect(dry).toMatchObject({ pages: 1, same: 1 });
+    expect(
+      dry.documents.find(entry => entry.label === "Listed tag")?.same ?? []
+    ).not.toContain("hidden");
     const applied = await apply(staff.importer, source, dry.plan);
     expect(applied.status, await applied.clone().text()).toBe(200);
     expect((await seoBySlug(t, "pages")).tag?.noindex ?? false).toBe(false);

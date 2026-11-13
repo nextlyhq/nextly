@@ -204,6 +204,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "PluginItemCount (type)",
   "PluginMenuItem (type)",
   "PluginMenuItemFields (type)",
+  "PluginPageStartupRead (type)",
   "PluginPanelGroup (type)",
   "PluginPanelSection (type)",
   "PluginRouteInvalidation (type)",
@@ -428,6 +429,7 @@ exports[`plugin-sdk public export surface > \`./client\` surface is unchanged 1`
 
 exports[`plugin-sdk public export surface > \`./db\` surface is unchanged 1`] = `
 [
+  "Increment (type)",
   "and (value)",
   "asc (value)",
   "count (value)",
@@ -436,6 +438,7 @@ exports[`plugin-sdk public export surface > \`./db\` surface is unchanged 1`] = 
   "gt (value)",
   "gte (value)",
   "inArray (value)",
+  "increment (value)",
   "isNotNull (value)",
   "isNull (value)",
   "like (value)",
@@ -737,6 +740,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginMenuItem (type)",
   "PluginMenuItemFields (type)",
   "PluginNavSection (type)",
+  "PluginPageStartupRead (type)",
   "PluginPanelGroup (type)",
   "PluginPanelSection (type)",
   "PluginPermission (type)",

@@ -13,14 +13,14 @@
  *
  * @module redirects/proxy-seen
  */
-import { NextlyError, type PluginContext } from "@nextlyhq/plugin-sdk";
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
 
-import { recordSlug, sha256 } from "../address-record/rows";
+import { noteKey, putNote, readNotes } from "../address-record/store";
 
 import type { ProxyStatus } from "./contract";
 
-/** The key of the record's row the Proxy notes its last request on. */
-const SEEN_KEY = sha256("meta:proxy-seen");
+/** The key of the note the Proxy notes its last request on. */
+const SEEN_KEY = noteKey("proxy-seen");
 
 /** How often one server notes again that its Proxy runs. */
 const PROXY_NOTE_EVERY_MS: number = 60 * 60 * 1000;
@@ -32,25 +32,9 @@ const PROXY_NOTE_EVERY_MS: number = 60 * 60 * 1000;
  */
 export const PROXY_QUIET_MS: number = 7 * 24 * 60 * 60 * 1000;
 
-/** The row the note is kept on, if it is there yet. */
-async function seenRow(
-  ctx: PluginContext
-): Promise<{ id: string; at: string | undefined } | undefined> {
-  const { data } = await ctx.services.ownCollections.listEntries(
-    recordSlug(ctx),
-    {
-      where: { claimKey: { equals: SEEN_KEY } },
-      pagination: { limit: 1, page: 1 },
-      depth: 0,
-    }
-  );
-  const [row] = data as Record<string, unknown>[];
-  if (row === undefined) return undefined;
-  // The time is kept in the row's text column, as the site's standing is.
-  return {
-    id: String(row.id),
-    at: typeof row.path === "string" ? row.path : undefined,
-  };
+/** When the Proxy last noted a request, if it ever has. */
+async function seenAt(ctx: PluginContext): Promise<string | undefined> {
+  return (await readNotes(ctx, [SEEN_KEY])).notes.get(SEEN_KEY) ?? undefined;
 }
 
 /**
@@ -66,34 +50,15 @@ function stillCurrent(stored: string | undefined, at: Date): boolean {
 
 /**
  * Record that the Proxy handled a request at `at`, where the stored note is
- * not already current: a note within the hour says the same, and each write
- * is a whole entry save.
+ * not already current: a note within the hour says the same.
  */
 export async function recordProxySeen(
   ctx: PluginContext,
   at: Date = new Date()
 ): Promise<void> {
-  const slug = recordSlug(ctx);
-  const path = at.toISOString();
-  const found = await seenRow(ctx);
-  if (stillCurrent(found?.at, at)) return;
-  if (found !== undefined) {
-    await ctx.services.collections.updateEntry(slug, found.id, {
-      path,
-      _overwrite: true,
-    });
-    return;
-  }
-  try {
-    await ctx.services.collections.createEntry(slug, {
-      claimKey: SEEN_KEY,
-      kind: "meta",
-      path,
-    });
-  } catch (error) {
-    // Another server noted it first: its note says the same thing.
-    if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
-  }
+  if (stillCurrent(await seenAt(ctx), at)) return;
+  // Another server noting it at the same moment notes the same thing.
+  await putNote(ctx, SEEN_KEY, at.toISOString());
 }
 
 /**
@@ -129,8 +94,7 @@ export async function readProxyStatus(
   ctx: PluginContext,
   now: number = Date.now()
 ): Promise<ProxyStatus> {
-  const found = await seenRow(ctx);
-  const at = found?.at;
+  const at = await seenAt(ctx);
   const time = at === undefined ? Number.NaN : Date.parse(at);
   if (at === undefined || Number.isNaN(time)) {
     return { state: "not-wired", lastSeen: null };

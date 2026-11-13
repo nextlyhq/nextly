@@ -21,7 +21,7 @@
  */
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { AnyColumn, AnyRelations, SQL, Table } from "drizzle-orm";
-import { count as countAll, eq, getColumns, inArray } from "drizzle-orm";
+import { count as countAll, eq, getColumns, inArray, sql } from "drizzle-orm";
 
 import { isMissingNamedColumnError } from "../../database/missing-column";
 import type { SupportedDialect } from "../../database/schema-registry";
@@ -51,6 +51,7 @@ import {
   type TableAccessRules,
 } from "./access";
 import { type ContentTarget, contentTarget } from "./content-target";
+import { type Increment, incrementBy, isIncrement } from "./increment";
 import { runInPluginTransactionFlow } from "./plugin-transaction-in-flow";
 import { linkPluginTransaction } from "./plugin-transaction-link";
 
@@ -69,9 +70,22 @@ export interface PortableSelect<TDefinition> {
   /**
    * @experimental How many rows match the `where`, counted in the database:
    * no row is read into the process. `orderBy`, `limit` and `offset` are
-   * ignored, as a count has no order and no page.
+   * ignored, as a count has no order and no page, and so is `lock`: a count
+   * locks no row.
    */
   count(): Promise<number>;
+  /**
+   * @experimental Read the rows locked until the transaction ends:
+   * `update` (`FOR UPDATE`) keeps any other transaction from changing or
+   * locking them, `share` (`FOR SHARE`) only from changing them. Either reads
+   * the latest committed rows, which on MySQL a plain read inside a
+   * transaction does not: it reads the snapshot its first read took. Meant
+   * for `tx` inside `ctx.db.transaction` or an in-transaction hook; on the
+   * pooled `ctx.db` the lock ends with the statement. SQLite runs one writer
+   * at a time, so there it reads the rows as a plain read does. Refused in a
+   * snapshot transaction, which is read-only.
+   */
+  lock(mode: "update" | "share"): PortableSelect<TDefinition>;
 }
 
 export interface PluginDatabaseDeps {
@@ -471,6 +485,48 @@ function withUpdatedColumns(
   return out;
 }
 
+/** The column kinds an `increment` may add to. */
+const INCREMENTABLE: ReadonlySet<string> = new Set([
+  "integer",
+  "smallint",
+  "bigint",
+  "real",
+  "double",
+  "decimal",
+]);
+
+/**
+ * Turn each `increment(n)` among `values` into `column + n` on `table`'s own
+ * column, so the database adds to the stored value under the row's lock. A
+ * column that is not numeric refuses it, rather than letting each dialect
+ * decide what adding to text means.
+ */
+function withIncrements(
+  definition: TableDefinition,
+  table: unknown,
+  values: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...values };
+  for (const column of definition.columns) {
+    const value = out[column.key];
+    if (!isIncrement(value)) continue;
+    if (!INCREMENTABLE.has(column.kind)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: `${definition.name}.${column.key}`,
+            code: "INVALID",
+            message: `"${column.key}" is a ${column.kind} column; increment() adds only to a numeric one.`,
+          },
+        ],
+      });
+    }
+    const target = (table as Record<string, AnyColumn>)[column.key];
+    out[column.key] = sql`${target} + ${incrementBy(value)}`;
+  }
+  return out;
+}
+
 /** Map an authored row onto the SQL column names the table uses. */
 function toColumns(
   definition: TableDefinition,
@@ -546,6 +602,24 @@ export type PluginInsert<T> =
     : never;
 
 /**
+ * @experimental What `ctx.db.update` may set: any column an insert may
+ * write, and on a numeric column `increment(n)` in place of a value. A key no
+ * write may supply (`col.serial()`, typed `never`) takes no increment either.
+ */
+export type PluginUpdate<T> = {
+  [K in keyof InferInsert<T>]?:
+    | InferInsert<T>[K]
+    | IncrementFor<NonNullable<InferInsert<T>[K]>>;
+};
+
+/** `Increment` where `TValue` is a number, and nothing for a closed key. */
+type IncrementFor<TValue> = [TValue] extends [never]
+  ? never
+  : TValue extends number
+    ? Increment
+    : never;
+
+/**
  * @experimental `ctx.db`: typed, owner-checked access to the tables a plugin
  * declared, its dependencies' tables and the columns it contributed, with one
  * behaviour on every dialect. Every method checks the caller's reach before it
@@ -562,9 +636,14 @@ export interface PluginDatabase {
     definition: T,
     values: PluginInsert<T>
   ): Promise<InferRow<T>>;
+  /**
+   * Update the rows the `where` matches; resolves to how many it changed. A
+   * numeric column may be given `increment(n)` (from `db-operators`) to add
+   * `n` to it in the same statement, so concurrent updates each count.
+   */
   update<T extends TableDefinition>(
     definition: T,
-    set: Partial<InferInsert<T>>
+    set: PluginUpdate<T>
   ): PortableWhere<number>;
   delete<T extends TableDefinition>(definition: T): PortableWhere<number>;
   /**
@@ -1122,6 +1201,7 @@ interface SelectState {
   readonly orderBy: readonly SQL[];
   readonly limit?: number;
   readonly offset?: number;
+  readonly lock?: "update" | "share";
 }
 
 /**
@@ -1306,7 +1386,17 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
         orderBy: (...columns) => build({ ...state, orderBy: columns }),
         limit: count => build({ ...state, limit: count }),
         offset: count => build({ ...state, offset: count }),
-        all: () => track(selectRows(state), "read"),
+        lock: mode => build({ ...state, lock: mode }),
+        // A locking read is refused where a write is: a read-only transaction
+        // refuses `FOR UPDATE` and `FOR SHARE` on PostgreSQL, so the refusal
+        // is made here, alike on every dialect.
+        all: () =>
+          track(
+            state.lock === undefined
+              ? selectRows(state)
+              : writable(deps, () => selectRows(state)),
+            "read"
+          ),
         async first() {
           const rows = await build({ ...state, limit: 1 }).all();
           return rows[0] ?? null;
@@ -1352,6 +1442,11 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
         if (state.offset !== undefined) {
           query = query.offset(state.offset as never) as typeof query;
         }
+        // SQLite has no row locks, and one writer at a time already keeps
+        // the rows read from changing before the transaction ends.
+        if (state.lock !== undefined && deps.dialect !== "sqlite") {
+          query = query.for(state.lock as never) as typeof query;
+        }
         return (await (query as unknown as Promise<unknown>)) as never;
       };
       return build({ orderBy: [] });
@@ -1373,9 +1468,10 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
       resolveTable(definition, deps);
       const run = async (condition: SQL): Promise<number> => {
         const { table } = resolveTable(definition, deps);
-        const values = toColumns(
+        const values = withIncrements(
           definition,
-          withUpdatedColumns(definition, set)
+          table,
+          toColumns(definition, withUpdatedColumns(definition, set))
         );
         const result = await (deps.db() as AnyDb)
           .update(table)

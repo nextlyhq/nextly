@@ -112,10 +112,18 @@ describe("each page's status", () => {
     expect(statusOf(ITEMS[0] as SiteAddress, undefined)).toBe("unknown");
   });
 
-  it("is unknown for a page of a type the problem list doesn't cover for the reader", () => {
-    const byPage = problemsByPage([], ["single:home"]);
+  it("is unknown for a page the problem list didn't check for the reader", () => {
+    const byPage = problemsByPage(
+      [],
+      [
+        { type: "single:home", id: "1" },
+        { type: "posts", id: "7", locale: "de" },
+      ]
+    );
     expect(statusOf(ITEMS[0] as SiteAddress, byPage)).toBe("good");
-    // Posts aren't readable to them: their problems were never in the list.
+    // The German version was checked, the post in the site's language not:
+    // coverage is page by page and language by language, not by type.
+    expect(statusOf(ITEMS[2] as SiteAddress, byPage)).toBe("good");
     expect(statusOf(ITEMS[1] as SiteAddress, byPage)).toBe("unknown");
     // A page built in code isn't checked per page either way.
     expect(statusOf(ITEMS[3] as SiteAddress, byPage)).toBe("not-connected");

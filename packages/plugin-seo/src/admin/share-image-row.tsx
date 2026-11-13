@@ -216,6 +216,27 @@ export function useMakeFailure(ogImage: unknown): MakeFailure {
   };
 }
 
+/**
+ * A copy that couldn't be made, said in the row: a status kept in place,
+ * empty until a copy fails, so a screen reader announces the failure as it
+ * happens, and the note that shows it.
+ */
+function MakeFailed({ failed }: { failed: boolean }): ReactNode {
+  return (
+    <>
+      <p role="status" className="sr-only">
+        {failed ? "The share image couldn't be made." : ""}
+      </p>
+      {failed ? (
+        <Note tone="warning">
+          The share image couldn&apos;t be made. Try again, or choose another
+          image.
+        </Note>
+      ) : null}
+    </>
+  );
+}
+
 /** The picture shown when someone shares the page. */
 export function ShareImageRow(props: AdvancedProps): ReactNode {
   const {
@@ -287,12 +308,7 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
           </SourceRow>
         </div>
       </div>
-      {failure.failed ? (
-        <Note tone="warning">
-          The share image couldn&apos;t be made. Try again, or choose another
-          image.
-        </Note>
-      ) : null}
+      <MakeFailed failed={failure.failed} />
       {made ? (
         <Note tone="success" icon={<Check className="size-4" />}>
           <span data-testid="seo-share-made">

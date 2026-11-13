@@ -17,7 +17,8 @@ import type {
   PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
-import { keysHolding, recordSlug, rowOf } from "../address-record/rows";
+import { keysHolding } from "../address-record/rows";
+import { onFlowTransaction, rowsAt } from "../address-record/store";
 
 import { pickRedirect, type HeldRow } from "./addresses";
 import { redirectsSlug } from "./collection";
@@ -37,23 +38,14 @@ export async function redirectMeeting(
 ): Promise<string | null> {
   const { locale, path } = address;
   const keys = keysHolding(locale, path);
-  const query = {
-    where: { claimKey: { in: keys } },
-    pagination: { limit: keys.length, page: 1 },
-    depth: 0,
-  };
-  const { data } =
+  // On the transaction the flow is in, which `transaction` stands for, where
+  // one is given: what the save has written so far is read too.
+  const stored =
     transaction === undefined
-      ? await ctx.services.ownCollections.listEntries(recordSlug(ctx), query)
-      : await ctx.services.ownCollections.listEntriesInTransaction(
-          transaction,
-          recordSlug(ctx),
-          query,
-          { lock: "none" }
-        );
+      ? await rowsAt(ctx, keys)
+      : await onFlowTransaction(ctx, db => rowsAt(ctx, keys, db));
   const redirects = redirectsSlug(ctx);
-  const rows: HeldRow[] = (data as unknown[]).flatMap(entry => {
-    const row = rowOf(entry);
+  const rows: HeldRow[] = stored.flatMap(row => {
     if (row.address === null || row.holder === null) return [];
     if (row.holder.collection === redirects && row.holder.id === skip) {
       return [];

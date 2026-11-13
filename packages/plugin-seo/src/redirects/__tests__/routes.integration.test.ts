@@ -23,8 +23,8 @@ import { defineCollection, text } from "nextly";
 import { createNextlyProxy } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { NOT_FOUND_SLUG } from "../../not-found/collection";
-import { recordNotFound } from "../../not-found/log";
+import { readNotFoundLog, recordNotFound } from "../../not-found/log";
+import { notFoundLog } from "../../schema/tables";
 import { keptSeoContext, logNotFound } from "../../not-found/report";
 import { seoPlugin } from "../../plugin";
 import { REDIRECTS_SLUG } from "../collection";
@@ -222,12 +222,13 @@ describe.each(getConfiguredTestDialects())(
       const { seo } = await boot(dialect);
       await recordNotFound(seo, { locale: "en", path: "/old-pricing" });
       // A probe logged before probes were left out, as an older log holds.
-      await seo.services.collections.createEntry(NOT_FOUND_SLUG, {
+      await seo.db.insert(notFoundLog, {
         pathKey: "probe-key",
         locale: "en",
         path: "/wp-admin/setup-config.php",
         hits: 40,
-        lastSeen: new Date().toISOString(),
+        firstSeen: new Date(),
+        lastSeen: new Date(),
         kind: "missing",
       });
 
@@ -478,11 +479,8 @@ describe.each(getConfiguredTestDialects())(
       await logNotFound(
         new Headers({ "x-nextly-seo-asked-for": "https://example.com/gone" })
       );
-      const { items: logged } = await t.nextly.find({
-        collection: NOT_FOUND_SLUG,
-      });
       expect(
-        (logged as Record<string, unknown>[]).map(
+        (await readNotFoundLog(seo)).map(
           row => `${row.locale}|${row.path}|${row.asked}`
         )
       ).toEqual(["en|/gone|/gone"]);

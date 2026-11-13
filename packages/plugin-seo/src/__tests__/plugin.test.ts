@@ -661,6 +661,15 @@ describe("the optional connections the plugin declares", () => {
     });
   });
 
+  it("declares the event a committed change to who holds an address is announced on", () => {
+    // Undeclared, every save that gains or releases an address would log a
+    // warning that the plugin emits an event it never declared.
+    const plugin = seoPlugin({ collections: ["pages"] });
+    expect(plugin.contributes?.events).toContainEqual({
+      name: "nextlyhq-plugin-seo.address-record-changed",
+    });
+  });
+
   it("reads a client secret wrapped by another copy of the plugin SDK", () => {
     // A site may install its own copy of the SDK beside the plugin's, whose
     // `secret()` makes an object of a class the plugin's copy did not make.

@@ -22,7 +22,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { statementsOf, writesAmong } from "../../__tests__/count-statements";
 import { lastCatchUp } from "../../address-record/catch-up";
-import { ADDRESS_RECORD_SLUG } from "../../address-record/collection";
+import { claimRows } from "../../address-record/__tests__/record-tables";
 import { keptSeoContext } from "../../not-found/report";
 import { seoPlugin } from "../../plugin";
 import { REDIRECTS_SLUG } from "../collection";
@@ -122,13 +122,9 @@ async function redirects(t: TestNextly) {
 }
 
 /** The record's held rows, as `locale|path` → holder collection. */
-async function holders(t: TestNextly) {
-  const { items } = await t.nextly.find({
-    collection: ADDRESS_RECORD_SLUG,
-    limit: 500,
-  });
+async function holders(_t: TestNextly) {
   return Object.fromEntries(
-    (items as Record<string, unknown>[])
+    (await claimRows())
       .filter(row => row.kind === "address" || row.kind === "range")
       .map(row => [
         `${row.locale}|${row.path}${row.kind === "range" ? "/*" : ""}`,

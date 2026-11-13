@@ -21,9 +21,12 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
-import { recordSlug, rowOf } from "../address-record/participant";
-import { notFoundSlug } from "../not-found/collection";
-import { setNotFoundIgnored } from "../not-found/log";
+import { heldRows } from "../address-record/store";
+import {
+  type LoggedRow,
+  readNotFoundLog,
+  setNotFoundIgnored,
+} from "../not-found/log";
 import { isBotProbe } from "../not-found/probes";
 import { closestPageIn, type LivePage } from "../not-found/suggest";
 import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
@@ -326,18 +329,9 @@ async function deleteRedirect(ctx: PluginRouteContext): Promise<Response> {
 async function livePages(ctx: PluginContext): Promise<LivePage[]> {
   const redirects = redirectsSlug(ctx);
   const live: LivePage[] = [];
-  for (let page = 1; live.length < MOST_CANDIDATES; page++) {
-    const { data } = await ctx.services.ownCollections.listEntries(
-      recordSlug(ctx),
-      {
-        where: { kind: { equals: "address" } },
-        pagination: { limit: PAGE, page },
-        sort: { field: "claimKey", direction: "asc" },
-        depth: 0,
-      }
-    );
-    for (const entry of data as unknown[]) {
-      const row = rowOf(entry);
+  for (let offset = 0; live.length < MOST_CANDIDATES; offset += PAGE) {
+    const rows = await heldRows(ctx, ["address"], { limit: PAGE, offset });
+    for (const row of rows) {
       if (row.address === null || row.holder?.collection === redirects)
         continue;
       live.push({
@@ -345,46 +339,33 @@ async function livePages(ctx: PluginContext): Promise<LivePage[]> {
         path: await servedOf(row.address.path, row.address.locale),
       });
     }
-    if ((data as unknown[]).length < PAGE) break;
+    if (rows.length < PAGE) break;
   }
   return live;
 }
 
-/** A stored time as ISO text, whichever way the dialect hands it back. */
-function isoOf(seen: unknown): string {
-  if (seen instanceof Date) return seen.toISOString();
-  return typeof seen === "string" ? seen : "";
-}
-
 /** One logged address as the Not found tab shows it, with its suggestion. */
 async function notFoundViewOf(
-  row: Record<string, unknown>,
+  row: LoggedRow,
   live: readonly LivePage[]
 ): Promise<NotFoundView> {
-  const kept = typeof row.path === "string" ? row.path : "";
-  const locale = typeof row.locale === "string" ? row.locale : "";
   // Suggested for in the spelling live pages are listed in, and shown as the
   // visitor asked for it, where that is known.
-  const served = await servedOf(kept, locale);
-  const asked = typeof row.asked === "string" ? row.asked : "";
-  const path = asked === "" ? served : asked;
+  const served = await servedOf(row.path, row.locale);
+  const path = row.asked === null || row.asked === "" ? served : row.asked;
   return {
-    id: String(row.id),
+    id: row.id,
     path,
     // A full address where its language has a domain of its own.
     from: served.startsWith("/") ? path : served,
-    hits: Number(row.hits ?? 0),
-    lastSeen: isoOf(row.lastSeen),
-    kind: row.kind === "moved" ? "moved" : "missing",
+    hits: row.hits,
+    lastSeen: row.lastSeen,
+    kind: row.kind,
     // A page in the address's own language, the only one a redirect from it
     // may go to.
-    suggestion: closestPageIn(served, locale, live),
-    cameFrom:
-      typeof row.cameFrom === "string" && row.cameFrom !== ""
-        ? row.cameFrom
-        : null,
-    // A boolean, or 0/1 where the dialect keeps one as a number.
-    ignored: row.ignored === true || row.ignored === 1,
+    suggestion: closestPageIn(served, row.locale, live),
+    cameFrom: row.cameFrom,
+    ignored: row.ignored,
   };
 }
 
@@ -397,17 +378,12 @@ export async function listNotFound(
   ctx: PluginContext,
   pageSize: number = MOST_LISTED
 ): Promise<Response> {
-  const rows = await everyRow(
-    ctx,
-    notFoundSlug(ctx),
-    { field: "hits", direction: "desc" },
-    pageSize
-  );
+  const rows = await readNotFoundLog(ctx, pageSize);
   const live = await livePages(ctx);
   const items: NotFoundView[] = [];
-  for (const row of rows as Record<string, unknown>[]) {
+  for (const row of rows) {
     // A bot's probe logged before probes were left out is left out here too.
-    if (typeof row.path === "string" && isBotProbe(row.path)) continue;
+    if (isBotProbe(row.path)) continue;
     items.push(await notFoundViewOf(row, live));
   }
   // Most visited first, and of those visited as often, the most recent.

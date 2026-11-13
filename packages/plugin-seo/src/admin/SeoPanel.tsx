@@ -201,7 +201,11 @@ function makerOf(
 ): (() => void) | undefined {
   const make = props.onMakeShareImage;
   const fixable = copyFixes(props.context?.shareImage?.problems);
-  if (!props.writable || make === undefined || !fixable) return undefined;
+  // Only where the group declares a share image, as the Advanced row is.
+  const declared = props.context?.fields.includes("ogImage") ?? true;
+  if (!props.writable || make === undefined || !fixable || !declared) {
+    return undefined;
+  }
   // A copy that could not be made answers with no image: said beside the
   // notice, so trying again is a choice rather than a silent repeat.
   return () => track(make());

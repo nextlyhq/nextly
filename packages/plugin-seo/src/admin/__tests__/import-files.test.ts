@@ -116,4 +116,16 @@ describe("whose values a WordPress export holds", () => {
 </item></channel></rss>`;
     expect(sourceOfFile("wordpress", rankMath)).toBe("rankMath");
   });
+
+  it("is not swayed by page content quoting another tool's meta key markup", () => {
+    const quoted = Array.from(
+      { length: 3 },
+      () => "<wp:meta_key>rank_math_title</wp:meta_key>"
+    ).join(" ");
+    const yoast = `<?xml version="1.0"?><rss xmlns:wp="http://wordpress.org/export/1.2/"><channel><item>
+<content:encoded><![CDATA[How Rank Math stores a title: ${quoted}]]></content:encoded>
+<wp:postmeta><wp:meta_key><![CDATA[_yoast_wpseo_title]]></wp:meta_key><wp:meta_value>T</wp:meta_value></wp:postmeta>
+</item></channel></rss>`;
+    expect(sourceOfFile("wordpress", yoast)).toBe("yoast");
+  });
 });

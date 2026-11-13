@@ -49,6 +49,7 @@ import { useId, useRef, useState, type JSX, type ReactNode } from "react";
 import { PAGES_PAGE_HREF } from "../code-pages/contract";
 import {
   IMPORT_APPLY_PATH,
+  IMPORT_PARTLY_APPLIED,
   IMPORT_DRY_RUN_PATH,
   IMPORT_GROUPS_PATH,
   IMPORT_TARGET_LABELS,
@@ -101,11 +102,13 @@ type Choice =
   | { kind: "group"; field: string }
   | { kind: "file"; tool: ImportTool };
 
-/** A file read for a tool: its text, and what the engine made of it. */
+/**
+ * A file read for a tool: what the engine made of it. Its text is not
+ * kept, so a large file is let go once it is read.
+ */
 interface ReadFile {
   tool: ImportTool;
   name: string;
-  text: string;
   source: Extract<ImportSource, { kind: "records" }>;
   run: DryRunBody;
 }
@@ -323,10 +326,12 @@ function OwnSeoDialog({
   type: TypeWithOwnSeo;
   close: () => void;
 }): JSX.Element {
+  // Renamed alone, the type still has no SEO: the plugin adds its group
+  // only to the collections it is given, so the type is added there too.
   const where =
     type.definedIn === "code"
-      ? "It is defined in the site's code, so Nextly can't replace it from here. Rename it in the code, for example to legacySeo, and deploy."
-      : "Rename it in the Schema Builder, for example to legacySeo, and save the type.";
+      ? `It is defined in the site's code, so Nextly can't replace it from here. In the code, rename it, for example to legacySeo, add ${type.label} to the SEO plugin's collections, and deploy.`
+      : `Rename it in the Schema Builder, for example to legacySeo, and save the type. Then add ${type.label} to the SEO plugin's collections in the site's code, and deploy.`;
   return (
     <Dialog open onOpenChange={open => (open ? undefined : close())}>
       <DialogContent>
@@ -1004,14 +1009,18 @@ function Imported({ run }: { run: DryRunBody }): JSX.Element {
 function Stopped({
   why,
   confirmed,
+  partly,
   again,
 }: {
   why: string;
   /**
    * Whether the server answered that it wrote nothing; false where no
-   * answer arrived, so whether the import finished is not known.
+   * answer arrived, so whether the import finished is not known, or where
+   * it answered that part of it may be in place.
    */
   confirmed: boolean;
+  /** Whether the server answered that a Single it wrote stayed changed. */
+  partly: boolean;
   again: () => void;
 }): JSX.Element {
   if (!confirmed) {
@@ -1019,9 +1028,15 @@ function Stopped({
       <Alert variant="warning">
         <div className="flex min-w-0 flex-1 flex-wrap items-start justify-between gap-4">
           <div className="grid min-w-0 flex-1 gap-0.5">
-            <AlertTitle>The import&apos;s answer didn&apos;t arrive</AlertTitle>
+            <AlertTitle>
+              {partly
+                ? "Part of the import may be in place"
+                : "The import's answer didn't arrive"}
+            </AlertTitle>
             <AlertDescription>
-              {`Nextly couldn't confirm whether it finished (${why.replace(/\.$/, "")}). Check again to see what is still to import: whatever was imported is already in place.`}
+              {partly
+                ? `${why} Check again to see what is still to import: whatever was imported is already in place.`
+                : `Nextly couldn't confirm whether it finished (${why.replace(/\.$/, "")}). Check again to see what is still to import: whatever was imported is already in place.`}
             </AlertDescription>
           </div>
           <Button type="button" variant="outline" size="sm" onClick={again}>
@@ -1110,7 +1125,7 @@ async function applyRun(
   source: ImportSource,
   run: DryRunBody,
   include: boolean
-): Promise<{ why: string; confirmed: boolean } | undefined> {
+): Promise<{ why: string; confirmed: boolean; partly: boolean } | undefined> {
   try {
     await writePluginRoute<ApplyBody & { message: string }>({
       plugin: SEO_PLUGIN_NAME,
@@ -1123,7 +1138,14 @@ async function applyRun(
     });
     return undefined;
   } catch (error) {
-    return { why: apiErrorMessage(error), confirmed: isApiError(error) };
+    // Only an answer from the server that it wrote nothing is confirmed:
+    // one saying a Single couldn't be put back means part may be in place.
+    const partly = isApiError(error) && error.code === IMPORT_PARTLY_APPLIED;
+    return {
+      why: apiErrorMessage(error),
+      confirmed: isApiError(error) && !partly,
+      partly,
+    };
   }
 }
 
@@ -1152,7 +1174,7 @@ async function readFor(
     };
     const run = await dryRun(source, false);
     if (run.held === 0 && run.redirects === 0) return nothingIn(tool);
-    return { tool, name: chosen.name, text, source, run };
+    return { tool, name: chosen.name, source, run };
   } catch (error) {
     return unreadable(apiErrorMessage(error));
   }
@@ -1180,7 +1202,12 @@ function useDryRuns() {
       const body = await dryRun(source, included);
       if (asked === latest.current) setRun(body);
     } catch (error) {
-      if (asked === latest.current) setFailure(apiErrorMessage(error));
+      if (asked === latest.current) {
+        setFailure(apiErrorMessage(error));
+        // The last answer was for what was asked before: let go of it, so
+        // no result for another matching is shown or imported.
+        setRun(undefined);
+      }
     } finally {
       if (asked === latest.current) setBusy(false);
     }
@@ -1209,7 +1236,8 @@ function useImportFlow() {
   const [stopped, setStopped] = useState<{
     why: string;
     confirmed: boolean;
-  }>({ why: "", confirmed: true });
+    partly: boolean;
+  }>({ why: "", confirmed: true, partly: false });
   // The dry run an applied import wrote, kept for its result whatever the
   // flow does after.
   const [applied, setApplied] = useState<DryRunBody | undefined>(undefined);
@@ -1348,6 +1376,7 @@ function StepBody({ flow }: { flow: ImportFlow }): JSX.Element {
       <Stopped
         why={flow.stopped.why}
         confirmed={flow.stopped.confirmed}
+        partly={flow.stopped.partly}
         again={() => flow.goTo(2)}
       />
     );

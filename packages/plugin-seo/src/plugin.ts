@@ -30,6 +30,12 @@ import {
   addressRecord,
   releaseOnCollectionDelete,
 } from "./address-record/participant";
+import {
+  ADDRESS_RECORD_CACHE_PART,
+  ADDRESS_RECORD_CHANGED,
+  prepareRecordMove,
+  recordReady,
+} from "./address-record/store";
 import { BULK_PAGE } from "./bulk/contract";
 import { bulkRoutes } from "./bulk/route";
 import { codePagesCollection } from "./code-pages/collection";
@@ -55,6 +61,7 @@ import { defaultSeoFields } from "./fields";
 import { importRoutes } from "./import/route";
 import { withLanguageLinks } from "./languages/head";
 import { notFoundCollection } from "./not-found/collection";
+import { moveLoggedRows } from "./not-found/log";
 import { keepSeoContext } from "./not-found/report";
 import { plainCopyProxyHandler } from "./outputs/ai-outputs";
 import { listPages, type ListedPagesService } from "./outputs/listing";
@@ -91,7 +98,7 @@ import { problemsCollection } from "./problems/store";
 import { RECEIVED_PAGE } from "./received/contract";
 import { receivedRoutes } from "./received/route";
 import { redirectsCollection } from "./redirects/collection";
-import { REDIRECTS_PAGE } from "./redirects/contract";
+import { REDIRECTS_PAGE, REDIRECTS_PAGE_HREF } from "./redirects/contract";
 import { heldRedirectKeys } from "./redirects/held-keys";
 import { redirectsProxyHandler } from "./redirects/proxy-handler";
 import { redirectRoutes } from "./redirects/routes";
@@ -99,15 +106,12 @@ import { PAGE_BUILDER_PLUGIN } from "./resolver/design-level";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
 import { routeValuesCollection } from "./route-values/collection";
 import { withRouteValues } from "./route-values/record";
+import { seoSchema, seoSchemaPlugin } from "./schema/definition";
 import {
   contentTypesRoute,
   settingsDocumentRoute,
 } from "./settings/content-types-route";
-import {
-  SETTINGS_PAGE,
-  SEO_ADMIN_SLUG,
-  SETTINGS_PAGE_HREF,
-} from "./settings/contract";
+import { SETTINGS_PAGE, SETTINGS_PAGE_HREF } from "./settings/contract";
 import {
   readBrandFacts,
   readSeoRules,
@@ -146,9 +150,6 @@ import {
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
-/** Where the redirects screen is, for the admin's menu. */
-const REDIRECTS_PAGE_HREF = `/admin/plugins/${SEO_ADMIN_SLUG}/${REDIRECTS_PAGE.path}`;
-
 const require = createRequire(import.meta.url);
 const { version: PLUGIN_VERSION } = require("../package.json") as {
   version: string;
@@ -665,12 +666,19 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       types: [...targets, ...singleTargets],
       pagePermissions,
     }),
-    // The record that keeps each public address to one page, the redirects
-    // whose From addresses it holds, the log of addresses not found, and
-    // what the problem list's checks found.
+    // The redirects whose From addresses the address record holds, the log
+    // of addresses not found, and what the problem list's checks found.
     collections: [
+      // The collection the address record was kept in before it moved to the
+      // plugin's own tables. Still declared so the rows a site already has
+      // are kept, and moved to the tables at start (`recordReady`); nothing
+      // writes it any more.
       addressRecordCollection(),
       redirectsCollection(),
+      // The collection the not-found log was kept in before it moved to the
+      // plugin's own table. Still declared so the rows a site already has are
+      // kept, and moved to the table at start (`moveLoggedRows`); nothing
+      // writes it any more.
       notFoundCollection(),
       problemsCollection(),
       // The SEO of each page a route renders from its own code, by address.
@@ -679,6 +687,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // which the SEO tab, bulk edit and the problem list read.
       routeValuesCollection(),
     ],
+    // The plugin's own tables, for bookkeeping written in one statement:
+    // the log of addresses not found.
+    schema: seoSchema,
     // Every page's head, as worked out above, each page built in code
     // recorded as connected as its route asks for its head, and what each
     // entry's or Single's route supplies in code kept for the admin.
@@ -728,9 +739,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // settings route as through the plugin's.
     settingsPermission: MANAGE_SEO_PERMISSION,
     // The events the address record announces once a save commits: each
-    // page's addresses, which IndexNow takes its notes from, and that
-    // redirects changed, which the Proxy's kept addresses are dropped on.
-    events: [{ name: ADDRESSES_MOVED }, { name: REDIRECTS_CHANGED }],
+    // page's addresses, which IndexNow takes its notes from; that redirects
+    // changed, which the Proxy's kept addresses are dropped on; and that who
+    // holds an address changed, which expires the page heads built from it.
+    events: [
+      { name: ADDRESSES_MOVED },
+      { name: REDIRECTS_CHANGED },
+      { name: ADDRESS_RECORD_CHANGED },
+    ],
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
     // The SEO settings screen, for whoever may read the settings, told what
@@ -798,6 +814,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         },
       ],
       pages: [
+        // No startup reads: the startup request answers only when every part
+        // has, and the checklist can read every page while an earlier SEO
+        // field group waits to be imported, which would hold up the whole
+        // admin's first answer on a large site.
         { ...OVERVIEW_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
         { ...PAGES_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
         { ...IMPORT_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
@@ -905,6 +925,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // and one that cannot fall behind, because it is the same string the
     // package already reads for its own `version`.
     nextly: `>=${PLUGIN_VERSION}`,
+    // The schema version its migrations bring the database to, read from the
+    // one declaration of its tables.
+    schemaVersion: seoSchemaPlugin.schemaVersion,
     author: "Nextly <contact@nextlyhq.com> (https://nextlyhq.com)",
     homepage: "https://nextlyhq.com",
     repository: "https://github.com/nextlyhq/nextly",
@@ -948,8 +971,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       }
       // The site-wide record that keeps each public address to one page:
       // asked on every save, and told what each document holds after it.
+      prepareRecordMove(ctx);
       ctx.publicAddresses.participate(addressRecord(ctx));
       releaseOnCollectionDelete(ctx);
+      // A page head reads who holds its address, so a change to that
+      // expires the heads, once it commits.
+      ctx.events.on(ADDRESS_RECORD_CHANGED, () =>
+        ctx.cache.expire(ADDRESS_RECORD_CACHE_PART)
+      );
       // A redirect saved here applies from this server's next request.
       ctx.events.on(REDIRECTS_CHANGED, () => redirectKeys.forget());
       // Kept for the routes that answer not found, which log through it, and
@@ -971,11 +1000,24 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       stopIndexNow = undefined;
       await stop?.();
     },
-    onReady(ctx) {
+    async onReady(ctx) {
+      // Awaited, so the start waits for it: the address record an earlier
+      // version kept in a collection moves to the plugin's table before this
+      // process answers any save, or a page could take an address the
+      // collection says another holds. One read once it has moved.
+      await recordReady(ctx);
       // Started, not awaited: it waits for the boot to finish, and brings the
       // record up to date with content saved while the plugin was absent or
       // addresses a deploy moved.
       void startCatchUp(ctx);
+      // The not-found log an earlier version kept in a collection, moved to
+      // the plugin's table; one count once there is nothing left to move.
+      void moveLoggedRows(ctx).catch((error: unknown) => {
+        ctx.logger.error(
+          "The SEO plugin could not move its not-found log to its table",
+          { error }
+        );
+      });
       // Decided once, the first time the plugin starts on a site: whether a
       // site with no production address known is kept out of search.
       void decideStanding(ctx).catch((error: unknown) => {

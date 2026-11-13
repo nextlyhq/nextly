@@ -531,15 +531,19 @@ function StructuredData({
       <div className="flex flex-wrap items-center gap-3">
         <Select
           value={chosen ?? AUTOMATIC}
-          onValueChange={value =>
-            change(current =>
-              withStructuredType(
-                current,
-                type.key,
-                isStructuredDataTypeKey(value) ? value : undefined
-              )
-            )
-          }
+          onValueChange={value => {
+            const next = isStructuredDataTypeKey(value) ? value : undefined;
+            change(current => withStructuredType(current, type.key, next));
+            // Open details follow the type chosen, or close where it has
+            // none to map, so they are never saved under the type left.
+            if (mapping !== null) {
+              setMapping(
+                next !== undefined && MAPPABLE_TYPES.includes(next)
+                  ? next
+                  : null
+              );
+            }
+          }}
         >
           <SelectTrigger
             className="w-56"

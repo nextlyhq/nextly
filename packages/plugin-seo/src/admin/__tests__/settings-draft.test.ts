@@ -524,7 +524,121 @@ describe("a draft moved onto newer settings", () => {
       posts: { title: "{Title} | Blog" },
       pages: { title: "{Title} | Docs" },
     });
-    expect(rebased.hiddenTypes).toEqual(["tags", "cases", "authors"]);
+    expect(rebased.hiddenTypes).toEqual(["tags", "authors", "cases"]);
+  });
+
+  it("moves the addresses and profiles item by item, keeping one added elsewhere", () => {
+    const listed = draftOf({
+      id: "s1",
+      productionAddresses: ["https://a.example"],
+      socialProfiles: [{ network: "x", url: "https://x.com/acme" }],
+    });
+    // Here: the address replaced, a profile added.
+    const draft = {
+      ...listed,
+      productionAddresses: ["https://b.example"],
+      socialProfiles: [
+        ...listed.socialProfiles,
+        { network: "github", url: "https://github.com/acme" },
+      ],
+    };
+    // Elsewhere meanwhile: an address and a profile added.
+    const after = draftOf({
+      id: "s1",
+      productionAddresses: ["https://a.example", "https://c.example"],
+      socialProfiles: [
+        { network: "x", url: "https://x.com/acme" },
+        { network: "linkedin", url: "https://linkedin.com/company/acme" },
+      ],
+    });
+
+    const rebased = rebasedDraft(draft, listed, after);
+    expect(rebased.productionAddresses).toEqual([
+      "https://b.example",
+      "https://c.example",
+    ]);
+    expect(rebased.socialProfiles).toEqual([
+      { network: "x", url: "https://x.com/acme" },
+      { network: "github", url: "https://github.com/acme" },
+      { network: "linkedin", url: "https://linkedin.com/company/acme" },
+    ]);
+  });
+
+  it("keeps the order edited here, so the first address stays the main one", () => {
+    const listed = draftOf({
+      id: "s1",
+      siteName: "Acme",
+      productionAddresses: ["https://old.example", "https://fr.example"],
+    });
+    const draft = {
+      ...listed,
+      productionAddresses: ["https://new.example", "https://fr.example"],
+    };
+    // Only the site name changed elsewhere.
+    const after = { ...listed, siteName: "Acme Ltd" };
+    expect(rebasedDraft(draft, listed, after).productionAddresses).toEqual([
+      "https://new.example",
+      "https://fr.example",
+    ]);
+  });
+
+  it("keeps a main address changed elsewhere first while one is added here", () => {
+    const listed = draftOf({
+      id: "s1",
+      productionAddresses: ["https://old.example", "https://fr.example"],
+    });
+    const draft = {
+      ...listed,
+      productionAddresses: [
+        "https://old.example",
+        "https://fr.example",
+        "https://de.example",
+      ],
+    };
+    const after = {
+      ...listed,
+      productionAddresses: ["https://new.example", "https://fr.example"],
+    };
+    expect(rebasedDraft(draft, listed, after).productionAddresses).toEqual([
+      "https://new.example",
+      "https://fr.example",
+      "https://de.example",
+    ]);
+  });
+
+  it("keeps a new order made here where the list wasn't changed elsewhere", () => {
+    const listed = draftOf({
+      id: "s1",
+      siteName: "Acme",
+      productionAddresses: ["https://a.example", "https://b.example"],
+    });
+    // Here, the second address made the main one.
+    const draft = {
+      ...listed,
+      productionAddresses: ["https://b.example", "https://a.example"],
+    };
+    const after = { ...listed, siteName: "Acme Ltd" };
+    expect(rebasedDraft(draft, listed, after).productionAddresses).toEqual([
+      "https://b.example",
+      "https://a.example",
+    ]);
+  });
+
+  it("takes the newer list as it is, in its order, where it wasn't edited here", () => {
+    const listed = draftOf({
+      id: "s1",
+      productionAddresses: ["https://old.example", "https://fr.example"],
+    });
+    const draft = { ...listed, description: "Edited here" };
+    // Elsewhere, the main address changed.
+    const after = {
+      ...listed,
+      productionAddresses: ["https://new.example", "https://fr.example"],
+    };
+    expect(rebasedDraft(draft, listed, after).productionAddresses).toEqual([
+      "https://new.example",
+      "https://fr.example",
+    ]);
   });
 
   it("takes out a type's entry taken out here, and a hidden type shown again", () => {

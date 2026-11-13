@@ -123,9 +123,12 @@ function dryRun(include: boolean): DryRunBody {
 let sent: { path: string; body: Record<string, unknown> }[];
 /** How the fake engine answers an apply. */
 let applying: () => Promise<unknown>;
+/** Whether the fake engine refuses a dry run. */
+let refusingDryRuns = false;
 
 beforeEach(() => {
   sent = [];
+  refusingDryRuns = false;
   applying = () =>
     Promise.resolve({ message: "Imported", pages: 1, redirects: 0 });
   vi.mocked(usePluginRoute).mockImplementation(
@@ -146,13 +149,24 @@ beforeEach(() => {
     const body = (request.body ?? {}) as Record<string, unknown>;
     sent.push({ path: request.path, body });
     if (request.path.endsWith("/apply")) return applying();
-    const source = body.source as { kind: string; fileName?: string };
+    if (refusingDryRuns) {
+      throw Object.assign(new Error("The database didn't answer."), {
+        status: 500,
+      });
+    }
+    const source = body.source as {
+      kind: string;
+      parsed?: { records?: { values?: Record<string, unknown> }[] };
+    };
     if (source.kind !== "group") {
+      // Counted from the records the file sent, as the engine counts them.
+      const records = source.parsed?.records ?? [];
       return {
         ...dryRun(false),
         fromFile: true,
-        checked: 148,
-        held: source.fileName?.includes("empty") ? 0 : 96,
+        checked: records.length,
+        held: records.filter(each => Object.keys(each.values ?? {}).length > 0)
+          .length,
       };
     }
     return dryRun(body.includeNeverServed === true);
@@ -283,6 +297,31 @@ describe("importing this site's own field group", () => {
     ).toBeTruthy();
   });
 
+  it("offers no earlier result to import once checking the import again fails", async () => {
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
+    await settle();
+    expect(
+      screen.getByRole("button", { name: /^Import \d+ values?$/ })
+    ).toBeTruthy();
+
+    // Back, and checked again: this time the check fails.
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    await settle();
+    refusingDryRuns = true;
+    fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
+    await settle();
+    expect(screen.getByText("The database didn't answer.")).toBeTruthy();
+    expect(screen.queryAllByText("Will set")).toHaveLength(0);
+    // Nothing to import until a check answers.
+    expect(
+      screen.getByRole("button", { name: /^Import \d+ values?$/ })
+    ).toHaveProperty("disabled", true);
+  });
+
   it("says nothing was imported when the import stops part-way, and tries again", async () => {
     // The server answered: it refused, and wrote nothing.
     applying = () =>
@@ -393,6 +432,30 @@ describe("importing this site's own field group", () => {
     ).toBeNull();
   });
 
+  it("says part of the import may be in place when a Single couldn't be put back", async () => {
+    applying = () =>
+      Promise.reject(
+        Object.assign(
+          new Error(
+            "The import stopped part-way, and a Single it had written could not be put back."
+          ),
+          { status: 500, code: "SEO_IMPORT_PARTLY_APPLIED" }
+        )
+      );
+    render(<SeoImportPage />);
+    fireEvent.click(screen.getByRole("radio", { name: /SEO \(old\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Check the result" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Import 2 values" }));
+    await settle();
+
+    expect(screen.queryByText("Nothing was imported")).toBeNull();
+    expect(screen.getByText("Part of the import may be in place")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
+  });
+
   it("says how to import a type's own seo field, which the plugin can't rename in code", () => {
     render(<SeoImportPage />);
     expect(
@@ -402,8 +465,10 @@ describe("importing this site's own field group", () => {
     const dialog = screen.getByRole("dialog", {
       name: 'Import the Posts\' own "seo" field',
     });
+    // Renamed alone, the type still has no SEO: it is added to the plugin's
+    // collections too, so its renamed field is offered here.
     expect(dialog.textContent).toContain(
-      "It is defined in the site's code, so Nextly can't replace it from here. Rename it in the code, for example to legacySeo, and deploy."
+      "It is defined in the site's code, so Nextly can't replace it from here. In the code, rename it, for example to legacySeo, add Posts to the SEO plugin's collections, and deploy."
     );
     // Nothing to confirm: the rename is the person's, in the site's code.
     expect(
@@ -546,7 +611,7 @@ describe("importing a file another tool exported", () => {
     expect(screen.getByText("acme.WordPress.xml")).toBeTruthy();
     expect(
       screen.getByText(
-        "148 posts and pages read. 96 have Yoast or Rank Math values. Next, match them to your pages."
+        "1 post or page read. 1 has Yoast or Rank Math values. Next, match them to your pages."
       )
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Continue" })).toHaveProperty(
@@ -613,7 +678,11 @@ describe("importing a file another tool exported", () => {
   it("says a file with no SEO values in it holds none", async () => {
     render(<SeoImportPage />);
     fireEvent.click(screen.getByRole("radio", { name: /WordPress/ }));
-    await choose("empty.xml", WXR);
+    // An export of a page with no Yoast or Rank Math value in it.
+    await choose(
+      "empty.xml",
+      WXR.replace(/<wp:postmeta>.*<\/wp:postmeta>\n/, "")
+    );
     expect(
       screen.getByText("There are no SEO values in this file")
     ).toBeTruthy();

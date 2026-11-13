@@ -179,9 +179,10 @@ export function importRoutes(setup: ImportSetup): PluginRoute[] {
       requiredPermission: MANAGE_SEO_PERMISSION,
       handler: async (req, ctx) => {
         const locale = await defaultLanguageOnly(ctx, queryOf(req).locale);
+        const engine = await engineFor(ctx, setup);
         const body: ImportGroupsBody = {
-          groups: await importGroups(await engineFor(ctx, setup), locale),
-          ownSeo: await typesWithOwnSeo(ctx, setup.targets),
+          groups: await importGroups(engine, locale),
+          ownSeo: await typesWithOwnSeo(engine),
           language: locale ?? (await ctx.publicAddresses.defaultLanguage()),
         };
         return respondDoc(body);

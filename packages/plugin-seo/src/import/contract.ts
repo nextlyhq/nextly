@@ -19,6 +19,12 @@ export const IMPORT_DRY_RUN_PATH = "/import/dry-run";
 /** Where a tried import is applied. */
 export const IMPORT_APPLY_PATH = "/import/apply";
 
+/**
+ * The code an apply is refused with when it stopped part-way and a step it
+ * had already written could not be put back: part of it may be in place.
+ */
+export const IMPORT_PARTLY_APPLIED = "SEO_IMPORT_PARTLY_APPLIED";
+
 /** The most characters an export file may hold. */
 export const IMPORT_FILE_LIMIT: number = 50 * 1024 * 1024;
 
