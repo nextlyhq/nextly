@@ -7,7 +7,7 @@
     "screens": {
       "login": {
         "requests": 4,
-        "rounds": 3,
+        "rounds": 2,
         "statements": 4,
         "kinds": {
           "GET /admin/api/startup": 1,
