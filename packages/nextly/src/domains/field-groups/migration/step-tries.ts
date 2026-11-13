@@ -25,9 +25,11 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 import { is, Name, StringChunk, type SQL } from "drizzle-orm";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import type { BusyTableBounds } from "../../schema/busy-table/bounds";
 import { endedWaiting } from "../../schema/busy-table/ended-waiting";
 import { firstNoRetry, targetTable } from "../../schema/busy-table/judge";
+import { boundMysqlLockWaits } from "../../schema/busy-table/mysql-wait-bounds";
 import { tableBusyError, tryNotice } from "../../schema/busy-table/report";
 import { triggerTables } from "../../schema/busy-table/run-unit";
 import { boundSqliteWait } from "../../schema/busy-table/session-try";
@@ -35,7 +37,10 @@ import {
   withBusyTableTries,
   type TryResult,
 } from "../../schema/busy-table/tries";
-import type { HolderReport } from "../../schema/busy-table/types";
+import type {
+  BusyTableStop,
+  HolderReport,
+} from "../../schema/busy-table/types";
 import {
   assertSchemaLockHeld,
   schemaLockConfirmedUntil,
@@ -53,6 +58,8 @@ export interface StepBusyTable {
   readonly notify: (line: string) => void;
   /** What runs the steps, as the operator knows it: "nextly migrate:field-groups --apply (up)". */
   readonly command: string;
+  /** Which way the run goes: `--down` rolls a completed migration back. */
+  readonly direction: "up" | "down";
 }
 
 /** Why the report names no holder: this command does not look one up. */
@@ -62,12 +69,59 @@ const HOLDER_NOT_LOOKED_UP: HolderReport = {
     "nextly migrate:field-groups does not look up the session holding the table.",
 };
 
+/**
+ * What to do once a step's tries ran out. The engine's report ends with the advice for a migration
+ * file (`nextly migrate:resolve`, `--lock-timeout`), which this command has neither of: a step is
+ * no migration file, and the command resumes from the step that stopped, re-reading the catalog,
+ * so it is simply run again.
+ */
+function stepNextStep(stop: BusyTableStop, direction: "up" | "down"): string {
+  const command = `nextly migrate:field-groups${direction === "down" ? " --down" : ""} --apply --backup-confirmed`;
+  const committed =
+    stop.outcome.kind === "part-way"
+      ? "The step's statements that committed on MySQL before the wait stay; the next run reads " +
+        "the catalog again and renames only what is left. "
+      : stop.outcome.kind === "no-retry" && !stop.outcome.restUndone
+        ? "What the step ran before the statement named above stays; the next run reads the " +
+          "catalog again and renames only what is left. "
+        : "";
+  return (
+    committed +
+    `Run \`${command}\` again once the holder ends, or end the holding session: it resumes ` +
+    "from the step that stopped. To wait longer, raise `NEXTLY_LOCK_TIMEOUT` / " +
+    "`NEXTLY_LOCK_TIMEOUT_TOTAL`."
+  );
+}
+
+/**
+ * The error a step's tries stop with: the engine's report (`tableBusyError`), its code, reason and
+ * stop as they are, with its last line, the next step, given for this command.
+ */
+export function stepTableBusyError(
+  stop: BusyTableStop,
+  direction: "up" | "down"
+): NextlyError {
+  const report = tableBusyError(stop);
+  const lines = report.publicMessage.split("\n");
+  lines[lines.length - 1] = stepNextStep(stop, direction);
+  return new NextlyError({
+    code: "NEXTLY_TABLE_BUSY",
+    publicMessage: lines.join("\n"),
+    ...(report.logContext === undefined
+      ? {}
+      : { logContext: report.logContext }),
+  });
+}
+
 /** A statement a try sent, as text the busy-table judgement reads; never shown to an operator. */
 interface SentStatement {
   readonly text: string;
   /** Whether it was a schema statement, which on MySQL commits what ran before it, and itself. */
   readonly schema: boolean;
 }
+
+/** Leading words of a statement a MySQL rollback undoes: a row change, a read or a setting. */
+const ROW_CHANGE = /^\s*(INSERT|UPDATE|DELETE|REPLACE|SELECT|SET)\b/i;
 
 /** Leading words of a schema statement: one MySQL commits on its own. */
 const SCHEMA_STATEMENT = /^\s*(ALTER|CREATE|DROP|RENAME)\b/i;
@@ -129,50 +183,6 @@ function recording(
   });
 }
 
-/** A whole number a session setting read back as, or undefined for anything else. */
-function wholeNumber(value: unknown): number | undefined {
-  const number = typeof value === "string" ? Number(value) : value;
-  return typeof number === "number" && Number.isSafeInteger(number)
-    ? number
-    : undefined;
-}
-
-/**
- * Runs `work` with MySQL's per-lock waits of the session bounded to `tryMs`, in whole seconds,
- * from 1: `lock_wait_timeout` for a table's metadata lock, `innodb_lock_wait_timeout` for a row's.
- * Both are session settings, which outlive the transaction on a pooled connection, so each is set
- * back to the value the session had before, whatever the outcome.
- */
-async function withMysqlWaitBounds<T>(
-  ctx: TransactionContext,
-  tryMs: number,
-  work: () => Promise<T>
-): Promise<T> {
-  const [row] = await ctx.execute<Record<string, unknown>>(
-    "SELECT @@SESSION.lock_wait_timeout AS lock_wait, @@SESSION.innodb_lock_wait_timeout AS row_wait"
-  );
-  const before = {
-    lock: wholeNumber(row?.lock_wait),
-    row: wholeNumber(row?.row_wait),
-  };
-  const seconds = String(Math.max(1, Math.ceil(tryMs / 1000)));
-  await ctx.execute(`SET SESSION lock_wait_timeout = ${seconds}`);
-  await ctx.execute(`SET SESSION innodb_lock_wait_timeout = ${seconds}`);
-  try {
-    return await work();
-  } finally {
-    // Where a value could not be read, the server's default is the nearest to the session's own.
-    const lock = before.lock === undefined ? "DEFAULT" : String(before.lock);
-    const rows = before.row === undefined ? "DEFAULT" : String(before.row);
-    await ctx
-      .execute(`SET SESSION lock_wait_timeout = ${lock}`)
-      .catch(() => undefined);
-    await ctx
-      .execute(`SET SESSION innodb_lock_wait_timeout = ${rows}`)
-      .catch(() => undefined);
-  }
-}
-
 /**
  * `session` for one try of `tryMs`: each transaction a step opens has its waits for a lock
  * bounded to the try, and records the statements it sends in `sent`.
@@ -204,7 +214,22 @@ function boundedSession(
             return work(recorded);
           }
           if (dialect === "mysql") {
-            return withMysqlWaitBounds(ctx, tryMs, () => work(recorded));
+            // Both of MySQL's per-lock waits bounded to the try, put back afterwards to what the
+            // session had (`boundMysqlLockWaits`).
+            const restoreWaits = await boundMysqlLockWaits(
+              {
+                read: text => ctx.execute<Record<string, unknown>>(text),
+                run: async text => {
+                  await ctx.execute(text);
+                },
+              },
+              tryMs / 1000
+            );
+            try {
+              return await work(recorded);
+            } finally {
+              await restoreWaits();
+            }
           }
           return work(recorded);
         });
@@ -238,10 +263,11 @@ export async function runStepInTries(
       bounds: busyTable.bounds,
       change,
       appliedBefore,
+      direction: busyTable.direction,
       notify: busyTable.notify,
       notice: tryNotice,
       assertHeld: assertSchemaLockHeld,
-      stopped: tableBusyError,
+      stopped: stop => stepTableBusyError(stop, busyTable.direction),
       // On SQLite the holder's write lock keeps the schema lock from renewing while the tries
       // wait, so they end where the lock can still be shown held, and say why.
       ...(dialect === "sqlite"
@@ -305,8 +331,13 @@ export async function runStepInTries(
                   judgement: lasting.judgement,
                 },
               }),
-          // Only a transaction that kept nothing undid the rest of the step.
-          undone: dialect !== "mysql",
+          // On PostgreSQL and SQLite the transaction rolled back whole. On MySQL the rest of the
+          // step was undone only where the try kept nothing and sent no schema statement: every
+          // statement it sent was a row change or a setting, which the rollback undid.
+          undone:
+            dialect !== "mysql" ||
+            (kept === 0 &&
+              sent.every(statement => ROW_CHANGE.test(statement.text))),
           committed,
         };
       }

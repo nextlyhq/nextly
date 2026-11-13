@@ -403,6 +403,7 @@ describe("a busy database, met by every path outside the schema pipeline (sqlite
           bounds: bounds(),
           notify,
           command: "nextly migrate:field-groups --apply (up)",
+          direction: "up",
         },
       })
     );

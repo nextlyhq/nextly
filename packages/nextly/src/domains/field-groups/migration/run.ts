@@ -877,6 +877,7 @@ export async function runFieldGroupMigration(
                 ...busyTable,
                 adapter,
                 command: `nextly migrate:field-groups --apply (${direction})`,
+                direction,
               },
             }),
       });

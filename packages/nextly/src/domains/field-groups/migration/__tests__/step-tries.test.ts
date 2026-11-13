@@ -76,8 +76,10 @@ const meta = {} as MetaService;
 function run(
   session: MigrationSession,
   steps: MigrationStep[],
-  notify: (line: string) => void
+  notify: (line: string) => void,
+  options: { direction?: "up" | "down"; adapter?: DrizzleAdapter } = {}
 ): Promise<void> {
+  const direction = options.direction ?? "up";
   return runMigrationSteps({
     session,
     meta,
@@ -85,10 +87,11 @@ function run(
     steps: steps.map(step => ({ ...step, recordsProgress: false })),
     fromStep: 1,
     busyTable: {
-      adapter: ADAPTER,
+      adapter: options.adapter ?? ADAPTER,
       bounds: BOUNDS,
       notify,
-      command: "nextly migrate:field-groups --apply (up)",
+      command: `nextly migrate:field-groups --apply (${direction})`,
+      direction,
     },
   });
 }
@@ -197,5 +200,59 @@ describe("a field-group migration step waits for a busy table in tries", () => {
     };
     await run(session, [rows], () => {});
     expect(sent).toEqual([]);
+  });
+
+  it("ends its stop with this command's next step, not a migration file's", async () => {
+    const session = sessionOf("postgresql", [], statement =>
+      statement.startsWith("ALTER TABLE") ? PG_LOCK_TIMEOUT : undefined
+    );
+    const error = (await run(session, [renameStep({ count: 0 })], () => {}, {
+      direction: "down",
+    }).then(
+      () => undefined,
+      (e: unknown) => e
+    )) as NextlyError;
+    expect(error.code).toBe("NEXTLY_TABLE_BUSY");
+    const lines = error.publicMessage.split("\n");
+    expect(lines[lines.length - 1]).toContain(
+      "`nextly migrate:field-groups --down --apply --backup-confirmed` again"
+    );
+    expect(lines[lines.length - 1]).toContain(
+      "resumes from the step that stopped"
+    );
+    expect(error.publicMessage).not.toContain("migrate:resolve");
+    expect(error.publicMessage).not.toContain("--lock-timeout");
+    expect(error.logContext?.stop).toMatchObject({ direction: "down" });
+  }, 10_000);
+
+  it("on MySQL, says the rest was undone where the try sent only row changes and kept nothing", async () => {
+    // Every table has a trigger, so a row change that waited may not be sent again.
+    const triggered = {
+      ...ADAPTER,
+      queryStatement: async () => [{ seen: 1, name: "dynamic_components" }],
+    } as unknown as DrizzleAdapter;
+    const session = sessionOf("mysql", [], () => undefined);
+    const rowsOnly: MigrationStep = {
+      id: "table:comp_hero->fg_hero",
+      changesStructure: true,
+      async run(s) {
+        await s.inTransaction(async ctx => {
+          await ctx.runStatement(
+            sql`UPDATE ${sql.identifier("dynamic_components")} SET table_name = ${"fg_hero"}`
+          );
+          throw MYSQL_LOCK_TIMEOUT;
+        });
+      },
+      verify: async () => true,
+    };
+    const error = (await run(session, [rowsOnly], () => {}, {
+      adapter: triggered,
+    }).then(
+      () => undefined,
+      (e: unknown) => e
+    )) as NextlyError;
+    expect(error.logContext?.stop).toMatchObject({
+      outcome: { kind: "no-retry", reason: "trigger", restUndone: true },
+    });
   });
 });
