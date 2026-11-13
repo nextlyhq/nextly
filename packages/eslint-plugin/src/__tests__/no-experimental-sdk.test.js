@@ -76,6 +76,18 @@ ruleTester.run("no-experimental-sdk", rule, {
       code: `const other = { init(ctx) { ctx.${contextTop}; } };`,
       options: CONTEXT,
     },
+    // A parameter shadowing the namespace import is not the SDK.
+    `import * as sdk from "${ROOT}"; export function read(sdk) { return sdk.${rootExperimental}; }`,
+    // A parameter shadowing definePlugin: its argument's lifecycle is not a plugin's.
+    {
+      code: `${definePluginImport} export function wrap(definePlugin) { return definePlugin({ init(ctx) { ctx.${contextTop}; } }); }`,
+      options: CONTEXT,
+    },
+    // A local type shadowing PluginContext describes something else.
+    {
+      code: `import type { PluginContext } from "${ROOT}"; export function f() { type PluginContext = { ${contextTop}: number }; const c: PluginContext = { ${contextTop}: 1 }; return c.${contextTop}; }`,
+      options: CONTEXT,
+    },
     // A context member adopted on purpose.
     {
       code: `${definePluginImport} definePlugin({ init(ctx) { ctx.${contextTop}; } });`,

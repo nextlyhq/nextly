@@ -11,6 +11,9 @@
       "inputs": [
         "$TURBO_EXTENDS$",
         "scripts/**",
+        // The committed manifest is JSON, which the root inputs leave out: an
+        // edit to it alone must still rerun the test that compares it.
+        "src/sdk-stability.json",
         "$TURBO_ROOT$/packages/plugin-sdk/STABILITY.md",
         "$TURBO_ROOT$/packages/plugin-sdk/package.json",
         "$TURBO_ROOT$/packages/plugin-sdk/src/**/*.ts",

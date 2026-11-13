@@ -95,11 +95,37 @@ export default {
     const options = context.options[0] ?? {};
     const allow = new Set(options.allow ?? []);
     const sourceCode = context.sourceCode ?? context.getSourceCode();
-    /** Local names bound to an SDK namespace import, with its specifier. */
+    /**
+     * Local names the SDK's imports bind, each with the import specifier that
+     * binds it: namespace imports with their entry point, and the SDK's
+     * `definePlugin` and `PluginContext`. A use of one of these names counts
+     * only where it resolves to that binding, so a parameter or local that
+     * shadows it is someone else's.
+     */
     const namespaces = new Map();
-    /** Local names bound to the SDK's `definePlugin` and `PluginContext`. */
-    const definePluginNames = new Set();
-    const contextTypeNames = new Set();
+    const definePluginNames = new Map();
+    const contextTypeNames = new Map();
+
+    /** The variable `name` refers to at `node`, searching outward from its scope. */
+    function findVariable(node, name) {
+      for (let scope = sourceCode.getScope(node); scope; scope = scope.upper) {
+        const variable = scope.set.get(name);
+        if (variable) return variable;
+      }
+      return null;
+    }
+
+    /**
+     * Whether `name`, used at `node`, is the binding `specifier` made. A name
+     * the scope manager cannot find at all is taken as the import: a type
+     * name is not always tracked, and the import is then the only binding of
+     * that name the file is known to declare.
+     */
+    function refersToImport(node, name, specifier) {
+      const variable = findVariable(node, name);
+      if (!variable) return true;
+      return variable.defs.some(definition => definition.node === specifier);
+    }
 
     function checkImported(node, name, source) {
       if (allow.has(name)) return;
@@ -171,18 +197,22 @@ export default {
 
     function isContextAnnotation(annotation) {
       const type = annotation?.typeAnnotation;
+      if (type?.type !== "TSTypeReference") return false;
+      if (type.typeName.type !== "Identifier") return false;
+      const specifier = contextTypeNames.get(type.typeName.name);
       return (
-        type?.type === "TSTypeReference" &&
-        type.typeName.type === "Identifier" &&
-        contextTypeNames.has(type.typeName.name)
+        specifier !== undefined &&
+        refersToImport(type.typeName, type.typeName.name, specifier)
       );
     }
 
     function isDefinePluginCall(node) {
+      if (node?.type !== "CallExpression") return false;
+      if (node.callee.type !== "Identifier") return false;
+      const specifier = definePluginNames.get(node.callee.name);
       return (
-        node?.type === "CallExpression" &&
-        node.callee.type === "Identifier" &&
-        definePluginNames.has(node.callee.name)
+        specifier !== undefined &&
+        refersToImport(node.callee, node.callee.name, specifier)
       );
     }
 
@@ -223,9 +253,9 @@ export default {
     function recordBinding(specifier) {
       const imported = specifierName(specifier.imported);
       if (imported === "definePlugin")
-        definePluginNames.add(specifier.local.name);
+        definePluginNames.set(specifier.local.name, specifier);
       if (imported === "PluginContext")
-        contextTypeNames.add(specifier.local.name);
+        contextTypeNames.set(specifier.local.name, specifier);
     }
 
     return {
@@ -234,7 +264,7 @@ export default {
         if (!isSdkSource(source)) return;
         for (const specifier of node.specifiers) {
           if (specifier.type === "ImportNamespaceSpecifier") {
-            namespaces.set(specifier.local.name, source);
+            namespaces.set(specifier.local.name, { source, specifier });
           } else if (specifier.type === "ImportSpecifier") {
             recordBinding(specifier);
             checkImported(specifier, specifierName(specifier.imported), source);
@@ -250,9 +280,15 @@ export default {
       },
       MemberExpression(node) {
         if (node.object.type !== "Identifier") return;
-        const source = namespaces.get(node.object.name);
+        const namespace = namespaces.get(node.object.name);
         const name = propertyName(node);
-        if (source && name) checkImported(node.property, name, source);
+        if (!namespace || !name) return;
+        if (
+          !refersToImport(node.object, node.object.name, namespace.specifier)
+        ) {
+          return;
+        }
+        checkImported(node.property, name, namespace.source);
       },
       "FunctionDeclaration, FunctionExpression, ArrowFunctionExpression":
         checkFunction,
