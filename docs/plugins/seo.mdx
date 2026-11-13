@@ -374,8 +374,13 @@ Each entry carries:
 - `<loc>`, the page's absolute address, made from `baseUrl`;
 - on a page published in more than one language, an `<xhtml:link rel="alternate">` for
   each of its languages, itself included, and `x-default`, the same links as its head;
-- `<lastmod>`, when the published page last changed. Saving a working draft leaves it as
-  it was;
+- `<lastmod>`, when the published page's content last changed: any of its fields but its
+  `seo` group and Nextly's own bookkeeping (its id, its dates, its status). A change to the
+  page's SEO alone, a save that changes nothing, and a working draft all leave it as it was,
+  so search engines can trust it. A page last saved before this was kept, as every page is
+  on the first upgrade, shows its last save until its next one; reading the sitemap writes
+  nothing. A [page built in code](#pages-built-in-code) carries one only where its route
+  states it;
 - the page's main images as `<image:image>`: its share image, or the cover image its
   content offers, as the page's head uses it, and the image its
   [structured data](#structured-data) reads where the content type maps one, such as a
@@ -1436,8 +1441,11 @@ count on the Overview opens it showing that severity only.
 A page hidden from search on purpose, by its own setting, its whole type or its route's code, is
 checked only for broken links and alt text. The site as a
 whole is checked for a missing production address, a collection with no public address, a
-redirect whose To address redirects again, and a page left out of the sitemap because another page
-holds its address.
+redirect whose To address redirects again, a page left out of the sitemap because another page
+holds its address, and sitemap dates that keep matching the day they are checked: more than half
+of the sitemap's addresses, and at least 20, dated the day of the full check, on two full checks
+made on different days, which is what dates taken from a build or a request look like. A site whose
+content all moved in on one earlier day does not match. It is a warning.
 
 The list is for anyone who may read one of the content types the plugin extends, a Single among
 them, and shows each person the problems of the pages they may read. A redirect that takes more
@@ -1650,8 +1658,8 @@ refused and given nothing of what it guards. The admin hides the Overview, Pages
 Redirects entries from someone without `manage-seo`, and Inspect asks `check-seo`.
 
 A page's SEO is part of the page. By default whoever may edit a page changes its SEO, and an SEO
-change is saved like any other change to it: held as a draft where the type has drafts, and served,
-and listed with a new `lastmod` in the sitemap, once the page is published.
+change is saved like any other change to it: held as a draft where the type has drafts, and served
+once the page is published. It does not move the page's `lastmod`, which follows its content.
 
 To let someone edit a type's pages but not their SEO, turn `pagePermissions` on:
 
@@ -1744,6 +1752,20 @@ The page is answered by the same order of who wins as every page with an entry:
   sets, such as keywords, is kept as it is;
 - then the site's [title pattern](#title-patterns) with the page's name, taken from its
   address (`/thank-you` is "Thank you") or given as `name`, and the site's defaults.
+
+A page built in code has a `lastmod` in the sitemap only where its route states when it last
+changed, as `openGraph.modifiedTime` in the metadata it passes; it is never given the time it was
+built or asked for:
+
+```tsx
+export const generateMetadata = () =>
+  seoMetadata("/pricing", {
+    metadata: {
+      title: "Pricing",
+      openGraph: { type: "article", modifiedTime: "2026-10-01" },
+    },
+  });
+```
 
 The canonical is the page's own address, never the route's. A page is hidden where the screen
 hides it or where the route's own metadata sets `noindex`; a route cannot list a page the screen

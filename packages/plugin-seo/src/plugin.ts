@@ -64,6 +64,7 @@ import {
   type GoogleClient,
 } from "./connections/search-console-send";
 import { CONNECTION_SECRETS, connectionSettings } from "./connections/store";
+import { watchContentDates } from "./content-dates/hooks";
 import { defaultSeoFields } from "./fields";
 import { importRoutes } from "./import/route";
 import { withLanguageLinks } from "./languages/head";
@@ -491,6 +492,15 @@ function rulesReader(options: { hiddenTypes?: readonly string[] }): ReadRules {
   };
 }
 
+/** What the sitemap lists, for the problem checks; nothing where it is off. */
+function sitemapScopeOf(
+  options: SeoPluginOptions,
+  collections: readonly string[] | undefined
+): { sitemap?: { collections?: readonly string[] } } {
+  if (options.sitemap === false) return {};
+  return { sitemap: collections === undefined ? {} : { collections } };
+}
+
 /** What the sitemap is served with, or nothing where it is turned off. */
 function sitemapConfig(
   options: SeoPluginOptions,
@@ -705,6 +715,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     get singles() {
       return types.singles;
     },
+    // The pages built in code the sitemap lists, and what it lists, for the
+    // check of its dates.
+    codeRoutes,
+    ...sitemapScopeOf(options, sitemapSubset),
     readers: {
       readRules,
       readStructuredDataRules: structuredDataFromSettings(
@@ -1080,6 +1094,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       keepSeoContext(ctx);
       // Each saved page checked again for the problem list.
       watchSaves(ctx, problemChecks);
+      // Each saved page's sitemap date moved only where its content changed.
+      watchContentDates(ctx, types);
       keepCodeRoutes(codeRoutes);
       // Changed pages noted for IndexNow, told once they settle.
       stopIndexNow = watchForIndexNow(ctx, { readRules, ...siteOrigin }, types);
