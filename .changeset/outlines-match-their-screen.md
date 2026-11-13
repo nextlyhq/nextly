@@ -36,3 +36,4 @@ The admin's loading outlines now match the screens they stand for, so nothing mo
 - The users list lays its columns out by fixed widths, shared with its outline, so the columns no longer jump when the rows land, and its Columns control is drawn at once.
 - The release tabs hold their counts' place while the counts load, and the releases list waits for them before it decides whether to show its search.
 - A list's toolbar keeps its controls side by side on a narrow column, the search giving way first.
+- A signed-in screen whose code is still on its way draws its outline, the one the frame drew, instead of a loading state of its own.
