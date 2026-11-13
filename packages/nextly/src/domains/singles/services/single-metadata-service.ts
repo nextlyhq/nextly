@@ -49,6 +49,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { FieldConfig } from "@nextly/collections";
 
 import { NextlyError } from "../../../errors";
+import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
   DynamicSingleInsert,
@@ -981,6 +982,15 @@ export class SingleMetadataService {
       before;
     const stored = singleEntity(existing);
     const rename = await this.detectedFieldRename(before, after);
+    // The Required and Unique settings of fields leaving translation are applied after the
+    // companion's values are copied, and refused together where those values cannot take them. The
+    // first file is written without them, so it matches what the registry records either way; a
+    // second records them once they have applied.
+    const leaving = plan?.leavingSettings ?? [];
+    const planned =
+      leaving.length > 0 ? withoutRefusedSettings(after, leaving) : after;
+    const entityWith = (fields: FieldDefinition[]) =>
+      singleEntity({ ...existing, ...updateData, fields });
     // Held in an object, as the apply below sets it from inside the writer.
     const ran: {
       outcome?: Awaited<ReturnType<SingleMetadataService["applyUpdateDdl"]>>;
@@ -992,7 +1002,7 @@ export class SingleMetadataService {
           kind: "single",
           slug: input.slug,
           previous: await previousEntity(deps, "single", input.slug, stored),
-          entity: singleEntity({ ...existing, ...updateData, fields: after }),
+          entity: entityWith(planned),
           change: "update",
           ...(rename ? { renamedFields: [rename] } : {}),
           ...(await singleRelations(
@@ -1004,9 +1014,24 @@ export class SingleMetadataService {
           )),
         },
         async () => {
-          if (plan) ran.outcome = await this.applyUpdateDdl(input, plan);
+          if (!plan) return undefined;
+          ran.outcome = await this.applyUpdateDdl(
+            input,
+            plan,
+            leaving.length > 0
+          );
+          // A companion that failed to follow leaves the main table changed: the files are kept
+          // and recorded applied nowhere, never taken as applied.
+          return ran.outcome.status === "failed" ? "partly-applied" : undefined;
         }
       );
+      if (plan && leaving.length > 0 && ran.outcome?.status !== "failed") {
+        const refused = await this.applyLeavingStep(deps, input, plan, {
+          previous: entityWith(planned),
+          entity: entityWith(after),
+        });
+        if (refused.length > 0) ran.outcome = { status: "failed", refused };
+      }
     } catch (error) {
       if (ran.outcome === undefined) throw error;
       this.logger.error(
@@ -1017,6 +1042,74 @@ export class SingleMetadataService {
       return { ...ran.outcome, status: "failed" };
     }
     return ran.outcome;
+  }
+
+  /**
+   * The Required and Unique settings of fields leaving translation, applied once their values are
+   * on the shared columns, and written as a migration of their own only once they have applied:
+   * refused, they are taken off whole, and no file says the table holds them. Answers the steps
+   * refused, or none.
+   *
+   * In development the writer runs them and records their file; a refusal withdraws it. Elsewhere
+   * they run first and their file is written after, for the deploy's `nextly migrate` to find done.
+   */
+  private async applyLeavingStep(
+    deps: CollectionSaveDeps,
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan,
+    entities: { previous: UiSchemaEntity; entity: UiSchemaEntity }
+  ): Promise<LeavingSettingStep[]> {
+    const adapter = deps.adapter;
+    const tableName = input.existing.tableName;
+    const save = {
+      kind: "single" as const,
+      slug: input.slug,
+      previous: entities.previous,
+      entity: entities.entity,
+      change: "update" as const,
+    };
+    const applyThem = async (): Promise<LeavingSettingStep[]> => {
+      const refused = await this.applyLeavingSettings(adapter, tableName, plan);
+      // The fields as the table now holds them, settings and all where they applied.
+      await this.registerUpdatedRuntimeSchema(
+        input,
+        { ...plan, fields: withoutRefusedSettings(plan.fields, refused) },
+        adapter,
+        input.isLocalized
+      );
+      return refused;
+    };
+    if (!deps.applies) {
+      const refused = await applyThem();
+      if (refused.length === 0) {
+        await writeEntitySave(deps, save, () => Promise.resolve(undefined));
+      }
+      return refused;
+    }
+    // Held in an object, as the apply below sets it from inside the writer.
+    const ran: { refused: LeavingSettingStep[] } = { refused: [] };
+    try {
+      await writeEntitySave(deps, save, async () => {
+        ran.refused = await applyThem();
+        if (ran.refused.length > 0) {
+          // Nothing of them applied: their file is withdrawn.
+          throw NextlyError.validation({
+            errors: [
+              {
+                path: "fields",
+                code: "LEAVING_SETTINGS_REFUSED",
+                message:
+                  "The settings of fields leaving translation were refused.",
+              },
+            ],
+          });
+        }
+        return undefined;
+      });
+    } catch (error) {
+      if (ran.refused.length === 0) throw error;
+    }
+    return ran.refused;
   }
 
   /**
@@ -2014,7 +2107,12 @@ export class SingleMetadataService {
    */
   private async applyUpdateDdl(
     input: UpdateSingleSchemaInput,
-    plan: UpdateDdlPlan
+    plan: UpdateDdlPlan,
+    /**
+     * Leave the Required and Unique settings of fields leaving translation to the caller, which
+     * applies them as a step of their own (`applyLeavingStep`): the fields are bound without them.
+     */
+    deferLeaving = false
   ): Promise<{
     status: SingleMigrationStatus | undefined;
     /** The leaving settings refused, so the fields are recorded without them; else empty. */
@@ -2131,10 +2229,15 @@ export class SingleMetadataService {
       // columns hold the default language's values: all of them or none. Refused, the fields are
       // recorded as the table then holds them, without the settings, and the runtime shape is
       // bound from the same list, so the next save sees the settings as a change and applies them.
-      const refused = await this.applyLeavingSettings(adapter, tableName, plan);
+      const refused = deferLeaving
+        ? []
+        : await this.applyLeavingSettings(adapter, tableName, plan);
       const recorded = {
         ...plan,
-        fields: withoutRefusedSettings(plan.fields, refused),
+        fields: withoutRefusedSettings(
+          plan.fields,
+          deferLeaving ? plan.leavingSettings : refused
+        ),
       };
 
       // 🔴 Registered only once the companion has been reconciled, never before it.

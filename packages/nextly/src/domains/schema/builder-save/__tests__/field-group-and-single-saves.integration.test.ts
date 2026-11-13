@@ -30,9 +30,56 @@ import type { CollectionService } from "../../../collections/services/collection
 import { FieldGroupMetadataService } from "../../../field-groups/services/field-group-metadata-service";
 import { SingleMetadataService } from "../../../singles/services/single-metadata-service";
 import { resolveBuilderVersions } from "../../../versions/builder-versions";
+import { SchemaEventsRepository } from "../../events/schema-events-repository";
+
+// A companion reconcile made to fail, by the one test that needs it to: every
+// other test runs the real one.
+const companionFails = vi.hoisted(() => ({ single: false, component: false }));
+vi.mock(
+  "../../../singles/services/reconcile-single-companion",
+  async importOriginal => {
+    const real =
+      await importOriginal<
+        typeof import("../../../singles/services/reconcile-single-companion")
+      >();
+    return {
+      ...real,
+      reconcileSingleCompanion: (
+        ...args: Parameters<typeof real.reconcileSingleCompanion>
+      ) => {
+        if (companionFails.single) {
+          return Promise.reject(new Error("the companion would not follow"));
+        }
+        return real.reconcileSingleCompanion(...args);
+      },
+    };
+  }
+);
+vi.mock(
+  "../../../field-groups/services/field-group-table-provisioning",
+  async importOriginal => {
+    const real =
+      await importOriginal<
+        typeof import("../../../field-groups/services/field-group-table-provisioning")
+      >();
+    return {
+      ...real,
+      reconcileComponentCompanion: (
+        ...args: Parameters<typeof real.reconcileComponentCompanion>
+      ) => {
+        if (companionFails.component) {
+          return Promise.reject(new Error("the companion would not follow"));
+        }
+        return real.reconcileComponentCompanion(...args);
+      },
+    };
+  }
+);
 
 let instance: TestNextly | undefined;
 afterEach(async () => {
+  companionFails.single = false;
+  companionFails.component = false;
   vi.unstubAllEnvs();
   resetSessionStandingForTests();
   await instance?.destroy();
@@ -124,6 +171,21 @@ async function deleteVia(way: Way, t: TestNextly, slug: string): Promise<void> {
   expect(response.status).toBe(204);
 }
 
+/** The migration files recorded applied, by name. */
+async function appliedFiles(t: TestNextly): Promise<string[]> {
+  const adapter = t.adapter as unknown as {
+    getDrizzle(): unknown;
+    getCapabilities(): { dialect: "postgresql" | "mysql" | "sqlite" };
+  };
+  const repo = new SchemaEventsRepository(
+    adapter.getDrizzle() as never,
+    adapter.getCapabilities().dialect
+  );
+  return (await repo.listFileApplies())
+    .filter(row => row.status === "applied")
+    .map(row => String(row.filename));
+}
+
 /** The migration files written, by name. */
 function migrationFiles(t: TestNextly): string[] {
   return readdirSync(join(t.basePath, "database", "history")).filter(f =>
@@ -134,10 +196,15 @@ function migrationFiles(t: TestNextly): string[] {
 describe.each(getConfiguredTestDialects())(
   "a Builder save of a field group or a Single (%s)",
   dialect => {
-    async function boot(): Promise<TestNextly> {
+    async function boot(
+      options: { translated?: boolean } = {}
+    ): Promise<TestNextly> {
       const t = await createTestNextly({
         dialect,
         db: { migrationsDir: HISTORY, uiSchemaFile: "./schema/builder.json" },
+        ...(options.translated
+          ? { localization: { locales: ["en", "de"], defaultLocale: "en" } }
+          : {}),
       });
       instance = t;
       // As the Builder runs: each save is applied, and recorded, here.
@@ -383,6 +450,178 @@ describe.each(getConfiguredTestDialects())(
         true
       );
       expect(latestColumns(t, "single_notice")).toContain("body");
+    });
+
+    it("seeds a Single's permissions when its create's migration wrote its row", async () => {
+      const t = await boot();
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          fields: [{ name: "heading", type: "text" }],
+        }
+      );
+
+      const rows = await t.adapter.executeQuery<{ slug: string }>(
+        `SELECT slug FROM permissions WHERE resource = 'notice'`
+      );
+      expect(rows.length).toBeGreaterThan(0);
+    });
+
+    it("keeps a Single update's files, recorded nowhere, when its companion fails to follow", async () => {
+      const t = await boot();
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          fields: [{ name: "heading", type: "text" }],
+        }
+      );
+
+      companionFails.single = true;
+      const result = await bodyOf(
+        await dispatchSingles(
+          "updateSingleSchema",
+          { slug: "notice" },
+          {
+            fields: [
+              { name: "heading", type: "text" },
+              { name: "body", type: "text" },
+            ],
+          }
+        )
+      );
+
+      expect(JSON.stringify(result)).toContain("failed");
+      const update = migrationFiles(t).find(f =>
+        /_notice_update\.sql$/.test(f)
+      );
+      expect(update).toBeDefined();
+      expect(await appliedFiles(t)).not.toContain(update);
+    });
+
+    it("keeps a field group change's files, recorded nowhere, when its companion fails after the push", async () => {
+      const t = await boot();
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "meta",
+          label: "Meta",
+          fields: [{ name: "note", type: "text" }],
+        }
+      );
+      const component = await t
+        .getService("fieldGroupRegistryService")
+        .getComponent("meta");
+
+      companionFails.component = true;
+      await expect(
+        dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "meta" },
+          {
+            fields: [
+              { name: "note", type: "text" },
+              { name: "byline", type: "text" },
+            ],
+            confirmed: true,
+            schemaVersion: component.schemaVersion,
+          }
+        )
+      ).rejects.toBeDefined();
+
+      // The push changed the table: its file stays, for `nextly migrate` to
+      // name, and is recorded applied nowhere.
+      const update = migrationFiles(t).find(f => /_meta_update\.sql$/.test(f));
+      expect(update).toBeDefined();
+      expect(await appliedFiles(t)).not.toContain(update);
+    });
+
+    /** A translated Single whose heading leaves translation as Required. */
+    async function leavingAsRequired(t: TestNextly) {
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          localized: true,
+          fields: [{ name: "heading", type: "text" }],
+        }
+      );
+      // A refused setting is answered as a refusal, the fields saved without it.
+      const refusal = await dispatchSingles(
+        "updateSingleSchema",
+        { slug: "notice" },
+        {
+          fields: [
+            {
+              name: "heading",
+              type: "text",
+              localized: false,
+              required: true,
+            },
+          ],
+        }
+      ).then(
+        () => undefined,
+        (error: unknown) => (error as { publicMessage?: string }).publicMessage
+      );
+      const updates = migrationFiles(t).filter(f =>
+        /_notice_update\.sql$/.test(f)
+      );
+      const heading = (
+        (await t.getService("singleRegistryService").getSingle("notice"))
+          .fields as { name: string; required?: boolean }[]
+      ).find(field => field.name === "heading");
+      return { refusal, updates, heading };
+    }
+
+    it("writes a field leaving translation as Required, its settings on record once applied", async () => {
+      const t = await boot({ translated: true });
+
+      const { refusal, updates, heading } = await leavingAsRequired(t);
+
+      expect(refusal).toBeUndefined();
+      expect(heading?.required).toBe(true);
+      expect(updates.length).toBeGreaterThan(0);
+      // Every file the update wrote stands as the table does.
+      const applied = await appliedFiles(t);
+      for (const file of updates) expect(applied).toContain(file);
+    });
+
+    it("writes a Single's update as the registry records it when a field leaving translation cannot be Required", async () => {
+      const t = await boot({ translated: true });
+      // The database refuses the settings, as it does where the default
+      // language holds no value: all of them, and nothing of them applied.
+      const refuse = vi
+        .spyOn(
+          SingleMetadataService.prototype as unknown as {
+            applyLeavingSettings: (...args: unknown[]) => Promise<unknown>;
+          },
+          "applyLeavingSettings"
+        )
+        .mockImplementation((...args: unknown[]) =>
+          Promise.resolve(
+            (args[2] as { leavingSettings: unknown[] }).leavingSettings
+          )
+        );
+
+      const { refusal, updates, heading } = await leavingAsRequired(t);
+      refuse.mockRestore();
+
+      expect(refusal).toContain("Required on heading");
+      expect(heading?.required).not.toBe(true);
+      expect(updates.length).toBeGreaterThan(0);
+      // Written without the refused setting, so every file stands as the
+      // table does.
+      const applied = await appliedFiles(t);
+      for (const file of updates) expect(applied).toContain(file);
     });
 
     it("records a field group made before its saves wrote migrations, once it is saved", async () => {

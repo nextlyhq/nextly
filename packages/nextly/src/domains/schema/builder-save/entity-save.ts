@@ -81,6 +81,10 @@ export async function checkEntitySaveHistory(
  * records the files applied; after the writer elsewhere. Without a writer,
  * `apply` alone runs. The history was checked first
  * (`checkEntitySaveHistory`).
+ *
+ * `apply` answers `"partly-applied"` where it changed the database and then
+ * failed part way: the files are kept and recorded applied nowhere (see
+ * `writeCollectionSave`'s `appliedBy`).
  */
 export async function writeEntitySave(
   deps: CollectionSaveDeps | undefined,
@@ -94,10 +98,10 @@ export async function writeEntitySave(
   if (deps.applies) {
     await writeCollectionSave(deps, save, {
       historyChecked: true,
-      // What `apply` answers is the caller's; the writer only waits on it.
-      appliedBy: async () => {
-        await apply();
-      },
+      // Only a part-way failure is the writer's to know; anything else
+      // `apply` answers is the caller's.
+      appliedBy: async () =>
+        (await apply()) === "partly-applied" ? "partly-applied" : undefined,
     });
     return;
   }

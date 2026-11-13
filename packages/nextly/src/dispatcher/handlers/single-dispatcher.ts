@@ -103,6 +103,7 @@ import {
   builderSaveDeps,
   checkBuilderSaveHistory,
   reviewBuilderSchemaChange,
+  landingPush,
   writeBuilderSchemaChange,
 } from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
@@ -1495,18 +1496,22 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             recordedFields: recordedFieldsOf(single),
           };
 
-          const push = builderSchemaPush({
-            dialect,
-            db,
-            databaseName,
-            slug,
-            kind: "single",
-            resolutions: [
-              renameResolutions ?? [],
-              eventResolutions ?? [],
-              legacyBundle,
-            ],
-          });
+          const landing = landingPush(
+            builderSchemaPush({
+              dialect,
+              db,
+              databaseName,
+              slug,
+              kind: "single",
+              resolutions: [
+                renameResolutions ?? [],
+                eventResolutions ?? [],
+                legacyBundle,
+              ],
+            })
+          );
+          // Notes once the push has landed, so a failure after it keeps the files that record it.
+          const push = landing.push;
           // The push excludes companion tables, so single_<slug>_locales is brought in step right
           // after it: created on the first translatable field, then ADD/DROPped as the field set
           // changes (mirrors collections).
@@ -1582,7 +1587,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                     (single.fields ?? []) as unknown as FieldDefinition[],
                     fields as unknown as FieldDefinition[]
                   )),
-            }
+            },
+            landing.landed
           );
 
           const newSchemaVersion = currentVersion + 1;

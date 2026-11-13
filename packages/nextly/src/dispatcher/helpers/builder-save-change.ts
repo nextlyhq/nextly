@@ -27,6 +27,8 @@ import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
+import type { PipelineResult } from "../../domains/schema/pipeline/pushschema-pipeline";
+import type { DesiredSchema } from "../../domains/schema/pipeline/types";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { NextlyError } from "../../errors/nextly-error";
 import type { UiSchemaEntity } from "../../schemas/_zod/ui-schema";
@@ -90,7 +92,14 @@ export async function writeBuilderSchemaChange(
     /** A Single's junction statements and relationship keys (`singleRelations`). */
     junctions?: NonNullable<CollectionSave["junctions"]>;
     keys?: NonNullable<CollectionSave["keys"]>;
-  }
+  },
+  /**
+   * Whether `apply`'s push has landed (`landingPush`): a failure after it,
+   * such as a companion reconcile, leaves the main table changed, so the
+   * files describing that change are kept, recorded applied nowhere, and the
+   * failure is still thrown.
+   */
+  landed?: () => boolean
 ): Promise<void> {
   if (deps === undefined) {
     await apply();
@@ -107,7 +116,41 @@ export async function writeBuilderSchemaChange(
       uiSchemaFile: deps.config.db.uiSchemaFile,
     }),
   });
-  await writeEntitySave(deps, save, apply);
+  // Held in an object, as the apply below sets it from inside the writer.
+  const failed: { error?: unknown } = {};
+  await writeEntitySave(deps, save, async () => {
+    try {
+      await apply();
+      return undefined;
+    } catch (error) {
+      if (landed?.() !== true) throw error;
+      failed.error = error;
+      return "partly-applied";
+    }
+  });
+  if ("error" in failed) throw failed.error;
+}
+
+/**
+ * A schema dialog's push that notes once one of its pushes has landed, for
+ * `writeBuilderSchemaChange` to tell a failure before the main table changed
+ * from one after it.
+ */
+export function landingPush(
+  push: (desired: DesiredSchema) => Promise<PipelineResult>
+): {
+  push: (desired: DesiredSchema) => Promise<PipelineResult>;
+  landed: () => boolean;
+} {
+  let landed = false;
+  return {
+    push: async desired => {
+      const result = await push(desired);
+      if (result.success) landed = true;
+      return result;
+    },
+    landed: () => landed,
+  };
 }
 
 /**
