@@ -60,7 +60,8 @@ const BEFORE = [
 
 /**
  * The save: a field made Unique, one renamed, one added, one removed, one retyped, one indexed,
- * a relationship re-keyed to another collection, and Draft/Published turned on.
+ * a relationship added with its key to another collection, and Draft/Published turned on. The
+ * keyed `owner` keeps its target: pointing a keyed relationship elsewhere is refused.
  */
 const AFTER = [
   { name: "title", type: "text", unique: true },
@@ -68,7 +69,8 @@ const AFTER = [
   { name: "flag", type: "checkbox" },
   { name: "rating", type: "text" },
   { name: "note", type: "text", index: true },
-  relationTo("owner", "teams"),
+  relationTo("owner", "people"),
+  relationTo("team", "teams"),
 ];
 
 describeEachDialect("a collection's Builder save", dialect => {

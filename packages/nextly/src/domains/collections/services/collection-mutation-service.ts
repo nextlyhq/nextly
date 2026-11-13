@@ -476,6 +476,10 @@ import {
   generateSlug,
   normalizeSlugPath,
 } from "./collection-utils";
+import {
+  entryStillReferenced,
+  referrersHolding,
+} from "./entry-still-referenced";
 import type { PartsState } from "./publish-parts";
 import { requiresEveryLanguage } from "./require-every-language";
 import {
@@ -18876,6 +18880,9 @@ export class CollectionMutationService extends BaseService {
     // The tags this delete invalidates, computed post-commit and flushed with the
     // result. Hoisted so the catch return carries it too.
     let revalidationIntent: RevalidationIntent | undefined;
+    // The entry's table, once known, so a delete the database refuses over a key still pointing
+    // at the entry can say what points at it (`entryStillReferenced`).
+    let entryTable: string | undefined;
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
 
@@ -18911,6 +18918,7 @@ export class CollectionMutationService extends BaseService {
       const { languages: askedLanguages, filters: deleteFilters } = gate.asked;
       const { storedHooks, tableName, sharedContext, requestFacts } =
         this.operationSetup(collection, params);
+      entryTable = tableName;
 
       // Execute beforeOperation hooks FIRST (before operation-specific hooks)
       // Can modify operation arguments (id) or throw to abort
@@ -19281,9 +19289,16 @@ export class CollectionMutationService extends BaseService {
         committed: committedWrite,
       };
     } catch (caught: unknown) {
+      // A delete the database refused over a relationship still pointing at the entry answers
+      // with what points at it; the transaction has rolled back, so nothing of the entry changed.
+      const referenced = await this.stillReferencedRefusal(
+        caught,
+        entryTable,
+        params
+      );
       // A delete the database is not migrated for answers as such, not as a 500.
       const error = await asNotMigrated(
-        caught,
+        referenced ?? caught,
         collectionNotMigrated(this.collectionService, params.collectionName, {
           trusted: fieldTrustOf(params),
         }),
@@ -19304,6 +19319,39 @@ export class CollectionMutationService extends BaseService {
         committed: committedWrite,
       };
     }
+  }
+
+  /**
+   * The refusal naming what still points at an entry, for a delete the database refused with a
+   * foreign-key violation; undefined for any other failure, or where nothing it can name points
+   * at the entry, so the original error stands.
+   */
+  private async stillReferencedRefusal(
+    caught: unknown,
+    entryTable: string | undefined,
+    params: { collectionName: string; entryId: string }
+  ): Promise<NextlyError | undefined> {
+    if (entryTable === undefined) return undefined;
+    // The driver's error may arrive wrapped (by the query builder, or as a mapped database
+    // error), so its cause chain is read, a few links deep.
+    let link: unknown = caught;
+    let foreignKey = false;
+    for (let depth = 0; depth < 5 && link != null && !foreignKey; depth++) {
+      foreignKey = toDbError(this.dialect, link).kind === "fk-violation";
+      link = (link as { cause?: unknown }).cause;
+    }
+    if (!foreignKey) return undefined;
+    const referrers = await referrersHolding(
+      this.adapter,
+      this.dialect,
+      entryTable,
+      params.entryId
+    );
+    if (referrers.length === 0) return undefined;
+    return entryStillReferenced(referrers, {
+      collectionName: params.collectionName,
+      entryId: params.entryId,
+    });
   }
 
   // ============================================================

@@ -36,12 +36,15 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import type { CollectionTables } from "../../dynamic-collections/services/collection-tables";
 import { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import {
+  fieldProducesColumn,
   relationshipStoresJson,
   toSnakeCase,
 } from "../services/field-column-descriptor";
+import { relationshipTargetSlug } from "../services/relationship-key-target";
 
 import type {
   ForeignKeySpec,
@@ -98,6 +101,12 @@ export function withBuilderForeignKeys(
     })
   );
 
+  // Refused before anything else is planned: a relationship whose column holds a key, pointed at
+  // another collection or made to hold a list by this save (`refuseKeyedRelationshipChanges`).
+  if (recordedFields !== undefined) {
+    refuseKeyedRelationshipChanges(fields, recordedFields, live);
+  }
+
   // Kept: every key the live table holds whose columns the table keeps. A key
   // over a column this push drops goes with the column, and so does one over a
   // relationship now holding a list: its column becomes JSON, which no key to
@@ -149,6 +158,86 @@ export function withBuilderForeignKeys(
   }
 
   return { ...spec, foreignKeys: [...kept, ...created] };
+}
+
+/** A field's name as an author reads it: its label where it has one. */
+function fieldTitle(field: FieldDefinition): string {
+  return typeof field.label === "string" && field.label.trim() !== ""
+    ? field.label
+    : field.name;
+}
+
+/**
+ * Refuses a save that would leave a relationship's key checking the wrong thing.
+ *
+ * A relationship whose live column holds a foreign key has every value checked against its
+ * target's table. Pointing it at another collection would keep that key checking the old target,
+ * so every value of the new one would be refused; making it hold several entries turns its column
+ * into a JSON list no key can check. Either is refused here, naming the field, before any statement
+ * is planned, and the key stays as it is: a key is never dropped without being asked for by name.
+ * Judged against the fields the registry records before this save, so only what the save changes
+ * is judged, and a relationship whose column holds no key changes freely, as it always has.
+ */
+function refuseKeyedRelationshipChanges(
+  fields: readonly FieldDefinition[],
+  recordedFields: readonly FieldDefinition[],
+  live: TableSpec | undefined
+): void {
+  const lower = (name: string) => name.toLowerCase();
+  const keyedColumns = new Set(
+    (live?.foreignKeys ?? []).flatMap(fk =>
+      fk.columns.length === 1 ? [lower(fk.columns[0])] : []
+    )
+  );
+  if (keyedColumns.size === 0) return;
+  const recordedByName = new Map(recordedFields.map(f => [f.name, f]));
+  for (const field of fields) {
+    const before = recordedByName.get(field.name);
+    if (
+      before === undefined ||
+      field.type !== "relationship" ||
+      before.type !== "relationship" ||
+      !fieldProducesColumn(field) ||
+      !fieldProducesColumn(before) ||
+      !keyedColumns.has(lower(toSnakeCase(field.name)))
+    ) {
+      continue;
+    }
+    const target = relationshipTargetSlug(before) ?? "its collection";
+    if (relationshipStoresJson(field) && !relationshipStoresJson(before)) {
+      throw keyedRelationshipRefusal(
+        field,
+        "KEYED_RELATIONSHIP_CANNOT_HOLD_MANY",
+        `"${fieldTitle(field)}" can't be changed to hold several entries: the database checks ` +
+          `its one value against "${target}", and a list can't be checked that way. Add a new ` +
+          `relationship field that holds several entries instead, then remove this one.`
+      );
+    }
+    const next = relationshipTargetSlug(field);
+    if (
+      !relationshipStoresJson(field) &&
+      next !== relationshipTargetSlug(before)
+    ) {
+      throw keyedRelationshipRefusal(
+        field,
+        "KEYED_RELATIONSHIP_CANNOT_CHANGE_TARGET",
+        `"${fieldTitle(field)}" can't be pointed at ${next === null ? "another collection" : `"${next}"`}: ` +
+          `the database checks every value it holds against "${target}". Add a new ` +
+          `relationship field for ${next === null ? "the new target" : `"${next}"`} instead, then remove this one.`
+      );
+    }
+  }
+}
+
+function keyedRelationshipRefusal(
+  field: FieldDefinition,
+  code: string,
+  message: string
+): NextlyError {
+  return NextlyError.validation({
+    errors: [{ path: `fields.${field.name}`, code, message }],
+    logContext: { field: field.name, reason: code },
+  });
 }
 
 /**

@@ -1455,19 +1455,28 @@ export class CollectionMetadataService extends BaseService {
       // is removed, when no such order exists (`collection-drop-order`). A key
       // to a renamed member references the table it kept, which the registry
       // names, so the keys are described against the registry's tables.
+      // Read as Builder collections' own keys, then held to the keys each table really carries:
+      // a relationship the admin made now has one, and one made before it was keyed has none,
+      // which orders nothing and is no cycle.
       const targetTables = await collectionTablesBySlug(
         this.adapter,
-        collections.flatMap(collection => collection.fields ?? [])
+        collections.flatMap(collection => collection.fields ?? []),
+        { builder: true }
+      );
+      const heldKeys = await Promise.all(
+        collections.map(collection =>
+          this.collectionService.heldRelationshipKeys(
+            collection.tableName,
+            collection.fields ?? [],
+            targetTables
+          )
+        )
       );
       const order = dropOrder(
         slugs.map((slug, index) => ({
           slug,
           tableName: collections[index].tableName,
-          keys: this.collectionService.relationshipForeignKeys(
-            collections[index].tableName,
-            collections[index].fields ?? [],
-            targetTables
-          ),
+          keys: heldKeys[index],
         }))
       );
       const ordered = order.map(index => ({

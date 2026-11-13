@@ -391,7 +391,14 @@ export class DynamicCollectionService extends BaseService {
         // MySQL's restate to the legacy renderer, which would `MODIFY` a float the create had just
         // made `double` down to `decimal(10,2)`.
         liveColumnTypes: this.schemaService.plannedColumnTypes(pendingFields),
-        ...this.schemaService.plannedAttachments(tableName, pendingFields),
+        // Keyed as the pending create keys them, so a key it will install is predicted.
+        ...this.schemaService.plannedAttachments(
+          tableName,
+          pendingFields,
+          await collectionTablesBySlug(this.adapter, pendingFields, {
+            builder: true,
+          })
+        ),
       };
     }
 
@@ -622,9 +629,12 @@ export class DynamicCollectionService extends BaseService {
         hasStatus: data.status === true,
         localized: storesPerLanguage(data),
         // A relationship to a renamed collection keys the table it kept.
+        // Read for this Builder collection's own keys, so a relationship the admin writes with
+        // `relationTo` is keyed too.
         targetTables: await collectionTablesBySlug(
           this.adapter,
-          userDefinedFields
+          userDefinedFields,
+          { builder: true }
         ),
       }
     );
@@ -1489,21 +1499,26 @@ export class DynamicCollectionService extends BaseService {
     const historyFacts = async () => {
       const live = await liveTable();
       const recorded = collection.fields ?? [];
+      // Where each relationship's target is stored, so a key this save adds or changes
+      // references the table a renamed target kept rather than one spelled from its new slug.
+      // Read for this Builder collection's own keys, `relationTo` relationships included.
+      const targetTables = await collectionTablesBySlug(
+        this.adapter,
+        [...recorded, ...(updates.fields ?? [])],
+        { builder: true }
+      );
       return {
         tableHasRows: live.tableHasRows,
         columnsContainingNull: live.columnsContainingNull,
         columnsAbsentFromTable: live.columnsAbsentFromTable,
         liveColumnTypes: this.schemaService.plannedColumnTypes(recorded),
+        // The recorded fields' keys as the tables they built carry them: a relationship naming its
+        // target by `relationTo` alone was created without one, so none is predicted for it.
         ...this.schemaService.plannedAttachments(
           collection.tableName,
           recorded
         ),
-        // Where each relationship's target is stored, so a key this save adds or changes
-        // references the table a renamed target kept rather than one spelled from its new slug.
-        targetTables: await collectionTablesBySlug(this.adapter, [
-          ...recorded,
-          ...(updates.fields ?? []),
-        ]),
+        targetTables,
       };
     };
 
@@ -2093,10 +2108,12 @@ export class DynamicCollectionService extends BaseService {
     junctions: { up: string[]; down: string[] };
     keys: { before: ForeignKeySpec[]; after: ForeignKeySpec[] };
   }> {
-    const targetTables = await collectionTablesBySlug(this.adapter, [
-      ...oldFields,
-      ...newFields,
-    ]);
+    // Read for this Builder collection's own keys, `relationTo` relationships included.
+    const targetTables = await collectionTablesBySlug(
+      this.adapter,
+      [...oldFields, ...newFields],
+      { builder: true }
+    );
     const junctions = this.junctionStatements(
       tableName,
       oldFields,
@@ -2123,14 +2140,103 @@ export class DynamicCollectionService extends BaseService {
         up: [...moved(oldFields, newFields), ...junctions.up],
         down: [...junctions.down, ...moved(newFields, oldFields)],
       },
-      keys: {
-        before: this.relationshipForeignKeys(
-          tableName,
-          oldFields,
-          targetTables
-        ),
-        after: this.relationshipForeignKeys(tableName, newFields, targetTables),
-      },
+      keys: await this.keysTheTableHolds(
+        tableName,
+        oldFields,
+        newFields,
+        targetTables
+      ),
+    };
+  }
+
+  /**
+   * The relationship keys `tableName` holds, as the schema service describes them for `fields`:
+   * each described key whose column the live table carries a key on. A relationship made before
+   * the Builder keyed it has none, so it orders and drops nothing. With no table, none.
+   */
+  async heldRelationshipKeys(
+    tableName: string,
+    fields: readonly FieldDefinition[],
+    targetTables?: CollectionTables
+  ): Promise<ForeignKeySpec[]> {
+    const described = this.relationshipForeignKeys(
+      tableName,
+      fields,
+      targetTables
+    );
+    if (described.length === 0) return described;
+    const keyed = await readForeignKeyColumns(
+      this.adapter.getDrizzle(),
+      this.adapter.dialect,
+      tableName
+    );
+    const liveKeyed = new Set([...keyed.keys()].map(c => c.toLowerCase()));
+    return described.filter(key =>
+      liveKeyed.has((key.columns[0] ?? "").toLowerCase())
+    );
+  }
+
+  /**
+   * A save's relationship keys before and after, as the table holds them.
+   *
+   * Which Builder relationships carry a key depends on when each was made: one made before the
+   * Builder keyed relationships named by `relationTo` has none, and an existing column is never
+   * given one. So `before` keeps only the keys the live table holds, and `after` keeps those plus
+   * the keys of relationships whose column this save adds. A key the table does not hold is never
+   * dropped, and a column it holds no key on is never keyed by a save that leaves it in place.
+   */
+  private async keysTheTableHolds(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    targetTables: CollectionTables | undefined
+  ): Promise<{ before: ForeignKeySpec[]; after: ForeignKeySpec[] }> {
+    const before = this.relationshipForeignKeys(
+      tableName,
+      oldFields,
+      targetTables
+    );
+    const after = this.relationshipForeignKeys(
+      tableName,
+      newFields,
+      targetTables
+    );
+    if (before.length === 0 && after.length === 0) return { before, after };
+    const keyed = await readForeignKeyColumns(
+      this.adapter.getDrizzle(),
+      this.adapter.dialect,
+      tableName
+    );
+    const lower = (name: string) => name.toLowerCase();
+    const liveKeyed = new Set([...keyed.keys()].map(lower));
+    const oldColumns = new Set(
+      oldFields
+        .filter(field => fieldProducesColumn(field))
+        .map(field => lower(toSnakeCase(field.name)))
+    );
+    // A renamed field keeps its column under the new name, with the key its old column had or
+    // without one: it is an existing column, not one this save adds.
+    // Asked only when a key stands on a column the old fields had none of, the one case a rename
+    // decides.
+    const onNewColumn = after.some(
+      key => !oldColumns.has(lower(key.columns[0] ?? ""))
+    );
+    const rename = onNewColumn
+      ? this.schemaService.detectFieldRename(oldFields, newFields)
+      : null;
+    if (rename !== null) {
+      const to = lower(toSnakeCase(rename.to.name));
+      oldColumns.add(to);
+      if (liveKeyed.has(lower(toSnakeCase(rename.from.name))))
+        liveKeyed.add(to);
+    }
+    const held = (key: ForeignKeySpec) =>
+      liveKeyed.has(lower(key.columns[0] ?? ""));
+    return {
+      before: before.filter(held),
+      after: after.filter(
+        key => held(key) || !oldColumns.has(lower(key.columns[0] ?? ""))
+      ),
     };
   }
 
