@@ -1,18 +1,19 @@
 ---
 title: CREATE_STORAGE_TAKEN
-description: "A field group or Single would be created where tables or other objects that nothing registered owns already stand."
+description: "A field group or Single would be created where tables or views that nothing registered owns already stand."
 ---
 
 ## Cause
 
-A field group or Single would be created where tables or other objects that nothing registered owns already stand.
+A field group or Single would be created where tables or views that nothing registered owns already stand.
 
-Before it builds anything, a field group's or Single's create checks the tables it would use. An empty table an earlier attempt left behind is replaced. It refuses instead, and changes nothing, when what stands there is not its own to replace: a table that holds rows, a leftover table other tables reference, or an object standing where it would build or reading what it would replace, such as a view. The message names each one.
+Before it builds anything, a field group's or Single's create checks the tables it would use. An empty table an earlier attempt left behind is replaced. It refuses instead, and changes nothing, when what stands there is not its own to replace: a table that holds rows, a leftover table other tables reference, a table standing where it would build one of its own, or a view reading the tables it would replace. The message names each one.
 
 ## Fix
 
 - Check the tables the message names. If they hold data you need, back it up first.
-- Drop or rename them, then retry the create.
+- For a table, drop or rename it, then retry the create.
+- For a view, drop it, or redefine it to read other tables, then retry the create. Renaming a view is not enough: under its new name it still reads the same tables.
 
 ## Example
 

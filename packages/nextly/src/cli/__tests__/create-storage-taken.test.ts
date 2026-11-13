@@ -1,0 +1,80 @@
+/**
+ * Every refusal of a field group's or Single's create over storage nothing registered owns ends a
+ * command as `CREATE_STORAGE_TAKEN`, read from the refusal as the create throws it.
+ *
+ * Each case builds its refusal through the builder the create itself throws, so a change to a
+ * refusal's reason or wording that the code no longer reads fails here: the error would end as
+ * `UNEXPECTED_ERROR`, or its parts would lose what happened, why or what to do.
+ */
+import { describe, expect, it } from "vitest";
+
+import {
+  occupiedRefusal,
+  referencedRefusal,
+  takenRefusal,
+  viewedRefusal,
+} from "../../domains/schema/services/leftover-storage";
+import { toCliError } from "../errors";
+
+const SINGLE = {
+  kind: "single",
+  slug: "home",
+  tableName: "single_home",
+} as const;
+const GROUP = {
+  kind: "fieldGroup",
+  slug: "card",
+  tableName: "comp_card",
+} as const;
+
+describe("a create refused over storage nothing registered owns", () => {
+  const cases = [
+    {
+      refusal: "a table standing where it would build",
+      error: takenRefusal(SINGLE, ["home_links"]),
+      what: 'Creating the Single "home" was refused.',
+      why: '"home_links" stands where it would build, and nothing registered owns it.',
+      next: "Drop or rename it, then retry the create.",
+    },
+    {
+      refusal: "a leftover table other tables reference",
+      error: referencedRefusal(SINGLE, ["dc_audit"]),
+      what: 'Creating the Single "home" was refused.',
+      why: '"single_home" already exists, and "dc_audit" references it, which nothing registered owns.',
+      next: "Drop or rename those tables, then retry the create.",
+    },
+    {
+      refusal: "a leftover table holding rows",
+      error: occupiedRefusal(GROUP, [{ table: "comp_card", rows: 2 }]),
+      what: 'Creating the field group "card" was refused.',
+      why: '"comp_card" (2 rows) already exists and holds rows, but nothing registered describes them.',
+      next: "Drop or rename those tables, then retry the create.",
+    },
+    {
+      refusal: "a view reading the tables it would replace",
+      error: viewedRefusal(GROUP, ["card_report"]),
+      what: 'Creating the field group "card" was refused.',
+      why: 'The view "card_report" reads the tables it would replace, and nothing registered owns it.',
+      next: "Drop it, or redefine it to read other tables, then retry the create.",
+    },
+  ];
+
+  for (const { refusal, error, what, why, next } of cases) {
+    it(`reads ${refusal} as its own code, with what happened, why and what to do`, () => {
+      const ended = toCliError(error);
+      expect(ended.code).toBe("CREATE_STORAGE_TAKEN");
+      expect({ what: ended.what, why: ended.why, next: ended.next }).toEqual({
+        what,
+        why,
+        next,
+      });
+    });
+  }
+
+  // Renaming a view keeps it reading the same table, so the advice for one must not offer it.
+  it("never tells a view's owner to rename it", () => {
+    expect(toCliError(viewedRefusal(SINGLE, ["home_report"])).next).not.toMatch(
+      /rename/i
+    );
+  });
+});

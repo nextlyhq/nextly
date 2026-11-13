@@ -27,7 +27,7 @@ function leftoverStorageRefusal(error: NextlyError): CliErrorParts {
     what: colon === -1 ? body : `${body.slice(0, colon)}.`,
     why:
       colon === -1
-        ? "Tables or other objects that nothing registered owns stand where it would build."
+        ? "Tables or views that nothing registered owns stand where it would build."
         : asSentence(body.slice(colon + 2)),
     next:
       last ??
@@ -329,11 +329,12 @@ export const SCHEMA_CODES = defineCodes({
     ],
   },
   // A field group's or Single's create checks the storage it would build in first, and refuses
-  // when something nothing registered owns stands there: objects in its place, a leftover table
-  // others reference, or one holding rows. Each refusal names the tables and what to do.
+  // when something nothing registered owns stands there: a table in its place, a leftover table
+  // others reference, one holding rows, or a view reading one. Each refusal names them and what
+  // to do.
   CREATE_STORAGE_TAKEN: {
     cause:
-      "A field group or Single would be created where tables or other objects that nothing registered owns already stand.",
+      "A field group or Single would be created where tables or views that nothing registered owns already stand.",
     from: [
       {
         code: "CONFLICT",
@@ -348,6 +349,11 @@ export const SCHEMA_CODES = defineCodes({
       {
         code: "CONFLICT",
         reason: "create-table-occupied",
+        describe: leftoverStorageRefusal,
+      },
+      {
+        code: "CONFLICT",
+        reason: "create-table-viewed",
         describe: leftoverStorageRefusal,
       },
     ],

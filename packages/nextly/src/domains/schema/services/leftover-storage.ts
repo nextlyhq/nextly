@@ -237,7 +237,7 @@ export async function clearLeftoverStorage(
   if (occupied.length > 0) throw occupiedRefusal(args, occupied);
   // A view reading one of these tables would go with it, unasked, under PostgreSQL's CASCADE.
   const views = await viewsOver(db, dialect, family);
-  if (views.length > 0) throw takenRefusal(args, views);
+  if (views.length > 0) throw viewedRefusal(args, views);
 
   args.logger.info(
     `Dropping empty unregistered tables ${family.map(table => `"${table}"`).join(", ")} before creating the ${KIND_NAMES[args.kind]} "${args.slug}"`
@@ -291,20 +291,29 @@ async function viewsOver(
   return [...views];
 }
 
-/** The refusal of a create where objects stand that nothing registered owns and it would remove. */
-function takenRefusal(
-  args: ClearLeftoverStorageArgs,
+/**
+ * The create a refusal is about: what is being created, and the table it would build. Each refusal
+ * below is exported so the CLI's error cases build it exactly as a create throws it.
+ */
+export type LeftoverRefusalSubject = Pick<
+  ClearLeftoverStorageArgs,
+  "kind" | "slug" | "tableName"
+>;
+
+/** The refusal of a create where tables stand that nothing registered owns and it would build. */
+export function takenRefusal(
+  args: LeftoverRefusalSubject,
   objects: readonly string[]
 ): NextlyError {
   const { kind, slug, tableName } = args;
+  const one = objects.length === 1;
   const named = objects.map(object => `"${object}"`).join(", ");
   return NextlyError.conflict({
     reason: "state",
     message:
       `Creating the ${KIND_NAMES[kind]} "${slug}" was refused: ${named} ` +
-      `${objects.length === 1 ? "stands" : "stand"} where it would build, or ` +
-      `${objects.length === 1 ? "reads" : "read"} what it would replace, and nothing registered ` +
-      "owns it. Drop or rename it, then retry the create.",
+      `${one ? "stands" : "stand"} where it would build, and nothing registered owns ` +
+      `${one ? "it" : "them"}. Drop or rename ${one ? "it" : "them"}, then retry the create.`,
     logContext: {
       reason: "create-objects-taken",
       kind,
@@ -315,9 +324,37 @@ function takenRefusal(
   });
 }
 
+/**
+ * The refusal of a create whose leftover tables views read. A view keeps reading its table under
+ * a new name of its own, so renaming one leaves the create refused; it is dropped or redefined.
+ */
+export function viewedRefusal(
+  args: LeftoverRefusalSubject,
+  views: readonly string[]
+): NextlyError {
+  const { kind, slug, tableName } = args;
+  const one = views.length === 1;
+  const named = views.map(view => `"${view}"`).join(", ");
+  return NextlyError.conflict({
+    reason: "state",
+    message:
+      `Creating the ${KIND_NAMES[kind]} "${slug}" was refused: the ${one ? "view" : "views"} ` +
+      `${named} ${one ? "reads" : "read"} the tables it would replace, and nothing registered ` +
+      `owns ${one ? "it" : "them"}. Drop ${one ? "it" : "them"}, or redefine ` +
+      `${one ? "it" : "them"} to read other tables, then retry the create.`,
+    logContext: {
+      reason: "create-table-viewed",
+      kind,
+      slug,
+      tableName,
+      views,
+    },
+  });
+}
+
 /** The refusal of a create whose leftover other tables reference. */
-function referencedRefusal(
-  args: ClearLeftoverStorageArgs,
+export function referencedRefusal(
+  args: LeftoverRefusalSubject,
   others: readonly string[]
 ): NextlyError {
   const { kind, slug, tableName } = args;
@@ -339,8 +376,8 @@ function referencedRefusal(
 }
 
 /** The refusal of a create whose leftover family holds rows, naming each table and its rows. */
-function occupiedRefusal(
-  args: ClearLeftoverStorageArgs,
+export function occupiedRefusal(
+  args: LeftoverRefusalSubject,
   occupied: readonly OccupiedTable[]
 ): NextlyError {
   const { kind, slug, tableName } = args;

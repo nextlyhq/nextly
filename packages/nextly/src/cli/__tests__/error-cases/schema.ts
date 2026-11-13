@@ -3,6 +3,7 @@
  *
  * @module cli/__tests__/error-cases/schema
  */
+import { occupiedRefusal } from "../../../domains/schema/services/leftover-storage";
 import {
   assertAdapterPostgresSchema,
   refuseMovedInstallation,
@@ -39,21 +40,12 @@ export const SCHEMA_CASES = {
     thrownBy(() => assertAdapterPostgresSchema("public", "tenant_a")),
   POSTGRES_SCHEMA_INVALID: () =>
     thrownBy(() => validatePostgresSchema("Tenant-A")),
-  // As `occupiedRefusal` in `domains/schema/services/leftover-storage.ts` throws it for a Single
-  // whose leftover table holds rows.
+  // The refusal a Single's create throws when its leftover table holds rows.
   CREATE_STORAGE_TAKEN: () =>
-    NextlyError.conflict({
-      reason: "state",
-      message:
-        'Creating the Single "home" was refused: "single_home" (3 rows) already exists and holds rows, but nothing registered describes them. Drop or rename those tables, then retry the create.',
-      logContext: {
-        reason: "create-table-occupied",
-        kind: "single",
-        slug: "home",
-        tableName: "single_home",
-        occupied: [{ table: "single_home", rows: 3 }],
-      },
-    }),
+    occupiedRefusal(
+      { kind: "single", slug: "home", tableName: "single_home" },
+      [{ table: "single_home", rows: 3 }]
+    ),
   // As `loadUiSchema` in `domains/schema/ui-schema/loader.ts` throws it for a file it cannot read.
   UI_SCHEMA_UNREADABLE: () =>
     new NextlyError({
