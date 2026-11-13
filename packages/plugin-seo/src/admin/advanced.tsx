@@ -6,8 +6,18 @@
  *
  * @module admin/advanced
  */
-import { Checkbox, Input, Switch, Textarea } from "@nextlyhq/ui";
-import { Check, ChevronDown, Lock, TriangleAlert } from "lucide-react";
+import {
+  Checkbox,
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Switch,
+  Textarea,
+} from "@nextlyhq/plugin-sdk/admin";
+import { Check, ChevronRight, Lock, TriangleAlert } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { SeoAnswer } from "../resolver/order";
@@ -109,18 +119,26 @@ export function AdvancedFrame({
 }): ReactNode {
   const id = useId();
   return (
-    <section className="rounded-lg border border-border bg-card">
+    // A disclosure under a rule, as the SEO tab draws it: the name with a
+    // turning arrow, and the rows inside once open.
+    <section className="border-t border-border pt-3">
       <button
         type="button"
         aria-expanded={open}
         aria-controls={`${id}-body`}
+        title={summary}
         onClick={() => onOpenChange(!open)}
-        className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg border-0 bg-transparent px-3.5 py-3 text-left hover:bg-accent"
+        className="flex w-full cursor-pointer items-center gap-2 rounded-md border-0 bg-transparent py-1.5 text-left hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       >
-        <b className="text-sm font-semibold text-foreground">Advanced</b>
-        <span className="min-w-0 flex-1 text-[12.5px] text-muted-foreground">
-          {summary}
-        </span>
+        <ChevronRight
+          aria-hidden="true"
+          className={cx(
+            "size-4 text-foreground transition-transform motion-reduce:transition-none",
+            open && "rotate-90"
+          )}
+        />
+        <b className="text-sm font-medium text-foreground">Advanced</b>
+        <span className="sr-only">{summary}</span>
         {problemCount > 0 ? (
           <span
             title={thingsToFix(problemCount)}
@@ -129,13 +147,6 @@ export function AdvancedFrame({
             {problemCount}
           </span>
         ) : null}
-        <ChevronDown
-          aria-hidden="true"
-          className={cx(
-            "size-4 text-muted-foreground transition-transform",
-            open && "rotate-180"
-          )}
-        />
       </button>
       <div id={`${id}-body`} hidden={!open}>
         {children}
@@ -243,6 +254,12 @@ function withArticle(label: string): string {
   return /^[aeiou]/i.test(name) ? `an ${name}` : `a ${name}`;
 }
 
+/**
+ * The choice of no type of the page's own, which the automatic one answers.
+ * The admin's select takes no empty value, so it has a name no type has.
+ */
+const AUTOMATIC_TYPE = "=automatic";
+
 function StructuredDataRow({
   values,
   context,
@@ -262,33 +279,30 @@ function StructuredDataRow({
       labelId={`${id}-label`}
       help="Tells Google what kind of page this is, so it can show details like the author and date. Only types Google still shows are offered."
       control={
-        // Drawn as the row's buttons are, with a caret of its own in place
-        // of the browser's.
-        <span className="relative inline-flex">
-          <select
+        <Select
+          value={chosen === "" ? AUTOMATIC_TYPE : chosen}
+          disabled={!writable}
+          onValueChange={next =>
+            onSet("structuredDataType", next === AUTOMATIC_TYPE ? null : next)
+          }
+        >
+          <SelectTrigger
             aria-labelledby={`${id}-label`}
-            value={chosen}
-            disabled={!writable}
-            onChange={event =>
-              onSet(
-                "structuredDataType",
-                event.target.value === "" ? null : event.target.value
-              )
-            }
-            className="h-7 min-w-[210px] cursor-pointer appearance-none rounded-md border border-border bg-background pl-2.5 pr-7 text-xs font-medium text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:cursor-not-allowed disabled:opacity-50"
+            className="h-8 w-auto min-w-[210px] text-xs"
           >
-            <option value="">{structured.automatic.label} · automatic</option>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={AUTOMATIC_TYPE}>
+              {structured.automatic.label} · automatic
+            </SelectItem>
             {structured.offered.map(type => (
-              <option key={type.key} value={type.key}>
+              <SelectItem key={type.key} value={type.key}>
                 {type.label}
-              </option>
+              </SelectItem>
             ))}
-          </select>
-          <ChevronDown
-            aria-hidden="true"
-            className="pointer-events-none absolute right-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-          />
-        </span>
+          </SelectContent>
+        </Select>
       }
     >
       {structured.problems.length > 0 ? (

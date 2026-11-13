@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { RECEIVED_PAGE_HREF } from "../../received/contract";
+import { INSPECT_PAGE_HREF } from "../../overview/contract";
 import type { SeoTabContext } from "../../tab/contract";
 import { receivedHrefOf } from "../SeoTab";
 
@@ -37,7 +37,7 @@ const asked = (href: string | undefined) =>
 describe("the way to what search engines received", () => {
   it("asks for the page at the address its language serves it at", () => {
     const href = receivedHrefOf("7", context("/en/blog/harbour"));
-    expect(href?.startsWith(RECEIVED_PAGE_HREF)).toBe(true);
+    expect(href?.startsWith(`${INSPECT_PAGE_HREF}?`)).toBe(true);
     expect(asked(href)).toBe("https://acme.example/en/blog/harbour");
   });
 

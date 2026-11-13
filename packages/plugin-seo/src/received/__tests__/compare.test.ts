@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import { compareReceived, type StoredHead } from "../compare";
+import type { CrawlerKey } from "../contract";
 import type { Fetched } from "../fetch";
 
 const ADDRESS = "https://rext.ai/blog/surfer-seo-vs-rext-ai";
@@ -17,6 +18,8 @@ const STORED: StoredHead = {
   image: { url: "https://rext.ai/media/share.jpg", width: 1200, height: 630 },
   canonical: ADDRESS,
   listed: true,
+  locale: "en_US",
+  siteName: "Rext AI",
 };
 
 /** The page as Nextly would serve it, with `change` made to its head. */
@@ -32,6 +35,8 @@ function page(
     "og:image": "https://rext.ai/media/share.jpg",
     "twitter:title": STORED.cardTitle ?? "",
     "twitter:image": "https://rext.ai/media/share.jpg",
+    "og:locale": "en_US",
+    "og:site_name": "Rext AI",
   };
   change(head);
   const meta = (name: string) =>
@@ -50,6 +55,8 @@ function page(
     meta("og:image"),
     meta("twitter:title"),
     meta("twitter:image"),
+    meta("og:locale"),
+    meta("og:site_name"),
   ].join("");
 }
 
@@ -71,13 +78,15 @@ function received(
 /** Every crawler received `html`, except where `by` says otherwise. */
 function everyone(
   html: string,
-  by: Partial<Record<"googlebot" | "linkedin" | "x" | "slack", Fetched>> = {}
-) {
+  by: Partial<Record<CrawlerKey, Fetched>> = {}
+): Record<CrawlerKey, Fetched> {
   return {
     googlebot: by.googlebot ?? received(html),
-    linkedin: by.linkedin ?? received(html),
+    bingbot: by.bingbot ?? received(html),
+    facebook: by.facebook ?? received(html),
     x: by.x ?? received(html),
-    slack: by.slack ?? received(html),
+    linkedin: by.linkedin ?? received(html),
+    ai: by.ai ?? received(html),
   };
 }
 
@@ -89,11 +98,15 @@ describe("comparing what crawlers received with what Nextly holds", () => {
       fetched: everyone(page()),
     });
     expect(compared.differences).toEqual([]);
+    // Search engines and AI crawlers read the page's own title; the networks
+    // read the card's.
     expect(compared.rows.title).toEqual({
       googlebot: { kind: "same" },
-      linkedin: { kind: "same", note: "without “| Rext AI”" },
+      bingbot: { kind: "same" },
+      facebook: { kind: "same", note: "without “| Rext AI”" },
       x: { kind: "same", note: "X doesn't display it" },
-      slack: { kind: "same", note: "without “| Rext AI”" },
+      linkedin: { kind: "same", note: "without “| Rext AI”" },
+      ai: { kind: "same" },
     });
     expect(compared.rows.description.x).toEqual({
       kind: "same",
@@ -103,13 +116,27 @@ describe("comparing what crawlers received with what Nextly holds", () => {
     expect(compared.rows.canonical.googlebot).toEqual({ kind: "same" });
     expect(compared.rows.robots).toEqual({
       googlebot: { kind: "same" },
-      linkedin: { kind: "not-used" },
+      bingbot: { kind: "not-used" },
+      facebook: { kind: "not-used" },
       x: { kind: "not-used" },
-      slack: { kind: "not-used" },
+      linkedin: { kind: "not-used" },
+      ai: { kind: "not-used" },
     });
+    // The card's language and site name are the networks' alone.
+    expect(compared.rows.locale.googlebot).toEqual({ kind: "not-used" });
+    expect(compared.rows.locale.facebook).toEqual({ kind: "same" });
+    expect(compared.rows.siteName.linkedin).toEqual({ kind: "same" });
+    expect(compared.crawlers.map(crawler => crawler.name)).toEqual([
+      "Google",
+      "Bing",
+      "Facebook",
+      "X",
+      "LinkedIn",
+      "AI crawlers",
+    ]);
     expect(compared.crawlers[0]).toEqual({
       key: "googlebot",
-      name: "Googlebot",
+      name: "Google",
       status: 200,
       ms: 400,
       redirected: false,
@@ -130,10 +157,18 @@ describe("comparing what crawlers received with what Nextly holds", () => {
     expect(compared.differences).toHaveLength(1);
     expect(compared.differences[0]).toMatchObject({
       number: 1,
-      title: "Googlebot, LinkedIn, X and Slack received no description.",
+      title:
+        "Google, Bing, Facebook, X, LinkedIn and AI crawlers received no description.",
       text: "Nextly holds “Surfer scores a draft. Rext AI writes it.”, but the page's head has none. The page's route may not build its head from Nextly. Once it's fixed, LinkedIn keeps its old card for about a week; its Post Inspector refreshes it.",
     });
-    for (const key of ["googlebot", "linkedin", "x", "slack"] as const) {
+    for (const key of [
+      "googlebot",
+      "bingbot",
+      "facebook",
+      "x",
+      "linkedin",
+      "ai",
+    ] as const) {
       expect(compared.rows.description[key]).toEqual({
         kind: "different",
         difference: 1,
@@ -162,7 +197,9 @@ describe("comparing what crawlers received with what Nextly holds", () => {
     expect(compared.differences).toEqual([
       {
         number: 1,
-        title: "Googlebot received a different title.",
+        // A saved copy is replaced in its own time: nothing to fix.
+        expected: true,
+        title: "Google received a different title.",
         text: "Nextly holds “Surfer SEO vs Rext AI: Which Fits? | Rext AI”; the page served “Old title | Rext AI”. The host served a copy it saved 5 minutes ago, before the last change. It's replaced when that copy expires or the page is published again.",
       },
     ]);
@@ -189,7 +226,7 @@ describe("comparing what crawlers received with what Nextly holds", () => {
         linkedin: received("<title>Blocked</title>", { status: 403 }),
       }),
     });
-    expect(compared.crawlers[1]).toMatchObject({
+    expect(compared.crawlers[4]).toMatchObject({
       key: "linkedin",
       status: 403,
       difference: 1,
@@ -218,10 +255,11 @@ describe("comparing what crawlers received with what Nextly holds", () => {
       stored: STORED,
       fetched: everyone(page(), { x: failed }),
     });
-    expect(compared.crawlers[2]).toMatchObject({
+    expect(compared.crawlers[3]).toMatchObject({
       key: "x",
       redirected: true,
       failure: failed.message,
+      reason: "other-site",
       difference: 1,
     });
     expect(compared.differences[0]).toEqual({
@@ -244,7 +282,7 @@ describe("comparing what crawlers received with what Nextly holds", () => {
     expect(compared.rows.robots.googlebot).toEqual({
       kind: "different",
       difference: 1,
-      received: "Hidden from search",
+      received: "noindex, follow",
     });
     expect(compared.differences[0]).toMatchObject({
       title: "Googlebot was told not to list this page.",
@@ -264,7 +302,7 @@ describe("comparing what crawlers received with what Nextly holds", () => {
     });
     expect(compared.rows.robots.googlebot).toMatchObject({
       kind: "different",
-      received: "Hidden from search",
+      received: "noindex, follow",
     });
   });
 
@@ -277,7 +315,8 @@ describe("comparing what crawlers received with what Nextly holds", () => {
       }),
     });
     expect(compared.differences[0]).toMatchObject({
-      title: "Googlebot received a different title.",
+      expected: true,
+      title: "Google received a different title.",
       text: "Nextly's automatic title is “Surfer SEO vs Rext AI: Which Fits? | Rext AI”; the page served “From the design”. A Page Builder design or the page's route can set the title, and theirs wins over the automatic one, so this is expected where the page sets its own.",
     });
   });
@@ -354,8 +393,159 @@ describe("comparing what crawlers received with what Nextly holds", () => {
     });
     expect(compared.rows.robots.googlebot).toEqual({
       kind: "received",
-      received: "Listed in search",
+      received: "index, follow",
     });
-    expect(compared.rows.robots.slack).toEqual({ kind: "not-used" });
+    expect(compared.rows.robots.facebook).toEqual({ kind: "not-used" });
+  });
+
+  it("says the networks show no picture for a share image they don't display, served as Nextly holds it", () => {
+    const svg = "https://rext.ai/media/cover.svg";
+    const compared = compareReceived({
+      address: ADDRESS,
+      editHref: "/admin/collections/posts/7?tab=nextlyhq-plugin-seo.tab",
+      stored: { ...STORED, image: { url: svg, width: 1200, height: 630 } },
+      fetched: everyone(
+        page(head => {
+          head["og:image"] = svg;
+          head["twitter:image"] = svg;
+        })
+      ),
+    });
+    // Search engines read the image as it is; every network's card shows none.
+    expect(compared.rows.image.googlebot).toEqual({ kind: "same" });
+    expect(compared.rows.image.linkedin).toEqual({
+      kind: "different",
+      difference: 1,
+      received: "No picture shown: LinkedIn doesn't display SVG",
+    });
+    expect(compared.differences).toEqual([
+      {
+        number: 1,
+        title: "Facebook, X and LinkedIn show no picture for this page.",
+        text: "Its share image is an SVG, which they don't display, so the card appears with text only.",
+        action: {
+          label: "Make a share image",
+          href: "/admin/collections/posts/7?tab=nextlyhq-plugin-seo.tab",
+        },
+      },
+    ]);
+  });
+
+  it("finds a card stating another language than Nextly's", () => {
+    const compared = compareReceived({
+      address: ADDRESS,
+      stored: STORED,
+      fetched: everyone(page(head => (head["og:locale"] = "en_GB"))),
+    });
+    expect(compared.rows.locale.x).toEqual({
+      kind: "different",
+      difference: 1,
+      received: "en_GB",
+    });
+    expect(compared.differences[0]).toMatchObject({
+      title: "Facebook, X and LinkedIn received another language.",
+      text: "Nextly holds en_US; the page stated en_GB. The page's route or the site's layout sets its own.",
+    });
+  });
+
+  it("judges a card's title by where the card's own title comes from, not the page's", () => {
+    const compared = compareReceived({
+      address: ADDRESS,
+      // The page's title is automatic; the card's was typed for it.
+      stored: { ...STORED, automatic: { title: true, cardTitle: false } },
+      fetched: everyone(page(), {
+        x: received(page(head => (head["twitter:title"] = "Something else"))),
+      }),
+    });
+    expect(compared.differences[0]).toMatchObject({
+      title: "X received a different title.",
+    });
+    expect(compared.differences[0]?.expected).toBeUndefined();
+  });
+
+  it("says the networks show no picture for a share image the route swapped for one they don't display", () => {
+    const svg = "https://rext.ai/opengraph-image.svg";
+    const compared = compareReceived({
+      address: ADDRESS,
+      // Nextly's PNG is automatic; the route serves an SVG instead.
+      stored: { ...STORED, automatic: { image: true } },
+      fetched: everyone(
+        page(head => {
+          head["og:image"] = svg;
+          head["twitter:image"] = svg;
+        })
+      ),
+    });
+    expect(compared.rows.image.facebook).toEqual({
+      kind: "different",
+      difference: expect.any(Number),
+      received: "No picture shown: Facebook doesn't display SVG",
+    });
+    const missing = compared.differences.find(difference =>
+      difference.title.includes("show no picture")
+    );
+    expect(missing?.expected).toBeUndefined();
+  });
+
+  it("finds links Google was told not to follow, though the page is listed", () => {
+    const compared = compareReceived({
+      address: ADDRESS,
+      stored: STORED,
+      fetched: everyone(page(head => (head.robots = "index, nofollow"))),
+    });
+    expect(compared.rows.robots.googlebot).toEqual({
+      kind: "different",
+      difference: 1,
+      received: "index, nofollow",
+    });
+    expect(compared.differences[0]).toMatchObject({
+      title: "Googlebot was told not to follow this page's links.",
+    });
+  });
+
+  it("judges the card's difference apart from the page's where both received the same text", () => {
+    const compared = compareReceived({
+      address: ADDRESS,
+      stored: { ...STORED, automatic: { title: true, cardTitle: false } },
+      fetched: everyone(
+        page(head => {
+          head.title = "Something else";
+          head["og:title"] = "Something else";
+          head["twitter:title"] = "Something else";
+        })
+      ),
+    });
+    const of = (key: "googlebot" | "x") => {
+      const cell = compared.rows.title[key];
+      return compared.differences.find(
+        difference =>
+          cell.kind === "different" && difference.number === cell.difference
+      );
+    };
+    // The page's automatic title may rightly be set by its route; the
+    // card's typed one should have reached the page.
+    expect(of("googlebot")?.expected).toBe(true);
+    expect(of("x")?.expected).toBeUndefined();
+  });
+
+  it("leaves a crawler's difference to fix though another crawler was served a saved copy", () => {
+    const changed = page(head => (head.title = "Old title | Rext AI"));
+    const compared = compareReceived({
+      address: ADDRESS,
+      stored: STORED,
+      fetched: everyone(page(), {
+        googlebot: received(changed, { headers: { age: "300" } }),
+        bingbot: received(changed),
+      }),
+    });
+    const of = (key: "googlebot" | "bingbot") => {
+      const cell = compared.rows.title[key];
+      return compared.differences.find(
+        difference =>
+          cell.kind === "different" && difference.number === cell.difference
+      );
+    };
+    expect(of("googlebot")?.expected).toBe(true);
+    expect(of("bingbot")?.expected).toBeUndefined();
   });
 });

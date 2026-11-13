@@ -140,6 +140,7 @@ export type {
   JsonValue,
   PluginAdminContributions,
   PluginAdminPage,
+  PluginPageStartupRead,
   PluginCollectionView,
   OverridableDocumentAction,
   PluginDocumentActionOverride,

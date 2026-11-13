@@ -74,11 +74,14 @@ describeEachDialect(
 
     /** Every entry's heading, read through the Direct API, by id. */
     async function headings(): Promise<Record<string, unknown>> {
-      const { items } = (await current.nextly.find({
+      // A list answers `{ items }`, each item a row of the collection's fields.
+      const { items } = await current.nextly.find({
         collection: "onelangposts",
         limit: 10,
-      })) as { items: { id: string; heading?: unknown }[] };
-      return Object.fromEntries(items.map(item => [item.id, item.heading]));
+      });
+      return Object.fromEntries(
+        items.map(item => [String(item.id), item.heading])
+      );
     }
 
     async function archived(): Promise<number> {
@@ -97,16 +100,14 @@ describeEachDialect(
       });
       expect(made.success, JSON.stringify(made)).toBe(true);
       for (const heading of ["Hello", "World"]) {
-        const created = await handler()
-          .getEntryService()
-          .createEntry(
-            {
-              collectionName: "onelangposts",
-              overrideAccess: true,
-              locale: "en",
-            },
-            { heading }
-          );
+        const created = await handler().getEntryService().createEntry(
+          {
+            collectionName: "onelangposts",
+            overrideAccess: true,
+            locale: "en",
+          },
+          { heading }
+        );
         expect(created.success, JSON.stringify(created)).toBe(true);
       }
       return headings();

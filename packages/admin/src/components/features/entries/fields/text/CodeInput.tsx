@@ -20,6 +20,7 @@ import {
   type Path,
 } from "react-hook-form";
 
+import { fieldLabel } from "@admin/lib/field-label";
 import { cn } from "@admin/lib/utils";
 
 // Lazy load CodeMirror and its dependencies to avoid SSR issues with Prism
@@ -214,6 +215,9 @@ export function CodeInput<TFieldValues extends FieldValues = FieldValues>({
       {isMounted ? (
         <Suspense fallback={<CodeEditorSkeleton minHeight={minHeight} />}>
           <CodeMirrorEditor
+            // The editor is a contenteditable, which the field's <label> cannot
+            // point at, so it carries the same name itself.
+            label={fieldLabel({ label: field.label, name: field.name })}
             value={value ?? ""}
             onChange={handleChange}
             language={language}

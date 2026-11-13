@@ -1,9 +1,9 @@
 /**
  * The redirects a deploy's move still owes: each address a page let go of in
- * the catch-up, kept in the address record on the very transaction that let
- * it go, until the redirect from it has been made once every claim stands.
- * A start that stops between the two finds them at the next start, so no old
- * address is forgotten before its redirect exists.
+ * the catch-up, noted beside the address record on the very transaction that
+ * let it go, until the redirect from it has been made once every claim
+ * stands. A start that stops between the two finds them at the next start,
+ * so no old address is forgotten before its redirect exists.
  *
  * @module address-record/pending-moves
  */
@@ -16,7 +16,12 @@ import type {
   PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
-import { recordSlug } from "./rows";
+import {
+  forgetNotes,
+  notePending,
+  onFlowTransaction,
+  pendingNotes,
+} from "./store";
 
 type Transaction = ParticipantTransaction["transaction"];
 
@@ -26,8 +31,6 @@ export interface PendingMove {
   holder: AddressHolder;
   address: HeldAddress;
 }
-
-const PAGE = 200;
 
 /** The claim key of the row keeping `address`, let go of by `holder`. */
 function pendingKey(holder: AddressHolder, address: HeldAddress): string {
@@ -40,58 +43,51 @@ function pendingKey(holder: AddressHolder, address: HeldAddress): string {
     .digest("hex");
 }
 
-/** Keep `released`, let go of by `holder`, on the transaction that let it go. */
+/**
+ * Keep `released`, let go of by `holder`, on the transaction that let it go:
+ * the one the calling flow is in, which `_transaction` stands for.
+ */
 export async function keepPending(
   ctx: PluginContext,
-  transaction: Transaction,
+  _transaction: Transaction,
   holder: AddressHolder,
   released: readonly HeldAddress[]
 ): Promise<void> {
-  const slug = recordSlug(ctx);
-  for (const address of released) {
-    const key = pendingKey(holder, address);
-    const { data } = await ctx.services.ownCollections.listEntriesInTransaction(
-      transaction,
-      slug,
-      {
-        where: { claimKey: { equals: key } },
-        pagination: { limit: 1, page: 1 },
-        depth: 0,
-      },
-      { lock: "update" }
-    );
-    if ((data as unknown[]).length > 0) continue;
-    await ctx.services.collections.createEntryInTransaction(transaction, slug, {
-      claimKey: key,
-      kind: "pending",
-      locale: address.locale,
-      path: JSON.stringify(address),
-      holderCollection: holder.collection,
-      holderId: holder.id,
-    });
-  }
+  if (released.length === 0) return;
+  await onFlowTransaction(ctx, db =>
+    notePending(
+      ctx,
+      db,
+      released.map(address => ({
+        key: pendingKey(holder, address),
+        value: JSON.stringify({
+          holder: { collection: holder.collection, id: holder.id },
+          address,
+        }),
+      }))
+    )
+  );
 }
 
-/** A stored row read back as the move it keeps, or nothing where it is not one. */
-function pendingOf(entry: unknown): PendingMove | undefined {
-  const row = entry as Record<string, unknown>;
-  if (
-    typeof row.holderCollection !== "string" ||
-    typeof row.holderId !== "string"
-  ) {
-    return undefined;
-  }
+/** A stored note read back as the move it keeps, or nothing where it is not one. */
+function pendingOf(key: string, value: string | null): PendingMove | undefined {
   try {
-    const address = JSON.parse(String(row.path)) as HeldAddress;
+    const parsed = JSON.parse(value ?? "") as {
+      holder?: { collection?: unknown; id?: unknown };
+      address?: Partial<HeldAddress> | null;
+    };
+    const { holder, address } = parsed;
     if (
-      typeof address.locale !== "string" ||
+      typeof holder?.collection !== "string" ||
+      typeof holder.id !== "string" ||
+      typeof address?.locale !== "string" ||
       typeof address.path !== "string"
     ) {
       return undefined;
     }
     return {
-      key: String(row.claimKey),
-      holder: { collection: row.holderCollection, id: row.holderId },
+      key,
+      holder: { collection: holder.collection, id: holder.id },
       address: {
         locale: address.locale,
         path: address.path,
@@ -105,23 +101,9 @@ function pendingOf(entry: unknown): PendingMove | undefined {
 
 /** Every move still owed a redirect. */
 export async function pendingMoves(ctx: PluginContext): Promise<PendingMove[]> {
-  const found: PendingMove[] = [];
-  for (let page = 1; ; page++) {
-    const { data } = await ctx.services.ownCollections.listEntries(
-      recordSlug(ctx),
-      {
-        where: { kind: { equals: "pending" } },
-        pagination: { limit: PAGE, page },
-        sort: { field: "claimKey", direction: "asc" },
-        depth: 0,
-      }
-    );
-    for (const entry of data as unknown[]) {
-      const move = pendingOf(entry);
-      if (move !== undefined) found.push(move);
-    }
-    if ((data as unknown[]).length < PAGE) return found;
-  }
+  return (await pendingNotes(ctx)).flatMap(
+    note => pendingOf(note.key, note.value) ?? []
+  );
 }
 
 /** Forget the moves `keys` keep, once their redirects are made. */
@@ -129,14 +111,5 @@ export async function forgetPending(
   ctx: PluginContext,
   keys: readonly string[]
 ): Promise<void> {
-  if (keys.length === 0) return;
-  const slug = recordSlug(ctx);
-  const { data } = await ctx.services.ownCollections.listEntries(slug, {
-    where: { claimKey: { in: [...keys] } },
-    pagination: { limit: keys.length, page: 1 },
-    depth: 0,
-  });
-  for (const row of data as Record<string, unknown>[]) {
-    await ctx.services.collections.deleteEntry(slug, String(row.id));
-  }
+  await forgetNotes(ctx, keys);
 }
