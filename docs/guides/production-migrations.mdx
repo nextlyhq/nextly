@@ -511,6 +511,10 @@ the database:
 - on SQLite, the database file's journal mode;
 - after the start, the built-in email templates and, on SQLite, a one-time repair of timestamps
   an older release stored as text;
+- which plugins take part in keeping public addresses unique, in one `nextly_meta` row, written
+  only when a start runs with another set of them than the last: a count there only ever goes
+  up, and tells those plugins to check their records again (see
+  [Unique public addresses](/docs/plugins/public-addresses));
 - whatever a plugin's own start-up code writes.
 
 A development start (`next dev`) is unchanged: it keeps the registry, the permissions and the
@@ -1602,8 +1606,11 @@ calls `onUninstall` again, and carries on. Run the other way, it is refused
 reason. `nextly plugins install` reinstates the plugin instead.
 
 A full uninstall that would drop tables, or run a DOWN that drops a column,
-lists what it would drop and stops with `PLUGIN_UNINSTALL_UNCONFIRMED` until
-you re-run it with `--yes`. Each module's DOWN is read, judged and run exactly
+lists what it would drop and asks before it drops anything. At a terminal it
+asks once; without one, it stops with `PLUGIN_UNINSTALL_UNCONFIRMED` until you
+re-run it with `--accept-data-loss`, alone or naming each table and
+`table.column` it drops (or `NEXTLY_ACCEPT_DATA_LOSS`). `--yes` does not
+consent to deleting data. Each module's DOWN is read, judged and run exactly
 as `migrate:down --plugin` runs it, newest first. Tables that a
 development push created, with no applied migration module to undo them, are
 refused with `PLUGIN_UNINSTALL_IRREVERSIBLE` (`logContext.reason` is

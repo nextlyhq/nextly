@@ -16,7 +16,7 @@
  */
 import { createHash } from "node:crypto";
 
-import { getColumns, isTable, type Table } from "drizzle-orm";
+import { getColumns, getTableName, isTable, type Table } from "drizzle-orm";
 
 import { loadDialectTables } from "../../../database/dialect-tables";
 import {
@@ -50,7 +50,12 @@ import {
   toIndexSpec,
   toTableSpec,
 } from "./compile";
-import { type SeedEntityTable, SchemaDraftStore } from "./draft";
+import {
+  type ColumnOverride,
+  type SeedEntityTable,
+  SchemaDraftStore,
+} from "./draft";
+import { foreignKeyRelations, type TableRelationInput } from "./dsl";
 import { enumChecks } from "./enum-check";
 import { assertMysqlRowFits, foreignKeyColumnProblem } from "./naming";
 import {
@@ -225,6 +230,15 @@ export interface ExtensionSchema {
    * runtime Drizzle table, and must NOT be emitted as a table of their own.
    */
   entityColumns: Map<string, ExtensionColumn[]>;
+  /**
+   * Entity table name → the app's overrides of its field columns' storage.
+   *
+   * Carried beside the contributions for the same reason: they change a
+   * table this module does not own, in its desired spec and its runtime
+   * table alike, and are recorded as the app's elements, which is what the
+   * drop guard is given for the app's migrations.
+   */
+  columnOverrides: Map<string, ColumnOverride[]>;
   /** Compiled, for the diff engine. */
   specs: TableSpec[];
   /** Compiled, sqlName → Drizzle table. */
@@ -260,6 +274,13 @@ export interface ExtensionSchema {
    * it changed. `codeFirstTables` is this map's keys.
    */
   entityOwners: ReadonlyMap<string, EntityOwner>;
+  /**
+   * Plugin id → the prefix its tables are named with, as this compile
+   * resolved it, for every plugin that declares a schema (disabled ones
+   * included). What a boot or command compares with the prefix the plugin's
+   * recorded tables were created under (`assertPluginPrefixesKept`).
+   */
+  pluginPrefixes: ReadonlyMap<string, string>;
   /** Stable hash of the compiled output, for caches. */
   fingerprint: string;
 }
@@ -275,7 +296,8 @@ export interface ExtensionSchema {
 function fingerprintOf(
   specs: readonly TableSpec[],
   entityIndexes: ReadonlyMap<string, ExtensionIndex[]>,
-  entityColumns: ReadonlyMap<string, ExtensionColumn[]>
+  entityColumns: ReadonlyMap<string, ExtensionColumn[]>,
+  columnOverrides: ReadonlyMap<string, ColumnOverride[]>
 ): string {
   // Sorted so the hash describes the CONTENT rather than the order the tables
   // happened to be visited in; two runs that produce the same schema must
@@ -307,8 +329,13 @@ function fingerprintOf(
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, columns]) => [name, columns] as const);
 
+  // Overrides likewise: a changed override is a change dev push applies.
+  const overrides = [...columnOverrides.entries()].sort(([a], [b]) =>
+    a.localeCompare(b)
+  );
+
   return createHash("sha256")
-    .update(JSON.stringify({ tables, entities, entityCols }))
+    .update(JSON.stringify({ tables, entities, entityCols, overrides }))
     .digest("hex");
 }
 
@@ -334,9 +361,13 @@ function fingerprintOf(
 function relationEdgesOf(
   table: ExtensionTable,
   byName: ReadonlyMap<string, ExtensionTable>,
-  coreTables: Readonly<Record<string, unknown>>
+  coreTables: Readonly<Record<string, unknown>>,
+  entityTables: ReadonlySet<string> = new Set()
 ): DynamicRelationEdge[] {
-  return (table.relations ?? []).map((rel, position) => {
+  return [
+    ...(table.relations ?? []),
+    ...keyRelationsOf(table, byName, coreTables, entityTables),
+  ].map((rel, position) => {
     const path = `${table.name}.relations[${String(position)}]`;
     if (rel.fromColumn === undefined) {
       throw NextlyError.internal({
@@ -365,6 +396,106 @@ function relationEdgesOf(
         : {}),
     };
   });
+}
+
+/**
+ * The one-edges the table's own foreign keys carry (`foreignKeyRelations`),
+ * so a key is queryable with `with` as a `ref()` column is.
+ *
+ * Its own keys only: a key another owner added to this table is that
+ * owner's, and an edge for it would take a name on a table the contributor
+ * does not own. And only to a table the registry will hold, since an edge to
+ * any other fails the boot's check that every relation resolves, where the
+ * key itself is the database's to judge:
+ *
+ * - a table this compile declares or adopts, or a core table, with the
+ *   referenced column named, so it is checked and carried through an
+ *   `afterDrizzle` hook's re-keying like a declared `toColumn`;
+ * - a seeded collection's, Single's or field group's table, by its `id`
+ *   only and left implied, as a `ref()` column's is: the compile does not
+ *   know such a table's other columns, and no hook may reshape it.
+ *
+ * A key to anything else (a table outside Nextly, or a Builder-made
+ * collection's) carries none.
+ */
+function keyRelationsOf(
+  table: ExtensionTable,
+  byName: ReadonlyMap<string, ExtensionTable>,
+  coreTables: Readonly<Record<string, unknown>>,
+  entityTables: ReadonlySet<string>
+): TableRelationInput[] {
+  const own = (table.foreignKeys ?? []).filter(
+    fk => fk.contributedBy === undefined
+  );
+  return foreignKeyRelations(own, table.columns, table.relations ?? []).flatMap(
+    (rel): TableRelationInput[] => {
+      const targetTable = relationTargetKey(
+        rel.targetTable,
+        byName,
+        coreTables
+      );
+      if (byName.has(targetTable) || isTable(coreTables[targetTable])) {
+        return [{ ...rel, targetTable }];
+      }
+      if (entityTables.has(targetTable) && rel.toColumn === "id") {
+        const { toColumn: _implied, ...edge } = rel;
+        return [{ ...edge, targetTable }];
+      }
+      return [];
+    }
+  );
+}
+
+/**
+ * Drop a key's own edge whose name an `afterDrizzle` hook gave to a column.
+ *
+ * A relation and a column share the row's namespace, and the key edges are
+ * named against the compiled table's column keys. A hook that rebuilt the
+ * table may hold a column under that name, and the pair would fail the
+ * relations' assembly at boot. The key edge yields: it is derived, not
+ * declared, while the hook's table is the app's own choice. A declared
+ * relation is the author's and is left to that refusal.
+ */
+function dropKeyEdgesAHookShadowed(
+  relations: Map<string, DynamicRelationEdge[]>,
+  tables: readonly ExtensionTable[],
+  compiled: Record<string, unknown>,
+  returned: Record<string, unknown>
+): void {
+  for (const [name, edges] of relations) {
+    const table = returned[name];
+    if (table === compiled[name] || !isTable(table)) continue;
+    const columns = new Set(Object.keys(getColumns(table)));
+    const declared = new Set(
+      (tables.find(one => one.name === name)?.relations ?? []).map(
+        relation => relation.name
+      )
+    );
+    const kept = edges.filter(
+      edge => declared.has(edge.key) || !columns.has(edge.key)
+    );
+    if (kept.length === edges.length) continue;
+    if (kept.length === 0) relations.delete(name);
+    else relations.set(name, kept);
+  }
+}
+
+/**
+ * The name the registry finds a key's target by. A key names its target's
+ * SQL table, and the registry holds a core table under its bundle key
+ * (`dynamicCollections` for `dynamic_collections`), so a core target is
+ * translated; any other table is registered under its SQL name already.
+ */
+function relationTargetKey(
+  sqlName: string,
+  byName: ReadonlyMap<string, ExtensionTable>,
+  coreTables: Readonly<Record<string, unknown>>
+): string {
+  if (byName.has(sqlName) || isTable(coreTables[sqlName])) return sqlName;
+  const core = Object.entries(coreTables).find(
+    ([, table]) => isTable(table) && getTableName(table) === sqlName
+  );
+  return core?.[0] ?? sqlName;
 }
 
 function invalidTargetColumn(path: string, message: string): never {
@@ -553,11 +684,12 @@ function collectElementOwners(
 function relationsOf(
   tables: readonly ExtensionTable[],
   byName: ReadonlyMap<string, ExtensionTable>,
-  coreTables: Readonly<Record<string, unknown>>
+  coreTables: Readonly<Record<string, unknown>>,
+  entityTables: ReadonlySet<string>
 ): Map<string, DynamicRelationEdge[]> {
   const relations = new Map<string, DynamicRelationEdge[]>();
   for (const table of tables) {
-    const edges = relationEdgesOf(table, byName, coreTables);
+    const edges = relationEdgesOf(table, byName, coreTables, entityTables);
     if (edges.length > 0) relations.set(table.name, edges);
   }
   return relations;
@@ -635,8 +767,10 @@ function assertForeignKeyTargetsExist(
         assertReferencesAKey(fk, declaredTarget, path);
       }
       if (!adopted.has(fk.referencesTable)) {
+        // A key another owner added to this table rides that owner's
+        // migration stream, so it is that stream whose order it must keep.
         assertForeignKeyTargetInAnEarlierStream(
-          table.owner,
+          fk.contributedBy ?? table.owner,
           fk,
           target,
           path,
@@ -1084,9 +1218,9 @@ export async function buildExtensionSchema(
   );
   // The core tables a relation may target, as the registry will resolve them.
   const coreTables = staticRelationTables(input.dialect);
-  const relations = relationsOf(tables, byName, coreTables);
 
   const { entityIndexes, entityColumns } = foreignTableContributions(store);
+  const columnOverrides = store.columnOverrides();
 
   const compiledSpecs = tables.map(table => toTableSpec(table, input.dialect));
   // Every declared key's, index's and check's resolved name, before any
@@ -1101,9 +1235,21 @@ export async function buildExtensionSchema(
     input.dialect
   );
   assertForeignKeyTargetsExist(tables, store, input);
+  // After the keys' targets are judged: a key's own edge names its target
+  // column, and a key to a column its target lacks is refused as a key, by
+  // the check above, rather than as the edge it carries.
+  const relations = relationsOf(
+    tables,
+    byName,
+    coreTables,
+    new Set(input.entities.map(entity => entity.name))
+  );
   // Each table whole, its own columns and every one a hook added, so a row
   // only MySQL cannot hold is refused on every dialect alike.
   for (const table of tables) assertMysqlRowFits(table);
+  // And each entity's, whose row hooks may have widened: the app's overrides
+  // and the hidden columns added to it.
+  store.assertEntityRowsFit();
   const { compiled, owners } = compileDrizzleTables(tables, input.dialect);
   const protectedTables = protectedTableNames(input, store);
 
@@ -1122,10 +1268,6 @@ export async function buildExtensionSchema(
       (spec.foreignKeys ?? []).map(fk => ({ table: spec.name, fk }))
     ),
   });
-
-  // The edges were keyed to the compiled tables; the registry resolves them
-  // against the ones the hooks returned. See `rekeyRelationEdges`.
-  rekeyRelationEdges({ edges: relations, compiled, returned: drizzle });
 
   // The migration model follows the hook, rather than describing the shape the
   // hook was handed.
@@ -1204,6 +1346,14 @@ export async function buildExtensionSchema(
     );
   }
 
+  // The edges were keyed to the compiled tables; the registry resolves them
+  // against the ones the hooks returned. See `rekeyRelationEdges`. After the
+  // keys are judged at both ends: a key's own edge joins the key's columns,
+  // and a hook that removed one is refused naming the key it broke rather
+  // than the edge the key carries.
+  rekeyRelationEdges({ edges: relations, compiled, returned: drizzle });
+  dropKeyEdgesAHookShadowed(relations, tables, compiled, drizzle);
+
   const { adopted, adoptedRelations } = compileAdoptedTables(
     store,
     input.dialect,
@@ -1229,6 +1379,7 @@ export async function buildExtensionSchema(
     tables,
     entityIndexes,
     entityColumns,
+    columnOverrides,
     specs,
     drizzle,
     owners,
@@ -1240,7 +1391,13 @@ export async function buildExtensionSchema(
     adoptedRelations,
     codeFirstTables: new Set(entityOwners.keys()),
     entityOwners,
-    fingerprint: fingerprintOf(specs, entityIndexes, entityColumns),
+    pluginPrefixes: input.pluginPrefixes,
+    fingerprint: fingerprintOf(
+      specs,
+      entityIndexes,
+      entityColumns,
+      columnOverrides
+    ),
   };
 }
 

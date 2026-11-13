@@ -43,6 +43,7 @@ import type {
   LocalizationConfig,
 } from "../domains/i18n/config/types";
 import { clearActiveExtensionSchema } from "../domains/schema/extension/active-schema";
+import type { SchemaHook } from "../domains/schema/extension/draft";
 import { clearFieldTypes } from "../domains/schema/field-types/field-type-registry";
 import {
   refreshEndpointPresence,
@@ -323,6 +324,8 @@ export interface CreateTestNextlyOptions {
     uiSchemaFile: string;
     /** Apply pending migrations at a production start, as `db.runMigrationsOnBoot` does. */
     runMigrationsOnBoot?: boolean;
+    /** The app's schema hooks, as `db.schema.extend` declares them. */
+    schema?: { extend?: SchemaHook[] };
   };
   /**
    * Keep every translatable field per language from the start, as a config's
