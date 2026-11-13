@@ -33,6 +33,7 @@
     "core-schema-apply-failed",
     "core-tables-not-created",
     "core-tables-not-reconciled",
+    "create-blocked-by-leftover-table",
     "database-adapter-missing",
     "database-catalog-unreadable",
     "database-dialect-invalid",
