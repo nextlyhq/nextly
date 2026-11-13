@@ -120,6 +120,37 @@ describeEachDialect("a field added to a Single that holds its row", dialect => {
     expect(row?.filled).toBe("Editor's pick");
   });
 
+  it("refuses, before any statement, a required field whose stated default fails its own rules", async () => {
+    await heroWithItsRow();
+
+    // The row would hold 0, which every later write of this Single refuses.
+    const refused = await save([
+      TITLE,
+      {
+        name: "rank",
+        type: "number",
+        required: true,
+        defaultValue: 0,
+        validation: { min: 1 },
+      },
+    ]).then(
+      () => null,
+      (error: unknown) => error
+    );
+
+    expect(refused).toMatchObject({
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "fields.rank",
+            code: "DEFAULT_FAILS_FIELD_RULES",
+          }),
+        ],
+      },
+    });
+    expect(await column("rank")).toBeUndefined();
+  });
+
   it("gives a field's own default to no column", async () => {
     await heroWithItsRow();
 

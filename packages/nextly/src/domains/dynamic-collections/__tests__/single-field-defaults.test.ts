@@ -158,6 +158,25 @@ describe.each(DIALECTS)(
       );
     });
 
+    it("writes a JSON field's stated string as the JSON string it is", () => {
+      const sql = added(
+        field({
+          name: "settings",
+          type: "json",
+          required: true,
+          defaultValue: "hello",
+        })
+      );
+
+      // The logical value "hello" is stored as the JSON text `"hello"`, never as bare `hello`.
+      const json = JSON.stringify("hello");
+      expect(sql).toContain(
+        dialect === "mysql"
+          ? `X'${Buffer.from(json, "utf8").toString("hex")}'`
+          : `'${json}'`
+      );
+    });
+
     it("never writes a password field's stated default into the column", () => {
       const sql = added(
         field({
