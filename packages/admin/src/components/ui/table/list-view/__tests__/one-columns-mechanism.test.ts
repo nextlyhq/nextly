@@ -32,7 +32,7 @@ const ALLOWED_STORAGE = [
 
 /**
  * Direct `useListColumns` callers: only the adapter itself, its exports (the
- * list view's barrel, and the kit entry that re-exports it for plugins),
+ * list view's barrel, and the kit's table area, which re-exports it for plugins),
  * the policy hook that composes it, and schema-driven dynamic Entry list
  * tables.
  */
@@ -40,7 +40,7 @@ const ALLOWED_LIST_COLUMNS = [
   join("list-view", "useListColumns.ts"),
   join("list-view", "useTableColumns.ts"),
   join("list-view", "index.tsx"),
-  join("admin", "src", "kit.ts"),
+  join("admin", "src", "kit", "table.ts"),
   join("entries", "EntryList", "EntryList.tsx"),
   join("entries", "EntryList", "EntryTable.tsx"),
 ];
