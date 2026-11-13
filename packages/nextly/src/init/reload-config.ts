@@ -2113,6 +2113,18 @@ async function applyReloadHolding(
         warn: m => logger?.warn(m),
       },
     });
+    // A plugin whose prefix moved since its tables were recorded is refused
+    // here, as at boot, before the push would create its tables again under
+    // the new names; the catch below keeps the previous config.
+    const { assertPluginPrefixesKeptIn } = await import(
+      "../domains/schema/ownership/plugin-prefix-check"
+    );
+    await assertPluginPrefixesKeptIn({
+      prefixes: reloadedExtensionSchema?.pluginPrefixes,
+      db,
+      dialect,
+      adapter,
+    });
     // Compared on the fingerprint of what was compiled, the key the pipeline
     // itself caches on, so "changed" here and "changed" there are one answer.
     extensionSchemaChanged =
@@ -2121,7 +2133,7 @@ async function applyReloadHolding(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger?.error(
-      `[Nextly HMR] Could not compile the extension schema: ${msg}. ` +
+      `[Nextly HMR] Could not apply the extension schema: ${msg}. ` +
         `Keeping the previously-loaded config.`
     );
     undoOptimisticReloadWork();
