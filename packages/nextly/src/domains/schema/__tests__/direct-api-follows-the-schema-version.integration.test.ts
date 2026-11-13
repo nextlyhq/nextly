@@ -29,6 +29,7 @@ import { reloadDynamicTables } from "../../../init/reload-dynamic-tables";
 import {
   createSchemaRegistry,
   initializeSchemaRegistry,
+  registerConfigTablesInResolver,
 } from "../../../di/register";
 import {
   definitionsLoaded,
@@ -395,6 +396,85 @@ describe.each(getConfiguredTestDialects())(
 
         expect(await loadsOnNextCall(t)).toEqual([]);
       });
+    });
+
+    it("records no start whose configuration replaced a registry table with other columns", async () => {
+      // An older build starting after a newer one migrated the registry (a
+      // column renamed, say): the configuration's tables are registered over
+      // the registry's, the start then serves what the registry no longer
+      // holds, and only a reload from the registry repairs it.
+      const t = (current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "first",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      }));
+      await t.nextly.find({ collection: "first" });
+      const silentLogger = { debug: () => {}, warn: () => {} };
+      const older = defineCollection({
+        slug: "first",
+        fields: [text({ name: "heading" })],
+      });
+
+      await asIfJustStarted(async () => {
+        const before = await versionBeforeLoading(t.adapter);
+        const completeness = { complete: true };
+        const registry = await initializeSchemaRegistry(
+          t.adapter,
+          await createSchemaRegistry(t.adapter),
+          undefined,
+          { collections: [], singles: [] },
+          { createMissingCompanions: false, completeness }
+        );
+        expect(registry).toBeDefined();
+        const overrides = { differed: false };
+        await registerConfigTablesInResolver(
+          registry!,
+          { collections: [older] } as never,
+          t.adapter,
+          silentLogger,
+          overrides
+        );
+        expect(completeness.complete).toBe(true);
+        expect(overrides.differed).toBe(true);
+        // The start's own rule.
+        definitionsLoaded(
+          t.adapter,
+          before,
+          completeness.complete && !overrides.differed
+        );
+        await pause(SCHEMA_VERSION_READ_INTERVAL_MS + 100);
+        expect((await loadsOnNextCall(t)).length).toBeGreaterThan(0);
+      });
+
+      // POPULATION CONTROL: the configuration the registry was built from
+      // replaces nothing with other columns.
+      const registry = await initializeSchemaRegistry(
+        t.adapter,
+        await createSchemaRegistry(t.adapter),
+        undefined,
+        { collections: [], singles: [] },
+        { createMissingCompanions: false }
+      );
+      const same = { differed: false };
+      await registerConfigTablesInResolver(
+        registry!,
+        {
+          collections: [
+            defineCollection({
+              slug: "first",
+              fields: [text({ name: "title" })],
+            }),
+          ],
+        } as never,
+        t.adapter,
+        silentLogger,
+        same
+      );
+      expect(same.differed).toBe(false);
     });
 
     it("moves the stored version when a registry row is deleted, and only then", async () => {

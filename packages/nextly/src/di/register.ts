@@ -1155,14 +1155,6 @@ async function registerServicesOnce(
           completeness,
         }
       );
-      // Recorded only for a load that registered every definition, at the
-      // version read before the start read any of them, so the first follow
-      // does not load them all again; otherwise it does, as before.
-      definitionsLoaded(
-        adapter,
-        definitionsVersion,
-        registry !== undefined && completeness.complete
-      );
 
       // Publish the webhook recording policy from the config INDEPENDENTLY of the
       // schema registry. `registerConfigTablesInResolver` (below) only runs when the
@@ -1185,11 +1177,25 @@ async function registerServicesOnce(
 
       await publishStoredRecordingPolicies(adapter, transformedConfig);
 
+      const overrides = { differed: false };
       await registerConfigTablesQuietly(
         registry,
         transformedConfig,
         adapter,
-        resolvedLogger
+        resolvedLogger,
+        overrides
+      );
+      // Recorded once the start's definitions are final, at the version read
+      // before the start read any of them, so the first follow does not load
+      // them all again: only for a load that registered every definition, and
+      // only where the configuration replaced no registry-backed table with
+      // other columns (an older build than the one that migrated the
+      // registry, say). Otherwise the first follow loads them again from the
+      // registry, as before.
+      definitionsLoaded(
+        adapter,
+        definitionsVersion,
+        registry !== undefined && completeness.complete && !overrides.differed
       );
 
       installConfigFieldFunctions(transformedConfig);
@@ -2016,7 +2022,8 @@ async function registerConfigTablesQuietly(
   schemaRegistry: SchemaRegistry | undefined,
   transformedConfig: NextlyServiceConfig,
   adapter: DrizzleAdapter,
-  logger: Logger
+  logger: Logger,
+  overrides?: { differed: boolean }
 ): Promise<void> {
   if (!schemaRegistry) return;
   try {
@@ -2024,7 +2031,8 @@ async function registerConfigTablesQuietly(
       schemaRegistry,
       transformedConfig,
       adapter,
-      logger
+      logger,
+      overrides
     );
   } catch (err) {
     // Non-fatal: the DB-backed pass may still have registered these
@@ -3641,8 +3649,6 @@ function carriesSqlState(error: unknown, code: string): boolean {
  * it. `undefined` when the registry could not be set up, as
  * `initializeSchemaRegistry` then returns too.
  */
-// Exported for the start's completeness test; reached at boot through registerServices.
-// fallow-ignore-next-line unused-export
 export async function createSchemaRegistry(
   adapter: DrizzleAdapter
 ): Promise<SchemaRegistry | undefined> {
@@ -3685,8 +3691,6 @@ export async function createSchemaRegistry(
  * Dynamic tables come from the `dynamic_collections`, `dynamic_singles`,
  * and `dynamic_components` DB tables and are generated at runtime.
  */
-// Exported for the start's completeness test; reached at boot through registerServices.
-// fallow-ignore-next-line unused-export
 export async function initializeSchemaRegistry(
   adapter: DrizzleAdapter,
   registry: SchemaRegistry | undefined,
@@ -4077,9 +4081,42 @@ export async function registerConfigTablesInResolver(
   registry: SchemaRegistry,
   config: NextlyServiceConfig,
   adapter: DrizzleAdapter,
-  logger: Partial<Logger>
+  logger: Partial<Logger>,
+  /**
+   * Told, where given, whether a table this registers replaced one the
+   * registry pass had registered with different columns: the definitions
+   * the start serves then differ from the stored registry, and the start's
+   * load may not be recorded as following it (`definitionsLoaded`).
+   */
+  overrides?: { differed: boolean }
 ): Promise<void> {
   const dialect = adapter.getCapabilities().dialect;
+  const { getTableColumns } = await import("drizzle-orm");
+  /** A table's column names as the database knows them, sorted. */
+  const columnsOf = (table: unknown): string =>
+    Object.values(
+      getTableColumns(table as Parameters<typeof getTableColumns>[0])
+    )
+      .map(column => column.name)
+      .sort()
+      .join(",");
+  // Every registration below goes through here, so a replacement of a
+  // registry-backed table with other columns is seen.
+  const observed: Pick<SchemaRegistry, "registerDynamicSchema"> = {
+    registerDynamicSchema: (tableName, table) => {
+      if (overrides !== undefined && registry.hasTable(tableName)) {
+        const existing = registry.getTable(tableName);
+        if (
+          typeof existing === "object" &&
+          existing !== null &&
+          columnsOf(existing) !== columnsOf(table)
+        ) {
+          overrides.differed = true;
+        }
+      }
+      registry.registerDynamicSchema(tableName, table);
+    },
+  };
   // Loaded here, as the generators it calls were, so they stay out of this
   // module's own load.
   const { registerEntityRuntimeTables } = await import(
@@ -4101,7 +4138,7 @@ export async function registerConfigTablesInResolver(
       // which Draft/Published CRUD reads and writes; the localized one leaves
       // the translatable columns to the companion.
       registerEntityRuntimeTables(
-        registry,
+        observed,
         {
           slug,
           tableName,
@@ -4133,7 +4170,7 @@ export async function registerConfigTablesInResolver(
       // The same registration as a collection's, so a localized single's
       // main table leaves out the columns its migrations put on the companion.
       registerEntityRuntimeTables(
-        registry,
+        observed,
         {
           slug,
           tableName,
