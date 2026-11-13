@@ -353,6 +353,40 @@ describe.each(DIALECTS)(
       }
     );
 
+    it.runIf(dialect === "mysql")(
+      "bounds a row change waiting on a row another session holds, not InnoDB's own 50 seconds",
+      async () => {
+        await adapter.executeQuery(`INSERT INTO ${BUSY} (id) VALUES (5)`);
+        writeFile("20261113_000001_update_row", [
+          `UPDATE ${BUSY} SET id = 7 WHERE id = 5`,
+        ]);
+        // The second session holds the row, not the table: an open transaction that updated it.
+        let held: () => void = () => {};
+        const isHeld = new Promise<void>(resolve => {
+          held = resolve;
+        });
+        const freed = new Promise<void>(resolve => {
+          free = resolve;
+        });
+        holding = holderAdapter.transaction(async ctx => {
+          await ctx.queryStatement(
+            sql.raw(`UPDATE ${BUSY} SET id = 6 WHERE id = 5`)
+          );
+          held();
+          await freed;
+        });
+        await isHeld;
+
+        const started = Date.now();
+        const stopped = await migrate({ tryMs: 1_000, totalMs: 3_000 }).catch(
+          (error: unknown) => error
+        );
+
+        expect(stopped).toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
+        expect(Date.now() - started).toBeLessThan(10_000);
+      }
+    );
+
     it("resumes a file run outside a transaction at its waiting statement, the one before it not sent again", async () => {
       await adapter.executeQuery(`CREATE TABLE ${OTHER} (id integer)`);
       const first = `ALTER TABLE ${OTHER} ADD COLUMN extra integer`;

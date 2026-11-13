@@ -32,6 +32,10 @@ export interface WatchedTry {
  * its asks on another connection never run inside that connection's flow (`prepareTryWatchdog`).
  * On SQLite it watches nothing, and the holder it reports says why none is named.
  */
+// One watch per try, and every try sends one statement: the try awaits `settle` (or `ended`)
+// before the next statement, and stopping awaits a cancel under way, so a cancel can never reach
+// a later statement. A runner that sends several statements in one try must tell the watch which
+// one runs (`moveTo`) and await `idle` before each, as `runUnitInTries` does.
 export function watchTry(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,

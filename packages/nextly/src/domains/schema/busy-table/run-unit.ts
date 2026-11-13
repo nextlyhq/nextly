@@ -27,6 +27,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { leadingWords } from "../migrate/split-sql";
 
 import {
+  isConnectionSetting,
   runMigrationStatements,
   type MigrationUnit,
 } from "../migrate/migration-transaction";
@@ -36,10 +37,13 @@ import {
 } from "../pipeline/schema-lock";
 
 import type { BusyTableBounds } from "./bounds";
+import { endedWaiting } from "./ended-waiting";
+import { readHolders } from "./holder";
 import { firstNoRetry, renamedTables, targetTable } from "./judge";
 import { tableBusyError, tryNotice } from "./report";
 import { withBusyTableTries, type TryResult } from "./tries";
-import { watchTry } from "./watched-try";
+import type { HolderReport } from "./types";
+import { prepareTryWatchdog } from "./watchdog";
 
 /** What a run hands every unit it runs in tries. */
 export interface BusyTableRun {
@@ -48,6 +52,12 @@ export interface BusyTableRun {
   readonly notify: (line: string) => void;
   /** The units this run applied before the one about to run. */
   readonly appliedBefore: () => readonly string[];
+  /**
+   * A statement whose failure this accepts is passed over and counts as run (a runner that
+   * tolerates a statement already applied); see `StatementTryBound.passOver` for where it is
+   * honoured.
+   */
+  readonly passOver?: (error: unknown, statement: string) => boolean;
 }
 
 /** The tables of this database with a trigger a row change would fire. */
@@ -67,10 +77,7 @@ function triggerTablesQuery(dialect: SupportedDialect): SQL {
   return sql`SELECT DISTINCT tbl_name AS name FROM sqlite_master WHERE type = 'trigger'`;
 }
 
-/**
- * The tables with a trigger, lower-cased, as the live catalog has them now: read once before a
- * unit's first try, and by every other runner of a try that judges a statement it would send again.
- */
+/** The tables with a trigger, lower-cased; read once before a unit's first try. */
 export async function triggerTables(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect
@@ -98,25 +105,24 @@ function keepingOf(unit: MigrationUnit, dialect: SupportedDialect): TryKeeping {
  */
 function commitsOnMysql(statement: string): boolean {
   const [first, second, third] = leadingWords(statement, "mysql", 3);
-  switch (first) {
-    case "CREATE":
-      return (
-        second === "TABLE" ||
-        second === "INDEX" ||
-        ((second === "UNIQUE" ||
-          second === "FULLTEXT" ||
-          second === "SPATIAL") &&
-          third === "INDEX")
-      );
-    case "ALTER":
-    case "DROP":
-      return second === "TABLE" || second === "INDEX";
-    case "RENAME":
-      return second === "TABLE";
-    default:
-      return false;
-  }
+  const objects = MYSQL_COMMITTING[first ?? ""];
+  if (objects === undefined) return false;
+  // `CREATE UNIQUE|FULLTEXT|SPATIAL INDEX`: the object is the third word.
+  const object =
+    first === "CREATE" && INDEX_KINDS.has(second ?? "") ? third : second;
+  return objects.has(object ?? "");
 }
+
+/** The objects whose creation, change, drop or rename commits MySQL's transaction, by verb. */
+const MYSQL_COMMITTING: Readonly<Record<string, ReadonlySet<string>>> = {
+  CREATE: new Set(["TABLE", "INDEX"]),
+  ALTER: new Set(["TABLE", "INDEX"]),
+  DROP: new Set(["TABLE", "INDEX"]),
+  RENAME: new Set(["TABLE"]),
+};
+
+/** The kinds of index MySQL writes before `INDEX`. */
+const INDEX_KINDS = new Set(["UNIQUE", "FULLTEXT", "SPATIAL"]);
 
 /**
  * The index of the first statement an ended try did not keep, from the try's first (`from`) and
@@ -144,10 +150,11 @@ function keptUntil(
 /**
  * The first statement from `start` up to `end` (not included) that a later try may not send
  * again, by its position in the whole unit; `firstNoRetry`'s reading, with the tables the
- * statements before `start` renamed carried into it, since a renamed table keeps its triggers.
- * Only those renames are read before `start`: the statements there were kept and are not sent
- * again. A rename there that is itself one that may not run again (none is, as the statements
- * are read today) is named as the statement that stops the run, failing closed.
+ * statements before `start` renamed carried into it, since a renamed table keeps its triggers,
+ * and the connection settings before `start` judged too, since the next try sends them again
+ * first (`SET @x = site_fn()` would run its function twice). Only those are read before `start`:
+ * the other statements there were kept and are not sent again. A rename or a setting there that
+ * may not run again is named as the statement that stops the run, failing closed.
  */
 function firstNoRetryBetween(
   statements: readonly string[],
@@ -157,14 +164,20 @@ function firstNoRetryBetween(
   triggers: ReadonlySet<string>
 ): ReturnType<typeof firstNoRetry> {
   if (end <= start) return undefined;
-  const renames: number[] = [];
+  const replayedBefore: number[] = [];
   for (const [index, statement] of statements.slice(0, start).entries()) {
     const renamed = renamedTables(statement, dialect);
-    if (renamed === "unread" || renamed.length > 0) renames.push(index);
+    if (
+      renamed === "unread" ||
+      renamed.length > 0 ||
+      isConnectionSetting(statement, dialect)
+    ) {
+      replayedBefore.push(index);
+    }
   }
   const found = firstNoRetry(
     [
-      ...renames.map(index => statements[index] ?? ""),
+      ...replayedBefore.map(index => statements[index] ?? ""),
       ...statements.slice(start, end),
     ],
     dialect,
@@ -173,7 +186,9 @@ function firstNoRetryBetween(
   if (found === undefined) return undefined;
   const at = found.statementNumber - 1;
   const index =
-    at < renames.length ? (renames[at] ?? 0) : start + at - renames.length;
+    at < replayedBefore.length
+      ? (replayedBefore[at] ?? 0)
+      : start + at - replayedBefore.length;
   return { statementNumber: index + 1, judgement: found.judgement };
 }
 
@@ -219,12 +234,20 @@ export async function runUnitInTries(
         : {}),
     },
     async (_tryNumber, tryMs): Promise<TryResult<number>> => {
+      let session: string | undefined;
       // The index last told: a statement about to be sent, or the count once all have run; -1
       // while none has been told.
       let reached = -1;
       // Made before the unit's transaction or session opens, so the watch's asks on another
       // connection never run inside that flow; it starts once the session is known.
-      const watch = watchTry(adapter, dialect, tryMs);
+      // What holds the table, read by the watch just before it ends the try, while the session
+      // still waits; after the rollback it waits for nothing and the database names no holder.
+      let holder: HolderReport | undefined;
+      const watchdog = prepareTryWatchdog(adapter, dialect, tryMs, {
+        beforeCancel: async waiting => {
+          holder = await readHolders(adapter, dialect, waiting);
+        },
+      });
       try {
         const value = await runMigrationStatements(
           adapter,
@@ -234,20 +257,28 @@ export async function runUnitInTries(
           {
             tryMs,
             from,
-            onSession: watch.onSession,
+            onSession: id => {
+              session = id;
+              watchdog.watch(id);
+            },
             onStatement: index => {
               reached = index;
+              // The watch cancels only the statement it saw waiting, never a later one.
+              watchdog.moveTo(index);
             },
             // The watch stops before the commit hands the connection back to the pool.
-            settle: watch.settle,
+            settle: async () => {
+              await watchdog.stop();
+            },
+            beforeStatement: () => watchdog.idle(),
+            ...(run.passOver === undefined ? {} : { passOver: run.passOver }),
           }
         );
-        await watch.settle();
+        await watchdog.stop();
         return { kind: "done", value };
       } catch (error) {
-        // What held the table, where the try ended waiting for it; any other failure goes on.
-        const holder = await watch.ended(error);
-        if (holder === undefined) throw error;
+        const { fired } = await watchdog.stop();
+        if (!endedWaiting(error, dialect, fired)) throw error;
         const started = from;
         // Nothing of this try's own was sent where no index was told: a setting sent again first
         // waited, and the try kept nothing.
@@ -274,7 +305,7 @@ export async function runUnitInTries(
           kind: "ended",
           ended: {
             table: waited === undefined ? null : targetTable(waited, dialect),
-            holder,
+            holder: holder ?? (await readHolders(adapter, dialect, session)),
           },
           ...(lasting === undefined ? {} : { lasting }),
           // Only a transaction that kept nothing undid the rest of the change.
