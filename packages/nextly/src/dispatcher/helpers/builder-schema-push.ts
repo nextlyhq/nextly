@@ -172,12 +172,17 @@ export async function pushAndReconcileCompanion(
   return result;
 }
 
+/** What a companion reconcile stopped after its entity's push landed leaves, for the admin. */
+const COMPANION_LEFT_BEHIND =
+  "The main table's change was applied, but its translations table's was not: save again to finish it.";
+
 /**
  * What a companion reconcile that failed after its entity's push landed is reported as, for every
  * Builder dialog and save that reconciles one. Passed on as they are: a refused setting, the
  * dialog's answer to the admin naming the field, with nothing dropped by then; and a busy-table
  * stop (`NEXTLY_TABLE_BUSY`), which the API answers with 409 and a report of the table, its tries
- * and what to do next, as every other bounded schema path does. Anything else is an internal error
+ * and what to do next, as every other bounded schema path does, saying too that the main table's
+ * change landed and a save again finishes the translations table's. Anything else is an internal error
  * saying the companion is out of step with its main table, which a save again brings in step.
  */
 export function companionReconcileFailure(
@@ -185,7 +190,28 @@ export function companionReconcileFailure(
   context: { op: string; slug: string; note?: string }
 ): unknown {
   if (isLeavingSettingsRefusal(error)) return error;
-  if (NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) return error;
+  if (NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) {
+    // The busy-table stop as it is, its code, status and report, with what it leaves said beside
+    // its first line: the entity's main table has its change, and only the translations table's
+    // waits for the next save.
+    const lines = error.publicMessage.split("\n");
+    lines.splice(1, 0, COMPANION_LEFT_BEHIND);
+    return new NextlyError({
+      code: error.code,
+      publicMessage: lines.join("\n"),
+      ...(error.publicData === undefined
+        ? {}
+        : { publicData: error.publicData }),
+      statusCode: error.statusCode,
+      logContext: {
+        ...error.logContext,
+        op: context.op,
+        slug: context.slug,
+        note: COMPANION_LEFT_BEHIND,
+      },
+      cause: error,
+    });
+  }
   return NextlyError.internal({
     cause: error instanceof Error ? error : undefined,
     logContext: {

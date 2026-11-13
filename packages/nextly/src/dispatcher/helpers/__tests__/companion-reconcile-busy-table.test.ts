@@ -55,6 +55,29 @@ const companion = {
   adapter: {},
 } as unknown as BuilderCompanionReconcile;
 
+/**
+ * `error` is the busy-table stop `stop` with its code, status and report, saying too that the main
+ * table's change landed and a save again finishes the translations table's.
+ */
+function expectBusyWithNote(error: unknown, stop: NextlyError): void {
+  expect(NextlyError.is(error)).toBe(true);
+  const busyError = error as NextlyError;
+  expect(busyError.code).toBe("NEXTLY_TABLE_BUSY");
+  expect(busyError.statusCode).toBe(stop.statusCode);
+  const lines = busyError.publicMessage.split("\n");
+  expect(lines[0]).toBe(stop.publicMessage.split("\n")[0]);
+  expect(lines[1]).toBe(
+    "The main table's change was applied, but its translations table's was not: save again to finish it."
+  );
+  expect(busyError.publicMessage).toContain(
+    stop.publicMessage.split("\n").slice(1).join("\n")
+  );
+  expect(busyError.logContext).toMatchObject({
+    stop: stop.logContext?.stop,
+    note: lines[1],
+  });
+}
+
 describe("a companion reconcile stopped by a busy table", () => {
   it("reaches a Single's dialog as NEXTLY_TABLE_BUSY", async () => {
     const stop = busy();
@@ -68,12 +91,13 @@ describe("a companion reconcile stopped by a busy table", () => {
       () => undefined,
       (e: unknown) => e
     );
-    expect(error).toBe(stop);
+    expectBusyWithNote(error, stop);
   });
 
   it("is passed on as it is by the collection save's reconcile too", () => {
     const stop = busy();
-    expect(companionReconcileFailure(stop, { op: "x", slug: "posts" })).toBe(
+    expectBusyWithNote(
+      companionReconcileFailure(stop, { op: "x", slug: "posts" }),
       stop
     );
   });
