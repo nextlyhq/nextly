@@ -54,6 +54,14 @@ export interface PruneTarget {
    * removed with it in the same transaction, first, so none outlives it.
    */
   dependents?: readonly { table: string; key: string }[];
+  /**
+   * Run in each batch's transaction before its rows are deleted, with the keys about to go:
+   * removes other rows those take with them, returning how many it removed.
+   */
+  beforeRemove?: (
+    db: Pick<DrizzleAdapter, "select" | "delete">,
+    keys: readonly string[]
+  ) => Promise<number>;
 }
 
 /**
@@ -121,24 +129,33 @@ async function removeBatch(
   target: PruneTarget,
   where: BatchWhere
 ): Promise<number> {
-  if (target.dependents && target.dependents.length > 0) {
+  if (
+    (target.dependents && target.dependents.length > 0) ||
+    target.beforeRemove
+  ) {
     const still = await db.select<Record<string, string>>(target.table, {
       columns: [target.key],
       where,
     });
     if (still.length === 0) return 0;
     const keys = still.map(row => row[target.key]);
-    for (const dependent of target.dependents) {
+    for (const dependent of target.dependents ?? []) {
       await db.delete(dependent.table, {
         and: [{ column: dependent.key, op: "IN", value: keys }],
       });
     }
-    return db.delete(target.table, {
-      and: [
-        { column: target.key, op: "IN", value: keys },
-        ...where.and.slice(1),
-      ],
-    });
+    const alongside = target.beforeRemove
+      ? await target.beforeRemove(db, keys)
+      : 0;
+    return (
+      alongside +
+      (await db.delete(target.table, {
+        and: [
+          { column: target.key, op: "IN", value: keys },
+          ...where.and.slice(1),
+        ],
+      }))
+    );
   }
   return db.delete(target.table, where);
 }

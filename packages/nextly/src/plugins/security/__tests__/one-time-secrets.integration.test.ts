@@ -619,6 +619,41 @@ describe.each(getConfiguredTestDialects())(
       expect(await rows()).toHaveLength(1);
     });
 
+    it("sweeps a code with the older codes it replaced, so none answers for it", async () => {
+      const { a, rows } = await boot();
+      const adapter = current?.first.adapter as unknown as DrizzleAdapter;
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const minted = Date.now();
+      const spend = (code: string) =>
+        a.security.secrets.consumeCode({ purpose: "sign-in", subject, code });
+      // A long-lived code, spent; then a short-lived one that replaced it, exhausted.
+      const first = await a.security.secrets.mintCode({
+        purpose: "sign-in",
+        subject,
+        expiresInMs: 60 * 60_000,
+        maxWrongTries: 3,
+      });
+      expect(await spend(first.code)).toMatchObject({ ok: true });
+      vi.setSystemTime(minted + 1000);
+      const second = await a.security.secrets.mintCode({
+        purpose: "sign-in",
+        subject,
+        expiresInMs: 60_000,
+        maxWrongTries: 1,
+      });
+      const wrong = second.code === "111111" ? "222222" : "111111";
+      expect(await spend(wrong)).toMatchObject({ reason: "wrong" });
+      expect(await spend(second.code)).toEqual({ ok: false, reason: "none" });
+
+      // Past the newer code's day of grace, not the older one's.
+      vi.setSystemTime(
+        minted + 1000 + 60_000 + ONE_TIME_SECRETS_GRACE_MS + 60_000
+      );
+      expect((await pruneOneTimeSecrets(adapter, new Date())).removed).toBe(2);
+      expect(await rows()).toHaveLength(0);
+      expect(await spend(second.code)).toEqual({ ok: false, reason: "none" });
+    });
+
     it("hands the scheduled drain the sweep, so a secret-only install still sweeps", async () => {
       await boot();
       expect(
