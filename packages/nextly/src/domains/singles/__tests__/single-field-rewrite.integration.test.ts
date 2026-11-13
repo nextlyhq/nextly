@@ -55,6 +55,8 @@ const SECRET = "rwsecretsite";
 /** No translations of its own, versions kept, and a translated field group. */
 const BANNERED = "rwbannersite";
 const BANNER = "rwsitebanner";
+/** Translated, with drafts, and no translated field that must hold a value. */
+const BLANKABLE = "rwblanksite";
 /** What the Single under test relates to. */
 const TARGETS = "rwtargets";
 /** A field group, placed inside a group of the Single under test. */
@@ -852,25 +854,30 @@ describe.each(getConfiguredTestDialects())(
 
     it("records a shared rewrite in the default language where its translation row is blank", async () => {
       const t = await boot(dialect, true);
-      // English's row is written with the status alone: its title is blank.
-      await save(t, LOCALIZED, { layout: "wide", status: "published" }, "en");
+      // English's row is written with its one translated value blank.
+      await save(
+        t,
+        BLANKABLE,
+        { layout: "wide", tagline: null, status: "published" },
+        "en"
+      );
       // POPULATION CONTROL: the translation row holds no value.
       expect(
-        (await read(t, LOCALIZED, { locale: "en" })).title ?? null
+        (await read(t, BLANKABLE, { locale: "en" })).tagline ?? null
       ).toBeNull();
       await t.nextly.rewriteField({
-        single: LOCALIZED,
+        single: BLANKABLE,
         field: "layout",
-        expectedVersion: await versionOf(t, LOCALIZED, "en"),
+        expectedVersion: await versionOf(t, BLANKABLE, "en"),
         set: { value: "narrow" },
         reason: REASON,
       });
       const { items } = await t.nextly.versions.list({
-        single: LOCALIZED,
+        single: BLANKABLE,
       } as never);
       const newest = items[0] as { versionNo: number; locale?: string | null };
       const version = await t.nextly.versions.get({
-        single: LOCALIZED,
+        single: BLANKABLE,
         versionNo: newest.versionNo,
       } as never);
       const snapshot = (
