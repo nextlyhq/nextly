@@ -8,6 +8,7 @@ import type { SingleConfig } from "../../singles/config/types";
 import type { ContentTypeScope } from "../content-type-scope";
 import {
   builderExtensionsOf,
+  installedBuilderEntities,
   publishBuilderExtensions,
   typesExtendedBy,
 } from "../extended-types";
@@ -615,3 +616,62 @@ describe("extend — which types each plugin's field was added to", () => {
     expect(types.at(-1)).toEqual({ kind: "collection", slug: "products" });
   });
 });
+
+describe("extend — which types got the field, once transforms and installs are done", () => {
+  it("leaves out a field the plugin's own transform took off again", () => {
+    publishBuilderExtensions(new Map());
+    applyPluginSchemaContributionsDeferred(siteConfig(), [
+      plugin("@t/notes", {
+        extend: [{ target: ["posts", "pages"], fields: [field("note")] }],
+        transforms: [
+          {
+            target: "pages",
+            transform: entity => ({
+              ...entity,
+              fields: (entity.fields as { name?: string }[]).filter(
+                each => each.name !== "note"
+              ),
+            }),
+          },
+        ],
+      }),
+    ]);
+    expect(typesExtendedBy("@t/notes", "note")).toEqual([
+      { kind: "collection", slug: "posts" },
+    ]);
+  });
+
+  it("reads a Builder type whose change was not installed as it is stored", () => {
+    const stored = [
+      { slug: "products", fields: [field("name")] },
+      { slug: "faq", fields: [field("question")] },
+    ];
+    const merged = [
+      { slug: "products", fields: [field("name"), seoTagged()] },
+      { slug: "faq", fields: [field("question"), seoTagged()] },
+    ];
+    // Only `faq`'s change reached its table and registry row.
+    const served = installedBuilderEntities(
+      "collection",
+      merged,
+      merged,
+      stored,
+      new Set(["collection:faq"])
+    );
+    publishBuilderExtensions(builderExtensionsOf({ collections: served }));
+    applyPluginSchemaContributionsDeferred(cfg({}), [seoPlugin()]);
+    expect(typesExtendedBy("@t/seo", "seo")).toEqual([
+      { kind: "collection", slug: "faq" },
+    ]);
+  });
+});
+
+/** The `seo` field as the Builder pass tags one it adds. */
+function seoTagged(): FieldConfig {
+  return {
+    name: "seo",
+    type: "text",
+    source: "plugin",
+    owner: "@t/seo",
+  } as unknown as FieldConfig;
+}

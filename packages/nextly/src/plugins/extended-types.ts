@@ -75,31 +75,62 @@ export function currentConfiguredExtensions(): AddedFields {
   return current().configured;
 }
 
+/** A configured entity as the fold leaves it: its slug and final fields. */
+interface FoldedEntity {
+  slug: string;
+  fields?: readonly unknown[];
+}
+
+/**
+ * Each collection's and Single's fields `fieldsOf` names, by type, leaving
+ * out a type it names none for.
+ */
+function addedByType(
+  entities: {
+    collections?: readonly FoldedEntity[];
+    singles?: readonly FoldedEntity[];
+  },
+  fieldsOf: (entity: FoldedEntity) => ReadonlyMap<string, string>
+): AddedFields {
+  const added = new Map<string, ReadonlyMap<string, string>>();
+  for (const [kind, list] of [
+    ["collection", entities.collections],
+    ["single", entities.singles],
+  ] as const) {
+    for (const entity of list ?? []) {
+      const fields = fieldsOf(entity);
+      if (fields.size > 0) added.set(keyOf(kind, entity.slug), fields);
+    }
+  }
+  return added;
+}
+
 /**
  * The fields each plugin added to the configured `collections` and
  * `singles`, from `bySlug` (slug to field name to plugin): the fold's record
- * of each slug target and scope clause it applied. Slugs that name neither,
- * such as a field group or a Builder type the fold deferred, are left out.
+ * of each slug target and scope clause it applied, kept to the fields each
+ * entity still has once every transform has run, since a transform may
+ * rename or remove one. Slugs that name neither, such as a field group or a
+ * Builder type the fold deferred, are left out.
  */
 export function configuredExtensionsOf(
   entities: {
-    collections?: readonly { slug: string }[];
-    singles?: readonly { slug: string }[];
+    collections?: readonly FoldedEntity[];
+    singles?: readonly FoldedEntity[];
   },
   bySlug: ReadonlyMap<string, ReadonlyMap<string, string>>
 ): AddedFields {
-  const added = new Map<string, ReadonlyMap<string, string>>();
-  const record = (kind: ExtendedType["kind"], slug: string) => {
-    const fields = bySlug.get(slug);
-    if (fields !== undefined && fields.size > 0) {
-      added.set(keyOf(kind, slug), new Map(fields));
-    }
-  };
-  for (const { slug } of entities.collections ?? []) {
-    record("collection", slug);
-  }
-  for (const { slug } of entities.singles ?? []) record("single", slug);
-  return added;
+  return addedByType(entities, entity => {
+    const names = new Set(
+      (entity.fields ?? []).flatMap(field => {
+        const name = (field as { name?: unknown } | null)?.name;
+        return typeof name === "string" ? [name] : [];
+      })
+    );
+    return new Map(
+      [...(bySlug.get(entity.slug) ?? [])].filter(([name]) => names.has(name))
+    );
+  });
 }
 
 /** A field as the Builder pass leaves it: tagged with the plugin that added it. */
@@ -114,14 +145,10 @@ interface TaggedField {
  * Builder pass puts on each field it adds (`source: "plugin"` and `owner`).
  */
 export function builderExtensionsOf(entities: {
-  collections?: readonly { slug: string; fields?: readonly unknown[] }[];
-  singles?: readonly { slug: string; fields?: readonly unknown[] }[];
+  collections?: readonly FoldedEntity[];
+  singles?: readonly FoldedEntity[];
 }): AddedFields {
-  const added = new Map<string, ReadonlyMap<string, string>>();
-  const record = (
-    kind: ExtendedType["kind"],
-    entity: { slug: string; fields?: readonly unknown[] }
-  ) => {
+  return addedByType(entities, entity => {
     const fields = new Map<string, string>();
     for (const field of entity.fields ?? []) {
       const { name, source, owner } = (field ?? {}) as TaggedField;
@@ -133,13 +160,42 @@ export function builderExtensionsOf(entities: {
         fields.set(name, owner);
       }
     }
-    if (fields.size > 0) added.set(keyOf(kind, entity.slug), fields);
-  };
-  for (const entity of entities.collections ?? []) {
-    record("collection", entity);
-  }
-  for (const entity of entities.singles ?? []) record("single", entity);
-  return added;
+    return fields;
+  });
+}
+
+/** A Builder entity as the Builder pass reads or merges it. */
+interface BuilderEntity {
+  slug: string;
+  fields?: readonly unknown[];
+}
+
+/**
+ * Each reconciled Builder entity as the start serves it: merged where its
+ * fields did not change, or the change was installed (`kind:slug` in
+ * `materialized`), and as stored where a change was not installed, as on a
+ * production start before `nextly migrate` or after a failure.
+ */
+export function installedBuilderEntities<E extends BuilderEntity>(
+  kind: string,
+  reconciled: readonly E[],
+  changed: readonly BuilderEntity[],
+  stored: readonly BuilderEntity[],
+  materialized: ReadonlySet<string>
+): BuilderEntity[] {
+  const pending = new Set(
+    changed
+      .map(entity => entity.slug)
+      .filter(slug => !materialized.has(`${kind}:${slug}`))
+  );
+  return reconciled.map(entity =>
+    pending.has(entity.slug)
+      ? (stored.find(row => row.slug === entity.slug) ?? {
+          slug: entity.slug,
+          fields: [],
+        })
+      : entity
+  );
 }
 
 /**
