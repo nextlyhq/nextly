@@ -193,6 +193,7 @@ function nextStep(stop: BusyTableStop): string {
       "`--lock-timeout-total` (or `NEXTLY_LOCK_TIMEOUT` / `NEXTLY_LOCK_TIMEOUT_TOTAL`)."
     );
   }
+  if (stop.direction === "down") return nextStepDown(stop);
   // Stopped with no retry, in a transaction that rolled back whole: nothing of the file stayed but
   // what the statement itself keeps (a sequence's position), and the file applies from its start.
   if (stop.outcome.kind === "no-retry" && stop.outcome.restUndone) {
@@ -208,6 +209,28 @@ function nextStep(stop: BusyTableStop): string {
     `Resolve \`${stop.change}\` with \`nextly migrate:resolve\` as for any part-way file: finish ` +
     "its remaining statements by hand and mark it applied with `nextly migrate:resolve --applied`, " +
     "or reverse them and run `nextly migrate:resolve --failed-cleanup`."
+  );
+}
+
+/**
+ * What to do next after a DOWN stopped (`migrate:down`), the other way round from an UP: the file
+ * is still recorded applied, so a DOWN finished by hand is recorded rolled back, never applied,
+ * and one undone runs as `migrate:down` again. Clearing a failed attempt would record the file
+ * rolled back while its tables stand, so it is never suggested here.
+ */
+function nextStepDown(stop: BusyTableStop): string {
+  if (stop.outcome.kind === "no-retry" && stop.outcome.restUndone) {
+    return (
+      `Run \`nextly migrate:down\` again once the holder ends or the holding session is ended: ` +
+      `the DOWN of \`${stop.change}\` was undone whole, and the file stays applied. Check what ` +
+      "the statement named above keeps (for `setval`, the sequence's position) before it runs again."
+    );
+  }
+  return (
+    `The DOWN of \`${stop.change}\` stopped part-way, and the file is still recorded applied. ` +
+    "Finish its remaining DOWN statements by hand and record it rolled back with " +
+    `\`nextly migrate:resolve --rolled-back ${stop.change}\`, or reverse what stayed so its ` +
+    "tables stand as applied and run `nextly migrate:down` again."
   );
 }
 
@@ -260,6 +283,7 @@ function plainStop(stop: BusyTableStop): BusyTableStop {
     outcome: plainOutcome(stop.outcome),
     cause: stop.cause,
     endedAtLease: stop.endedAtLease,
+    ...(stop.direction === undefined ? {} : { direction: stop.direction }),
   };
 }
 

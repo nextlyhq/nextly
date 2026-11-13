@@ -538,6 +538,49 @@ describe("the runner's own writes after a unit's statements", () => {
   });
 });
 
+describe("a bounded SQLite unit run outside a transaction", () => {
+  // Each statement takes SQLite's write lock anew, and the busy timeout bounds each wait on its
+  // own: without one deadline for the try, three waits could take three times the bound.
+  it("sets the busy timeout before each statement to what is left of the try", async () => {
+    let clock = 0;
+    // Each reading of the clock moves it on, as statements that waited would.
+    vi.spyOn(performance, "now").mockImplementation(() => (clock += 300));
+    const run = adapter.executeQuery.bind(adapter);
+    const timeouts: number[] = [];
+    vi.spyOn(adapter, "executeQuery").mockImplementation(
+      async (statement, params) => {
+        const set = /^PRAGMA busy_timeout = (\d+)$/.exec(statement);
+        if (set) timeouts.push(Number(set[1]));
+        return run(statement, params);
+      }
+    );
+    try {
+      await runMigrationStatements(
+        adapter,
+        [
+          "INSERT INTO parent VALUES ('p2', 'two')",
+          "INSERT INTO parent VALUES ('p3', 'three')",
+          "INSERT INTO parent VALUES ('p4', 'four')",
+        ],
+        { source: "0003_rows.sql", transaction: false },
+        undefined,
+        { tryMs: 1_000 }
+      );
+    } finally {
+      vi.restoreAllMocks();
+    }
+    // The try's bound, then before each statement what is left of it, never more than the last.
+    const [first, ...beforeStatements] = timeouts;
+    expect(first).toBe(1_000);
+    expect(beforeStatements.length).toBeGreaterThanOrEqual(3);
+    for (const [at, left] of beforeStatements.slice(0, 3).entries()) {
+      expect(left).toBeLessThan(1_000);
+      expect(left).toBeLessThanOrEqual(beforeStatements[at - 1] ?? 1_000);
+    }
+    expect(count("parent")).toBe(4);
+  });
+});
+
 describe("a unit run outside a transaction, on MySQL and PostgreSQL", () => {
   /**
    * An adapter that logs where each statement ran: through `withSession`,

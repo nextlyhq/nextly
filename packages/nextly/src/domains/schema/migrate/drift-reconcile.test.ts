@@ -653,6 +653,8 @@ describe("reconcileFile (Phase 2 three-state)", () => {
       await expect(
         reconcileFile({
           file: { ...file, transaction: false },
+          // A busy-table stop on SQLite, as the file's other no-transaction cases run.
+          dialect: "sqlite",
           before: snap("a"),
           target: snap("a", "b"),
           live: snap("a"),

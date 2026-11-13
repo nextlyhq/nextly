@@ -476,6 +476,68 @@ describe.each(DIALECTS)(
       }
     );
 
+    it.runIf(dialect === "postgresql")(
+      "stops where a row change waits on a table the file itself gave a trigger, reading the triggers after the try",
+      async () => {
+        const touch = `${PREFIX}_touch`;
+        await adapter.executeQuery(`CREATE TABLE ${OTHER} (id integer)`);
+        await adapter.executeQuery(`INSERT INTO ${OTHER} (id) VALUES (1)`);
+        writeFile(
+          "20261112_000001_trigger",
+          [
+            `CREATE FUNCTION ${touch}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$`,
+            `CREATE TRIGGER ${touch} BEFORE UPDATE ON ${OTHER} FOR EACH ROW EXECUTE FUNCTION ${touch}()`,
+            `UPDATE ${OTHER} SET id = id WHERE id = 1`,
+          ],
+          { outside: true }
+        );
+        // A row lock on the row the update changes: the trigger's CREATE does not wait for it,
+        // the update does, once the trigger exists.
+        let held: () => void = () => {};
+        const isHeld = new Promise<void>(resolve => {
+          held = resolve;
+        });
+        const freed = new Promise<void>(resolve => {
+          free = resolve;
+        });
+        holding = holderAdapter.transaction(async ctx => {
+          await ctx.queryStatement(
+            sql.raw(`SELECT id FROM ${OTHER} WHERE id = 1 FOR UPDATE`)
+          );
+          held();
+          await freed;
+        });
+        await isHeld;
+        try {
+          const stopped = await migrate({
+            tryMs: 1_000,
+            totalMs: 3_000,
+          }).catch((error: unknown) => error);
+
+          // Read before the file, the triggers named none on that table; sent again, the update
+          // would run the trigger's code a second time for the rows it already reached.
+          expect(stopped).toMatchObject({
+            code: "NEXTLY_TABLE_BUSY",
+            logContext: {
+              stop: {
+                tries: 1,
+                outcome: {
+                  kind: "no-retry",
+                  statementNumber: 3,
+                  reason: "trigger",
+                },
+              },
+            },
+          });
+        } finally {
+          free();
+          await holding.catch(() => {});
+          await adapter.executeQuery(`DROP TABLE IF EXISTS ${OTHER}`);
+          await adapter.executeQuery(`DROP FUNCTION IF EXISTS ${touch}()`);
+        }
+      }
+    );
+
     it.runIf(dialect === "mysql")(
       "trusts the trigger list of an account that may see every trigger of the database",
       async () => {

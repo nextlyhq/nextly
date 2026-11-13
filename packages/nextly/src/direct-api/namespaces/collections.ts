@@ -9,6 +9,10 @@
  * @packageDocumentation
  */
 
+import {
+  parseFieldRewrite,
+  type FieldRewriteResult,
+} from "../../domains/versions/field-rewrite";
 import { NextlyError } from "../../errors/nextly-error";
 import { collectingWarnings } from "../../hooks/side-effect-warnings";
 import type { HiddenFieldPaths } from "../../shared/lib/filterable-fields";
@@ -34,6 +38,7 @@ import type {
   MutationResult,
   PublishArgs,
   PublishResult,
+  RewriteFieldArgs,
   UpdateArgs,
 } from "../types/index";
 
@@ -701,5 +706,46 @@ export async function duplicate<TSlug extends CollectionSlug>(
     message: buildMutationMessage(args.collection, "duplicated"),
     item: result.data as RowFromCollectionSlug<TSlug>,
     ...(warnings ? { warnings } : {}),
+  };
+}
+
+/**
+ * @experimental Rewrite one field of an entry on its live copy and on every
+ * pending draft that holds it, in one transaction, without publishing: each
+ * draft stays a draft and the entry's status is unchanged. Refused with
+ * `STALE_VERSION`, changing nothing, unless the entry is still at
+ * `expectedVersion`. Runs no save hooks; records one history event with the
+ * reason, and the `entry.updated` event for the live change.
+ */
+export async function rewriteField(
+  ctx: NextlyContext,
+  args: RewriteFieldArgs
+): Promise<MutationResult<FieldRewriteResult>> {
+  const config = mergeConfig(ctx.defaultConfig, args);
+  // The request is the call's own fields alone: the instance's default
+  // language would otherwise reach a shared field, which takes none.
+  const request = parseFieldRewrite({
+    collection: args.collection,
+    id: args.id,
+    field: args.field,
+    ...(args.locale === undefined ? {} : { locale: args.locale }),
+    expectedVersion: args.expectedVersion,
+    set: args.set,
+    reason: args.reason,
+  });
+  const access = accessOptions(config);
+  const result = await ctx.collectionsHandler.rewriteField({
+    request,
+    user: access.user,
+    // Trusted unless the call says otherwise, as every Direct API call is.
+    overrideAccess: access.overrideAccess !== false,
+    authenticatedScope: access.authenticatedScope,
+  });
+  if (!result.success) {
+    throw createErrorFromResult(result);
+  }
+  return {
+    message: buildMutationMessage(args.collection, "updated"),
+    item: result.data as FieldRewriteResult,
   };
 }

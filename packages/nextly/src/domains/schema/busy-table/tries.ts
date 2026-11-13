@@ -46,6 +46,8 @@ export interface BusyTableTriesOptions {
   readonly change: string;
   /** The changes this run applied before this one. */
   readonly appliedBefore: readonly string[];
+  /** Which way the change runs, for the report's next step (`BusyTableStop.direction`). */
+  readonly direction?: "up" | "down";
   /** Prints one line on standard error at each try after the first. */
   readonly notify: (line: string) => void;
   /** The notice for a try after the first (`report.ts`'s `tryNotice`). */
@@ -152,6 +154,9 @@ export async function withBusyTableTries<T>(
         outcome: outcomeOf(ended),
         cause: "table-busy",
         endedAtLease,
+        ...(options.direction === undefined
+          ? {}
+          : { direction: options.direction }),
       });
     const nextAt = now() + pauseAfterTry(tryNumber - 1);
     const ending = whyNoNextTry(options, result, firstStartedAt, nextAt);

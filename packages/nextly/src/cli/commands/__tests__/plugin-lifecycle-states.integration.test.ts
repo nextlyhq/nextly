@@ -802,5 +802,84 @@ describe.each(getConfiguredTestDialects())(
         code: "PLUGIN_SCHEMA_UNINSTALLED",
       });
     });
+
+    // Whether `onInstall` runs is read in the access suite beside this one:
+    // here an instance is already started in the process, and the runner
+    // refuses to boot another for a hook.
+    describe("installed again", () => {
+      /** The plugin's lifecycle events, oldest first, by the state each records. */
+      const events = async () =>
+        (await new SchemaEventsRepository(db(), dialect).listPluginLifecycle())
+          .filter(row => row.scopeSlug === PLUGIN)
+          .map(row => row.note);
+
+      /** Whether the ledger records the named module of the plugin applied. */
+      const applied = async (module: PluginMigration) =>
+        (
+          await new SchemaEventsRepository(db(), dialect).listFileApplies()
+        ).some(
+          row =>
+            row.filename === `plugin:${PLUGIN}/${module.name}` &&
+            row.status === "applied"
+        );
+
+      it("records no second event when its recorded state is installed", async () => {
+        await install();
+        expect(await events()).toEqual(["installed"]);
+
+        await install();
+
+        expect(await events()).toEqual(["installed"]);
+        await expect(boot()).resolves.toBeUndefined();
+      });
+
+      it("applies and records a module its upgraded package added, with no event", async () => {
+        // The first release shipped one module, and the install ran it.
+        run.plugin = {
+          ...(run.plugin as object),
+          contributes: {
+            schema: { prefix: "lc", tables: [notes], migrations: [modules[0]] },
+          },
+        };
+        await install();
+        expect(await exists("lc__tags")).toBe(false);
+
+        // The upgraded package adds the second.
+        run.plugin = {
+          ...(run.plugin as object),
+          contributes: {
+            schema: {
+              prefix: "lc",
+              tables: [notes, tags],
+              migrations: modules,
+            },
+          },
+        };
+        await install();
+
+        expect(await exists("lc__tags")).toBe(true);
+        expect(await applied(modules[1])).toBe(true);
+        expect(await events()).toEqual(["installed"]);
+      });
+
+      it.each([
+        ["dropping its data", false],
+        ["keeping its data", true],
+      ])(
+        "records the install event again after an uninstall %s",
+        async (_how, keepData) => {
+          await install();
+          await uninstall(keepData);
+
+          await install();
+
+          // Counted, not read by position: the ledger's list is not ordered.
+          // That the newest record is the install, the boot's gate shows.
+          const recorded = await events();
+          expect(recorded.filter(note => note === "installed")).toHaveLength(2);
+          await expect(boot()).resolves.toBeUndefined();
+        }
+      );
+    });
   }
 );
