@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import type { DryRunBody, ImportReportEntry } from "../../import/contract";
 import {
+  cellResultOf,
   firstOfPage,
   otherChanges,
   reportCsv,
@@ -244,5 +245,40 @@ describe("a page with several versions", () => {
       "Deutsch · published",
       "published",
     ]);
+  });
+});
+
+describe("a version the source holds no value for", () => {
+  // A German version with a title in the source and no description: the
+  // engine reports nothing for the description, since there is nothing to
+  // bring in, and the report says so rather than leaving the cell blank.
+  const german = entry({
+    label: "Preise",
+    locale: "de",
+    language: "Deutsch",
+    set: ["title"],
+    values: { title: "Preise" },
+  });
+
+  it("says there is nothing to import for a value the source doesn't hold", () => {
+    expect(cellResultOf(german, "title")).toBe("set");
+    expect(cellResultOf(german, "description")).toBe("absent");
+    // Blank text is no value either.
+    expect(
+      cellResultOf(entry({ values: { description: "  " } }), "description")
+    ).toBe("absent");
+    // A value the engine gave no result keeps none: it is not "absent".
+    expect(
+      cellResultOf(entry({ values: { description: "Held" } }), "description")
+    ).toBe("none");
+  });
+
+  it("downloads the same words as the table shows", () => {
+    const lines = reportCsv(runOf([german]))
+      .trimEnd()
+      .split("\r\n");
+    expect(lines[1]).toBe(
+      "Preise,Deutsch · published,set,Preise,Will set,,Nothing to import (not in the source),"
+    );
   });
 });
