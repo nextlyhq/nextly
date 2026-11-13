@@ -920,6 +920,14 @@ export class SingleMetadataService {
     input: UpdateSingleSchemaInput
   ): Promise<void> {
     if (!input.wasLocalized && !input.isLocalized) return;
+    // A save that sends no fields moves nothing unless it turns translation on or off, and with no
+    // adapter none of it runs: neither is asked anything.
+    if (
+      input.fields === undefined &&
+      (input.wasLocalized === input.isLocalized || !this.adapter)
+    ) {
+      return;
+    }
     if (!this.adapter) {
       throw NextlyError.internal({
         logContext: {

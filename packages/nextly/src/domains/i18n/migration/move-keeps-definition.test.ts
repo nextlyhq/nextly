@@ -85,7 +85,7 @@ describe("refusalsForMovesLosingDefinition", () => {
       code: "TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION",
     });
     expect(refused?.message).toMatch(
-      /dc_posts\.summary.*own comment.*translation on.*Remove the comment.*leave translation off.*save again/
+      /dc_posts\.summary.*own comment.*translation on.*no comment of its own.*leave translation off.*save again/
     );
   });
 });

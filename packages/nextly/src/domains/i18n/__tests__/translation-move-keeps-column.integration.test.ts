@@ -201,5 +201,99 @@ describe.each(DIALECTS)(
       );
       expect(row?.summary).toBe("Written before");
     });
+
+    it("takes a main column's wider type into the companion, and back when translation ends", async () => {
+      // A decimal field declared (10,2) over a column widened to (12,2) by hand, holding a value
+      // only the wider one fits.
+      const price = {
+        name: "price",
+        type: "number",
+        dbType: "decimal",
+        precision: 10,
+        scale: 2,
+      };
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "tmk_prices",
+            fields: [price as never],
+          }),
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const adapter = current.adapter as unknown as {
+        executeQuery: <T = unknown>(sql: string) => Promise<T[]>;
+      };
+      const query = <T>(statement: string) =>
+        adapter.executeQuery<T>(statement);
+      const priceOf = async (table: string) =>
+        (await readTableDefinition(query, dialect, table)).columns.find(
+          c => c.name === "price"
+        );
+      await query(
+        dialect === "mysql"
+          ? `ALTER TABLE ${q("dc_tmk_prices")} MODIFY COLUMN ${q("price")} DECIMAL(12,2) NULL`
+          : `ALTER TABLE ${q("dc_tmk_prices")} ALTER COLUMN ${q("price")} TYPE numeric(12,2)`
+      );
+      await query(
+        `INSERT INTO ${q("dc_tmk_prices")} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("price")}) VALUES ('row1', 'T', 'r1', 1234567890.12)`
+      );
+      const before = await priceOf("dc_tmk_prices");
+
+      const translated = [{ ...price, localized: true }];
+      expect(
+        await ensureCompanionTable(
+          current.adapter as Parameters<typeof ensureCompanionTable>[0],
+          {
+            builtBy: "codeFirst" as const,
+            slug: "tmk_prices",
+            tableName: "dc_tmk_prices",
+            fields: translated,
+            dialect,
+            sourceLocale: "en",
+          }
+        )
+      ).toBe(true);
+      expect((await priceOf("dc_tmk_prices_locales"))?.type).toBe(before?.type);
+
+      await query(
+        `ALTER TABLE ${q("dc_tmk_prices")} DROP COLUMN ${q("price")}`
+      );
+      const shared = [price];
+      const plan = buildCompanionTransitionStatements({
+        slug: "tmk_prices",
+        kind: "collection",
+        tableName: "dc_tmk_prices",
+        dialect,
+        builtBy: "codeFirst",
+        defaultLocale: "en",
+        status: false,
+        wasLocalized: true,
+        isLocalized: false,
+        wasStatus: false,
+        oldFields: translated,
+        newFields: shared,
+        companionExists: true,
+        ...(await liveCompanionShape(
+          current.adapter as Parameters<typeof liveCompanionShape>[0],
+          {
+            tableName: "dc_tmk_prices",
+            oldFields: translated,
+            newFields: shared,
+            builtBy: "codeFirst",
+            companionExists: true,
+          }
+        )),
+      });
+      if (plan.needsArchive) await ensureI18nArchive(adapter, dialect);
+      for (const statement of plan.statements) await query(statement);
+
+      expect((await priceOf("dc_tmk_prices"))?.type).toBe(before?.type);
+      const [row] = await query<{ price: string }>(
+        `SELECT CAST(${q("price")} AS ${dialect === "mysql" ? "CHAR" : "TEXT"}) AS price FROM ${q("dc_tmk_prices")} WHERE ${q("id")} = 'row1'`
+      );
+      expect(row?.price).toBe("1234567890.12");
+    });
   }
 );

@@ -3,9 +3,11 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
+import type { ColumnSpec } from "../../schema/pipeline/diff/types";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
 
+import { carriedDefinition } from "./carried-definition";
 import {
   companionUniqueIndexName,
   companionUniqueIndexChanges,
@@ -701,11 +703,12 @@ export interface CompanionTransitionArgs {
    */
   liveCompanionColumns?: readonly string[];
   /**
-   * Each companion column's default as this database has it, by column. A column turning
-   * translation off restores to the main table takes its default back (`CarriedDefinition`).
-   * Describes one database only, like `liveCompanionColumns`.
+   * Each companion column as this database has it, by column. A column turning translation off
+   * restores to the main table takes back what it carries (`carriedDefinition`): its type where
+   * wider than the field's own, and its default. Describes one database only, like
+   * `liveCompanionColumns`.
    */
-  liveCompanionDefaults?: Readonly<Record<string, string>>;
+  liveCompanionDefinitions?: Readonly<Record<string, ColumnSpec>>;
   /**
    * The companion's index names as this database has them, so a per-language unique index is
    * created only where missing and dropped only where present. Left out, they are planned from
@@ -948,13 +951,13 @@ export function buildCompanionTransitionStatements(
       args.languageOrder,
       args.companionHasStatus ?? args.wasStatus
     );
-    // A restored main column takes back the default its companion column has.
-    const defaults = args.liveCompanionDefaults ?? {};
-    spec.columns = spec.columns.map(c =>
-      defaults[c.name] === undefined
-        ? c
-        : { ...c, carried: { default: defaults[c.name] } }
-    );
+    // A restored main column takes back what its companion column carries, by the rule turning
+    // translation on gave the companion column its own (`carriedDefinition`).
+    const definitions = args.liveCompanionDefinitions ?? {};
+    spec.columns = spec.columns.map(c => {
+      const carried = carriedDefinition(definitions[c.name], c, dialect);
+      return carried ? { ...c, carried } : c;
+    });
     return {
       statements: buildLocalizationDownStatements(spec, {
         existingMainColumns: args.existingMainColumns,

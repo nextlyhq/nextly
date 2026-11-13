@@ -18,7 +18,10 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { NO_CONSENT } from "../../schema/migrate/data-loss-consent";
+import {
+  NO_CONSENT,
+  resolveDataLossConsent,
+} from "../../schema/migrate/data-loss-consent";
 import {
   generateMigration,
   type MinimalConfigEntity,
@@ -132,5 +135,86 @@ describe.each(getConfiguredTestDialects())(
       )) as unknown as { n: unknown }[];
       expect(row).toBeDefined();
     }, 120_000);
+
+    // SQLite cannot give an existing column a default without rebuilding its table.
+    it.skipIf(dialect === "sqlite")(
+      "refuses the file turning translation off where the companion column has a default the file does not restore",
+      async () => {
+        current = await createTestNextly({ dialect });
+        const adapter = current.adapter as unknown as DrizzleAdapter;
+        const query = (statement: string) => adapter.executeQuery(statement);
+        dir = await mkdtemp(join(tmpdir(), "nextly-definition-loss-"));
+        const migrationsDir = dir;
+        const generate = (
+          entity: MinimalConfigEntity,
+          name: string,
+          at: string
+        ) =>
+          generateMigration({
+            name,
+            dialect,
+            migrationsDir,
+            defaultLocale: "en",
+            collections: [entity],
+            singles: [],
+            components: [],
+            nonInteractive: true,
+            now: new Date(at),
+          });
+        const sqlFiles = async () =>
+          (await readdir(migrationsDir)).filter(f => f.endsWith(".sql"));
+        // Turning translation off drops the translations table, a deletion the deploy names, so
+        // the only refusal left is the one judged here.
+        const migrate = (step?: number) =>
+          migrateCore({
+            ...(step === undefined ? {} : { step }),
+            extensionSchema: undefined,
+            dialect,
+            db: adapter.getDrizzle(),
+            adapter: adapter as never,
+            migrationsDir,
+            logger: createLogger({ quiet: true }),
+            lockMode: "fail-fast",
+            consent: resolveDataLossConsent({
+              flag: "dc_mkd_docs_locales",
+              env: {},
+            }),
+            interactive: false,
+          } as never);
+
+        await generate(docs(true), "one", "2026-11-13T10:00:00.000Z");
+        const first = (await sqlFiles()).length;
+        await generate(docs(false), "two", "2026-11-13T11:00:00.000Z");
+        expect(
+          (await sqlFiles()).some(f => /disable_localization_mkd_docs/.test(f))
+        ).toBe(true);
+
+        await migrate(first);
+        // The companion column as a database may have it, with a default the file's restored main
+        // column would not take.
+        await query(
+          dialect === "mysql"
+            ? `ALTER TABLE ${q("dc_mkd_docs_locales")} MODIFY COLUMN ${q("heading")} VARCHAR(255) NULL DEFAULT 'none'`
+            : `ALTER TABLE ${q("dc_mkd_docs_locales")} ALTER COLUMN ${q("heading")} SET DEFAULT 'none'`
+        );
+
+        const refused = await migrate().then(
+          () => undefined,
+          (error: unknown) => error
+        );
+
+        expect(refused).toBeInstanceOf(Error);
+        expect(
+          JSON.stringify(
+            (refused as { publicData?: unknown }).publicData ?? refused
+          )
+        ).toMatch(/TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION.*own default/);
+        // No file of the run applied: the translations table is still there.
+        await expect(
+          query(`SELECT 1 FROM ${q("dc_mkd_docs_locales")}`)
+        ).resolves.toBeDefined();
+      },
+      120_000
+    );
   }
 );

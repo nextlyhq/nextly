@@ -14,6 +14,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import {
   type ColumnExtras,
   readColumnExtras,
@@ -21,6 +22,7 @@ import {
   type ReceivingDefaults,
 } from "../../schema/pipeline/live-table-facts";
 
+import { carriedDefinition } from "./carried-definition";
 import {
   type LeavingTranslationRefusal,
   refusal,
@@ -29,7 +31,12 @@ import {
 import type { LocalizationMigrationIntent } from "./migration-intent";
 
 /** A part of a column's definition a move into a new column can lose. */
-export type CarriedProperty = "comment" | "character set" | "collation";
+export type CarriedProperty =
+  | "comment"
+  | "character set"
+  | "collation"
+  | "type"
+  | "default";
 
 /** A moved field whose column has parts of its definition the receiving column would not. */
 export interface ColumnMoveLoss {
@@ -108,8 +115,8 @@ export function refusalsForMovesLosingDefinition(args: {
       `"${field}" is stored in ${args.table}.${column}, which has its own ${parts}; turning ` +
         `translation ${args.translation} moves its values into a new column, which would not have it.`,
       [
-        `Remove the ${parts} from ${args.table}.${column} in the database, or leave translation ` +
-          `${args.translation === "on" ? "off" : "on"} for this entity.`,
+        `Change ${args.table}.${column} in the database to have no ${parts} of its own, or leave ` +
+          `translation ${args.translation === "on" ? "off" : "on"} for this entity.`,
         args.surface === "builder" ? "Then save again." : "Then run it again.",
       ]
     );
@@ -147,7 +154,10 @@ export async function refuseMigrationFilesLosingDefinition(
     const [from, to] = turningOn
       ? [spec.mainTable, spec.companionTable]
       : [spec.companionTable, spec.mainTable];
-    const losses = await lossesOnMove(db, dialect, { moved, from, to });
+    const losses = mergeLosses(
+      await lossesOnMove(db, dialect, { moved, from, to }),
+      turningOn ? [] : await uncarriedOnDisable(db, dialect, spec)
+    );
     if (losses.length === 0) continue;
     refused.push(file.name);
     refusals.push(
@@ -164,4 +174,52 @@ export async function refuseMigrationFilesLosingDefinition(
     errors: refusals,
     logContext: { files: refused, fields: refusals.map(r => r.path) },
   });
+}
+
+/**
+ * What a file turning translation off would not restore of each companion column: its type where
+ * wider than the field's own, and its default (`carriedDefinition`). The file re-adds each main
+ * column from the field alone, since its header records the companion's columns by kind, while
+ * the live companion column may carry either, from a move that turned translation on or from a
+ * change by hand.
+ */
+async function uncarriedOnDisable(
+  db: unknown,
+  dialect: SupportedDialect,
+  spec: LocalizationMigrationIntent["spec"]
+): Promise<ColumnMoveLoss[]> {
+  const live = (
+    await introspectLiveSnapshot(db, dialect, [spec.companionTable])
+  ).tables.find(t => t.name === spec.companionTable);
+  if (live === undefined) return [];
+  return spec.columns.flatMap(column => {
+    const carried = carriedDefinition(
+      live.columns.find(c => c.name === column.name),
+      column,
+      dialect
+    );
+    const lost: CarriedProperty[] = [
+      ...(carried?.type !== undefined ? (["type"] as const) : []),
+      ...(carried?.default !== undefined ? (["default"] as const) : []),
+    ];
+    return lost.length > 0
+      ? [{ field: column.name, column: column.name, lost }]
+      : [];
+  });
+}
+
+/** `a` and `b` as one loss per column, each column's lost parts together. */
+function mergeLosses(
+  a: readonly ColumnMoveLoss[],
+  b: readonly ColumnMoveLoss[]
+): ColumnMoveLoss[] {
+  const byColumn = new Map<string, ColumnMoveLoss>();
+  for (const loss of [...a, ...b]) {
+    const known = byColumn.get(loss.column);
+    byColumn.set(
+      loss.column,
+      known ? { ...known, lost: [...known.lost, ...loss.lost] } : loss
+    );
+  }
+  return [...byColumn.values()];
 }

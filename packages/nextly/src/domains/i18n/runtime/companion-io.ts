@@ -1262,7 +1262,7 @@ export async function liveCompanionShape(
   existingMainColumns: string[];
   presentOnCompanion?: string[];
   liveCompanionColumns?: string[];
-  liveCompanionDefaults?: Readonly<Record<string, string>>;
+  liveCompanionDefinitions?: Readonly<Record<string, ColumnSpec>>;
   liveCompanionIndexes?: readonly string[];
   liveCompanionNotUnique?: readonly string[];
 }> {
@@ -1284,13 +1284,12 @@ export async function liveCompanionShape(
             live
           ),
     liveCompanionColumns: live,
-    // Each companion column's default, which a column restored to the main table takes back.
+    // Each companion column as it is, whose wider type and default a column restored to the main
+    // table takes back (`carriedDefinition`).
     ...(liveSpecs
       ? {
-          liveCompanionDefaults: Object.fromEntries(
-            liveSpecs.flatMap(c =>
-              c.default === undefined ? [] : [[c.name, c.default] as const]
-            )
+          liveCompanionDefinitions: Object.fromEntries(
+            liveSpecs.map(c => [c.name, c] as const)
           ),
         }
       : {}),
