@@ -5,7 +5,8 @@
  *
  * The loop is dialect-free: how one try is bounded and run is the caller's `attempt`, which says
  * how the try ended. Before every try after the first the run shows it still holds the schema lock
- * (`assertHeld`), so a run that lost it during a pause sends no further try.
+ * (`assertHeld`), so a run that lost it during a pause sends no further try, and asks again whether
+ * a whole try still fits, since the pause or the check can end later than planned.
  *
  * @module domains/schema/busy-table/tries
  */
@@ -138,7 +139,6 @@ export async function withBusyTableTries<T>(
   const firstStartedAt = now();
   let committed: readonly number[] = [];
   for (let tryNumber = 1; ; tryNumber++) {
-    if (tryNumber > 1) await options.assertHeld();
     const result = await attempt(tryNumber, tryBoundAt(options, now()));
     if (result.kind === "done") return result.value;
     // What earlier tries made durable stays durable, and is reported with this try's.
@@ -162,6 +162,11 @@ export async function withBusyTableTries<T>(
     const ending = whyNoNextTry(options, result, firstStartedAt, nextAt);
     if (ending !== undefined) throw stop(ending === "lease");
     await sleep(nextAt - now());
+    await options.assertHeld();
+    // Asked again once the pause and the lock's check are over: either can resume later than
+    // planned, and a try that starts then must still end by the total bound and the lease.
+    const lateEnding = whyNoNextTry(options, result, firstStartedAt, now());
+    if (lateEnding !== undefined) throw stop(lateEnding === "lease");
     options.notify(
       options.notice({
         change: options.change,
