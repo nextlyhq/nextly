@@ -564,8 +564,9 @@ async function deniedOnlyInPending(
 
 /**
  * The paths at or under `path` the produced document denies once it holds the pending value there:
- * the path itself, or each descendant the rules remove from it. A container the produced document
- * allows can still hold a child its rules deny, and that child is the pending change's to keep.
+ * the path itself, each descendant the rules remove from it, or `path` again where the rules remove
+ * a container holding it. A container the produced document allows can still hold a child its
+ * rules deny, and that child is the pending change's to keep.
  * A path the produced document has no container for stays denied.
  */
 async function deniedInProduced(
@@ -580,12 +581,18 @@ async function deniedInProduced(
   }
   const judged = detachData(produced);
   await input.applyRules(judged);
-  return deniedPaths(produced, judged, "").filter(
-    denied =>
-      denied === path ||
-      denied.startsWith(`${path}.`) ||
-      denied.startsWith(`${path}[`)
-  );
+  const denied = deniedPaths(produced, judged, "");
+  const under = denied.filter(d => d === path || isUnder(d, path));
+  // A container the rules remove once the pending value is in it takes the value with it: the
+  // pending change's value is denied as surely as if the rule had named it.
+  return denied.some(d => isUnder(path, d))
+    ? [...new Set([path, ...under])]
+    : under;
+}
+
+/** Whether `path` lies inside `ancestor`, through a named field or a list row. */
+function isUnder(path: string, ancestor: string): boolean {
+  return path.startsWith(`${ancestor}.`) || path.startsWith(`${ancestor}[`);
 }
 
 /** Refuse the promotion, naming every field at fault, in a stable order. */
