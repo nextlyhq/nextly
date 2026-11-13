@@ -667,6 +667,9 @@ async function runUnitStatements(
         // row): what the transaction read of them before is read again.
         clearRegistryRowCache();
         if (after !== undefined) {
+          // A cancel decided while the last statement waited lands before the ledger write starts,
+          // never on it (MySQL's kill ends whatever runs when it arrives).
+          await bound?.beforeStatement?.();
           await tx.restoreSession();
           // The ledger write is part of the try: watched on the same session, and on SQLite
           // bounded by what is left of it.

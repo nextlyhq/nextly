@@ -80,7 +80,8 @@ export interface StatementsInTries {
 async function judgedForResend(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,
-  statement: string
+  statement: string,
+  ddlEventTriggers: boolean
 ): Promise<StatementJudgement> {
   let asksTriggers = false;
   const judgement = judgeStatement(statement, dialect, () => {
@@ -94,7 +95,6 @@ async function judgedForResend(
   const triggers = asksTriggers
     ? await triggerTables(adapter, dialect)
     : new Set<string>();
-  const ddlEventTriggers = await hasDdlEventTriggers(adapter, dialect);
   return (
     firstNoRetry([statement], dialect, triggers, { ddlEventTriggers })
       ?.judgement ?? judgeStatement(statement, dialect, () => false)
@@ -116,6 +116,9 @@ export async function runStatementsInTries(
   const dialect = adapter.getCapabilities().dialect;
   const applied: string[] = [];
   if (statements.length === 0) return applied;
+  // Read once, before the list's session holds a connection of the pool, so the read never waits
+  // behind it; the statements here are Nextly's own, which make no event trigger.
+  const ddlEventTriggers = await hasDdlEventTriggers(adapter, dialect);
   const nameOf =
     run.name ??
     ((index: number) =>
@@ -167,7 +170,12 @@ export async function runStatementsInTries(
         } catch (error) {
           const holder = await watch.ended(error);
           if (holder === undefined) throw error;
-          const judgement = await judgedForResend(adapter, dialect, statement);
+          const judgement = await judgedForResend(
+            adapter,
+            dialect,
+            statement,
+            ddlEventTriggers
+          );
           return {
             kind: "ended",
             ended: { table: targetTable(statement, dialect), holder },

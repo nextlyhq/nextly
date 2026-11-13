@@ -124,6 +124,8 @@ export interface RunPluginMigrationsDeps {
    * that transaction when there is one; returns statements run.
    */
   executeSql: ReconcileFileArgs["executeSql"];
+  /** See `ReconcileFileArgs.recordStopped`: a module's busy-table stop, recorded within a bound. */
+  recordStopped?: ReconcileFileArgs["recordStopped"];
   /** Ledger rows are recorded through this — `reconcileFile`'s own repo. */
   repo: ReconcileRepo;
   /**
@@ -1288,6 +1290,9 @@ async function applyModule(
     dialect: deps.dialect,
     repo: deps.repo,
     executeSql: deps.executeSql,
+    ...(deps.recordStopped === undefined
+      ? {}
+      : { recordStopped: deps.recordStopped }),
     // A module records its owner rows through the handle its applied row
     // was written on, after that row, so in a transaction both commit with
     // the statements, or with the adoption, or neither does.

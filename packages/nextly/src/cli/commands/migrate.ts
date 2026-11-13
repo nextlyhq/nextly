@@ -1884,6 +1884,8 @@ export async function runPluginPhase(
   // stopped. A module waits for a busy table in tries as an app file does (`runUnitInTries`), its
   // ledger and owner rows written in `after` with its statements.
   const appliedModules: string[] = [];
+  // The record of a module a busy table stopped waits for the ledger table one try at most.
+  const moduleTryMs = deps.busyTable?.bounds.tryMs;
   const executeModule = buildSqlExecutor(
     dz,
     deps.dialect,
@@ -1983,6 +1985,12 @@ export async function runPluginPhase(
       return live;
     },
     executeSql: pluginExecuteSql,
+    ...(moduleTryMs === undefined
+      ? {}
+      : {
+          recordStopped: (write: (db: unknown) => Promise<void>) =>
+            writeLedgerBounded(dz, moduleTryMs, write),
+        }),
     repo: eventsRepo,
     recordOwner: async ({
       pluginName,

@@ -26,7 +26,7 @@ import { sessionNumberOf } from "./ended-waiting";
 import type { TryWatchdog } from "./types";
 import {
   openWatchConnection,
-  poolCanSpareOne,
+  poolHasFreeConnection,
   type WatchConnection,
 } from "./watch-connection";
 
@@ -169,9 +169,6 @@ export function prepareTryWatchdog(
   // closed by `stop`. Until it opens, nothing is asked.
   let asking: Promise<WatchConnection> | undefined;
   let closing: Promise<void> | undefined;
-  // Whether the holder read, which goes through the adapter's pool, can be answered while the
-  // watched session holds a connection of that pool.
-  const holderReadable = poolCanSpareOne(adapter, dialect);
 
   /**
    * Whether the session is waiting for a lock now. On MySQL a wait the process list does not word
@@ -204,9 +201,10 @@ export function prepareTryWatchdog(
     seen: number
   ): Promise<void> {
     const stillThere = () => !stopped && current === seen;
-    // What holds the table is read before the cancel, where the pool it is read through can
-    // answer now; a failed read leaves the cancel to go on.
-    if (holderReadable) {
+    // What holds the table is read before the cancel, where the pool it is read through has a
+    // connection free now (`poolHasFreeConnection`), so the read cannot queue behind other work
+    // and hold the cancel back; a failed read leaves the cancel to go on.
+    if (poolHasFreeConnection(adapter, dialect)) {
       await options.beforeCancel?.(String(target)).catch(() => undefined);
     }
     if (!stillThere()) return;

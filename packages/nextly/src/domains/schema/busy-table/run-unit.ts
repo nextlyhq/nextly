@@ -141,11 +141,12 @@ export async function triggerTables(
 }
 
 /**
- * Whether PostgreSQL has an enabled DDL event trigger that no installed extension owns: one runs
- * code the system does not know on every CREATE, ALTER and DROP, so a schema statement may not be
- * sent again (`JudgeContext`). An extension's own (Supabase's, PostGIS's) is vetted code that only
- * notifies or grants, which a rollback takes back. False on the other dialects, which have none. A
- * read that fails answers yes, failing closed.
+ * Whether PostgreSQL has an enabled DDL event trigger (one on `ddl_command_start`,
+ * `ddl_command_end`, `sql_drop` or `table_rewrite`, not a `login` one) that no installed extension
+ * owns: one runs code the system does not know on every CREATE, ALTER and DROP, so a schema
+ * statement may not be sent again (`JudgeContext`). An extension's own is vetted code installed
+ * with it. False on the other dialects, which have none. A read that fails answers yes, failing
+ * closed.
  */
 export async function hasDdlEventTriggers(
   adapter: Pick<DrizzleAdapter, "queryStatement">,
@@ -156,6 +157,7 @@ export async function hasDdlEventTriggers(
     const rows = await adapter.queryStatement<{ found: unknown }>(
       sql`SELECT 1 AS found FROM pg_event_trigger e
         WHERE e.evtenabled <> 'D'
+          AND e.evtevent IN ('ddl_command_start', 'ddl_command_end', 'sql_drop', 'table_rewrite')
           AND NOT EXISTS (SELECT 1 FROM pg_depend d
             WHERE d.classid = 'pg_event_trigger'::regclass AND d.objid = e.oid AND d.deptype = 'e')
         LIMIT 1`
@@ -318,7 +320,9 @@ function firstNoRetryBetween(
     ],
     dialect,
     catalog.triggers,
-    catalog.context
+    // The kept statements read again only to follow renames and settings are not sent again as
+    // schema statements: only those from `start` fire an event trigger again.
+    { ...catalog.context, ddlEventTriggersFrom: replayedBefore.length }
   );
   if (found === undefined) return undefined;
   const at = found.statementNumber - 1;
@@ -327,6 +331,26 @@ function firstNoRetryBetween(
       ? (replayedBefore[at] ?? 0)
       : start + at - replayedBefore.length;
   return { statementNumber: index + 1, judgement: found.judgement };
+}
+
+/** The first words of the statements that change rows or settings, none of which commits MySQL's transaction. */
+const ROW_CHANGE_WORDS = new Set([
+  "INSERT",
+  "UPDATE",
+  "DELETE",
+  "REPLACE",
+  "SELECT",
+  "SET",
+]);
+
+/**
+ * Whether every one of `statements` changes rows or a setting: on MySQL none commits the
+ * transaction implicitly, as a schema statement, a trigger's or a view's CREATE or a TRUNCATE does.
+ */
+function onlyRowChanges(statements: readonly string[]): boolean {
+  return statements.every(statement =>
+    ROW_CHANGE_WORDS.has(leadingWords(statement, "mysql", 1)[0] ?? "")
+  );
 }
 
 /** The positions (1 for the first) of the statements from `from` up to `kept`, not included. */
@@ -352,8 +376,6 @@ export async function runUnitInTries(
 ): Promise<number> {
   const dialect = adapter.getCapabilities().dialect;
   const keeping = keepingOf(unit, dialect);
-  // Read again after each try that ended (below): a statement a try kept may have made a trigger.
-  let catalog = await readUnitCatalog(adapter, dialect, statements);
   // Where the next try starts: past every statement an earlier try kept.
   let from = 0;
   return withBusyTableTries(
@@ -455,7 +477,13 @@ export async function runUnitInTries(
         // transaction each statement committed as it ran, and on MySQL a trigger's CREATE commits
         // on its own. The list is read again, after the try let go of its session, before judging
         // what the next try sends; a read that fails counts every table as having one.
-        catalog = await readUnitCatalog(adapter, dialect, statements).catch(
+        // Read once the try let go of its session, never before the first try: a statement a try
+        // kept may have made a trigger, so an earlier read would only be read again.
+        const catalog = await readUnitCatalog(
+          adapter,
+          dialect,
+          statements
+        ).catch(
           (): UnitCatalog => ({
             triggers: "unseen",
             context: { ddlEventTriggers: true },
@@ -497,11 +525,13 @@ export async function runUnitInTries(
             holder: holder ?? (await readHolders(adapter, dialect, session)),
           },
           ...(lasting === undefined ? {} : { lasting }),
-          // Only a transaction that kept nothing undid the rest of the change: on MySQL, one that
-          // had no schema statement commit any of the unit before the wait, in this try or before.
+          // Only a transaction that kept nothing undid the rest of the change: on MySQL, one whose
+          // statements sent were all row changes, none of which commits the transaction.
           undone:
             keeping === "rolled-back" ||
-            (keeping === "open-transaction" && kept === 0),
+            (keeping === "open-transaction" &&
+              kept === 0 &&
+              onlyRowChanges(statements.slice(0, sentIndex + 1))),
           committed: positionsBetween(started, kept),
         };
       }

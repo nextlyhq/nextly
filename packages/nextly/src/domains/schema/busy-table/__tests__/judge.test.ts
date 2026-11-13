@@ -347,6 +347,17 @@ describe("firstNoRetry", () => {
     }
   );
 
+  it("does not stop at a kept rename read only to follow its table, where a DDL event trigger exists", () => {
+    expect(
+      firstNoRetry(
+        ["ALTER TABLE plain RENAME TO plain_v2", "UPDATE plain_v2 SET x = 1"],
+        "postgresql",
+        triggers,
+        { ddlEventTriggers: true, ddlEventTriggersFrom: 1 }
+      )
+    ).toBeUndefined();
+  });
+
   it("lets a row change run again where only a DDL event trigger exists", () => {
     expect(
       firstNoRetry(
@@ -409,6 +420,10 @@ describe("judgeStatement on what drizzle-kit and the migration generator write",
     ["mysql", "CREATE TABLE posts (title varchar(255), KEY k (title(191)))"],
     ["mysql", "ALTER TABLE posts ADD PRIMARY KEY (slug(100))"],
     ["mysql", "CREATE UNIQUE INDEX idx ON `posts` (`title`(191))"],
+    ["mysql", "CREATE INDEX idx ON shop.posts (title(191))"],
+    ["postgresql", "ALTER TABLE docs ADD COLUMN embedding vector(1536)"],
+    ["postgresql", "CREATE TABLE docs (id integer, embedding vector(1536))"],
+    ["postgresql", "ALTER TABLE docs ALTER COLUMN embedding TYPE vector(768)"],
   ] as const)(
     "reads an index prefix length as no call on %s: %s",
     (dialect, statement) => {

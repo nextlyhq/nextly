@@ -66,6 +66,7 @@ import {
   runRecordedAttempt,
   snapshotsEquivalent,
 } from "../migrate/drift-reconcile";
+import { writeLedgerBounded } from "../migrate/migration-transaction";
 import { refuseRequiredColumnsOverNulls } from "../migrate/required-column-guard";
 import { resolveMigration } from "../migrate/resolve";
 import { marksNoTransaction, splitSqlStatements } from "../migrate/split-sql";
@@ -1433,6 +1434,9 @@ async function runWritten(
   const dialect = deps.adapter.getCapabilities().dialect;
   const repo = new SchemaEventsRepository(db, dialect);
   const bounds = boundsRead ?? busyTableBounds({ env: process.env });
+  // The record of a file a busy table stopped waits for the ledger table one try at most.
+  const recordStopped = (write: (db: unknown) => Promise<void>) =>
+    writeLedgerBounded(deps.adapter, bounds.tryMs, write);
   const applied: string[] = [];
   const executeSql = (
     sql: string,
@@ -1478,7 +1482,13 @@ async function runWritten(
     );
     const target = await snapshotOf(deps, filename);
     if (target === null) {
-      await runRecordedAttempt({ file, dialect, repo, executeSql });
+      await runRecordedAttempt({
+        file,
+        dialect,
+        repo,
+        executeSql,
+        recordStopped,
+      });
       return;
     }
     const scopedTarget = onlyTable(target, table);
@@ -1491,6 +1501,7 @@ async function runWritten(
       dialect,
       repo,
       executeSql,
+      recordStopped,
       ...(adoption === undefined
         ? {}
         : {

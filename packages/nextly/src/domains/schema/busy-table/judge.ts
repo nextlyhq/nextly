@@ -281,11 +281,33 @@ function namesNotCalls(
   while (tokens[beforeAt] === ".") beforeAt -= 2;
   const before = tokens[beforeAt];
   if (typeof before === "string" && NAME_FOLLOWS.has(before)) return true;
-  return (
-    dialect === "mysql" &&
-    onlyDigitsWithin(tokens, at + 1) &&
-    inIndexColumnList(tokens, at)
-  );
+  if (!onlyDigitsWithin(tokens, at + 1)) return false;
+  if (inTypePosition(tokens, at)) return true;
+  return dialect === "mysql" && inIndexColumnList(tokens, at);
+}
+
+/** Words after which a column's name, then its type, follow (`ADD COLUMN c type`). */
+const COLUMN_DEFINERS = new Set(["(", ",", "COLUMN", "ADD", "MODIFY"]);
+
+/**
+ * Whether the word at `at` is a column's type, sized in a schema statement: it follows the
+ * column's name, which follows `(`, `,`, `COLUMN`, `ADD` or `MODIFY` (`ADD COLUMN embedding
+ * vector(1536)`), or it follows `TYPE` (`ALTER COLUMN c TYPE vector(1536)`). A type the
+ * `PAREN_TYPES` list does not know, such as an extension's, is then still a type and no call. A
+ * default's or a check's `site_fn(1)` follows no column name, and stays a call.
+ */
+function inTypePosition(
+  tokens: readonly StatementToken[],
+  at: number
+): boolean {
+  if (tokens[0] !== "CREATE" && tokens[0] !== "ALTER") return false;
+  const before = tokens[at - 1];
+  if (before === "TYPE") return true;
+  const named =
+    (typeof before === "string" && WORD.test(before)) ||
+    (typeof before === "object" && before?.kind === "name");
+  const definer = tokens[at - 2];
+  return named && typeof definer === "string" && COLUMN_DEFINERS.has(definer);
 }
 
 /** Words that open an index's column list, directly (`PRIMARY KEY (`) or before its name. */
@@ -313,7 +335,10 @@ function inIndexColumnList(
     if (typeof before === "string" && INDEX_LIST_OPENERS.has(before)) {
       return true;
     }
-    const keyword = tokens[open - 2];
+    // Back past the name and its schema qualifier (`ON shop.posts (`).
+    let keywordAt = open - 2;
+    while (tokens[keywordAt] === ".") keywordAt -= 2;
+    const keyword = tokens[keywordAt];
     return (
       keyword === "ON" ||
       (typeof keyword === "string" && INDEX_LIST_OPENERS.has(keyword))
@@ -643,6 +668,11 @@ export interface JudgeContext {
    * (`hasDdlEventTriggers`): every schema statement then runs code the system does not know.
    */
   readonly ddlEventTriggers?: boolean;
+  /**
+   * How many of the statements judged come before those a later try sends again: read only to
+   * follow renames and settings, so an event trigger does not stop the run on them. 0 by default.
+   */
+  readonly ddlEventTriggersFrom?: number;
 }
 
 /** The first words of the statements a PostgreSQL DDL event trigger fires on. */
@@ -677,9 +707,10 @@ export function firstNoRetry(
   const eventTriggers =
     dialect === "postgresql" && context.ddlEventTriggers === true;
   for (const [index, statement] of statements.entries()) {
-    const judgement = eventTriggers
-      ? firesEventTrigger(statement, dialect, hasTrigger)
-      : judgeStatement(statement, dialect, hasTrigger);
+    const judgement =
+      eventTriggers && index >= (context.ddlEventTriggersFrom ?? 0)
+        ? firesEventTrigger(statement, dialect, hasTrigger)
+        : judgeStatement(statement, dialect, hasTrigger);
     if (judgement.kind === "no-retry") {
       // Named for what was not known, so the report does not claim the table has a trigger.
       const reason =
