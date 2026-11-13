@@ -541,8 +541,9 @@ function isRefusal(
  * `PromotionAccessInput.pending`). Judged there alone, a rule reading a sibling the publish itself
  * changes reads the draft's value of it, not the one the publish writes, and refuses a publish the
  * produced document allows. So each such path is judged on the produced document with the pending
- * value put at it, which keeps the protected-child case refused (the rule still denies the value)
- * and lets the sibling case through. A path inside a list is left denied: a row's path is its
+ * value put at it, and the paths it denies there at or under it are kept: the protected-child case
+ * stays refused (the rule still denies the value, or a child of it), and the sibling case goes
+ * through. A path inside a list is left denied: a row's path is its
  * position, and the produced document's rows need not sit where the pending change's do.
  */
 async function deniedOnlyInPending(
@@ -554,26 +555,37 @@ async function deniedOnlyInPending(
   const out: string[] = [];
   for (const path of deniedPaths(input.pending, permittedPending, "")) {
     if (alreadyDenied.has(path)) continue;
-    if (path.includes("[") || (await deniedInProduced(input, path))) {
-      out.push(path);
-    }
+    out.push(
+      ...(path.includes("[") ? [path] : await deniedInProduced(input, path))
+    );
   }
   return out;
 }
 
-/** Whether the produced document, holding the pending value at `path`, denies it there. */
+/**
+ * The paths at or under `path` the produced document denies once it holds the pending value there:
+ * the path itself, or each descendant the rules remove from it. A container the produced document
+ * allows can still hold a child its rules deny, and that child is the pending change's to keep.
+ * A path the produced document has no container for stays denied.
+ */
 async function deniedInProduced(
   input: PromotionAccessInput,
   path: string
-): Promise<boolean> {
+): Promise<string[]> {
   const produced = detachData(input.before);
   if (
     !setRecordPath(produced, path, detachData(valueAt(input.pending, path)))
   ) {
-    return true;
+    return [path];
   }
-  await input.applyRules(produced);
-  return !pathExists(produced, path);
+  const judged = detachData(produced);
+  await input.applyRules(judged);
+  return deniedPaths(produced, judged, "").filter(
+    denied =>
+      denied === path ||
+      denied.startsWith(`${path}.`) ||
+      denied.startsWith(`${path}[`)
+  );
 }
 
 /** Refuse the promotion, naming every field at fault, in a stable order. */

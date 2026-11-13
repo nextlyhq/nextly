@@ -855,4 +855,36 @@ describe("resolvePromotedDocument judges a pending value by the document it prod
       ).publicData?.errors?.map(e => e.path)
     ).toEqual(["ops.runbook"]);
   });
+  it("refuses a protected child inside a container the produced document allows, though the draft alone denied the container", async () => {
+    // `ops` may be written only where `kind` is "public"; `ops.runbook` is always denied.
+    const rules = (document: Record<string, unknown>): Promise<void> => {
+      if (document.kind !== "public") delete document.ops;
+      const ops = document.ops as Record<string, unknown> | undefined;
+      if (ops) delete ops.runbook;
+      return Promise.resolve();
+    };
+    const pending = {
+      kind: "private",
+      ops: { note: "draft", runbook: "protected edit" },
+    };
+    const callerSupplied = { kind: "public", ops: { note: "caller" } };
+    let refused: unknown;
+    try {
+      await resolvePromotedDocument({
+        slug: "posts",
+        applyRules: rules,
+        before: { kind: "public", ops: { note: "caller" } },
+        live: { kind: "public", ops: { note: "live" } },
+        pending,
+        callerSupplied,
+      });
+    } catch (error) {
+      refused = error;
+    }
+    expect(
+      (
+        refused as { publicData?: { errors?: { path: string }[] } }
+      ).publicData?.errors?.map(e => e.path)
+    ).toEqual(["ops.runbook"]);
+  });
 });
