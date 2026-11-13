@@ -378,7 +378,14 @@ describe.each(getConfiguredTestDialects())(
         );
       });
       expect(created.code, created.said.join("\n")).toBeUndefined();
-      expect(migrationFiles()).toEqual(filesBefore);
+      // A file written here is a change the save left unrecorded; its text says which.
+      const written = migrationFiles().filter(f => !filesBefore.includes(f));
+      expect(
+        written,
+        written
+          .map(f => readFileSync(join(migrationsDir(), f), "utf-8"))
+          .join("\n")
+      ).toEqual([]);
 
       const checked = await command(context =>
         runMigrateCheck({ cwd: basePath }, context)
@@ -436,7 +443,10 @@ describe.each(getConfiguredTestDialects())(
         const t = await boot();
         await kind.create([text("heading")]);
 
-        await kind.change(t, [text("title")], { from: "heading", to: "title" });
+        await kind.change(t, [text("headline")], {
+          from: "heading",
+          to: "headline",
+        });
 
         const update = migrationFiles().find(f =>
           f.endsWith(`_${kind.slug}_update.sql`)
@@ -448,9 +458,11 @@ describe.each(getConfiguredTestDialects())(
         expect(up).toMatch(/RENAME/i);
         expect(up).not.toMatch(/DROP COLUMN/i);
         const names = await columns(t, kind.table);
-        expect(names).toContain("title");
+        expect(names).toContain("headline");
         expect(names).not.toContain("heading");
-        expect(await appliedFiles(t)).toEqual(migrationFiles());
+        expect(await appliedFiles(t), JSON.stringify(migrationFiles())).toEqual(
+          migrationFiles()
+        );
         await nothingLeftToDo(t);
       }, 60_000);
 
