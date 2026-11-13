@@ -981,8 +981,16 @@ export async function problemList(
   ]).sort(byKind);
   const checkedAt = site.checkedAt;
   const age = checkedAt === undefined ? Infinity : now - Date.parse(checkedAt);
+  const defaultLanguage = await ctx.publicAddresses.defaultLanguage();
   return {
     problems,
+    // Each version of a page the reader may read that a check read, named
+    // as its problems name it: a language only where not the default.
+    checked: pages.map(({ subject, locale }) => ({
+      type: subject.type,
+      id: subject.id,
+      ...(locale === defaultLanguage || locale === "" ? {} : { locale }),
+    })),
     ...(host === undefined ? {} : { site: host }),
     ...(checkedAt === undefined ? {} : { checkedAt }),
     pagesChecked: site.pagesChecked,
