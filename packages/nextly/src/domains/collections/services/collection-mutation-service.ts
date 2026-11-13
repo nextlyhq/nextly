@@ -7229,6 +7229,9 @@ export class CollectionMutationService extends BaseService {
     const own = convertTimestampsToCamelCase({
       ...(row as Record<string, unknown>),
     });
+    // Decoded by the fields stored at this level, a field inside an unnamed
+    // layout group included, so a JSON value reaches `set.from` parsed.
+    const stored = addressableFields(fields) as unknown as FieldDefinition[];
     const translations =
       translatedIn === null
         ? {}
@@ -7243,10 +7246,10 @@ export class CollectionMutationService extends BaseService {
     const reach = await this.passwordReach(fields, tx.getDrizzle());
     const main = this.deserializeJsonFieldsForSnapshot(
       { ...own, ...translations },
-      fields
+      stored
     );
     this.redactSnapshotRow(main, fields, tableName, reach);
-    const shared = this.deserializeJsonFieldsForSnapshot(own, fields);
+    const shared = this.deserializeJsonFieldsForSnapshot(own, stored);
     this.redactSnapshotRow(shared, fields, tableName, reach);
     const { live, ...comparison } = await this.liveSharedDocument(tx, {
       collectionName: params.collectionName,
@@ -7405,10 +7408,18 @@ export class CollectionMutationService extends BaseService {
     const data: Record<string, unknown> = {
       [field]: this.rewritePayloadValue(args, write.value),
     };
-    this.shapeWriteParts(data, fields, [], args.collection, {
-      stored: write.stored,
-      reach: await this.passwordReach(fields, tx.getDrizzle()),
-    });
+    // Shaped by the fields stored at this level, so a value inside an
+    // unnamed layout group is encoded for its column as any other is.
+    this.shapeWriteParts(
+      data,
+      addressableFields(fields) as unknown as FieldDefinition[],
+      [],
+      args.collection,
+      {
+        stored: write.stored,
+        reach: await this.passwordReach(fields, tx.getDrizzle()),
+      }
+    );
     // A translated value goes to its language's row, and leaves `data`.
     const translation =
       write.translatedIn === null
@@ -7564,10 +7575,12 @@ export class CollectionMutationService extends BaseService {
             locale: save.locale,
             actor: args.actor,
             personName: params.user?.name ?? null,
-            inPlaceTranslated:
-              save.live && save.locale !== null
-                ? this.translatedFieldsOf(args.collection, args.fields)
-                : null,
+            // The live copy's change is judged in every language it reaches:
+            // a shared value is shown in each, so each language's approval is
+            // judged with it laid over, as an in-place save's is.
+            inPlaceTranslated: save.live
+              ? this.translatedFieldsOf(args.collection, args.fields)
+              : null,
           }
         );
       } catch (err) {

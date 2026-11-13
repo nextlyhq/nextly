@@ -643,6 +643,33 @@ describe.each(getConfiguredTestDialects())(
         expect(await withdrawals("posts", post)).toHaveLength(1);
       });
 
+      it("withdraws a language's approval on a field rewrite of a live shared field", async () => {
+        await boot(dialect);
+        const { post } = await approvedPost();
+        const read = await handlerOf(app()).getEntry({
+          collectionName: "posts",
+          entryId: post,
+          overrideAccess: true,
+          locale: "en",
+          fallbackLocale: false,
+        });
+        // `code` is shared: English shows it, so English's approval no
+        // longer holds over what it shows.
+        await app().nextly.rewriteField({
+          collection: "posts",
+          id: post,
+          field: "code",
+          expectedVersion: (read.data as { _rev: string })._rev,
+          set: { value: "renumbered" },
+          reason: "Codes renumbered",
+        });
+
+        expect(await stateOf(app(), partOf("posts", post, "en"))).toMatchObject(
+          { stage: "legal", approval: null }
+        );
+        expect(await withdrawals("posts", post)).toHaveLength(1);
+      });
+
       it("withdraws on a field rewrite that reaches an approved part's held draft", async () => {
         await boot(dialect);
         const bob = await person(app(), "bob", [["sign-off", "posts"]]);
