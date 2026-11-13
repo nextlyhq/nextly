@@ -89,7 +89,7 @@ function liveNames(
 }
 
 /** The entity and field a table's column belongs to, as a refusal names them. */
-function subjectOf(
+export function subjectOf(
   desired: DesiredSchema,
   table: string,
   column: string
@@ -124,7 +124,7 @@ interface RefusalError {
 }
 
 /** `rows` counted, as a refusal words it: "1 row holds", "3 rows hold". */
-function rowsHold(rows: number): string {
+export function rowsHold(rows: number): string {
   return rows === 1 ? "1 row holds" : `${String(rows)} rows hold`;
 }
 

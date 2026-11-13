@@ -193,3 +193,60 @@ describe("diffSnapshots — constraint drops", () => {
     });
   });
 });
+
+describe("diffSnapshots — a key moved to another target", () => {
+  // The column keeps its place; its key moves from `authors` to `editors` under a name of its own.
+  const before: TableSpec = {
+    ...table("posts", ["authors"]),
+    columns: [
+      { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+      { name: "author", type: "varchar(36)", nullable: true },
+    ],
+    foreignKeys: [key("posts", "author", "authors")],
+  };
+  const moved: TableSpec = {
+    ...before,
+    foreignKeys: [
+      {
+        ...key("posts", "author", "editors"),
+        name: "fk_posts_author_to_editors",
+      },
+    ],
+  };
+  const steps = (ops: Operation[]) =>
+    ops.flatMap(op =>
+      op.type === "add_foreign_key" || op.type === "drop_foreign_key"
+        ? [`${op.type} ${op.foreignKey.name}`]
+        : []
+    );
+
+  it("adds the new key before dropping the one it replaces", () => {
+    expect(
+      steps(diffSnapshots({ tables: [before] }, { tables: [moved] }))
+    ).toEqual([
+      "add_foreign_key fk_posts_author_to_editors",
+      "drop_foreign_key fk_posts_author",
+    ]);
+  });
+
+  it("does the same the other way round in the down", () => {
+    const up = diffSnapshots({ tables: [before] }, { tables: [moved] });
+    expect(steps(buildInverseOperations(up, { tables: [before] }))).toEqual([
+      "add_foreign_key fk_posts_author",
+      "drop_foreign_key fk_posts_author_to_editors",
+    ]);
+  });
+
+  it("still drops first a key whose change of shape keeps its name", () => {
+    const sameName: TableSpec = {
+      ...before,
+      foreignKeys: [key("posts", "author", "editors")],
+    };
+    expect(
+      steps(diffSnapshots({ tables: [before] }, { tables: [sameName] }))
+    ).toEqual([
+      "drop_foreign_key fk_posts_author",
+      "add_foreign_key fk_posts_author",
+    ]);
+  });
+});

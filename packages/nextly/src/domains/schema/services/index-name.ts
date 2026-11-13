@@ -117,6 +117,27 @@ export function foreignKeyNameForColumns(
 }
 
 /**
+ * The name a relationship's key takes when it moves to another target table.
+ *
+ * The new key is added before the old one is dropped, so the column is never left without one
+ * (MySQL commits each schema statement), and two keys cannot share a name. So a move alternates
+ * between the column's usual name (`foreignKeyNameForColumns`) and one naming the new target: a key
+ * under the usual name moves to `fk_<table>_<column>_to_<target>`, and one under any other name
+ * moves back to the usual name. Bounded as every derived identifier is.
+ */
+export function movedForeignKeyName(
+  tableName: string,
+  column: string,
+  currentName: string,
+  targetTable: string
+): string {
+  const usual = foreignKeyNameForColumns(tableName, [column]);
+  return currentName.toLowerCase() === usual.toLowerCase()
+    ? foreignKeyNameForColumns(tableName, [column, "to", targetTable])
+    : usual;
+}
+
+/**
  * The SQL name of a check constraint, from the table and the check's own name.
  *
  * Scoped by the table because MySQL, unlike PostgreSQL, requires check names to be unique across

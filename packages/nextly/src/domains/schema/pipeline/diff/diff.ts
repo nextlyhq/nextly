@@ -216,8 +216,11 @@ export function diffSnapshots(
     // names, and a check's columns cannot be read from its SQL. Its add, when
     // it is being re-keyed, stays behind the columns, so the pair still runs
     // drop-then-add and the inverse still re-adds after re-creating columns.
+    // A key a replacement on the same columns supersedes is the exception: it is dropped after
+    // that replacement is added, in the order the foreign-key diff produced (`afterReplacement`).
     const isConstraintDrop =
-      op.type === "drop_check" || op.type === "drop_foreign_key";
+      op.type === "drop_check" ||
+      (op.type === "drop_foreign_key" && op.afterReplacement !== true);
     if (coversBlockedColumn || isConstraintDrop)
       dropIndexBeforeColumns.push(op);
     else dropIndexAfterAdds.push(op);
@@ -456,7 +459,39 @@ function diffForeignKeys(
       ops.push({ type: "drop_foreign_key", tableName, foreignKey: fk });
     }
   }
-  return ops;
+  return replacementsAfterTheirAdds(ops);
+}
+
+/**
+ * `ops` with each key that another, under a new name on the same columns, replaces dropped after
+ * that replacement is added (`afterReplacement`), so a key moving to another target never leaves
+ * its columns unkeyed, even where each statement commits on its own. A key whose replacement shares
+ * its name is a change of shape, dropped first as before: two keys cannot share a name.
+ */
+function replacementsAfterTheirAdds(ops: Operation[]): Operation[] {
+  const columnsOf = (fk: ForeignKeySpec) => fk.columns.join("\u0000");
+  const added = new Set(
+    ops.flatMap(op =>
+      op.type === "add_foreign_key" ? [columnsOf(op.foreignKey)] : []
+    )
+  );
+  const addedNames = new Set(
+    ops.flatMap(op =>
+      op.type === "add_foreign_key" ? [op.foreignKey.name] : []
+    )
+  );
+  const replaced = (op: Operation) =>
+    op.type === "drop_foreign_key" &&
+    !addedNames.has(op.foreignKey.name) &&
+    added.has(columnsOf(op.foreignKey));
+  return [
+    ...ops.filter(op => !replaced(op)),
+    ...ops.flatMap(op =>
+      op.type === "drop_foreign_key" && replaced(op)
+        ? [{ ...op, afterReplacement: true as const }]
+        : []
+    ),
+  ];
 }
 
 /**

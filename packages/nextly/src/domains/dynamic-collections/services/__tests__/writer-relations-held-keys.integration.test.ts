@@ -97,16 +97,38 @@ describeEachDialect("a Builder save's relationship keys", dialect => {
   });
 
   it("keeps a held key's target when its field reads another collection", async () => {
-    // `relationTo`, which reads follow, now names the editors; the database still checks authors.
-    const { keys } = await service.writerRelations("dc_notes", recorded, [
+    // Recorded so already: `relationTo`, which reads follow, names the editors, while the database
+    // still checks authors. A save that does not change it leaves the key where it is.
+    const mismatched = [
       recorded[0],
       relationship("author", {
         relationTo: "editors",
         options: { target: "authors", relationType: "manyToOne" },
       }),
-    ]);
+    ];
+    const { keys } = await service.writerRelations(
+      "dc_notes",
+      mismatched,
+      mismatched
+    );
     expect(keys.after.map(key => key.referencesTable)).toEqual(["dc_authors"]);
     expect(keys.before.map(key => key.referencesTable)).toEqual(["dc_authors"]);
+  });
+
+  it("moves a held key with a save that points its relationship elsewhere", async () => {
+    const { keys } = await service.writerRelations("dc_notes", recorded, [
+      recorded[0],
+      relationship("author", {
+        options: { target: "editors", relationType: "manyToOne" },
+      }),
+    ]);
+    expect(keys.before.map(key => [key.name, key.referencesTable])).toEqual([
+      ["fk_dc_notes_author", "dc_authors"],
+    ]);
+    // Under a name of its own, so the file adds it before dropping the old one.
+    expect(keys.after.map(key => [key.name, key.referencesTable])).toEqual([
+      ["fk_dc_notes_author_to_dc_editors", "dc_editors"],
+    ]);
   });
 
   it("gives a translated relationship no key on the main table", async () => {

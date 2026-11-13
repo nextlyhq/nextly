@@ -95,6 +95,7 @@ import {
   companionsHoldingBack,
   withKeptScopeFieldsIn,
 } from "./kept-scope-fields";
+import { refuseKeysRowsWouldBreak } from "./key-move-refusal";
 import { kitRouteConstraintStatements } from "./kit-route-constraints";
 import {
   desiredUniqueColumns,
@@ -1033,6 +1034,16 @@ export class PushSchemaPipeline {
         dialect: args.dialect,
         desired: args.desired,
         live: { tables: [...liveSnapshot.tables, ...switches.tables] },
+        operations: resolvedOps,
+      });
+      // A key added over a column that already holds values (a relationship pointed at another
+      // collection, or one an earlier apply left without its key), while a row holds a value its
+      // new target does not have: refused before anything runs, naming the field and its rows.
+      await refuseKeysRowsWouldBreak({
+        db: args.db,
+        dialect: args.dialect,
+        desired: args.desired,
+        live: liveSnapshot,
         operations: resolvedOps,
       });
 
