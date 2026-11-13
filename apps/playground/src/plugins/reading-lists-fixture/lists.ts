@@ -117,3 +117,19 @@ export function recountAll(db: PluginDatabase): Promise<void> {
     }
   });
 }
+
+/**
+ * Set every count the items made back to none. For a full uninstall, whose
+ * DOWN drops the items: the hidden column belongs to the app's migrations and
+ * stays, and once the items are gone nothing could tell which posts to reset.
+ * Safe to run again, as an uninstall finished on a second run calls it again.
+ */
+export function clearCounts(db: PluginDatabase): Promise<void> {
+  return db.transaction(async tx => {
+    const items = await tx.select(listItems).all();
+    const counts = tx.contributed(POSTS_TABLE, postColumns);
+    for (const postId of new Set(items.map(item => item.postId))) {
+      await counts.set(postId, { savedCount: 0 });
+    }
+  });
+}

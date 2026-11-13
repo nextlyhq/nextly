@@ -558,6 +558,9 @@ describe.each(dialects())("the reading-lists fixture on %s", dialect => {
     // The hidden column came with the app's migration, so it stays until the
     // app's own migrations remove it.
     expect(await db.columns("dc_posts")).toContain("saved_count");
+    // Its items went with the tables, so the uninstall hook has set the count
+    // they made to none rather than leave it naming lists that are gone.
+    expect(await savedCountStored()).toBe(0);
     expect(codeOf(await boot())).toBe("PLUGIN_SCHEMA_UNINSTALLED");
   });
 
@@ -573,6 +576,8 @@ describe.each(dialects())("the reading-lists fixture on %s", dialect => {
     expect(await count("SELECT COUNT(*) AS n FROM reading__list_items")).toBe(
       0
     );
+    // A fresh install finds no items, and the post counts none.
+    expect(await savedCountStored()).toBe(0);
 
     const failure = await boot(async ctx => {
       const [owner] = await db.rows("SELECT id FROM users");

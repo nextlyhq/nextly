@@ -376,8 +376,8 @@ or let it default to your plugin's admin slug.
 For a whole plugin built this way, see the
 [reading-lists fixture](https://github.com/nextlyhq/nextly/tree/dev/apps/playground/src/plugins/reading-lists-fixture)
 in the Nextly repository: two tables with a foreign key and a relation, their
-generated migration module, a hidden column on a collection, an idempotent
-`onInstall`, and a test that installs, uses and uninstalls it with the real
+generated migration module, a hidden column on a collection, idempotent
+`onInstall` and `onUninstall` hooks, and a test that installs, uses and uninstalls it with the real
 commands on PostgreSQL, MySQL and SQLite.
 
 ### The column kinds

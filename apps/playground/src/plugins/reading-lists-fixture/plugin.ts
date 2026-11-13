@@ -2,8 +2,9 @@
  * A fixture plugin that exercises the schema a plugin can declare, written the
  * way a plugin author writes one: tables of its own with the migration modules
  * that carry them to production, a foreign key and a relation between them, a
- * key to a core table, a hidden column on a collection it does not own, and an
- * install hook. Everything comes from `@nextlyhq/plugin-sdk`, never `nextly`.
+ * key to a core table, a hidden column on a collection it does not own, and
+ * install and uninstall hooks. Everything comes from `@nextlyhq/plugin-sdk`,
+ * never `nextly`.
  *
  * People keep reading lists of posts: `reading__lists` and
  * `reading__list_items` (see `schema.ts`), and each post carries a hidden
@@ -24,7 +25,7 @@
  */
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 
-import { recountAll } from "./lists";
+import { clearCounts, recountAll } from "./lists";
 import { migrations } from "./migrations";
 import { lists, listItems, PREFIX, POSTS_TABLE, postColumns } from "./schema";
 
@@ -69,5 +70,11 @@ export const readingListsFixturePlugin = definePlugin({
   // none and nothing is written.
   async onInstall(ctx) {
     await recountAll(ctx.db);
+  },
+  // Runs before the DOWN, while the items can still be read. Without
+  // `--keep-data` they are about to go, so the counts they made go first; with
+  // it they stay, and the next install recounts from them.
+  async onUninstall(ctx, { keepData }) {
+    if (!keepData) await clearCounts(ctx.db);
   },
 });
