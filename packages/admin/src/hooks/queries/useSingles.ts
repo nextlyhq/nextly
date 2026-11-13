@@ -37,7 +37,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import { schemaFileApi } from "@admin/services/schemaFileApi";
 import { singleApi, type SingleDocument } from "@admin/services/singleApi";
 import type { ApiSingle, UpdateSinglePayload } from "@admin/types/entities";

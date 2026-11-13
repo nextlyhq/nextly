@@ -669,6 +669,9 @@ async function connect(
       dialect,
       plugins: definitions,
       config,
+      // The connected server's limits: refuse constructs it cannot hold
+      // before plugin installation runs any migration.
+      server: drizzleAdapter.getCapabilities(),
       logger: { warn: m => context.logger.warn(m) },
     });
 
