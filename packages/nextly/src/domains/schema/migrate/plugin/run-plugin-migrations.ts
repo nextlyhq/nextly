@@ -29,7 +29,6 @@
  * @module domains/schema/migrate/plugin/run-plugin-migrations
  * @since 1.0.0
  */
-import { CORE_TABLE_NAMES } from "../../../../schemas/core-schema";
 import type { SupportedDialect } from "../../../../database/schema-registry";
 import { pluginCollectionSources } from "./plugin-collection-sources";
 import { describeError } from "../../../../errors/describe-error";
@@ -302,19 +301,11 @@ export async function runPluginMigrations(
   // executes; a target no module of the owner names is another owner's or
   // one the database already held, judged for reach at the declaration
   // compile rather than by arrival.
-  const availableTables = new Set<string>(CORE_TABLE_NAMES);
   for (const set of sets) {
-    const ordered = orderedMigrations(set.migrations);
-    assertModuleForeignKeysResolve(set.pluginName, ordered, {
-      availableTables,
-      dialect: deps.dialect,
-    });
-    const last = ordered[ordered.length - 1];
-    if (last) {
-      for (const table of last.snapshot[deps.dialect]?.tables ?? []) {
-        availableTables.add(table.name);
-      }
-    }
+    assertModuleForeignKeysResolve(
+      set.pluginName,
+      orderedMigrations(set.migrations)
+    );
   }
   // And for what the server itself can hold: a module generated for every
   // dialect had no one server to be judged against, so pending modules are
@@ -525,19 +516,12 @@ export async function previewPluginMigrations(
     appliedShas,
     declaredPlugins: args.declaredPlugins,
   });
-  const availableTables = new Set<string>(CORE_TABLE_NAMES);
+  // The run's own chain refusal, so a dry run reports what the run refuses.
   for (const set of sets) {
-    const ordered = orderedMigrations(set.migrations);
-    assertModuleForeignKeysResolve(set.pluginName, ordered, {
-      availableTables,
-      dialect: args.dialect,
-    });
-    const last = ordered[ordered.length - 1];
-    if (last) {
-      for (const table of last.snapshot[args.dialect]?.tables ?? []) {
-        availableTables.add(table.name);
-      }
-    }
+    assertModuleForeignKeysResolve(
+      set.pluginName,
+      orderedMigrations(set.migrations)
+    );
   }
   if (args.serverConstructs !== undefined) {
     refusePendingConstructsTheServerCannotHold(sets, {
