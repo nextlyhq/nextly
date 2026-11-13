@@ -497,7 +497,9 @@ Each line is read as you type, the way crawlers read robots.txt:
 A value edited past the screen that breaks these rules is not served, with one warning in the
 log. robots.txt is served with an `x-nextly-robots` header, which the screen reads to say when
 the site serves its own robots.txt file instead, so the box and the AI tools choice have no
-effect. The rules are a new field of the settings Single: a site that applies its schema with
+effect. On such a site no block asks to be confirmed and none is listed as a problem, since the
+plugin's rules are not the ones crawlers read; the plugin reads the site's robots.txt at its
+production address for that header, at most every ten minutes. The rules are a new field of the settings Single: a site that applies its schema with
 migrations runs `nextly migrate:create` and then `nextly migrate` after upgrading.
 
 robots.txt can't take a site out of Google's AI Overviews or AI Mode without taking it out of

@@ -332,3 +332,31 @@ describe("an exception that opens nothing", () => {
     ).toBeUndefined();
   });
 });
+
+describe("an exception judged by every page it can open", () => {
+  it("is one where some page it names stays open, whatever samples are blocked", () => {
+    const text =
+      "User-agent: Googlebot\nDisallow: /\nAllow: /$\nAllow: /public\nDisallow: /public$\nDisallow: /publica";
+    expect(refusals(text)[0]?.message ?? "").not.toContain("whole site");
+  });
+
+  it("is none where a longer rule closes every page it names", () => {
+    const text =
+      "User-agent: Googlebot\nDisallow: /\nAllow: /$\nAllow: /public\nDisallow: /public*";
+    expect(refusals(text)[0]?.message).toContain("away from the whole site");
+  });
+});
+
+describe("an exception judged where every character is named", () => {
+  it("still finds the page it opens", () => {
+    const text = [
+      "User-agent: Googlebot",
+      "Disallow: /",
+      "Allow: /$",
+      "Allow: /public",
+      "Disallow: /public~",
+      "Disallow: /~_-.0123456789abcdefghijklmnopqrstuvwxyz",
+    ].join("\n");
+    expect(refusals(text)[0]?.message ?? "").not.toContain("whole site");
+  });
+});
