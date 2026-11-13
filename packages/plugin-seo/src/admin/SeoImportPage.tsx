@@ -728,10 +728,11 @@ function ValueCell({
   const value = entry.values[place];
   return (
     <div className="flex items-start justify-between gap-3">
-      {/* Wraps, at most two lines, so the table fits its card and every
-          result stays in view; the whole value is the line's title. */}
+      {/* At most 13rem wide and two lines, so the table, which sizes its
+          columns to their content, fits its card with every result in view;
+          the whole value is the line's title. */}
       <span
-        className="line-clamp-2 min-w-0 whitespace-normal text-muted-foreground [overflow-wrap:anywhere]"
+        className="line-clamp-2 min-w-0 max-w-52 whitespace-normal text-muted-foreground [overflow-wrap:anywhere]"
         title={value ?? undefined}
       >
         {value ?? ""}
