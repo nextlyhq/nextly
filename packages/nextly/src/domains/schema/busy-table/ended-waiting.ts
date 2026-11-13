@@ -85,18 +85,42 @@ export function endedWaiting(
 }
 
 /**
+ * The text of `ownSessionId`'s statement, for a session that runs statements as text (an
+ * adapter's `withSession`). Fixed text, never built from input.
+ */
+export function ownSessionIdText(
+  dialect: SupportedDialect
+): string | undefined {
+  if (dialect === "postgresql") return "SELECT pg_backend_pid() AS session_id";
+  if (dialect === "mysql") return "SELECT CONNECTION_ID() AS session_id";
+  return undefined;
+}
+
+/**
  * The statement that reads the session id of the connection it runs on, as the column
  * `session_id`: PostgreSQL's backend pid, MySQL's connection id. Undefined on SQLite, whose
  * connections have no id another connection can name.
  */
 export function ownSessionId(dialect: SupportedDialect): SQL | undefined {
-  if (dialect === "postgresql") {
-    return sql`SELECT pg_backend_pid() AS ${sql.identifier("session_id")}`;
-  }
-  if (dialect === "mysql") {
-    return sql`SELECT CONNECTION_ID() AS ${sql.identifier("session_id")}`;
-  }
-  return undefined;
+  const text = ownSessionIdText(dialect);
+  return text === undefined ? undefined : sql.raw(text);
+}
+
+/**
+ * The session id in the first row `ownSessionId`'s statement returned, as text; undefined where
+ * there is no row or its value is not a number (a pid or a connection id comes back as a number,
+ * or a string on some drivers).
+ */
+export function sessionIdOfRows(
+  rows: readonly Record<string, unknown>[]
+): string | undefined {
+  const [row] = rows;
+  const id = row === undefined ? undefined : Object.values(row)[0];
+  return typeof id === "number" ||
+    typeof id === "string" ||
+    typeof id === "bigint"
+    ? String(id)
+    : undefined;
 }
 
 /**

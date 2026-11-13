@@ -638,7 +638,15 @@ export async function runRecordedAttempt(
         id,
         err,
         failedAttemptMayBePartial(file, args.dialect)
-      );
+      ).catch((recordError: unknown) => {
+        // A file that stopped waiting for a busy table says so whatever its record does. On SQLite
+        // the holder can still hold the whole database, so the record cannot be written; the
+        // attempt then stays without an outcome, which the next run refuses on until resolved,
+        // as for any attempt left so.
+        if (!(NextlyError.is(err) && err.code === "NEXTLY_TABLE_BUSY")) {
+          throw recordError;
+        }
+      });
     }
     throw err;
   }

@@ -3,10 +3,15 @@
  * and says so: `nextly migrate`'s app files, run by `runFileMigrations`, against a second
  * connection that holds the table.
  *
- * On PostgreSQL the holder is an open transaction that has read the table, so the file's ALTER
- * waits for its lock. On SQLite it is an open write transaction on a second connection to the same
- * file, which holds the whole database. The bounds are shortened (one second a try) so the cases
- * run in seconds; the schedule they follow is the default's, which the unit tests pin.
+ * On PostgreSQL and MySQL the holder is an open transaction that has read the table, so the
+ * file's ALTER waits for its lock (on MySQL, the table's metadata lock). On SQLite it is an open
+ * write transaction on a second connection to the same file, which holds the whole database. The
+ * bounds are shortened (one second a try) so the cases run in seconds; the schedule they follow is
+ * the default's, which the unit tests pin.
+ *
+ * A unit whose statements commit as they run (MySQL's schema statements, a file marked to run
+ * outside a transaction) resumes past what an ended try kept: a statement sent twice would fail
+ * on its duplicate column, or add its row twice.
  */
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -16,7 +21,7 @@ import { join } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runFileMigrations } from "../../../cli/commands/migrate";
 import { createLogger } from "../../../cli/utils/logger";
@@ -34,15 +39,12 @@ const PREFIX = `btw_${randomBytes(4).toString("hex")}`;
 const BUSY = `${PREFIX}_busy`;
 const EARLIER = `${PREFIX}_earlier`;
 const FIRST = `${PREFIX}_first`;
+const OTHER = `${PREFIX}_other`;
 // The ledger too: on a server every test shares one database, and a file one test recorded
 // applied would be skipped by the next.
-const TABLES = [BUSY, EARLIER, FIRST, "nextly_schema_events"];
+const TABLES = [BUSY, EARLIER, FIRST, OTHER, "nextly_schema_events"];
 
-/** This slice runs a unit in tries where it runs in one transaction on PostgreSQL or SQLite. */
-const DIALECTS = LOCK_DIALECTS.filter(
-  (dialect): dialect is Exclude<SupportedDialect, "mysql"> =>
-    dialect !== "mysql"
-);
+const DIALECTS: readonly SupportedDialect[] = LOCK_DIALECTS;
 
 const quiet = createLogger({ quiet: true });
 
@@ -71,6 +73,8 @@ describe.each(DIALECTS)(
     });
 
     afterEach(async () => {
+      // A spy on the repository's prototype would reach the next test's runs.
+      vi.restoreAllMocks();
       free();
       await holding.catch(() => {});
       await holderAdapter.disconnect();
@@ -80,21 +84,30 @@ describe.each(DIALECTS)(
       rmSync(migrationsDir, { recursive: true, force: true });
     });
 
-    /** A file of `up` statements, run in one transaction. */
-    function writeFile(name: string, up: readonly string[]): string {
+    /** A file of `up` statements, run in one transaction unless `outside` marks it. */
+    function writeFile(
+      name: string,
+      up: readonly string[],
+      options: { outside?: boolean } = {}
+    ): string {
       const filename = `${name}.sql`;
+      const marker =
+        options.outside === true ? "-- nextly:no-transaction\n" : "";
       writeFileSync(
         join(migrationsDir, filename),
-        `-- Migration: ${name}\n\n-- UP\n${up.map(s => `${s};`).join("\n")}\n\n-- DOWN\n`
+        `${marker}-- Migration: ${name}\n\n-- UP\n${up.map(s => `${s};`).join("\n")}\n\n-- DOWN\n`
       );
       return filename;
     }
 
     /**
-     * The second session holds the table until `free()`: on PostgreSQL an open transaction that has
-     * read it, on SQLite an open write transaction.
+     * The second session holds the table until `free()`: on PostgreSQL and MySQL an open
+     * transaction that has read it (with `write`, one that has written a row of it), on SQLite an
+     * open write transaction.
      */
-    async function holdTheTable(): Promise<void> {
+    async function holdTheTable(
+      options: { write?: boolean } = {}
+    ): Promise<void> {
       let held: () => void = () => {};
       const isHeld = new Promise<void>(resolve => {
         held = resolve;
@@ -104,7 +117,7 @@ describe.each(DIALECTS)(
       });
       holding = holderAdapter.transaction(async ctx => {
         await ctx.queryStatement(
-          dialect === "sqlite"
+          dialect === "sqlite" || options.write === true
             ? sql.raw(`INSERT INTO ${BUSY} (id) VALUES (0) RETURNING id`)
             : sql.raw(`SELECT id FROM ${BUSY}`)
         );
@@ -112,6 +125,48 @@ describe.each(DIALECTS)(
         await freed;
       });
       await isHeld;
+    }
+
+    /**
+     * MySQL's second session takes the table with `LOCK TABLES … WRITE` until `free()`, so a row
+     * change of the file waits for the table's lock, as a schema change would.
+     */
+    async function lockTheTableForWriting(): Promise<void> {
+      let held: () => void = () => {};
+      const isHeld = new Promise<void>(resolve => {
+        held = resolve;
+      });
+      const freed = new Promise<void>(resolve => {
+        free = resolve;
+      });
+      holding = holderAdapter.withSession(async session => {
+        await session.execute(`LOCK TABLES ${BUSY} WRITE`);
+        held();
+        await freed;
+        await session.execute("UNLOCK TABLES");
+      });
+      await isHeld;
+    }
+
+    /**
+     * Holds the table once the file's statement `after` has run: on SQLite, whose holder holds the
+     * whole database, the hold starts only then (the statements outside a transaction run through
+     * the adapter one at a time), so the statement before the held table's commits first; on the
+     * servers the hold starts now, as it holds the one table.
+     */
+    async function holdAfter(after: string): Promise<void> {
+      if (dialect !== "sqlite") {
+        await holdTheTable();
+        return;
+      }
+      const run = adapter.executeQuery.bind(adapter);
+      vi.spyOn(adapter, "executeQuery").mockImplementation(
+        async (statement, params) => {
+          const rows = await run(statement, params);
+          if (statement === after) await holdTheTable();
+          return rows;
+        }
+      );
     }
 
     /** Runs the app files with `bounds`, each try's notice kept; `beforeApply` before each file. */
@@ -139,6 +194,13 @@ describe.each(DIALECTS)(
           : `SELECT column_name AS name FROM information_schema.columns WHERE table_name = '${table}'`
       );
       return rows.map(row => row.name).sort();
+    }
+
+    async function idsOf(table: string): Promise<number[]> {
+      const rows = await adapter.executeQuery<{ id: unknown }>(
+        `SELECT id FROM ${table}`
+      );
+      return rows.map(row => Number(row.id)).sort((a, b) => a - b);
     }
 
     async function tableExists(table: string): Promise<boolean> {
@@ -243,6 +305,141 @@ describe.each(DIALECTS)(
       expect(await columnsOf(BUSY)).toEqual(["id", "late"]);
       expect(await appliedRows(filename)).toBe(1);
     });
+
+    it.runIf(dialect === "mysql")(
+      "keeps a schema change MySQL committed before the wait, and sends only the waiting one again",
+      async () => {
+        await adapter.executeQuery(`CREATE TABLE ${OTHER} (id integer)`);
+        const filename = writeFile("20261112_000001_two_alters", [
+          `ALTER TABLE ${OTHER} ADD COLUMN extra integer`,
+          `ALTER TABLE ${BUSY} ADD COLUMN late integer`,
+        ]);
+        await holdTheTable();
+        // Tries at 0, 2 and 5 seconds: the second pause runs from 3 to 5.
+        const freeing = sleep(3_500).then(() => free());
+
+        const applied = await migrate({ tryMs: 1_000, totalMs: 20_000 });
+        await freeing;
+
+        // Sent again, the first ALTER would have failed on its duplicate column.
+        expect(applied).toBe(1);
+        expect(notices).toHaveLength(2);
+        expect(await columnsOf(OTHER)).toEqual(["extra", "id"]);
+        expect(await columnsOf(BUSY)).toEqual(["id", "late"]);
+        expect(await appliedRows(filename)).toBe(1);
+      }
+    );
+
+    it.runIf(dialect === "mysql")(
+      "runs MySQL's open transaction again from its first row change once the table is free",
+      async () => {
+        await adapter.executeQuery(`CREATE TABLE ${OTHER} (id integer)`);
+        const filename = writeFile("20261112_000001_two_rows", [
+          `INSERT INTO ${OTHER} (id) VALUES (1)`,
+          `INSERT INTO ${BUSY} (id) VALUES (2)`,
+        ]);
+        await lockTheTableForWriting();
+        const freeing = sleep(3_500).then(() => free());
+
+        const applied = await migrate({ tryMs: 1_000, totalMs: 20_000 });
+        await freeing;
+
+        // The first try's row was rolled back with its transaction, and added again once.
+        expect(applied).toBe(1);
+        expect(notices).toHaveLength(2);
+        expect(await idsOf(OTHER)).toEqual([1]);
+        expect(await idsOf(BUSY)).toEqual([2]);
+        expect(await appliedRows(filename)).toBe(1);
+      }
+    );
+
+    it("resumes a file run outside a transaction at its waiting statement, the one before it not sent again", async () => {
+      await adapter.executeQuery(`CREATE TABLE ${OTHER} (id integer)`);
+      const first = `ALTER TABLE ${OTHER} ADD COLUMN extra integer`;
+      const filename = writeFile(
+        "20261112_000001_outside",
+        [first, `ALTER TABLE ${BUSY} ADD COLUMN late integer`],
+        { outside: true }
+      );
+      await holdAfter(first);
+      const freeing = sleep(3_500).then(() => free());
+
+      const applied = await migrate({ tryMs: 1_000, totalMs: 20_000 });
+      await freeing;
+
+      // Sent again, the first statement would have failed on its duplicate column.
+      expect(applied).toBe(1);
+      expect(notices.length).toBeGreaterThanOrEqual(1);
+      expect(await columnsOf(OTHER)).toEqual(["extra", "id"]);
+      expect(await columnsOf(BUSY)).toEqual(["id", "late"]);
+      expect(await appliedRows(filename)).toBe(1);
+    });
+
+    it("stops a file run outside a transaction part-way, naming the kept statement by its position", async () => {
+      await adapter.executeQuery(`CREATE TABLE ${OTHER} (id integer)`);
+      const first = `ALTER TABLE ${OTHER} ADD COLUMN extra integer`;
+      writeFile(
+        "20261112_000001_outside",
+        [first, `ALTER TABLE ${BUSY} ADD COLUMN late integer`],
+        { outside: true }
+      );
+      await holdAfter(first);
+      const stopped = await migrate({ tryMs: 1_000, totalMs: 3_000 }).catch(
+        (error: unknown) => error
+      );
+
+      expect(stopped).toMatchObject({
+        code: "NEXTLY_TABLE_BUSY",
+        logContext: {
+          stop: { outcome: { kind: "part-way", committed: [1] } },
+        },
+      });
+      expect(await columnsOf(OTHER)).toEqual(["extra", "id"]);
+      expect(await columnsOf(BUSY)).toEqual(["id"]);
+      const message = String((stopped as Error).message);
+      expect(message).toContain("Statement 1 had committed");
+      // Named by position only: a statement's text can hold a literal value.
+      expect(message).not.toMatch(/ALTER|ADD COLUMN|extra/i);
+    });
+
+    it.runIf(dialect === "postgresql")(
+      "stops after one try where the waiting statement builds an index concurrently",
+      async () => {
+        await adapter.executeQuery(`CREATE TABLE ${OTHER} (id integer)`);
+        writeFile(
+          "20261112_000001_concurrent_index",
+          [
+            `ALTER TABLE ${OTHER} ADD COLUMN extra integer`,
+            `CREATE INDEX CONCURRENTLY ${PREFIX}_busy_id ON ${BUSY} (id)`,
+          ],
+          { outside: true }
+        );
+        // A concurrent build waits for the transactions that have written the table.
+        await holdTheTable({ write: true });
+
+        const stopped = await migrate({ tryMs: 1_000, totalMs: 20_000 }).catch(
+          (error: unknown) => error
+        );
+
+        expect(stopped).toMatchObject({
+          code: "NEXTLY_TABLE_BUSY",
+          logContext: {
+            stop: {
+              tries: 1,
+              outcome: {
+                kind: "no-retry",
+                statementNumber: 2,
+                reason: "concurrent-index",
+              },
+            },
+          },
+        });
+        expect(notices).toHaveLength(0);
+        expect(String((stopped as Error).message)).not.toMatch(
+          /CREATE INDEX|CONCURRENTLY/i
+        );
+      }
+    );
   },
   60_000
 );
