@@ -28,6 +28,7 @@ import { type JSX, useId, useState } from "react";
 import { usePluginFieldTypeEntries } from "@admin/components/field-ui";
 import { namesFollowingName } from "@admin/lib/builder/entity-names";
 import { suggestIcon } from "@admin/lib/builder/icon-suggestion";
+import { useUnsavedAddresses } from "@admin/lib/builder/unsaved-entities";
 import {
   entryKindChoices,
   hasStartingFieldChoice,
@@ -118,7 +119,10 @@ export function NewEntityDialog({
   const hasIcon = kind !== "field-group";
   const icon = pickedIcon ?? suggestIcon(values.singularName);
 
-  const check = useAddressCheck(kind, values.slug);
+  // Entities created in this tab and not saved yet hold their addresses too,
+  // so the server counts them as used.
+  const unsaved = useUnsavedAddresses();
+  const check = useAddressCheck(kind, values.slug, unsaved);
   // Nothing typed yet is not a refusal to show.
   const typed = values.singularName !== "" || values.slug !== "";
   const blockedBy = createBlockedBy(values, hasPlural, check);

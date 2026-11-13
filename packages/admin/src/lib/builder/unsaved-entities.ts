@@ -12,7 +12,7 @@
  *
  * @module lib/builder/unsaved-entities
  */
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
 import type { BuilderKind } from "@admin/components/features/schema-builder/builder-config";
@@ -85,15 +85,22 @@ export function unsavedEntity(
   return entities.get(keyOf(kind, address));
 }
 
+/** Each entity's address, as the address check names its kind. */
+function addressesOf(
+  held: ReadonlyMap<string, UnsavedEntity>
+): PendingAddress[] {
+  return [...held.values()].map(entity => ({
+    kind: CHECK_KIND[entity.kind],
+    address: entity.address,
+  }));
+}
+
 /**
  * Every unsaved entity's address, as the server's address check takes its
  * `pendingCreates`: each holds its address until it is saved or discarded.
  */
 export function unsavedAddresses(): PendingAddress[] {
-  return [...entities.values()].map(entity => ({
-    kind: CHECK_KIND[entity.kind],
-    address: entity.address,
-  }));
+  return addressesOf(entities);
 }
 
 /** Calls `listener` on every change to the store; returns its unsubscribe. */
@@ -114,4 +121,20 @@ export function useUnsavedEntity(
     () => unsavedEntity(kind, address),
     () => undefined
   );
+}
+
+const NOTHING_HELD: ReadonlyMap<string, UnsavedEntity> = new Map();
+
+/**
+ * Every unsaved entity's address, kept current, for the dialog's address
+ * check. Derived from the store's own snapshot (a new Map on each change), so
+ * the list is a new value exactly when the store changes.
+ */
+export function useUnsavedAddresses(): readonly PendingAddress[] {
+  const held = useSyncExternalStore(
+    subscribeUnsavedEntities,
+    () => entities,
+    () => NOTHING_HELD
+  );
+  return useMemo(() => addressesOf(held), [held]);
 }
