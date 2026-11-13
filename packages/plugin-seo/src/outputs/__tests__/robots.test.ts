@@ -166,3 +166,45 @@ describe("the AI crawler names, as data", () => {
     expect(shutOut(file)).not.toContain("MistralAI-Index");
   });
 });
+
+describe("robots.txt with the site's own rules", () => {
+  const own =
+    "User-agent: *\nDisallow: /search  \n\nContent-Signal: search=yes, ai-train=no\n\n";
+
+  it("serves them after the plugin's own lines, which stay as they are", () => {
+    const plain = robotsTxt({ sitemap: SITEMAP, aiCrawlers: "search" });
+    const file = robotsTxt({
+      sitemap: SITEMAP,
+      aiCrawlers: "search",
+      ownRules: own,
+    });
+    expect(file.startsWith(plain)).toBe(true);
+    expect(file.slice(plain.length)).toBe(
+      [
+        "",
+        "# Your own rules, from the SEO settings",
+        "User-agent: *",
+        "Disallow: /search",
+        "",
+        "Content-Signal: search=yes, ai-train=no",
+        "",
+      ].join("\n")
+    );
+  });
+
+  it("serves nothing more for an empty box", () => {
+    expect(
+      robotsTxt({ sitemap: SITEMAP, aiCrawlers: "all", ownRules: " \n\n" })
+    ).toBe(robotsTxt({ sitemap: SITEMAP, aiCrawlers: "all" }));
+  });
+
+  it("never serves rules their own check refuses", () => {
+    expect(
+      robotsTxt({
+        sitemap: SITEMAP,
+        aiCrawlers: "all",
+        ownRules: "User-agent: *\nDisallow: /",
+      })
+    ).toBe(robotsTxt({ sitemap: SITEMAP, aiCrawlers: "all" }));
+  });
+});

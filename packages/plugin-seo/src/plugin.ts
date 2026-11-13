@@ -126,6 +126,11 @@ import {
 } from "./settings/content-types-route";
 import { SETTINGS_PAGE, SETTINGS_PAGE_HREF } from "./settings/contract";
 import {
+  listingOrigins,
+  robotsRulesCheckRoute,
+  sitemapPaths,
+} from "./settings/robots-rules-route";
+import {
   readBrandFacts,
   readSeoRules,
   readVerificationTags,
@@ -586,6 +591,49 @@ function siteFileRoutes(
 }
 
 /**
+ * The route behind "Block these N pages anyway": the sitemap listed at each
+ * of the site's origins with the rules the draft reads by, and judged only
+ * where the plugin serves both robots.txt and the sitemap.
+ */
+function ownRulesCheckRoute(
+  options: SeoPluginOptions,
+  readers: {
+    readRules: ReadRules;
+    readStructuredDataRules: ReadStructuredDataRules;
+    codeRoutes: () => readonly CodeRoute[];
+    sitemapSubset: readonly string[] | undefined;
+  }
+): PluginRoute {
+  const { codeRoutes, sitemapSubset } = readers;
+  return robotsRulesCheckRoute({
+    readRules: readers.readRules,
+    aiCrawlers: options.aiCrawlers,
+    servesBoth: options.robots !== false && options.sitemap !== false,
+    listPaths: async (ctx, readRules) => {
+      const paths: string[] = [];
+      // Each origin's sitemap, as the root sitemap answers on that host.
+      for (const origin of await listingOrigins(
+        ctx,
+        readRules,
+        options.baseUrl
+      )) {
+        const { pages } = await listPages(ctx, {
+          origin,
+          readRules,
+          readStructuredDataRules: readers.readStructuredDataRules,
+          codeRoutes,
+          ...(sitemapSubset === undefined
+            ? {}
+            : { collections: sitemapSubset }),
+        });
+        paths.push(...sitemapPaths(pages));
+      }
+      return paths;
+    },
+  });
+}
+
+/**
  * Create the SEO plugin. Register it directly in your config — no unwrapping:
  *
  * @example
@@ -726,6 +774,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // check of its dates.
     codeRoutes,
     ...sitemapScopeOf(options, sitemapSubset),
+    // Whether the plugin serves robots.txt, so its rules can block a page.
+    servesRobots: options.robots !== false,
     readers: {
       readRules,
       readStructuredDataRules: structuredDataFromSettings(
@@ -965,6 +1015,13 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // What the settings screen reads: the types SEO is added to, and which
     // Single holds the settings.
     contentTypesRoute(types),
+    // Which sitemap pages the own robots.txt rules being typed would block.
+    ownRulesCheckRoute(options, {
+      readRules,
+      readStructuredDataRules: problemChecks.readers.readStructuredDataRules,
+      codeRoutes,
+      sitemapSubset,
+    }),
     settingsDocumentRoute(),
     // What the redirects screen reads and writes.
     ...redirectRoutes(),

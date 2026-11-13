@@ -2,7 +2,7 @@
   "racy": {},
   "sqlite": {
     "start": {
-      "statements": 107
+      "statements": 109
     },
     "screens": {
       "login": {
@@ -69,7 +69,7 @@
       "edit": {
         "requests": 16,
         "rounds": 6,
-        "statements": 44,
+        "statements": 42,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -93,7 +93,7 @@
   },
   "postgresql": {
     "start": {
-      "statements": 110
+      "statements": 113
     },
     "screens": {
       "login": {
@@ -184,7 +184,7 @@
   },
   "mysql": {
     "start": {
-      "statements": 120
+      "statements": 122
     },
     "screens": {
       "login": {
