@@ -524,7 +524,7 @@ describe("a draft moved onto newer settings", () => {
       posts: { title: "{Title} | Blog" },
       pages: { title: "{Title} | Docs" },
     });
-    expect(rebased.hiddenTypes).toEqual(["tags", "cases", "authors"]);
+    expect(rebased.hiddenTypes).toEqual(["tags", "authors", "cases"]);
   });
 
   it("moves the addresses and profiles item by item, keeping one added elsewhere", () => {
@@ -554,13 +554,31 @@ describe("a draft moved onto newer settings", () => {
 
     const rebased = rebasedDraft(draft, listed, after);
     expect(rebased.productionAddresses).toEqual([
-      "https://c.example",
       "https://b.example",
+      "https://c.example",
     ]);
     expect(rebased.socialProfiles).toEqual([
       { network: "x", url: "https://x.com/acme" },
-      { network: "linkedin", url: "https://linkedin.com/company/acme" },
       { network: "github", url: "https://github.com/acme" },
+      { network: "linkedin", url: "https://linkedin.com/company/acme" },
+    ]);
+  });
+
+  it("keeps the order edited here, so the first address stays the main one", () => {
+    const listed = draftOf({
+      id: "s1",
+      siteName: "Acme",
+      productionAddresses: ["https://old.example", "https://fr.example"],
+    });
+    const draft = {
+      ...listed,
+      productionAddresses: ["https://new.example", "https://fr.example"],
+    };
+    // Only the site name changed elsewhere.
+    const after = { ...listed, siteName: "Acme Ltd" };
+    expect(rebasedDraft(draft, listed, after).productionAddresses).toEqual([
+      "https://new.example",
+      "https://fr.example",
     ]);
   });
 
