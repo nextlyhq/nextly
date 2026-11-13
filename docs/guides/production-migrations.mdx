@@ -511,6 +511,10 @@ the database:
 - on SQLite, the database file's journal mode;
 - after the start, the built-in email templates and, on SQLite, a one-time repair of timestamps
   an older release stored as text;
+- which plugins take part in keeping public addresses unique, in one `nextly_meta` row, written
+  only when a start runs with another set of them than the last: a count there only ever goes
+  up, and tells those plugins to check their records again (see
+  [Unique public addresses](/docs/plugins/public-addresses));
 - whatever a plugin's own start-up code writes.
 
 A development start (`next dev`) is unchanged: it keeps the registry, the permissions and the
