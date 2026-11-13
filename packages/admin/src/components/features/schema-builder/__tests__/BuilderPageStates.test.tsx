@@ -11,6 +11,7 @@ import { render, screen } from "@admin/__tests__/utils";
 
 import type { BuilderKind } from "../builder-config";
 import { BuilderPageLayout } from "../BuilderPageLayout";
+import { NO_PENDING_CHANGES } from "./no-pending-changes";
 import {
   BuilderErrorScreen,
   BuilderLoadingScreen,
@@ -83,6 +84,13 @@ describe("the builder's empty editor", () => {
       handleFieldUpdate: vi.fn(),
       handleNestedFieldAdd: vi.fn(),
       validateFields: vi.fn(() => ({ valid: true })),
+      resetFields: vi.fn(),
+      clearHistory: vi.fn(),
+      historyStep: 0,
+      canUndo: false,
+      canRedo: false,
+      undo: vi.fn(() => null),
+      redo: vi.fn(() => null),
     };
     return render(
       <BuilderPageLayout
@@ -98,6 +106,7 @@ describe("the builder's empty editor", () => {
         name="Example"
         locked={locked}
         unsavedCount={0}
+        pending={NO_PENDING_CHANGES}
         savedFieldIds={new Set<string>()}
         onSave={vi.fn()}
         settings={{ singularName: "Example", slug: "example", icon: "Box" }}

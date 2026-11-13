@@ -24,6 +24,7 @@ import {
 } from "../../i18n/migration/reconcile-companion";
 import { liveCompanionShape } from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
+import type { BusyTableWait } from "../../schema/services/apply-migration-statements";
 
 /**
  * Whether the in-memory schema was actually refreshed, and why not when it was not.
@@ -166,6 +167,8 @@ export async function reconcileComponentCompanion(args: {
    * throwing when they are refused. Left out, each column is dropped right after its copy.
    */
   settleLeaving?: () => Promise<void>;
+  /** A Schema Builder save's wait for a busy table (`applyCompanionTransition`). */
+  busyTable?: BusyTableWait;
   // Whether any DDL actually ran. The caller cannot derive this from the request: a field-set
   // change on a group that was and remains non-localized reaches here and moves nothing, and a
   // caller that inferred "the tables changed" from the request shape would report a physical
@@ -230,6 +233,7 @@ export async function reconcileComponentCompanion(args: {
     adapter,
     plan,
     settleLeaving: args.settleLeaving,
+    ...(args.busyTable === undefined ? {} : { busyTable: args.busyTable }),
     kind: "fieldGroup",
     slug,
     tableName,

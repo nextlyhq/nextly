@@ -308,9 +308,10 @@ defineCollection({
 
 ## The escape hatch
 
-When you need something the neutral model has no word for — a `bigint`, a
-`char(3)`, a type one dialect has and the others do not — reshape the Drizzle
-table directly:
+When you need something the neutral model has no word for — a type one dialect
+has and the others do not, or a column read another way, such as a `bigint` read
+as a JavaScript `bigint` rather than the number `col.bigint()` gives — reshape the
+Drizzle table directly:
 
 ```ts
 db: {
@@ -382,37 +383,15 @@ it declares any of these:
 Checks, foreign keys and expression indexes all carry through the DSL above;
 the escape hatch refuses them because the DSL is the one path that keeps them
 in migrations and drift. These are the exceptions to the comparison with
-Payload below, whose `afterSchemaInit` keeps them on your machine only.
+Payload (see [Coming from Payload](/docs/database/coming-from-payload)), whose
+`afterSchemaInit` keeps them on your machine only.
 
 ## Coming from Payload
 
-| Payload                                                         | Nextly                                                                                                                      |
-| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `beforeSchemaInit`                                              | `db.schema.extend`, which also runs for plugins                                                                             |
-| `afterSchemaInit`                                               | `db.schema.afterDrizzle`, refusing what migrations cannot carry (listed under the escape hatch)                             |
-| `extendTable`                                                   | `schema.extendTable`, with ownership rules                                                                                  |
-| `rawTables`                                                     | `defineTable` + `col.*`, the primary path rather than an escape                                                             |
-| Collection `indexes`                                            | Collection `indexes`, now actually emitted                                                                                  |
-| `.references()` / `RawForeignKey`                               | `foreignKeys` on `defineTable`                                                                                              |
-| `check()`                                                       | `checks` on `defineTable`                                                                                                   |
-| A plugin's `(config) => config` over other plugins' collections | `contributes.transforms` (and `contributes.extend` for added fields)                                                        |
-| `idType` (`serial`, `uuid` or `uuidv7`)                         | `db.idType` per collection, `uuid` or `uuidv7`; `serial` is refused (see [Generated integer keys](#generated-integer-keys)) |
-| A client-supplied `id` on create                                | `db.allowIdOnCreate` per collection                                                                                         |
-| `.where()` partial index                                        | not supported: refused on every dialect, because MySQL has none                                                             |
-| `relations()`                                                   | `relations` on `defineTable` + `ref()` auto-edges                                                                           |
-| `pgEnum`                                                        | `col.enum([...])` — stored as text (`varchar(255)` on MySQL), values enforced by a CHECK on every dialect                   |
-| `schemaName`                                                    | `db.postgres.schema` (see [The PostgreSQL schema](#the-postgresql-schema))                                                  |
-| `generate:db-schema`                                            | not needed — types come from the declaration                                                                                |
-
-Two differences worth knowing:
-
-Payload's hooks are app-only. Ours accept plugins too, in dependency order,
-with ownership recorded on every table, index, check and foreign key — so two
-plugins cannot quietly fight over one table.
-
-Payload's `extendTable` reaches into Drizzle's internal symbols, and its hook
-tables lose their types. Ours build Drizzle objects from the neutral model and
-type them from the declaration, so `ctx.db` is checked without a codegen step.
+[Coming from Payload](/docs/database/coming-from-payload) maps each of Payload's
+schema capabilities to its Nextly equivalent, row by row: a sample for each, the
+databases it works on, what Nextly refuses on purpose and why, and what Nextly
+offers that Payload does not.
 
 ## The PostgreSQL schema
 
@@ -515,7 +494,10 @@ already diffs, emits and introspects everywhere.
 
 Adding a value is an ordinary constraint change. **Removing one is refused by
 the database** while a row still holds it, which is the correct answer: the
-rows would otherwise violate the constraint the moment it applied.
+rows would otherwise violate the constraint the moment it applied. On MySQL,
+which commits each schema change as it runs, the old constraint has already
+been dropped when the new one is refused, so move those rows to a value that
+stays before you remove one.
 
 The CHECK is named `ck_<table>_<column>_enum`. `col.enum(values, { name })`
 replaces the column part only: the constraint is `ck_<table>_<name>`, so the
@@ -569,7 +551,15 @@ export default definePlugin({
   nextly: ">=0.0.2-alpha.67",
   contributes: {
     schema: {
-      extend: [({ schema }) => schema.extendTable("dc_posts", { columns })],
+      extend: [
+        ({ schema }) => {
+          // Absent when the plugin's own modules are generated, since the
+          // app's migrations carry this column.
+          if (schema.getTable("dc_posts")) {
+            schema.extendTable("dc_posts", { columns });
+          }
+        },
+      ],
     },
   },
   async init(ctx) {
@@ -581,6 +571,17 @@ export default definePlugin({
   },
 });
 ```
+
+The column has to exist before the call. On a collection's, Single's or field
+group's table, development push adds it; in production, and on an extendable
+core table everywhere, it arrives with the app's migrations (`nextly
+migrate:create`, then `nextly migrate`), and until then the call refuses,
+naming the column (`PLUGIN_COLUMN_NOT_MIGRATED`). The hook checks `schema.getTable` first because
+`nextly migrate:create --plugin` compiles the plugin's own modules without the
+app's tables (see [Hooks](/docs/plugins/schema#hooks-when-a-declaration-is-not-enough)).
+A full plugin uninstall leaves such a column in place, since the app's
+migrations made it; once the plugin is removed from the config, the app's next
+`nextly migrate:create` drops it, asking for the data-loss consent.
 
 It reaches the row's id and the columns the CALLER contributed, and nothing
 else: naming the table's own columns, or a column another plugin contributed,
@@ -664,6 +665,14 @@ contributed it). Until that migration has run, `ctx.db.contributed` on the
 column refuses with an error naming the column and the table, rather than
 failing inside the query; `col.ref()` alone records a reference for documentation and validation
 — a constraint comes from `foreignKeys`. Resizing a `varchar(n)` or
-`decimal(p, s)` produces no migration — the diff normalises type modifiers
-away, and collections behave the same. Add a new column and migrate the data
-across.
+`decimal(p, s)` is planned as a change of the column's type, where the dialect
+stores the size; a narrowing fails on rows whose values no longer fit, so check
+the data first.
+
+A table you declare owns its constraints as well as its columns and indexes. A
+check or foreign key added to it any other way, by hand or by a migration file
+of your own, is drift: development push drops it, and a plugin's next generated
+module does not know it. Declare it with `defineTable`'s `checks` and
+`foreignKeys` (or, for the app, an `afterDrizzle` hook) to keep it. A
+collection's, Single's, field group's or core table is different: a constraint
+it does not declare is left in place.

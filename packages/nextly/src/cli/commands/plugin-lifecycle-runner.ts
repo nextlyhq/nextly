@@ -17,6 +17,8 @@ import {
   presetGrantsStanding,
   readPresetGrantsRelease,
 } from "../../domains/meta/preset-grants-release";
+import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
+import type { BusyTableRun } from "../../domains/schema/busy-table/run-unit";
 import { pluginOfLedgerRow } from "../../domains/schema/events/ledger-scope";
 import {
   appliedFilenames,
@@ -83,6 +85,34 @@ interface RunnerOptions {
    * opened read-only, and no lock, consent, hook or write follows.
    */
   dryRun?: boolean;
+  /**
+   * One try's bound for a busy table, in whole seconds, as typed (`--lock-timeout`); checked with
+   * the total before anything is read (`busyTableBounds`).
+   */
+  lockTimeout?: string;
+  /** Every try's bound together, in whole seconds, as typed (`--lock-timeout-total`). */
+  lockTimeoutTotal?: string;
+}
+
+/** How the command's schema changes wait for a busy table: its bounds, and where notices go. */
+type BusyTableWait = Omit<BusyTableRun, "appliedBefore">;
+
+/**
+ * The busy-table wait from the command's flags over the environment over the defaults. Throws
+ * `INVALID_INPUT` for a value outside its range, so it is asked before anything is read or
+ * changed. Each try's notice goes to standard error, as `nextly migrate` prints it.
+ */
+function busyTableWaitOf(options: RunnerOptions): BusyTableWait {
+  return {
+    bounds: busyTableBounds({
+      flags: {
+        lockTimeout: options.lockTimeout,
+        lockTimeoutTotal: options.lockTimeoutTotal,
+      },
+      env: process.env,
+    }),
+    notify: line => process.stderr.write(`${line}\n`),
+  };
 }
 
 /**
@@ -243,7 +273,12 @@ async function refuseFromAnOlderRelease(
   });
 }
 
-async function connect(options: RunnerOptions, context: CommandContext) {
+async function connect(
+  options: RunnerOptions,
+  context: CommandContext,
+  /** How the modules this command applies or undoes wait for a busy table. */
+  busyTable: BusyTableWait
+) {
   const {
     config,
     configPath,
@@ -370,6 +405,8 @@ async function connect(options: RunnerOptions, context: CommandContext) {
             ?.migrations ?? [],
       },
       command: "plugins uninstall",
+      // A module's DOWN waits for a busy table in tries, as `migrate:down --plugin` does.
+      busyTable,
     });
 
   /**
@@ -632,6 +669,9 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       dialect,
       plugins: definitions,
       config,
+      // The connected server's limits: refuse constructs it cannot hold
+      // before plugin installation runs any migration.
+      server: drizzleAdapter.getCapabilities(),
       logger: { warn: m => context.logger.warn(m) },
     });
 
@@ -644,6 +684,8 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       logger: context.logger,
       pluginsWithMigrations: new Set([plugin.name]),
       pluginMigrationSets,
+      // A module waits for a busy table in tries, as the same phase does under `nextly migrate`.
+      busyTable,
     });
   };
 
@@ -1164,12 +1206,13 @@ interface SettingsDeleteDb {
 async function reportPluginDryRun(
   options: RunnerOptions,
   context: CommandContext,
+  busyTable: BusyTableWait,
   plan: (deps: PluginLifecycleDeps) => Promise<DryRunPlan>
 ): Promise<void> {
   let deps: PluginLifecycleDeps | undefined;
   try {
     const report = await plannedOrRefused(async () => {
-      deps = await connect(options, context);
+      deps = await connect(options, context, busyTable);
       return deps === undefined ? undefined : plan(deps);
     });
     if (report !== undefined) reportDryRun(context.logger, report);
@@ -1183,12 +1226,15 @@ export async function runPluginInstall(
   options: RunnerOptions & InstallOptions,
   context: CommandContext
 ): Promise<void> {
+  // The busy-table bounds are checked first, so a value outside its range is refused before
+  // anything is read or changed, a dry run's included.
+  const busyTable = busyTableWaitOf(options);
   if (options.dryRun === true) {
-    return reportPluginDryRun(options, context, deps =>
+    return reportPluginDryRun(options, context, busyTable, deps =>
       previewPluginInstall(name, deps)
     );
   }
-  const deps = await connect(options, context);
+  const deps = await connect(options, context, busyTable);
   if (deps === undefined) return;
   try {
     await runPluginInstallCommand(name, deps, { consent: options.consent });
@@ -1202,10 +1248,17 @@ export async function runPluginInstallAll(
   options: RunnerOptions & InstallOptions,
   context: CommandContext
 ): Promise<void> {
+  // Checked first, as for one plugin's install.
+  const busyTable = busyTableWaitOf(options);
   if (options.dryRun === true) {
-    return reportPluginDryRun(options, context, previewPluginInstallAll);
+    return reportPluginDryRun(
+      options,
+      context,
+      busyTable,
+      previewPluginInstallAll
+    );
   }
-  const deps = await connect(options, context);
+  const deps = await connect(options, context, busyTable);
   if (deps === undefined) return;
   try {
     await runPluginInstallAllCommand(deps, { consent: options.consent });
@@ -1219,8 +1272,10 @@ export async function runPluginUninstall(
   options: RunnerOptions & UninstallOptions,
   context: CommandContext
 ): Promise<void> {
+  // Checked first, as for an install.
+  const busyTable = busyTableWaitOf(options);
   if (options.dryRun === true) {
-    return reportPluginDryRun(options, context, deps =>
+    return reportPluginDryRun(options, context, busyTable, deps =>
       previewPluginUninstall(
         name,
         { keepData: options.keepData, yes: options.yes },
@@ -1228,7 +1283,7 @@ export async function runPluginUninstall(
       )
     );
   }
-  const deps = await connect(options, context);
+  const deps = await connect(options, context, busyTable);
   if (deps === undefined) return;
   try {
     // The command takes the migrate lock itself, through `underMigrateLock`,

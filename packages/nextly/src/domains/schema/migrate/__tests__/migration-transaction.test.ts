@@ -256,6 +256,86 @@ describe("a unit run outside a transaction that fails part-way", () => {
   });
 });
 
+describe("a statement a try passes over", () => {
+  const ALREADY = [
+    "INSERT INTO parent VALUES ('p4', 'four')",
+    "INSERT INTO missing_table VALUES ('x')",
+    "INSERT INTO parent VALUES ('p5', 'five')",
+  ];
+  const missingTable = (error: unknown) =>
+    String((error as Error).message).includes("no such table: missing_table");
+
+  it("is passed over outside a transaction, and the unit goes on to the next", async () => {
+    const seen: string[] = [];
+    await expect(
+      runMigrationStatements(
+        adapter,
+        ALREADY,
+        { source: "0001_x.sql", transaction: false },
+        undefined,
+        {
+          tryMs: 1_000,
+          passOver: (error, statement) => {
+            seen.push(statement);
+            return missingTable(error);
+          },
+        }
+      )
+    ).resolves.toBe(3);
+    expect(seen).toEqual(["INSERT INTO missing_table VALUES ('x')"]);
+    const rows = await adapter.executeQuery<{ id: string }>(
+      "SELECT id FROM parent WHERE id IN ('p4', 'p5') ORDER BY id"
+    );
+    expect(rows.map(row => row.id)).toEqual(["p4", "p5"]);
+  });
+
+  it("never passes over a wait for a busy table, whatever the caller accepts", async () => {
+    const real = adapter.executeQuery.bind(adapter);
+    const spy = vi
+      .spyOn(adapter, "executeQuery")
+      .mockImplementation((statement: string, ...rest: unknown[]) => {
+        if (statement.includes("missing_table")) {
+          return Promise.reject(
+            Object.assign(new Error("database is locked"), {
+              code: "SQLITE_BUSY",
+            })
+          );
+        }
+        return (real as (...args: unknown[]) => Promise<unknown>)(
+          statement,
+          ...rest
+        ) as ReturnType<typeof adapter.executeQuery>;
+      });
+    try {
+      await expect(
+        runMigrationStatements(
+          adapter,
+          ALREADY,
+          { source: "0001_x.sql", transaction: false },
+          undefined,
+          { tryMs: 1_000, passOver: () => true }
+        )
+      ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("is never consulted in a SQLite transaction, whose refused statement aborts it", async () => {
+    const passOver = vi.fn(() => true);
+    await expect(
+      runMigrationStatements(
+        adapter,
+        ALREADY,
+        { source: "0001_x.sql", transaction: true },
+        undefined,
+        { tryMs: 1_000, passOver }
+      )
+    ).rejects.toThrow();
+    expect(passOver).not.toHaveBeenCalled();
+  });
+});
+
 describe("a unit run outside a transaction refused at a column made required", () => {
   // The refusal says itself which statements ran and that they stayed applied, so it reaches the
   // caller as it is, under its own code, rather than as a statement that failed part-way.
@@ -458,6 +538,49 @@ describe("the runner's own writes after a unit's statements", () => {
   });
 });
 
+describe("a bounded SQLite unit run outside a transaction", () => {
+  // Each statement takes SQLite's write lock anew, and the busy timeout bounds each wait on its
+  // own: without one deadline for the try, three waits could take three times the bound.
+  it("sets the busy timeout before each statement to what is left of the try", async () => {
+    let clock = 0;
+    // Each reading of the clock moves it on, as statements that waited would.
+    vi.spyOn(performance, "now").mockImplementation(() => (clock += 300));
+    const run = adapter.executeQuery.bind(adapter);
+    const timeouts: number[] = [];
+    vi.spyOn(adapter, "executeQuery").mockImplementation(
+      async (statement, params) => {
+        const set = /^PRAGMA busy_timeout = (\d+)$/.exec(statement);
+        if (set) timeouts.push(Number(set[1]));
+        return run(statement, params);
+      }
+    );
+    try {
+      await runMigrationStatements(
+        adapter,
+        [
+          "INSERT INTO parent VALUES ('p2', 'two')",
+          "INSERT INTO parent VALUES ('p3', 'three')",
+          "INSERT INTO parent VALUES ('p4', 'four')",
+        ],
+        { source: "0003_rows.sql", transaction: false },
+        undefined,
+        { tryMs: 1_000 }
+      );
+    } finally {
+      vi.restoreAllMocks();
+    }
+    // The try's bound, then before each statement what is left of it, never more than the last.
+    const [first, ...beforeStatements] = timeouts;
+    expect(first).toBe(1_000);
+    expect(beforeStatements.length).toBeGreaterThanOrEqual(3);
+    for (const [at, left] of beforeStatements.slice(0, 3).entries()) {
+      expect(left).toBeLessThan(1_000);
+      expect(left).toBeLessThanOrEqual(beforeStatements[at - 1] ?? 1_000);
+    }
+    expect(count("parent")).toBe(4);
+  });
+});
+
 describe("a unit run outside a transaction, on MySQL and PostgreSQL", () => {
   /**
    * An adapter that logs where each statement ran: through `withSession`,
@@ -543,5 +666,93 @@ describe("a unit run outside a transaction, on MySQL and PostgreSQL", () => {
     const { log, adapter: pgAdapter } = sessionAdapter("postgresql");
     await runMigrationStatements(pgAdapter, statements, unit);
     expect(log).toEqual(statements.map(s => `pool: ${s}`));
+  });
+
+  /**
+   * `sessionAdapter` with a transaction too, whose statements are logged as `tx:`, for the ledger
+   * write a bounded unit makes after its session has closed.
+   */
+  function boundedAdapter(dialect: "postgresql" | "mysql") {
+    const { log, adapter: base } = sessionAdapter(dialect);
+    const fake = Object.assign(Object.create(base) as object, {
+      transactionOpenInFlow: () => false,
+      transaction: async <T>(
+        work: (ctx: {
+          execute: (statement: string) => Promise<unknown[]>;
+          getDrizzle: () => unknown;
+        }) => Promise<T>
+      ): Promise<T> =>
+        work({
+          execute: async statement => {
+            log.push(`tx: ${statement}`);
+            return [];
+          },
+          getDrizzle: () => ({ tx: true }),
+        }),
+    });
+    return { log, adapter: fake as unknown as DrizzleAdapter };
+  }
+
+  it("writes the ledger of a bounded PostgreSQL unit in a transaction bounded as the try, once the session has closed", async () => {
+    const { log, adapter: pgAdapter } = boundedAdapter("postgresql");
+    let ledgerDb: unknown;
+    await runMigrationStatements(
+      pgAdapter,
+      statements,
+      unit,
+      async db => {
+        ledgerDb = db;
+        log.push("after");
+      },
+      { tryMs: 1_000 }
+    );
+    // A ledger table another session holds ends the try at the bound, never waits unbounded.
+    expect(log.slice(log.indexOf("session closed"))).toEqual([
+      "session closed",
+      "tx: SET LOCAL lock_timeout = '1500ms'",
+      "after",
+    ]);
+    expect(ledgerDb).toEqual({ tx: true });
+  });
+
+  describe("a bounded unit with a column made required after a statement filled it", () => {
+    const filled = [
+      "UPDATE t SET v = 'x' WHERE v IS NULL",
+      "ALTER TABLE t ALTER COLUMN v SET NOT NULL",
+    ];
+
+    it("counts the column through the session the statements run on, never the pool", async () => {
+      const { log, adapter: pgAdapter } = boundedAdapter("postgresql");
+      await runMigrationStatements(pgAdapter, filled, unit, undefined, {
+        tryMs: 1_000,
+      }).catch(() => undefined);
+      // On a pool of one, the session holds the only connection: a read through the pool waits
+      // for it, and escapes the try's bounds besides.
+      expect(log.filter(line => line.startsWith("pool:"))).toEqual([]);
+      // The checkpoint's reads, after the fill, on the session (its first read is the session's
+      // own id, asked when the try opens).
+      const filledAt = log.indexOf(`session: ${filled[0]}`);
+      expect(filledAt).toBeGreaterThanOrEqual(0);
+      expect(
+        log.some((line, at) => at > filledAt && /^session: SELECT/i.test(line))
+      ).toBe(true);
+    });
+
+    it("tells the statement before its checkpoint reads, so a wait there is the statement's", async () => {
+      const { log, adapter: pgAdapter } = boundedAdapter("postgresql");
+      await runMigrationStatements(pgAdapter, filled, unit, undefined, {
+        tryMs: 1_000,
+        onStatement: index => log.push(`told ${String(index)}`),
+      }).catch(() => undefined);
+      // The checkpoint's reads come after the fill, the first statement, has run.
+      const filledAt = log.indexOf(`session: ${filled[0]}`);
+      const told = log.indexOf("told 1");
+      const firstRead = log.findIndex(
+        (line, at) => at > filledAt && /^session: SELECT/i.test(line)
+      );
+      expect(filledAt).toBeGreaterThanOrEqual(0);
+      expect(told).toBeGreaterThan(filledAt);
+      expect(firstRead).toBeGreaterThan(told);
+    });
   });
 });
