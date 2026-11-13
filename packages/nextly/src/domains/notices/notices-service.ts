@@ -363,7 +363,12 @@ export class NoticesService {
       }),
       this.deps.db.count(NOTICES_TABLE, { where }),
     ]);
-    return { rows: await this.viewsOf(rows), total, page, limit };
+    return {
+      rows: await this.viewsOf(rows, query.userId),
+      total,
+      page,
+      limit,
+    };
   }
 
   /** How many notices this person has, or how many are unread. */
@@ -441,11 +446,31 @@ export class NoticesService {
     return { and: conditions };
   }
 
-  /** Render a page: each kind's text, and its links resolved once per kind. */
-  private async viewsOf(rows: NoticeRow[]): Promise<NoticeView[]> {
+  /**
+   * Render a page for `userId`: each kind's text, and its links and readable notices resolved
+   * once per kind. A notice whose subject the person may not read is shown without its text or
+   * link, but still shown, so the count and the list agree.
+   */
+  private async viewsOf(
+    rows: NoticeRow[],
+    userId: string
+  ): Promise<NoticeView[]> {
     const links = new Map<string, ReadonlyMap<string, string> | null>();
+    const readable = new Map<string, ReadonlyMap<string, unknown>>();
     for (const kindKey of new Set(rows.map(row => row.kind))) {
       const kind = registeredNoticeKind(kindKey);
+      if (kind?.readable !== undefined) {
+        // A snapshot that no longer parses is shown as no longer showable whatever is decided.
+        const judged = rows
+          .filter(row => row.kind === kindKey)
+          .flatMap(row => {
+            const parsed = kind.data.safeParse(row.data);
+            return parsed.success
+              ? [{ id: row.id, subjectId: row.subjectId, data: parsed.data }]
+              : [];
+          });
+        readable.set(kindKey, await kind.readable(userId, judged));
+      }
       if (kind?.link === undefined) {
         links.set(kindKey, null);
         continue;
@@ -463,12 +488,37 @@ export class NoticesService {
       const known = links.get(row.kind) ?? null;
       const link = known?.get(row.subjectId) ?? null;
       const gone = known !== null && link === null;
-      const parsed = kind.data.safeParse(row.data);
+      // A subject the person may not read, or one that is gone, which no rule can be asked of
+      // any more: nothing of what the snapshot says, failing closed whoever reads it.
+      const judged = readable.get(row.kind);
+      if (judged !== undefined && (gone || !judged.has(row.id))) {
+        return [
+          {
+            id: row.id,
+            kind: row.kind,
+            title: UNSHOWN_NOTICE_TITLE,
+            ...(gone && kind.goneText !== undefined
+              ? { body: kind.goneText }
+              : {}),
+            subject: {
+              type: row.subjectType,
+              id: row.subjectId,
+              link: null,
+              gone,
+            },
+            createdAt: row.createdAt,
+            readAt: row.readAt,
+          },
+        ];
+      }
+      // The snapshot as the person may see it, where the kind decides that; as stored otherwise.
+      const shown = judged?.get(row.id);
+      const parsed = kind.data.safeParse(shown ?? row.data);
       const text = parsed.success
         ? kind.render(parsed.data, { subjectGone: gone })
         : // A snapshot written before its kind's schema changed. Shown
           // plainly rather than dropped, so the count and the list agree.
-          { title: "This notice can no longer be shown." };
+          { title: UNSHOWN_NOTICE_TITLE };
       return [
         {
           id: row.id,
@@ -508,6 +558,9 @@ export class NoticesService {
     return false;
   }
 }
+
+/** What a notice that cannot be shown to its person says in its place. */
+const UNSHOWN_NOTICE_TITLE = "This notice can no longer be shown.";
 
 /** The registered kinds a person may see now: each kind's `visible`, or all. */
 async function visibleKinds(userId: string): Promise<string[]> {

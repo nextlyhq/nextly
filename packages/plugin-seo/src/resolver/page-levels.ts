@@ -213,7 +213,7 @@ async function heldByAnother(
  * search engines; nothing for page 1 under a second spelling, a page number
  * spelled another way, or a page of another address.
  */
-function laterListPage(
+export function laterListPage(
   path: string,
   served: string | undefined
 ): string | undefined {

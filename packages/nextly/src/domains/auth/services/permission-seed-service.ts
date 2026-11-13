@@ -485,6 +485,18 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
       resource: "content-releases",
     },
   },
+  // Email deliveries. ONE permission for now: cancelling a queued email, the
+  // one act anything enforces today. Reading the delivery log arrives with the
+  // delivery screen and its routes, which would read it; seeding it sooner
+  // would show the admin a screen whose routes do not exist yet.
+  {
+    name: "Manage Email Deliveries",
+    slug: "manage-email-deliveries",
+    action: "manage",
+    resource: "email-deliveries",
+    description:
+      "Permission to cancel a queued email, and to have one sent again where a plugin offers it",
+  },
   // Background jobs. ONE permission, not a CRUD set: the only surface that
   // checks anything today is the trigger that runs a drain pass by hand, and a
   // permission nothing enforces teaches the admin a vocabulary the server

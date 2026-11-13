@@ -37,6 +37,7 @@ import { nextlyTags } from "../cache/nextly-tags";
 import {
   knownNoPageMetadataProvider,
   pageMetadataFor,
+  pageMetadataProviderToAsk,
   pageStructuredDataFor,
   type PageMetadataRequest,
 } from "../seo/page-metadata";
@@ -45,7 +46,7 @@ import type {
   PageStructuredDataHints,
 } from "../seo/page-metadata-contract";
 
-import { triggerNotFound, triggerPermanentRedirect } from "./not-found";
+import { answerNotFound, triggerPermanentRedirect } from "./not-found";
 import {
   confirmedLanguage,
   requestLanguage,
@@ -416,7 +417,17 @@ export interface ContentRouteConfig<TNode> {
    *
    * @experimental Settles with list pagination.
    */
-  mountPath?: string;
+  mountPath?: string /**
+   * How this route answers a request it has nothing for, in place of
+   * Next.js's `notFound()`: a site passes its own to do something for each
+   * miss, such as logging the address. The page and `generateMetadata` may
+   * both call it for one request. A handler that returns is
+   * followed by Next.js's `notFound()`; without one the route answers as
+   * before.
+   *
+   * @experimental Its name and shape may change before 1.0.
+   */;
+  notFound?: () => never | Promise<never>;
 }
 
 /**
@@ -991,20 +1002,22 @@ function buildRoute<TNode>(
   ): Promise<T> {
     const params = await args.params;
     const slug = joinSlug(params);
-    if (isReservedPath(`/${slug}`)) triggerNotFound();
+    if (isReservedPath(`/${slug}`)) return answerNotFound(config.notFound);
     // A `[locale]` naming none of the site's languages is not a page here.
     const language = await requestLanguage(
       params.locale,
       config.locale,
       getInstance
     );
-    if (language === null) triggerNotFound();
+    if (language === null) return answerNotFound(config.notFound);
     return runWithAccessMemo(async () => {
       const resolved = await resolvePath(slug, language);
       // A language read before Nextly had started is confirmed now the read
       // has started it, before anything is served in it.
-      if (!(await confirmedLanguage(language))) triggerNotFound();
-      if (!resolved) triggerNotFound();
+      if (!(await confirmedLanguage(language))) {
+        return answerNotFound(config.notFound);
+      }
+      if (!resolved) return answerNotFound(config.notFound);
       return use(resolved, language);
     });
   }
@@ -1093,9 +1106,11 @@ async function contentPageRequest<TNode>(
   const code = config.buildMetadata
     ? await config.buildMetadata(entry, context)
     : undefined;
-  // What the content offers costs reads of its own, so it is not worked out
-  // for a process known to have nobody to give it to.
-  if (knownNoPageMetadataProvider()) return { code, request: null };
+  // What the content offers costs reads of its own, so it is worked out only
+  // where a provider can be asked: Nextly is started first where nothing has
+  // started it, and with no provider, or none reachable, the route's own
+  // metadata is served without the content being read for one.
+  if (!(await pageMetadataProviderToAsk(path))) return { code, request: null };
   const derived = config.derivedMetadata
     ? await config.derivedMetadata(entry, context)
     : undefined;
@@ -1159,8 +1174,9 @@ export async function contentPageStructuredData<TNode>(
   context: RenderContext,
   path: string
 ): Promise<string | undefined> {
-  // Nobody to answer: the route's own metadata is not worked out for nothing.
-  if (knownNoPageMetadataProvider()) return undefined;
+  // Nobody to answer, or nobody reachable once Nextly's start was tried: the
+  // route's own metadata is not worked out for nothing.
+  if (!(await pageMetadataProviderToAsk(path))) return undefined;
   const { request } = await contentPageRequest(config, entry, context, path);
   if (request === null) return undefined;
   const hints = await config.structuredDataHints?.(entry, context);

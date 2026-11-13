@@ -126,9 +126,12 @@ const requireDeclaration = (createRequireName: string) =>
 const require = ${createRequireName}(import.meta.url);`;
 const REQUIRE_DECLARATION = requireDeclaration("createRequire");
 
-/** Where a new app's config takes the crawlers that wait for the whole head. */
+/**
+ * Where a new app's config takes the crawlers that wait for the whole head,
+ * and the files its deployed routes need beyond their traces.
+ */
 const HTML_LIMITED_BOTS_IMPORT =
-  'import { nextlyHtmlLimitedBots } from "nextly/next";';
+  'import { nextlyHtmlLimitedBots, nextlyTracingIncludes } from "nextly/next";';
 /**
  * The crawlers answered with each page's whole head in the first HTML rather
  * than streamed it: Next.js's own list, the main Googlebot and the AI
@@ -137,6 +140,15 @@ const HTML_LIMITED_BOTS_IMPORT =
 const HTML_LIMITED_BOTS_LINE = `  // Search engines and AI crawlers read each page's whole head in the first
   // HTML, rather than metadata streamed in after it.
   htmlLimitedBots: nextlyHtmlLimitedBots,`;
+
+/**
+ * The files Nextly loads at request time that a route's build trace leaves
+ * out (`nextlyTracingIncludes`): without them, a host that deploys each route
+ * with only its traced files (Vercel) fails the first request needing one.
+ */
+const TRACING_INCLUDES_LINE = `  // Files Nextly loads at request time that the build's trace leaves out,
+  // which a host deploying only traced files (Vercel) needs.
+  outputFileTracingIncludes: { "/**": nextlyTracingIncludes() },`;
 
 /**
  * Render a complete next.config.ts file for the selected database.
@@ -149,6 +161,7 @@ const nextConfig: NextConfig = {
 ${CACHE_COMPONENTS_ON}
   serverExternalPackages: ${packageListLiteral(database)},
 ${HTML_LIMITED_BOTS_LINE}
+${TRACING_INCLUDES_LINE}
 };
 
 export default nextConfig;
@@ -167,6 +180,7 @@ const nextConfig = {
 ${CACHE_COMPONENTS_ON}
   serverExternalPackages: ${packageListLiteral(database)},
 ${HTML_LIMITED_BOTS_LINE}
+${TRACING_INCLUDES_LINE}
 };
 
 export default nextConfig;

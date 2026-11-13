@@ -7,7 +7,7 @@ export { seoPlugin } from "./plugin";
 export type { SeoPluginOptions } from "./plugin";
 export { defaultSeoFields } from "./fields";
 // Pages with no entry: the one line a page built in code adds so the SEO set
-// for its address on the Pages and addresses screen reaches its head, and
+// for its address on Pages reaches its head, and
 // its structured data from the same answer.
 export { seoMetadata, seoStructuredData } from "./code-pages/metadata";
 export type { RouteMetadata, SeoMetadataOptions } from "./code-pages/metadata";
@@ -110,8 +110,10 @@ export type {
 export { shareImageProblems } from "./social/problems";
 export type { ShareImageProblem, ShareImageReaders } from "./social/problems";
 export type { SocialCardOptions } from "./social/card";
-// Logs the address a not-found page was asked for, from the site's
-// not-found page. Redirects themselves reach requests through the site's
-// Proxy, which `seoPlugin` contributes a handler to.
+// Logs the address a request was not found at, from its headers. A route
+// that answers not found calls `notFoundLogged` from
+// `@nextlyhq/plugin-seo/next`, which calls this. Redirects themselves reach
+// requests through the site's Proxy, which `seoPlugin` contributes a handler
+// to.
 export { logNotFound } from "./not-found/report";
 export type { HeaderReader } from "./not-found/report";

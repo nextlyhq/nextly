@@ -295,6 +295,45 @@ describe.each(getConfiguredTestDialects())(
       expect((await queued(qKept)).state).toBe("waiting");
     }, 60_000);
 
+    it("cancels each one several Spam marks at once take, naming Spam, and no other", async () => {
+      // As the list's bulk "Mark as spam" does: one update per submission,
+      // each in its own transaction, all at once.
+      const { t, submit, sendsOf, queued } = await boot(dialect);
+      behaviour.mode = "retryable";
+      const [a, b, kept] = [
+        await submit("a"),
+        await submit("b"),
+        await submit("kept"),
+      ];
+      const sendOf = async (id: string) =>
+        (await sendsOf(id))[0] as unknown as {
+          queuedId: string;
+          cancel?: unknown;
+        };
+      const [qa, qb, qKept] = [
+        (await sendOf(a)).queuedId,
+        (await sendOf(b)).queuedId,
+        (await sendOf(kept)).queuedId,
+      ];
+
+      await Promise.all(
+        [a, b].map(id =>
+          t.nextly.update({
+            collection: "form-submissions",
+            id,
+            data: { status: "spam", _overwrite: true },
+          })
+        )
+      );
+
+      expect((await queued(qa)).state).toBe("cancelled");
+      expect((await queued(qb)).state).toBe("cancelled");
+      expect((await queued(qKept)).state).toBe("waiting");
+      expect((await sendOf(a)).cancel).toEqual({ by: "spam" });
+      expect((await sendOf(b)).cancel).toEqual({ by: "spam" });
+      expect((await sendOf(kept)).cancel ?? null).toBeNull();
+    }, 60_000);
+
     it("deletes a form's submissions with it, forgetting what they sent", async () => {
       const { t, formId, submit, sendsOf, queued, trigger } =
         await boot(dialect);

@@ -8,6 +8,7 @@
  */
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import {
+  checkbox,
   date,
   defineCollection,
   number,
@@ -55,6 +56,12 @@ export function notFoundCollection(): CollectionConfig {
       // `missing` for a request that found nothing, `moved` for an old
       // address a deploy moved whose redirect could not be saved.
       text({ name: "kind", label: "Kind", required: true }),
+      // Where the last visitor sent from another page came from: another
+      // site's host, or a path on this site without its query. Empty while
+      // every visitor came directly.
+      textarea({ name: "cameFrom", label: "Came from" }),
+      // Someone chose to ignore the address: listed only when asked for.
+      checkbox({ name: "ignored", label: "Ignored", defaultValue: false }),
     ],
     access: {
       create: () => false,

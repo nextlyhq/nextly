@@ -29,8 +29,13 @@ import {
   newestMigrationIn,
   type RunnersFolderReading,
 } from "./domains/schema/build-schema-version";
+import { nextlyTracingIncludes } from "./next-runtime-includes";
 import { statedDialect } from "./shared/lib/stated-dialect";
 import { DEFAULT_MIGRATIONS_DIR } from "./shared/types/migrations-dir-default";
+
+// The files `withNextly` adds to every route's trace, for a config that is not
+// wrapped in it to add itself.
+export { nextlyTracingIncludes } from "./next-runtime-includes";
 
 /**
  * Packages that must be loaded from node_modules at runtime
@@ -58,27 +63,6 @@ const NEXTLY_SERVER_EXTERNAL_PACKAGES = [
   "drizzle-kit",
   // Auth (jose is a pure ESM package, no native bindings)
   "jose",
-];
-
-/**
- * Packages that must be explicitly included in the Vercel Lambda
- * output via `outputFileTracingIncludes`.
- *
- * pnpm's strict `.pnpm` store uses symlinks for peer deps, but
- * Vercel's Lambda filesystem doesn't always follow symlink chains.
- * This forces Next.js/NFT to copy these packages into the Lambda
- * regardless of whether tracing resolves them.
- */
-const NEXTLY_FILE_TRACING_INCLUDES = [
-  "./node_modules/pg/**/*",
-  "./node_modules/pg-*/**/*",
-  "./node_modules/mysql2/**/*",
-  "./node_modules/better-sqlite3/**/*",
-  "./node_modules/@nextlyhq/adapter-postgres/**/*",
-  "./node_modules/@nextlyhq/adapter-mysql/**/*",
-  "./node_modules/@nextlyhq/adapter-sqlite/**/*",
-  "./node_modules/@nextlyhq/adapter-drizzle/**/*",
-  "./node_modules/drizzle-orm/**/*",
 ];
 
 /**
@@ -331,9 +315,11 @@ export function withNextly<T extends Record<string, unknown>>(
     ...new Set([...existing, ...NEXTLY_SERVER_EXTERNAL_PACKAGES]),
   ];
 
-  // Force-include database packages in Vercel Lambda output.
-  // pnpm's strict .pnpm store uses symlinks for peer deps, but
-  // Vercel's Lambda filesystem doesn't follow symlink chains.
+  // Force-include database packages in Vercel Lambda output, and the
+  // Next.js files Nextly loads at request time through requires no trace
+  // follows (`nextlyTracingIncludes`). pnpm's strict .pnpm store uses
+  // symlinks for peer deps, but Vercel's Lambda filesystem doesn't follow
+  // symlink chains.
   //
   // Next.js reads `outputFileTracingIncludes` at the top level only. Under
   // `experimental` it warns on every build that the key is unrecognized and
@@ -347,7 +333,7 @@ export function withNextly<T extends Record<string, unknown>>(
       nextConfig.outputFileTracingIncludes as TracingIncludes | undefined,
       experimentalIncludes as TracingIncludes | undefined
     ),
-    { "/**": NEXTLY_FILE_TRACING_INCLUDES }
+    { "/**": nextlyTracingIncludes() }
   );
 
   // The build's schema version: the newest migration in the app's folder,

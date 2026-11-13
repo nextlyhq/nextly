@@ -23,12 +23,9 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
-import { refusedAsChangedSince } from "@admin/lib/document-version";
-import { entryKeys } from "@admin/services/entryApi";
 import {
   versionApi,
   type DocumentEventListResponse,
-  type RestoreVersionResponse,
   type SetVersionLabelResponse,
   type VersionDetail,
   type VersionDiff,
@@ -37,7 +34,6 @@ import {
 } from "@admin/services/versionApi";
 
 import { refreshRemovedFromCodeSchema } from "./removed-from-code-refusal";
-import { singleDocumentKeys, singleKeys } from "./useSingles";
 
 /** Page size for the history list. */
 const PAGE_SIZE = 25;
@@ -317,24 +313,6 @@ export function useVersionDiff({
 // Mutation Hooks
 // ============================================================
 
-export interface UseRestoreVersionOptions {
-  scope: VersionScope;
-  /**
-   * The version of the document, as the editor holds it in `locale`, that a
-   * restore writing that language sends: a restore is refused when the
-   * document changed since. Without it, a restore sends none.
-   */
-  versionFor?: (locale: string | null) => Promise<string | undefined>;
-  onSuccess?: (result: RestoreVersionResponse) => void;
-  onError?: (error: Error) => void;
-}
-
-/** The version to restore, and the language it writes: its own. */
-export interface RestoreVersionInput {
-  versionNo: number;
-  locale: string | null;
-}
-
 /** Options for renaming a version. */
 export interface UseSetVersionLabelOptions {
   scope: VersionScope;
@@ -382,79 +360,6 @@ export function useSetVersionLabel({
     },
     onSuccess: result => {
       void queryClient.invalidateQueries({ queryKey: versionKeys.all() });
-      onSuccess?.(result);
-    },
-  });
-}
-
-/**
- * Put the document back to an earlier version.
- *
- * Restoring writes the live document and records a new version, so both the
- * document and its history are stale afterwards. The entry caches are
- * invalidated alongside the version caches, or the editor would keep showing
- * the pre-restore content it already had.
- */
-export function useRestoreVersion({
-  scope,
-  versionFor,
-  onSuccess,
-  onError,
-}: UseRestoreVersionOptions): UseMutationResult<
-  RestoreVersionResponse,
-  Error,
-  number | RestoreVersionInput,
-  unknown
-> {
-  const queryClient = useQueryClient();
-
-  return useMutation<
-    RestoreVersionResponse,
-    Error,
-    number | RestoreVersionInput
-  >({
-    // A bare number restores without naming its language, and so without a
-    // version.
-    mutationFn: async input => {
-      const { versionNo, locale } =
-        typeof input === "number"
-          ? { versionNo: input, locale: undefined }
-          : input;
-      const version =
-        locale === undefined ? undefined : await versionFor?.(locale);
-      return versionApi.restore(scope, versionNo, version);
-    },
-    // Mutations retry twice by default. A restore is not idempotent — each
-    // attempt is a fresh write that records another version and another outbox
-    // event — so a dropped response would otherwise multiply into several
-    // restores of the same version.
-    retry: false,
-    onError: error => {
-      // A refusal because the entity was removed from code reads its schema
-      // again, so a screen opened before the removal turns read-only.
-      refreshRemovedFromCodeSchema(queryClient, error);
-      // A refusal because the document changed since reads it again, so the
-      // editor shows the version a second restore would write over.
-      if (refusedAsChangedSince(error)) {
-        void queryClient.invalidateQueries({ queryKey: entryKeys.all });
-        void queryClient.invalidateQueries({
-          queryKey: singleDocumentKeys.all(),
-        });
-      }
-      onError?.(error);
-    },
-    onSuccess: result => {
-      void queryClient.invalidateQueries({ queryKey: versionKeys.all() });
-      void queryClient.invalidateQueries({ queryKey: entryKeys.all });
-      if (scope.kind === "single") {
-        // The editor reads the document through `singleDocumentKeys`, which is
-        // a different root from the metadata list — invalidating only the list
-        // would leave the form showing pre-restore content.
-        void queryClient.invalidateQueries({
-          queryKey: singleDocumentKeys.all(),
-        });
-        void queryClient.invalidateQueries({ queryKey: singleKeys.all() });
-      }
       onSuccess?.(result);
     },
   });

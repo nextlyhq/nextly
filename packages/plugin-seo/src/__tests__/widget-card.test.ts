@@ -147,10 +147,14 @@ describe("the SEO issues card", () => {
 });
 
 describe("the SEO Needs attention line", () => {
-  it("counts every problem the list shows the person, linked to the list", async () => {
+  it("counts the errors and warnings the list shows the person, linked to the list", async () => {
     const { item } = over([
+      // A notice: left to the list.
       problem("longTitle"),
+      // An error.
       problem("noTitle", "pages"),
+      // A warning.
+      problem("noDescription", "pages"),
       { ...problem("productionAddress"), subject: { label: "Whole site" } },
     ]);
     expect(item?.id).toBe(SEO_PROBLEMS_ATTENTION_ID);

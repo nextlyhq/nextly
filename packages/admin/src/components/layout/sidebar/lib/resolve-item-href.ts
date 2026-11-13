@@ -12,9 +12,8 @@ import {
 
 // Where a primary sidebar icon points.
 //
-// Collections and singles land on their section page, whose smart-redirect
-// routes pick the most-recently-created record server-side. Plugins follows the
-// same convention and lands on the installed list, which renders an empty table
+// Content lands on the Content overview, and collections and singles on its
+// one-table pages. Plugins follows the same convention and lands on the installed list, which renders an empty table
 // when nothing is installed. Standalone plugins have no section page, so they
 // go where `standalonePluginLanding` decides: the landing the plugin names, or
 // the first collection or menu item its panel lists for the reader.
@@ -40,12 +39,11 @@ export function resolveItemHref(
   // guarded page would bounce them to the dashboard and remove their only route
   // to content they are allowed to see, so for them the icon stays a
   // sub-sidebar opener.
-  canOpenPluginsPage = false,
-  // Where the Content item goes: `#` while it opens a panel, a part's page when
-  // the panel is suppressed. Decided by `contentItemHref`.
-  contentHref = "#"
+  canOpenPluginsPage = false
 ): string {
-  if (item.id === CONTENT_RAIL_ID) return contentHref;
+  // The Content overview. On a phone the item still opens its panel rather
+  // than navigating (`railEntryNavigates`), and the panel's title leads here.
+  if (item.id === CONTENT_RAIL_ID) return ROUTES.CONTENT;
   if (item.id === "collections") return ROUTES.COLLECTIONS;
   if (item.id === "singles") return ROUTES.SINGLES;
   if (item.id === "plugins") return canOpenPluginsPage ? ROUTES.PLUGINS : "#";

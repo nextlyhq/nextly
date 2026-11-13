@@ -112,24 +112,25 @@ result.meta.hasNext; // boolean
 result.meta.hasPrev; // boolean
 ```
 
-| Argument           | Type                                         | Default  | Description                                                                                                                                      |
-| ------------------ | -------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `collection`       | `string`                                     | required | Collection slug.                                                                                                                                 |
-| `where`            | `WhereFilter`                                | —        | Filter conditions (see [Querying](#querying)).                                                                                                   |
-| `limit`            | `number`                                     | `10`     | Page size.                                                                                                                                       |
-| `page`             | `number`                                     | `1`      | Page number, 1-indexed.                                                                                                                          |
-| `sort`             | `string`                                     | —        | `field` for ascending, `-field` for descending.                                                                                                  |
-| `depth`            | `number`                                     | `0`      | Relationship population depth.                                                                                                                   |
-| `select`           | `Record<string, boolean>`                    | —        | Whitelist or blacklist fields.                                                                                                                   |
-| `populate`         | `Record<string, boolean \| PopulateOptions>` | —        | Per-field population control.                                                                                                                    |
-| `pagination`       | `boolean`                                    | `true`   | Set `false` to return all matching rows without paging.                                                                                          |
-| `status`           | `"published" \| "draft" \| "all"`            | —        | Lifecycle scope on a collection with the status lifecycle. An untrusted read (`overrideAccess: false`) that states none sees public states only. |
-| `richTextFormat`   | `"json" \| "html" \| "both"`                 | `"json"` | Output format for rich text fields.                                                                                                              |
-| `overrideAccess`   | `boolean`                                    | `true`   | Bypass access control.                                                                                                                           |
-| `showHiddenFields` | `boolean`                                    | `true`   | `false` leaves `admin.hidden` fields out and refuses filters and sorts on them (see [Hidden fields](#hidden-fields)).                            |
-| `user`             | `{ id, role? }`                              | —        | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor.                                    |
-| `context`          | `Record<string, unknown>`                    | —        | Custom data forwarded to hooks via `req.context`.                                                                                                |
-| `disableErrors`    | `boolean`                                    | `false`  | Return an empty result instead of throwing.                                                                                                      |
+| Argument           | Type                                         | Default     | Description                                                                                                                                      |
+| ------------------ | -------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `collection`       | `string`                                     | required    | Collection slug.                                                                                                                                 |
+| `where`            | `WhereFilter`                                | —           | Filter conditions (see [Querying](#querying)).                                                                                                   |
+| `limit`            | `number`                                     | `10`        | Page size.                                                                                                                                       |
+| `page`             | `number`                                     | `1`         | Page number, 1-indexed.                                                                                                                          |
+| `sort`             | `string`                                     | —           | `field` for ascending, `-field` for descending.                                                                                                  |
+| `depth`            | `number`                                     | `0`         | Relationship population depth.                                                                                                                   |
+| `select`           | `Record<string, boolean>`                    | —           | Whitelist or blacklist fields.                                                                                                                   |
+| `populate`         | `Record<string, boolean \| PopulateOptions>` | —           | Per-field population control.                                                                                                                    |
+| `pagination`       | `boolean`                                    | `true`      | Set `false` to return all matching rows without paging.                                                                                          |
+| `status`           | `"published" \| "draft" \| "all"`            | —           | Lifecycle scope on a collection with the status lifecycle. An untrusted read (`overrideAccess: false`) that states none sees public states only. |
+| `richTextFormat`   | `"json" \| "html" \| "both"`                 | `"json"`    | Output format for rich text fields.                                                                                                              |
+| `richTextStyles`   | `"default" \| "none"`                        | `"default"` | How rich text HTML is styled: `"none"` gives classes only (see [Rich text format](#rich-text-format)).                                           |
+| `overrideAccess`   | `boolean`                                    | `true`      | Bypass access control.                                                                                                                           |
+| `showHiddenFields` | `boolean`                                    | `true`      | `false` leaves `admin.hidden` fields out and refuses filters and sorts on them (see [Hidden fields](#hidden-fields)).                            |
+| `user`             | `{ id, role? }`                              | —           | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor.                                    |
+| `context`          | `Record<string, unknown>`                    | —           | Custom data forwarded to hooks via `req.context`.                                                                                                |
+| `disableErrors`    | `boolean`                                    | `false`     | Return an empty result instead of throwing.                                                                                                      |
 
 ### findByID
 
@@ -157,19 +158,20 @@ if (post) {
 }
 ```
 
-| Argument         | Type                                         | Default  | Description                                                                                                                                                               |
-| ---------------- | -------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `collection`     | `string`                                     | required | Collection slug.                                                                                                                                                          |
-| `id`             | `string`                                     | required | Document ID.                                                                                                                                                              |
-| `depth`          | `number`                                     | `0`      | Relationship population depth.                                                                                                                                            |
-| `select`         | `Record<string, boolean>`                    | —        | Whitelist or blacklist fields.                                                                                                                                            |
-| `populate`       | `Record<string, boolean \| PopulateOptions>` | —        | Per-field population control.                                                                                                                                             |
-| `status`         | `"published" \| "draft" \| "all"`            | —        | As on `find`. An untrusted read that states none answers `NOT_FOUND` for a row that was never published, whatever `draft` says.                                           |
-| `draft`          | `boolean`                                    | `false`  | Overlay the pending working draft on a drafts-enabled collection. Granted outright to a trusted read; for an untrusted one, only when the caller may update the document. |
-| `richTextFormat` | `"json" \| "html" \| "both"`                 | `"json"` | Output format for rich text fields.                                                                                                                                       |
-| `disableErrors`  | `boolean`                                    | `false`  | Return `null` instead of throwing.                                                                                                                                        |
-| `overrideAccess` | `boolean`                                    | `true`   | Bypass access control.                                                                                                                                                    |
-| `user`           | `{ id, role? }`                              | —        | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor.                                                             |
+| Argument         | Type                                         | Default     | Description                                                                                                                                                               |
+| ---------------- | -------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `collection`     | `string`                                     | required    | Collection slug.                                                                                                                                                          |
+| `id`             | `string`                                     | required    | Document ID.                                                                                                                                                              |
+| `depth`          | `number`                                     | `0`         | Relationship population depth.                                                                                                                                            |
+| `select`         | `Record<string, boolean>`                    | —           | Whitelist or blacklist fields.                                                                                                                                            |
+| `populate`       | `Record<string, boolean \| PopulateOptions>` | —           | Per-field population control.                                                                                                                                             |
+| `status`         | `"published" \| "draft" \| "all"`            | —           | As on `find`. An untrusted read that states none answers `NOT_FOUND` for a row that was never published, whatever `draft` says.                                           |
+| `draft`          | `boolean`                                    | `false`     | Overlay the pending working draft on a drafts-enabled collection. Granted outright to a trusted read; for an untrusted one, only when the caller may update the document. |
+| `richTextFormat` | `"json" \| "html" \| "both"`                 | `"json"`    | Output format for rich text fields.                                                                                                                                       |
+| `richTextStyles` | `"default" \| "none"`                        | `"default"` | How rich text HTML is styled: `"none"` gives classes only (see [Rich text format](#rich-text-format)).                                                                    |
+| `disableErrors`  | `boolean`                                    | `false`     | Return `null` instead of throwing.                                                                                                                                        |
+| `overrideAccess` | `boolean`                                    | `true`      | Bypass access control.                                                                                                                                                    |
+| `user`           | `{ id, role? }`                              | —           | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor.                                                             |
 
 **Returns:** `T | null`.
 
@@ -443,16 +445,17 @@ const settings = await nextly.findSingle({
 console.log(settings.siteName);
 ```
 
-| Argument          | Type                                         | Default  | Description                                                                                                              |
-| ----------------- | -------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `slug`            | `string`                                     | required | Single slug.                                                                                                             |
-| `depth`           | `number`                                     | `0`      | Relationship population depth.                                                                                           |
-| `select`          | `Record<string, boolean>`                    | —        | Whitelist or blacklist fields.                                                                                           |
-| `populate`        | `Record<string, boolean \| PopulateOptions>` | —        | Per-field population control.                                                                                            |
-| `richTextFormat`  | `"json" \| "html" \| "both"`                 | `"json"` | Rich text output format.                                                                                                 |
-| `overrideAccess`  | `boolean`                                    | `true`   | Bypass access control.                                                                                                   |
-| `user`            | `{ id, role? }`                              | —        | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor.            |
-| `createIfMissing` | `boolean`                                    | `true`   | Whether a read of a single that has never been saved creates its default document. Pass `false` to read without writing. |
+| Argument          | Type                                         | Default     | Description                                                                                                              |
+| ----------------- | -------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `slug`            | `string`                                     | required    | Single slug.                                                                                                             |
+| `depth`           | `number`                                     | `0`         | Relationship population depth.                                                                                           |
+| `select`          | `Record<string, boolean>`                    | —           | Whitelist or blacklist fields.                                                                                           |
+| `populate`        | `Record<string, boolean \| PopulateOptions>` | —           | Per-field population control.                                                                                            |
+| `richTextFormat`  | `"json" \| "html" \| "both"`                 | `"json"`    | Rich text output format.                                                                                                 |
+| `richTextStyles`  | `"default" \| "none"`                        | `"default"` | How rich text HTML is styled: `"none"` gives classes only (see [Rich text format](#rich-text-format)).                   |
+| `overrideAccess`  | `boolean`                                    | `true`      | Bypass access control.                                                                                                   |
+| `user`            | `{ id, role? }`                              | —           | Whose access is judged when `overrideAccess: false`. Without one, the call is judged as a signed-out visitor.            |
+| `createIfMissing` | `boolean`                                    | `true`      | Whether a read of a single that has never been saved creates its default document. Pass `false` to read without writing. |
 
 **Returns:** the bare single document (`T`). With `createIfMissing: false`, a
 single that has no stored document yet answers `null` (typed `T | null`), and
@@ -555,6 +558,8 @@ const settingsLike = await nextly.findSingles({ search: "settings" });
 The `nextly.email.*` namespace sends transactional email through whichever provider is configured (database-default first, code-config fallback second).
 
 `email.send`, `sendWithTemplate`, `queue` and `queueWithTemplate` ask no permission, even with `overrideAccess: false`: they act as the site. If a user's action triggers a send, check in your own code whether that user may send it, and to whom, before calling them.
+
+`email.cancelQueued({ id })` (`@experimental`) cancels a queued email as a person: one waiting, or failed with its message still held, is cancelled and its message cleared; one the provider is sending at that moment is asked to stop, which takes effect only if that attempt fails. A checked call needs `manage-email-deliveries`, seeded to super-admin; the plugin that queued the email is told who cancelled it. It refuses an email already sent or cancelled with `CONFLICT`, and an unknown id with `NOT_FOUND`.
 
 ### email.send
 
@@ -775,20 +780,20 @@ The full TypeScript surface is generated from [`packages/nextly/src/direct-api/n
 
 ### Operators
 
-| Operator             | Description                                                                  | Example                                      |
-| -------------------- | ---------------------------------------------------------------------------- | -------------------------------------------- |
-| `equals`             | Exact match                                                                  | `{ status: { equals: "published" } }`        |
-| `not_equals`         | Not equal                                                                    | `{ status: { not_equals: "draft" } }`        |
-| `greater_than`       | `>`                                                                          | `{ price: { greater_than: 100 } }`           |
-| `greater_than_equal` | `>=`                                                                         | `{ price: { greater_than_equal: 100 } }`     |
-| `less_than`          | `<`                                                                          | `{ price: { less_than: 50 } }`               |
-| `less_than_equal`    | `<=`                                                                         | `{ price: { less_than_equal: 50 } }`         |
-| `like`               | SQL `LIKE` (case-sensitive)                                                  | `{ title: { like: "%hello%" } }`             |
+| Operator             | Description                                                                                                  | Example                                      |
+| -------------------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------- |
+| `equals`             | Exact match                                                                                                  | `{ status: { equals: "published" } }`        |
+| `not_equals`         | Not equal                                                                                                    | `{ status: { not_equals: "draft" } }`        |
+| `greater_than`       | `>`                                                                                                          | `{ price: { greater_than: 100 } }`           |
+| `greater_than_equal` | `>=`                                                                                                         | `{ price: { greater_than_equal: 100 } }`     |
+| `less_than`          | `<`                                                                                                          | `{ price: { less_than: 50 } }`               |
+| `less_than_equal`    | `<=`                                                                                                         | `{ price: { less_than_equal: 50 } }`         |
+| `like`               | SQL `LIKE` (case-sensitive)                                                                                  | `{ title: { like: "%hello%" } }`             |
 | `contains`           | Substring, ignoring case on every database, letters outside ASCII included; `%` and `_` are matched as typed | `{ title: { contains: "hello" } }`           |
-| `search`             | Alias for `contains`                                                         | `{ title: { search: "hello" } }`             |
-| `in`                 | Value in array                                                               | `{ status: { in: ["draft", "published"] } }` |
-| `not_in`             | Value not in array                                                           | `{ status: { not_in: ["archived"] } }`       |
-| `exists`             | Field is non-null when `true`, null when `false`                             | `{ image: { exists: true } }`                |
+| `search`             | Alias for `contains`                                                                                         | `{ title: { search: "hello" } }`             |
+| `in`                 | Value in array                                                                                               | `{ status: { in: ["draft", "published"] } }` |
+| `not_in`             | Value not in array                                                                                           | `{ status: { not_in: ["archived"] } }`       |
+| `exists`             | Field is non-null when `true`, null when `false`                                                             | `{ image: { exists: true } }`                |
 
 `contains` ignores case the same way on PostgreSQL, MySQL and SQLite, accented and other non-ASCII letters included: `{ title: { contains: "CRÈME" } }` finds "crème brûlée". Case is folded by Unicode's default rules rather than a language's, one letter at a time: the Turkish capital "İ" matches a plain "i", so "İstanbul" and "istanbul" find each other, and "I" matches "i", never the dotless "ı". On PostgreSQL, a database created with the `C` or `POSIX` locale folds ASCII letters only.
 
@@ -851,13 +856,18 @@ const post = await nextly.findByID({
 const all = await nextly.findByID({ collection: "posts", id, locale: "all" });
 
 // A write stores into the language it names.
-await nextly.update({ collection: "posts", id, locale: "es", data: { title: "Hola" } });
+await nextly.update({
+  collection: "posts",
+  id,
+  locale: "es",
+  data: { title: "Hola" },
+});
 ```
 
-| Option           | Type              | What it does                                                                                                                                                              |
-| ---------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `locale`         | `string`          | The language a read returns or a write stores. Unset, the default language. `"all"` answers a read with every language's value for each translated field, as an object keyed by language code. Generated types do not model that yet and still declare the field's own type, so treat such a result as untyped.               |
-| `fallbackLocale` | `string \| false` | Where a read takes a value its language lacks. Unset, the language's own [fallback chain](/docs/localization#fallback-chains). `false` turns fallback off.               |
+| Option           | Type              | What it does                                                                                                                                                                                                                                                                                                    |
+| ---------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `locale`         | `string`          | The language a read returns or a write stores. Unset, the default language. `"all"` answers a read with every language's value for each translated field, as an object keyed by language code. Generated types do not model that yet and still declare the field's own type, so treat such a result as untyped. |
+| `fallbackLocale` | `string \| false` | Where a read takes a value its language lacks. Unset, the language's own [fallback chain](/docs/localization#fallback-chains). `false` turns fallback off.                                                                                                                                                      |
 
 Language filters and the per-language status overview are REST parameters; see
 [Languages](/docs/api-reference/rest-api#languages) in the REST reference.
@@ -950,6 +960,24 @@ b.items[0].content; // "<p>Hello world</p>"
 const c = await nextly.find({ collection: "posts", richTextFormat: "both" });
 c.items[0].content; // { json: {...}, html: "<p>Hello world</p>" }
 ```
+
+The HTML carries Nextly's own look as inline styles, so it reads well in a page whose CSS
+resets every element. To style it with your own CSS instead, ask for classes only with
+`richTextStyles: "none"`:
+
+```typescript
+const d = await nextly.find({
+  collection: "posts",
+  richTextFormat: "html",
+  richTextStyles: "none",
+});
+d.items[0].content; // '<p class="nextly-rich-text-paragraph">Hello world</p>'
+```
+
+No element then carries a style Nextly adds: each has a class in the `nextly-rich-text-`
+namespace, and alignment is a class too. Styles an author chose in the editor (a text colour, a
+button's colours) are kept. The classes are listed under
+[Styling rich text HTML](/docs/configuration/fields#styling-rich-text-html).
 
 ## Versions and conflicts
 

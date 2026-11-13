@@ -65,7 +65,7 @@ test("opens a notification at its own address and saves an edit", async ({
     .getByRole("listitem")
     .filter({ hasText: "Notify the events team" });
   await expect(row).toContainText("events@example.com, access@example.com");
-  await expect(row).toContainText("Only when Joining is online");
+  await expect(row).toContainText("Only when Joining is Online");
 
   // Opened directly at its own address.
   await gotoAdmin(page, `${base}?section=team`);

@@ -12,8 +12,18 @@ import { isRecord } from "../plain-values";
 import { forgetDeleted, recheckSaved, type ProblemChecks } from "./check";
 import { singleKey } from "./page-types";
 
+/** What a hook the checks are started from is handed, as far as they read it. */
+interface SavedContext {
+  data?: unknown;
+  /**
+   * Runs an effect once the write is durable: after its transaction commits,
+   * where it is made on one, or at once. Absent on a context built by hand.
+   */
+  afterCommit?: (effect: () => unknown) => Promise<void>;
+}
+
 /** The id of the document a hook was handed, as text. */
-export function idOf(context: { data?: unknown }): string | undefined {
+export function idOf(context: SavedContext): string | undefined {
   const id = isRecord(context.data) ? context.data.id : undefined;
   return typeof id === "string" || typeof id === "number"
     ? String(id)
@@ -27,24 +37,46 @@ export function idOf(context: { data?: unknown }): string | undefined {
  */
 export function watchSaves(ctx: PluginContext, checks: ProblemChecks): void {
   for (const slug of checks.targets) {
-    const saved = (context: { data?: unknown }) => {
+    const saved = (context: SavedContext) => {
       const id = idOf(context);
-      if (id !== undefined) recheckSaved(ctx, checks, slug, id);
+      if (id !== undefined) {
+        onceDurable(context, () => recheckSaved(ctx, checks, slug, id));
+      }
     };
     ctx.hooks.on("afterCreate", slug, saved);
     ctx.hooks.on("afterUpdate", slug, saved);
-    ctx.hooks.on("afterDelete", slug, (context: { data?: unknown }) => {
+    ctx.hooks.on("afterDelete", slug, (context: SavedContext) => {
       const id = idOf(context);
-      if (id !== undefined) forgetDeleted(ctx, slug, id);
+      if (id !== undefined) {
+        onceDurable(context, () => forgetDeleted(ctx, slug, id));
+      }
     });
   }
   // A Single is never created or deleted by a person: its save is an
   // update, its hooks named by its key.
   for (const slug of checks.singles) {
     const key = singleKey(slug);
-    ctx.hooks.on("afterUpdate", key, (context: { data?: unknown }) => {
+    ctx.hooks.on("afterUpdate", key, (context: SavedContext) => {
       const id = idOf(context);
-      if (id !== undefined) recheckSaved(ctx, checks, key, id);
+      if (id !== undefined) {
+        onceDurable(context, () => recheckSaved(ctx, checks, key, id));
+      }
     });
   }
+}
+
+/**
+ * Start `start` once the write the hook belongs to is durable. A save made on
+ * a transaction runs its after-hooks inside it: a check started there would
+ * read the page before the transaction commits, and make its own writes on
+ * the transaction's connection beside the transaction's, where on PostgreSQL
+ * and MySQL the two name the same savepoint and either can fail. Held until
+ * the commit, it runs outside the transaction and reads what was saved.
+ */
+function onceDurable(context: SavedContext, start: () => void): void {
+  if (context.afterCommit === undefined) {
+    start();
+    return;
+  }
+  void context.afterCommit(start);
 }

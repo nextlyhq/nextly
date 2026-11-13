@@ -92,7 +92,7 @@ describe("the top bar's trail", () => {
       "Content",
       "Blog posts",
     ]);
-    expect(links[0]).toHaveAttribute("href", "/admin/collections");
+    expect(links[0]).toHaveAttribute("href", "/admin/content");
     expect(links[1]).toHaveAttribute("href", "/admin/collections/posts");
     // The last step is the page itself, named and not a link.
     const here = within(trail()).getByText("Spring is here");
@@ -107,6 +107,7 @@ describe("the top bar's trail", () => {
 
     const links = within(trail()).getAllByRole("link");
     expect(links.map(link => link.textContent)).toEqual(["Content", "Singles"]);
+    expect(links[0]).toHaveAttribute("href", "/admin/content");
     expect(links[1]).toHaveAttribute("href", "/admin/singles");
     expect(within(trail()).getByText("Homepage")).toHaveAttribute(
       "aria-current",

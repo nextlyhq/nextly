@@ -223,6 +223,10 @@ export default function CreateEntryPage({
   }
 
   const collectionLabel = collection.label || collection.name || slug;
+  // The trail's step leads to the collection's list, so it says what the
+  // list and the default editor's trail say: the plural ("Submissions"),
+  // not the one-entry label a collection may also answer as `label`.
+  const listLabel = collection.labels?.plural || collectionLabel;
 
   // A collection removed from code refuses every create, so no form is
   // offered: the notice says why and what to do, with the way back to its
@@ -289,7 +293,7 @@ export default function CreateEntryPage({
           breadcrumbs={
             <CreateEntryBreadcrumbs
               collectionSlug={slug}
-              collectionLabel={collectionLabel}
+              collectionLabel={listLabel}
             />
           }
         >

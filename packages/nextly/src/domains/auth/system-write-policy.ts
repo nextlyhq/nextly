@@ -107,6 +107,9 @@ export const SYSTEM_WRITE_POLICY = {
     sendTest: only("create", "email-providers"),
     makeDefault: only("update", "email-providers"),
   },
+  emailDeliveries: {
+    cancel: only("manage", "email-deliveries"),
+  },
   emailTemplates: {
     create: only("create", "email-templates"),
     update: only("update", "email-templates"),

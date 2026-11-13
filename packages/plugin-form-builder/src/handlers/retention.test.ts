@@ -118,13 +118,117 @@ describe("the retention pass", () => {
     expect(deleted).toEqual(["f1-old", "f2-old"]);
   });
 
+  it("carries the uploads' sweep on past the files it kept, into the unclaimed ones", async () => {
+    const queue = vi.fn(async () => ({ id: "job", deduped: false }));
+    const deadline = new Date(Date.now() + 60_000);
+    // Three released uploads whose files the site still uses, so each is
+    // kept, and checked again only by a later night's pass.
+    const released = ["u1", "u2", "u3"].map(id => ({
+      id,
+      media: `m-${id}`,
+      releasedAt: new Date(),
+    }));
+    const asked: Array<Record<string, unknown>> = [];
+    const checked: string[] = [];
+    const uploads = {
+      own: {
+        listEntries: vi.fn(
+          async (
+            _slug: string,
+            options: { where: Record<string, unknown> }
+          ) => {
+            asked.push(options.where);
+            if (!("releasedAt" in options.where)) return { data: [] };
+            if (
+              (options.where.releasedAt as { exists?: boolean }).exists !== true
+            ) {
+              return { data: [] };
+            }
+            const after = (options.where.id as { greater_than?: string })
+              ?.greater_than;
+            return {
+              data: released.filter(
+                upload => after === undefined || upload.id > after
+              ),
+            };
+          }
+        ),
+        count: vi.fn(async () => 0),
+      },
+      collections: { deleteEntry: vi.fn() },
+      media: {
+        findById: vi.fn(async () => ({})),
+        isInUse: vi.fn(async (mediaId: string) => {
+          checked.push(mediaId);
+          // The run's time is up once the second file is checked.
+          if (checked.length === 2) deadline.setTime(0);
+          return true;
+        }),
+        delete: vi.fn(),
+      },
+      uploadsSlug: "form-uploads",
+    };
+    const value = {
+      collections: {
+        listEntries: vi.fn(async () => ({ data: [] })),
+        deleteEntry: vi.fn(),
+      },
+      jobs: { queue },
+      formsSlug: "forms",
+      submissionsSlug: "form-submissions",
+      uploads,
+    } as unknown as RetentionDeps;
+    const start = { spamDone: true, formsDone: true };
+
+    expect(await runRetention(value, deadline, start)).toBe("continued");
+    expect(checked).toEqual(["m-u1", "m-u2"]);
+    expect(queue).toHaveBeenCalledWith({
+      task: RETENTION_JOB,
+      input: { spamDone: true, formsDone: true, afterUpload: "u2" },
+    });
+
+    // The continuation starts past u2, checks u3 alone, and goes on to the
+    // uploads nobody claimed.
+    deadline.setTime(Date.now() + 60_000);
+    asked.length = 0;
+    expect(
+      await runRetention(
+        value,
+        deadline,
+        retentionCursorOf({
+          ...start,
+          afterUpload: "u2",
+        })
+      )
+    ).toBe("done");
+    expect(checked).toEqual(["m-u1", "m-u2", "m-u3"]);
+    expect(asked[0]).toMatchObject({ id: { greater_than: "u2" } });
+    expect(asked.some(where => "createdAt" in where)).toBe(true);
+    expect(uploads.media.delete).not.toHaveBeenCalled();
+  });
+
   it("reads a continuation's cursor from its job input", () => {
     expect(retentionCursorOf(null)).toEqual({});
     expect(retentionCursorOf({ spamDone: true, afterForm: "f1" })).toEqual({
       spamDone: true,
       afterForm: "f1",
     });
-    expect(retentionCursorOf({ spamDone: "yes", afterForm: 3 })).toEqual({});
+    expect(
+      retentionCursorOf({
+        spamDone: true,
+        formsDone: true,
+        releasedDone: true,
+        afterUpload: "u2",
+      })
+    ).toEqual({
+      spamDone: true,
+      formsDone: true,
+      releasedDone: true,
+      afterUpload: "u2",
+    });
+    expect(
+      retentionCursorOf({ spamDone: "yes", afterForm: 3, afterUpload: 4 })
+    ).toEqual({});
   });
 
   it("is started each night by the plugin's schedule", () => {

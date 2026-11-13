@@ -56,10 +56,14 @@ import {
 const start = vi.hoisted(() => ({
   boot: undefined as (() => void) | undefined,
   calls: 0,
+  /** Whether the start cannot be made, as where the app registered none. */
+  fails: false,
 }));
 vi.mock("../../../init", () => ({
   getCachedNextly: async () => {
     start.calls += 1;
+    if (start.fails)
+      throw new Error("getCachedNextly() called before initialization");
     start.boot?.();
     return {};
   },
@@ -126,6 +130,7 @@ const params = (slug: string[]) => ({ params: Promise.resolve({ slug }) });
 beforeEach(() => {
   start.boot = undefined;
   start.calls = 0;
+  start.fails = false;
 });
 
 afterEach(() => {
@@ -585,6 +590,45 @@ describe("a worker where nothing has started Nextly yet", () => {
       "/"
     );
     expect(single.title).toEqual({ absolute: "Answered" });
+  });
+
+  it("reads nothing for a provider where Nextly cannot be started, and serves the route's own", async () => {
+    forgetCapabilityProviders();
+    start.fails = true;
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const derived: string[] = [];
+    const built: string[] = [];
+    const rendered: Array<string | undefined> = [];
+    const { reader } = contentReader();
+    const route = createPublicContentRoute({
+      collections: ["pages"],
+      nextly: reader,
+      buildMetadata: entry => {
+        built.push(String(entry.slug));
+        return { title: "Own" };
+      },
+      derivedMetadata: entry => {
+        derived.push(String(entry.slug));
+        return { title: "Drawn" };
+      },
+      render: (_, context) => {
+        rendered.push(context.structuredData);
+        return "page";
+      },
+    });
+
+    await route.ContentPage(params(["about"]));
+    // The render asks only for structured data, which nobody can give: the
+    // route's own head is not worked out for it either.
+    expect(built).toEqual([]);
+    const metadata = await route.generateMetadata(params(["about"]));
+
+    // Nobody can be asked, so what the page's content offers a provider is
+    // never worked out, for its render or for its head.
+    expect(derived).toEqual([]);
+    expect(rendered).toEqual([undefined]);
+    expect(metadata.title).toBe("Own");
+    expect(start.calls).toBeGreaterThan(0);
   });
 
   it("starts Nextly before a Single page's structured data is read", async () => {

@@ -1,7 +1,10 @@
 /**
- * The SEO plugin's record of who holds each public address, kept so no two
- * pages are served at one address in one language.
+ * The collection an earlier version kept the SEO plugin's record of who holds
+ * each public address in. The record now lives in the plugin's own tables
+ * (`address-record/store`), where its rows are moved once at start; this is
+ * still declared so a site's rows are kept, and nothing writes it any more.
  *
+ * As it was kept:
  * One row per held address (`address`), per range of addresses held as one,
  * such as a paginated list's later pages (`range`), and per lock row taken
  * before reading (`lock`). The claim key is the only unique column, and it is

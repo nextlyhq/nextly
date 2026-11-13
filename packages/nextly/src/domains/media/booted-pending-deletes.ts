@@ -29,7 +29,7 @@ export function bootedPendingDeletes(now?: () => Date): PendingMediaDeletes {
     // Queued in the transaction that writes the marks, so the job exists
     // exactly when they do.
     schedule: async (tx, job) => {
-      await enqueueInTransaction(tx, adapter.getCapabilities().dialect, {
+      await enqueueInTransaction(tx, {
         slug: MEDIA_FINALIZE_DELETES_JOB,
         input: { ids: [...job.ids] },
         runAt: job.runAt,

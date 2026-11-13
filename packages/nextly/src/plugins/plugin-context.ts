@@ -34,6 +34,12 @@ import {
   type ForgetSendsInput,
   forgetPluginSends,
 } from "../domains/email/plugin-send-forgetting";
+import {
+  onQueuedEmailChange,
+  type QueuedEmailChange,
+  RECIPIENT_DIGEST_PURPOSE,
+  useRecipientDigester,
+} from "../domains/email/queued-send-changes";
 import { pluginKeyScope, scopedSender } from "../domains/email/send-claims";
 import type { FieldGroupRegistryService } from "../domains/field-groups/services/field-group-registry-service";
 import type { JobRegistry } from "../domains/jobs/job-registry";
@@ -667,7 +673,7 @@ export type { PluginMediaService } from "./plugin-media";
 /** @experimental `ctx.services.email`. */
 export type PluginEmailService = Pick<
   EmailService,
-  (typeof PLUGIN_EMAIL_METHODS)[number]
+  (typeof PLUGIN_EMAIL_METHODS)[number] | "readQueued" | "recipientDigest"
 > & {
   /**
    * @experimental Forget email this plugin sent about something it has
@@ -684,7 +690,31 @@ export type PluginEmailService = Pick<
     input: ForgetSendsInput,
     options?: { tx?: PluginTransaction }
   ): Promise<void>;
+  /**
+   * @experimental Be told of each change of this plugin's own queued emails,
+   * inside the transaction that makes it: an attempt starting (`sending`), a
+   * failure a retry can help (`retrying`), `sent`, `failed`, or `cancelled`
+   * with why. Each lists every final recipient after `email.beforeSend`
+   * filters, with its line, what became of it, a masked hint and this
+   * plugin's `recipientDigest` of it; no address. What the handler writes
+   * through `db` or the collection services' in-transaction methods with
+   * `transaction` commits or rolls back with the change, and a handler that
+   * throws undoes it, so the attempt is tried again: write as an upsert.
+   * Not told of an erasure, which a plugin reads with `readQueued`.
+   * Returns the undo; teardown also withdraws it.
+   */
+  onQueuedEmailChange(handler: QueuedEmailChangeHandler): () => void;
 };
+
+/**
+ * @experimental What `ctx.services.email.onQueuedEmailChange` hands its
+ * handler: the change, and this plugin's database and collection token
+ * bound to the change's transaction.
+ */
+export type QueuedEmailChangeHandler = (
+  change: QueuedEmailChange,
+  context: { db: PluginTransaction; transaction: PluginCollectionTransaction }
+) => void | Promise<void>;
 /** @experimental `ctx.services.versions`. */
 export type PluginVersionsService = Pick<
   VersionsService,
@@ -2931,6 +2961,32 @@ export function createPluginContext(
     ? resolvePluginSelf(plugin)
     : { name: "", collections: {}, singles: {} };
 
+  // Under this plugin's own key, kept in `nextly_meta` sealed in its name.
+  // The store and the install's secrets are read per call, as above. One
+  // helper for `ctx.security.digests` and for the recipient digests its
+  // queued email carries, so the two are one key and agree.
+  const digests = createKeyedDigests({
+    owner,
+    store: () => getServiceFn("metaService"),
+    adapter: () => asDigestKeyAdapter(getServiceFn("adapter")),
+    // The keyed generations only: a key is sealed and opened with one.
+    secrets: () =>
+      secretGenerations(env.NEXTLY_SECRET, env.NEXTLY_SECRET_PREVIOUS).filter(
+        (generation): generation is string => typeof generation === "string"
+      ),
+  });
+  const emailScope = pluginKeyScope(pluginName);
+  if (pluginName) {
+    // The digests its queued emails' recipients carry and its exclusions are
+    // compared by, withdrawn at teardown with its other subscriptions.
+    recordPluginSubscription(
+      pluginName,
+      useRecipientDigester(emailScope, mailbox =>
+        digests.digest(RECIPIENT_DIGEST_PURPOSE, mailbox)
+      )
+    );
+  }
+
   return {
     services: {
       collections: wrapCollectionsForPlugin(collectionService),
@@ -3022,9 +3078,31 @@ export function createPluginContext(
       // plugin and the site, never name one send with the same key.
       email: Object.freeze({
         ...methodFacade(
-          scopedSender(emailService, pluginKeyScope(pluginName)),
+          scopedSender(emailService, emailScope),
           PLUGIN_EMAIL_METHODS
         ),
+        // Its own queued emails only, and its own digests, by its scope.
+        readQueued: (ids: readonly string[]) =>
+          scopedSender(emailService, emailScope).readQueued(ids),
+        recipientDigest: (address: string) =>
+          scopedSender(emailService, emailScope).recipientDigest(address),
+        // Each change of its own queued emails, in the change's transaction,
+        // with this plugin's database and collection token bound to it.
+        onQueuedEmailChange: (handler: QueuedEmailChangeHandler) => {
+          const undo = onQueuedEmailChange(emailScope, (change, tx) =>
+            bindToTransaction(tx, db =>
+              withWriteTransactionToken(
+                tx,
+                async transaction => {
+                  await handler(change, { db, transaction });
+                },
+                "ctx.services.email.onQueuedEmailChange"
+              )
+            )
+          );
+          if (pluginName) recordPluginSubscription(pluginName, undo);
+          return undo;
+        },
         // Its own sends only, by the same scope its keys are claimed in.
         forgetSends: (
           input: ForgetSendsInput,
@@ -3093,6 +3171,7 @@ export function createPluginContext(
     publicAddresses: pluginPublicAddresses({
       bindTo: bindToTransaction,
       owner: hookOwner ?? "app",
+      dialect: () => getServiceFn("dialect"),
       // Withdrawn at teardown with the plugin's other subscriptions.
       onTeardown: undo => {
         if (pluginName) recordPluginSubscription(pluginName, undo);
@@ -3131,19 +3210,7 @@ export function createPluginContext(
       // rotation applies at once.
       // Under this plugin's own key, kept in `nextly_meta` sealed in its name.
       // The store and the install's secrets are read per call, as above.
-      digests: createKeyedDigests({
-        owner,
-        store: () => getServiceFn("metaService"),
-        adapter: () => asDigestKeyAdapter(getServiceFn("adapter")),
-        // The keyed generations only: a key is sealed and opened with one.
-        secrets: () =>
-          secretGenerations(
-            env.NEXTLY_SECRET,
-            env.NEXTLY_SECRET_PREVIOUS
-          ).filter(
-            (generation): generation is string => typeof generation === "string"
-          ),
-      }),
+      digests,
       secrets: createOneTimeSecrets({
         owner,
         adapter: () => asSecretsAdapter(getServiceFn("adapter")),

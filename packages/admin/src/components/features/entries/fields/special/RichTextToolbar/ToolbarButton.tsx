@@ -54,6 +54,9 @@ export function ToolbarButton({
           onClick={onClick}
           disabled={disabled}
           aria-pressed={isActive}
+          // The button shows only an icon, and a tooltip's text names nothing
+          // until it opens, so the tooltip's text is also the button's name.
+          aria-label={tooltip}
         >
           {children}
         </Button>

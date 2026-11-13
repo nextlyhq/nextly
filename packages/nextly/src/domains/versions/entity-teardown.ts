@@ -20,6 +20,7 @@ import type { RevalidationIntent } from "../../revalidation/types";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { deletePinsOfTarget } from "../dashboard/dashboard-pins";
 import type { DashboardLogger, TableProbe } from "../dashboard/table-presence";
+import { clearRegistryRowCache } from "../dynamic-collections/services/collection-row-cache";
 import { deletedEntityIntent } from "../flush-content-change";
 
 import type { VersionsDbApi } from "./db-api";
@@ -92,6 +93,9 @@ export async function deleteEntityRegistryRow(
   const deleted = await tx.delete(registry, {
     and: [{ column: "slug", op: "=" as const, value: scopeSlug }],
   });
+  // Cleared as the row goes, so a read later in the transaction does not
+  // answer with the row it read before the delete.
+  clearRegistryRowCache();
   await new VersionsRepository(tx).deleteAutosavesForEntity(
     scopeKind,
     scopeSlug

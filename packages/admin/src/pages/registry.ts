@@ -101,8 +101,11 @@ const PluginBrowsePage = lazyRoute(() => import("./dashboard/plugins/browse"));
 const PluginsOverviewPage = lazyRoute(
   () => import("./dashboard/plugins/index")
 );
-const CollectionsLandingRedirect = lazyRoute(
-  () => import("./dashboard/redirects/CollectionsLandingRedirect")
+const CollectionsOverviewPage = lazyRoute(
+  () => import("./dashboard/content/collections")
+);
+const ContentOverviewPage = lazyRoute(
+  () => import("./dashboard/content/index")
 );
 const EmailSettingsRedirect = lazyRoute(
   () => import("./dashboard/redirects/EmailSettingsRedirect")
@@ -110,8 +113,8 @@ const EmailSettingsRedirect = lazyRoute(
 const FieldGroupsLandingRedirect = lazyRoute(
   () => import("./dashboard/redirects/FieldGroupsLandingRedirect")
 );
-const SinglesLandingRedirect = lazyRoute(
-  () => import("./dashboard/redirects/SinglesLandingRedirect")
+const SinglesOverviewPage = lazyRoute(
+  () => import("./dashboard/content/singles")
 );
 const ReleaseDetailPage = lazyRoute(() => import("./dashboard/releases/[id]"));
 const ReleasesPage = lazyRoute(() => import("./dashboard/releases/index"));
@@ -425,18 +428,25 @@ export const routeConfig: Record<string, RouteConfig> = {
   },
 
   // ============================================================
-  // Section landing redirects.
+  // Section landings.
   //
-  // hits one of these instead of a static schema-list. The router
-  // picks the most-recently-created record, navigates to its content
-  // URL, or surfaces 404 when none exist. Components is a static
-  // redirect into the Builder since components have no content surface.
+  // /admin/content, /admin/collections and /admin/singles are the Content
+  // overview: every collection and Single the reader may open, or one kind's
+  // table alone. Field groups have no content surface, so theirs is a static
+  // redirect into the Builder.
   // IMPORTANT: these section-landing routes must be registered BEFORE
   // the matching content routes (/admin/collections/[slug] etc.) so
   // the literal /admin/collections takes priority over the wildcard.
   // ============================================================
+  // Opening Content in the rail lands here with the Content panel beside it.
+  [ROUTES.CONTENT]: {
+    component: ContentOverviewPage,
+    screenName: "Content",
+    type: "private",
+    section: "collections",
+  },
   [ROUTES.COLLECTIONS]: {
-    component: CollectionsLandingRedirect,
+    component: CollectionsOverviewPage,
     // Named here, not by the rail: the rail holds one Content item for both, so it has no
     // Collections item to read a label from.
     screenName: "Collections",
@@ -444,7 +454,7 @@ export const routeConfig: Record<string, RouteConfig> = {
     section: collectionContentSection,
   },
   [ROUTES.SINGLES]: {
-    component: SinglesLandingRedirect,
+    component: SinglesOverviewPage,
     // As Collections above: the rail's one Content item holds Singles too.
     screenName: "Singles",
     type: "private",

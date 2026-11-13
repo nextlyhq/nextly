@@ -70,6 +70,16 @@ describe("compareSchemaVersion", () => {
     });
   });
 
+  it("is behind where the database stores a hand-named migration and the build a timestamped one", () => {
+    // A version stored before hand-named names ranked below timestamps: the
+    // next `nextly migrate` stores the newest timestamped name over it.
+    expect(compareSchemaVersion(stored("get_started_only"), NEWER)).toEqual({
+      kind: "behind",
+      stored: "get_started_only",
+      build: NEWER,
+    });
+  });
+
   it("is unknown where no version is stored, or the row holds something else", () => {
     expect(compareSchemaVersion({ present: false }, NEWER)).toEqual({
       kind: "unknown",
@@ -92,6 +102,30 @@ describe("the newest migration", () => {
     expect(newestMigrationName([NEWER, OLDER])).toBe(NEWER);
     expect(newestMigrationName([OLDER, NEWER])).toBe(NEWER);
     expect(newestMigrationName([])).toBeUndefined();
+  });
+
+  it("is the newest timestamped name, where hand-named ones sort after it", () => {
+    // Hand-named files predate the timestamped names `migrate:create`
+    // writes, so a timestamp outranks a name without one, whatever their
+    // code-unit order.
+    expect(newestMigrationName(["get_started_only", OLDER, NEWER])).toBe(NEWER);
+    expect(newestMigrationName([NEWER, "zz_seed", OLDER])).toBe(NEWER);
+    // Hand-named names alone keep their run order among themselves.
+    expect(newestMigrationName(["b_second", "a_first"])).toBe("b_second");
+  });
+
+  it("in a folder that still holds a hand-named file, is the newest timestamped one", () => {
+    dir = mkdtempSync(join(tmpdir(), "nextly-schema-version-"));
+    for (const file of [
+      `get_started_only.sql`,
+      `${OLDER}.sql`,
+      `${NEWER}.sql`,
+    ]) {
+      writeFileSync(join(dir, file), "-- UP\n");
+    }
+    expect(
+      newestMigrationIn(dir, "postgresql", () => readMigrationFolderSync)
+    ).toBe(NEWER);
   });
 
   it("in a folder, counts a dialect's variant as its base and ignores what is not SQL", () => {
@@ -179,6 +213,37 @@ describe("newestAppliedAppMigration", () => {
 
   it("is null where no app migration is applied", () => {
     expect(newestAppliedAppMigration([])).toBeNull();
+  });
+
+  it("is the last timestamped migration, never an older hand-named one that sorts after it", () => {
+    // A ledger shaped like a site that went live with a hand-named file: it
+    // applied first, in August, then the generated, timestamped files after
+    // it. The hand-named name sorts after every timestamp ("g" > "2"), so a
+    // plain name order would call it the newest, and the stored version and
+    // the registry record would name a migration older than the database.
+    const handNamed = "get_started_only";
+    const last = "20261111_081916_829_blog_post_author_optional";
+    const rows = [
+      row(`${handNamed}.sql`, "applied", "2026-08-05T10:00:00Z"),
+      row(
+        "20260810_092339_908_feature_fields.sql",
+        "applied",
+        "2026-08-10T09:24:00Z"
+      ),
+      row(
+        "20261020_101500_000_blog_categories.sql",
+        "applied",
+        "2026-10-20T10:16:00Z"
+      ),
+      row(`${last}.sql`, "applied", "2026-11-11T08:34:00Z"),
+      // The file was later taken out of the folder, its removal recorded:
+      // a note about the file, which leaves the migration applied.
+      {
+        ...row(`${handNamed}.sql`, "applied", "2026-11-12T08:42:00Z"),
+        eventType: "file_removed",
+      } as SchemaEventRow,
+    ];
+    expect(newestAppliedAppMigration(rows)).toBe(last);
   });
 });
 

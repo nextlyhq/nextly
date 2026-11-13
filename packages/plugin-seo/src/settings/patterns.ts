@@ -86,18 +86,21 @@ const SITE_NAME_MARK = "\u0000";
 const SEPARATOR_BEFORE_MARK = /\s*[|\u2014\u2013\u00b7:,-]?\s*$/;
 
 /**
- * `filled` with each mark of the site's name replaced by it, except where the
- * text before the mark already ends with the name: there the mark and the
- * separator before it go, so "{Title} | {Site name}" never gives
- * "Pricing | Acme | Acme".
+ * `filled` with each mark of the site's name replaced by it, except the one
+ * that ends the pattern where the text before it already ends with the name:
+ * there the mark and the separator before it go, so "{Title} | {Site name}"
+ * never gives "Pricing | Acme | Acme". A mark with more of the pattern after
+ * it is always filled, since the name there is part of a longer suffix:
+ * "{Title} | {Site name} Blog" gives "Why we chose Acme | Acme Blog".
  */
 function withSiteName(filled: string, siteName: string): string {
   const [first = "", ...rest] = filled.split(SITE_NAME_MARK);
   let result = first;
-  for (const text of rest) {
+  for (const [at, text] of rest.entries()) {
+    const endsPattern = at === rest.length - 1 && text.trim() === "";
     const before = result.replace(SEPARATOR_BEFORE_MARK, "");
     result =
-      before !== "" && endsWithBrand(before, siteName)
+      endsPattern && before !== "" && endsWithBrand(before, siteName)
         ? before + text
         : result + siteName + text;
   }
@@ -108,7 +111,8 @@ function withSiteName(filled: string, siteName: string): string {
  * `pattern` filled in from the page: `{Title}` and `{Site name}`, and any of
  * the page's own text fields by name. Nothing where a token has no value, so
  * the next level supplies the value rather than a pattern with a hole in it.
- * The site's name is never added after a title that already ends with it.
+ * The site's name is never added at the end of a pattern after a title that
+ * already ends with it.
  *
  * The one place a pattern becomes a title: the resolver's answer and the
  * settings screen's preview both call it, so the two cannot disagree.

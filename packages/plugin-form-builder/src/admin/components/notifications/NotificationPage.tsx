@@ -26,6 +26,7 @@ import {
   useFieldBookkeeping,
   useFormBuilder,
 } from "../../context/FormBuilderContext";
+import { useBuilderConfig } from "../../use-builder-config";
 
 import { notificationHref, showNotification } from "./notification-address";
 import type {
@@ -34,6 +35,7 @@ import type {
 } from "./notification-sources";
 import { NotificationConditions } from "./NotificationConditions";
 import { NotificationEmail } from "./NotificationEmail";
+import { NotificationRecentSends } from "./NotificationRecentSends";
 import { NotificationRecipients } from "./NotificationRecipients";
 
 function BackToList(): JSX.Element {
@@ -65,10 +67,12 @@ export function NotificationPage({
   const {
     notifications,
     fields,
+    formData,
     updateNotification,
     duplicateNotification,
     deleteNotification,
   } = useFormBuilder();
+  const { submissionsSlug } = useBuilderConfig();
   const notification = notifications.find(each => each.id === id);
   // After an Undo the sections draw afresh from the restored rule, so a
   // choice they hold for themselves (typing another Reply-To) follows it.
@@ -164,6 +168,11 @@ export function NotificationPage({
         sources={sources}
         defaults={defaults}
         update={update}
+      />
+      <NotificationRecentSends
+        formId={formData.id}
+        notificationId={notification.id}
+        submissionsSlug={submissionsSlug}
       />
     </div>
   );

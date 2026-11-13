@@ -14,6 +14,7 @@ import type { FormActionsProps } from "../types/form-layout";
  */
 export function FormActions({
   dirty,
+  message = "You have unsaved changes",
   className,
   children,
 }: FormActionsProps): JSX.Element {
@@ -29,9 +30,10 @@ export function FormActions({
         // `role="status"` (implying `aria-live="polite"`) so a screen-reader
         // user is told when the flag flips false to true, not only sighted
         // users watching the bar. This is the only live region FormActions
-        // renders, one per form.
+        // renders, one per form. The page's own message replaces the default
+        // text inside the same region, so a changed count is announced.
         <span role="status" className="mr-auto text-sm text-muted-foreground">
-          You have unsaved changes
+          {message}
         </span>
       ) : null}
       {children}

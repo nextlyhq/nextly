@@ -59,6 +59,7 @@
     "interrupted-before-start",
     "invalid-snapshot",
     "legacy-bookkeeping-found",
+    "fields-leaving-translation-not-moved",
     "localization-not-provisioned",
     "media-apply-outside-project",
     "media-config-outside-project",

@@ -25,6 +25,7 @@ import {
   AI_CRAWLER_CHOICES,
   SEO_PLUGIN_NAME,
   SEO_SETTINGS_SLUG,
+  SETUP_STEPS,
   SITE_KINDS,
   type AiCrawlerChoice,
   type SiteKind,
@@ -283,6 +284,17 @@ export async function readSeoRules(
   locale?: string
 ): Promise<SeoRules> {
   return rulesOf(await readSeoSettingsDocument(ctx, locale), mediaImages(ctx));
+}
+
+/**
+ * Whether first-time setup still waits to be asked: fewer than its steps
+ * answered, and not closed for later. The Overview sends a first visit on
+ * to it. Like {@link readSeoRules}, never awaited while the site starts.
+ */
+export async function setupWaiting(ctx: PluginContext): Promise<boolean> {
+  const document = await readSeoSettingsDocument(ctx);
+  const step = typeof document.setupStep === "number" ? document.setupStep : 0;
+  return step < SETUP_STEPS && document.setupDismissed !== true;
 }
 
 /**

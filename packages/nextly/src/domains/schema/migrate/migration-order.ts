@@ -19,3 +19,27 @@ export function compareMigrationBaseNames(a: string, b: string): number {
   if (a === b) return 0;
   return a < b ? -1 : 1;
 }
+
+/**
+ * A name `migrate:create` writes: a UTC timestamp first (`YYYYMMDD_HHMMSS`,
+ * then milliseconds in current releases).
+ */
+const TIMESTAMPED = /^\d{8}_\d{6}/;
+
+/**
+ * Which of two app migrations is the newer, by base name: a timestamped name
+ * outranks one without a timestamp, and names of the same kind compare in
+ * run order (`compareMigrationBaseNames`).
+ *
+ * Run order alone would rank a hand-named file (`get_started_only`) above
+ * every timestamped one, since a letter sorts after a digit, though such a
+ * file predates the names `migrate:create` writes and is applied before
+ * them. "Newest" is asked of the build's migrations folder and of the
+ * database's ledger, and the two answers are compared, so both ask this,
+ * which reads the names alone: the folder has no applied times to read.
+ */
+export function compareMigrationRecency(a: string, b: string): number {
+  const aTimestamped = TIMESTAMPED.test(a);
+  if (aTimestamped !== TIMESTAMPED.test(b)) return aTimestamped ? 1 : -1;
+  return compareMigrationBaseNames(a, b);
+}

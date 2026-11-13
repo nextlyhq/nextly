@@ -137,6 +137,7 @@ import {
 } from "../../../shared/lib/case-conversion";
 import {
   declaredFieldNames,
+  keepPendingWhereDenied,
   refusalIssues,
   resolvePromotedDocument,
 } from "../../../shared/lib/denied-change";
@@ -1667,6 +1668,16 @@ interface CreateEntryWriteOptions {
 
 interface WorkingDraftWriteContext {
   collection: unknown;
+  /**
+   * What the field rules kept at the live row's value because the writer may not write it: each
+   * path, its live value, and the save as sent before the rules ran. A save held over another
+   * writer's pending change keeps that change's value there instead (`keepPendingWhereDenied`).
+   */
+  keptAtStored?: {
+    paths: ReadonlySet<string>;
+    values: ReadonlyMap<string, unknown>;
+    sent: Record<string, unknown>;
+  };
   collectionHasStatus: boolean;
   /** The entry's own table, whose version counter a held edit moves. */
   tableName: string;
@@ -1720,6 +1731,22 @@ interface WorkingDraftWriteContext {
    * a save touch its language's draft.
    */
   translatedKeys?: readonly string[];
+}
+
+/**
+ * The top-level keys a held save sets: what it laid over the working draft.
+ * A translatable value is among them however drafts are kept: the locale
+ * split moves it out of `updatePayload` into the translations row, and a
+ * save to a draft that already exists builds on that draft, so a key left
+ * out here is dropped from the draft while the save reports success.
+ */
+function keysHeldSaveSets(ctx: WorkingDraftWriteContext): Set<string> {
+  return new Set<string>([
+    ...Object.keys(ctx.updatePayload),
+    ...Object.keys(ctx.componentFieldData),
+    ...Object.keys(ctx.manyToManyData),
+    ...(ctx.translatedKeys ?? []),
+  ]);
 }
 
 /** What the caller needs back: the draft as a read would shape it, and its predecessor. */
@@ -12938,7 +12965,6 @@ export class CollectionMutationService extends BaseService {
       snapshotComponents,
       snapshotM2M,
       splitComponentSchemas,
-      updatePayload,
     } = ctx;
     const draftParts = await this.snapshotPartsFor(
       {
@@ -12964,14 +12990,7 @@ export class CollectionMutationService extends BaseService {
     // since the live row the re-fetch returns is the unchanged
     // published content.
     // base below rather than replacing it.
-    const touched = new Set<string>([
-      ...Object.keys(updatePayload),
-      ...Object.keys(componentFieldData),
-      ...Object.keys(manyToManyData),
-      // Kept by part, a translatable edit is a change of its own language's
-      // draft, so it is laid over that draft as the other edits are.
-      ...(draftsKeptByPart() ? (ctx.translatedKeys ?? []) : []),
-    ]);
+    const touched = keysHeldSaveSets(ctx);
     const patchFields = Object.fromEntries(
       Object.entries(patchedDocument).filter(([key]) => touched.has(key))
     );
@@ -13186,6 +13205,25 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Over another writer's pending change, each value the field rules kept at the live row's
+   * because this writer may not write it is the pending change's, and a new value sent there is
+   * refused (`keepPendingWhereDenied`). Nothing to do on a first held save, or one no rule denied.
+   */
+  private keepPendingOverDenied(
+    ctx: WorkingDraftWriteContext,
+    existingDraft: { snapshot: unknown } | undefined,
+    draftDocument: Record<string, unknown>
+  ): void {
+    if (!existingDraft || !ctx.keptAtStored) return;
+    keepPendingWhereDenied({
+      slug: ctx.params.collectionName,
+      document: draftDocument,
+      pending: existingDraft.snapshot as Record<string, unknown>,
+      kept: ctx.keptAtStored,
+    });
+  }
+
+  /**
    * Store the pending edit as this document's working draft, on the caller's
    * transaction.
    *
@@ -13244,6 +13282,7 @@ export class CollectionMutationService extends BaseService {
       ctx,
       existingDraft
     );
+    this.keepPendingOverDenied(ctx, existingDraft, draftDocument);
     // A held edit may not change a field an update filter that judged it
     // names, or the entry could leave the filter once the edit is put live.
     const refusedBy = await this.heldEditRefusedBy(
@@ -13316,12 +13355,7 @@ export class CollectionMutationService extends BaseService {
             // The language whose draft this save writes beside the shared
             // one: never the shared slot here, so the store is handed a code.
             locale: draftLocale,
-            touched: new Set([
-              ...Object.keys(ctx.updatePayload),
-              ...Object.keys(ctx.componentFieldData),
-              ...Object.keys(ctx.manyToManyData),
-              ...(ctx.translatedKeys ?? []),
-            ]),
+            touched: keysHeldSaveSets(ctx),
             keys: await partKeysOf(fields),
           }
         : undefined;
@@ -14263,6 +14297,9 @@ export class CollectionMutationService extends BaseService {
         locale: params.locale,
         overrideAccess: params.overrideAccess,
       });
+      // The save as sent, before the rules keep a denied value at the row's: a save held over
+      // another writer's pending change is judged against what it sent.
+      const sentBeforeRules = detachData(finalData);
       const { storedPaths, storedValues } = await fieldAccessPass(
         params.context,
         {
@@ -15973,6 +16010,11 @@ export class CollectionMutationService extends BaseService {
               stripServerOnlyColumns(liveParentRow, tableName);
               const draftWrite = await this.storeWorkingDraftInTx(tx, {
                 collection,
+                keptAtStored: {
+                  paths: storedPaths,
+                  values: storedValues,
+                  sent: sentBeforeRules,
+                },
                 collectionHasStatus,
                 tableName,
                 componentFieldData,
@@ -19892,6 +19934,8 @@ export class CollectionMutationService extends BaseService {
       // explicit override bypasses.
       // With the field groups this entry stores inline, by their own rules,
       // and every denied value inside a container kept as the row holds it.
+      // The save as sent, before the rules keep a denied value at the row's.
+      const sentBeforeRules = detachData(finalData);
       const { storedPaths, storedValues } = await this.keepDeniedFieldsAtStored(
         {
           data: finalData,
@@ -20630,6 +20674,11 @@ export class CollectionMutationService extends BaseService {
       if (storeAsWorkingDraft) {
         const draftWrite = await this.storeWorkingDraftInTx(tx, {
           collection,
+          keptAtStored: {
+            paths: storedPaths,
+            values: storedValues,
+            sent: sentBeforeRules,
+          },
           tableName,
           collectionHasStatus:
             (collection as { status?: boolean }).status === true,

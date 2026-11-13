@@ -278,3 +278,64 @@ describe("the user menu's theme and help", () => {
     expect(screen.queryByText("Help and community")).toBeNull();
   });
 });
+
+describe("the user menu and the page behind it", () => {
+  /** The menu beside a page that holds a link of its own, as the admin does. */
+  function renderBesidePage() {
+    vi.spyOn(navigator, "language", "get").mockReturnValue("en-US");
+    return render(
+      <AdminI18nProvider signedIn>
+        <main data-testid="page">
+          <a href="#content">Skip to content</a>
+        </main>
+        <UserProfileDropdown
+          user={{ id: "u1", name: "Ada", email: "ada@example.com" }}
+          onLogout={() => {}}
+        />
+      </AdminI18nProvider>
+    );
+  }
+
+  it("leaves the page announced while the menu is open", async () => {
+    const user = userEvent.setup();
+    renderBesidePage();
+    await openMenu(user);
+    // POSITIVE CONTROL: the menu is open.
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+
+    // No ancestor of the page's link is hidden from assistive technology,
+    // while the link itself can still take focus.
+    const page = screen.getByTestId("page");
+    expect(page.closest("[aria-hidden='true']")).toBeNull();
+    expect(
+      screen.getByRole("link", { name: "Skip to content" })
+    ).toBeInTheDocument();
+  });
+
+  it("takes focus, moves by arrow keys, and gives focus back on Escape", async () => {
+    const user = userEvent.setup();
+    renderBesidePage();
+    const trigger = screen.getByRole("button", { name: "User profile menu" });
+    trigger.focus();
+    await user.keyboard("{Enter}");
+
+    const menu = await screen.findByRole("menu");
+    expect(menu.contains(document.activeElement)).toBe(true);
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement?.getAttribute("role")).toMatch(/^menuitem/);
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("closes on a click outside it", async () => {
+    const user = userEvent.setup();
+    renderBesidePage();
+    await openMenu(user);
+    expect(await screen.findByRole("menu")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("page"));
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+});

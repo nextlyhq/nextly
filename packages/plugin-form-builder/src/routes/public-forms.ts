@@ -48,6 +48,17 @@ import { formAvailabilityNow } from "../utils/form-closing";
 import { normalizeFormSettings } from "../utils/form-settings";
 
 /**
+ * The refusal for a form that is absent, not published, or not open: one
+ * message whatever the reason, so the answer does not say which forms exist.
+ */
+export function noSuchForm(slug: string): NextlyError {
+  return NextlyError.notFound({
+    message: NO_SUCH_FORM,
+    logContext: { entity: "form", slug },
+  });
+}
+
+/**
  * These routes read and write as the anonymous visitor on the other end.
  *
  * `public: true` waives the ROUTE's authentication and says nothing about the
@@ -72,7 +83,7 @@ const DEFAULT_SUCCESS_MESSAGE = "Thank you for your submission!";
  * Reading the declared name directly is what made the core endpoints fail on a
  * renamed install while the plugin's own export route kept working.
  */
-function installedSlugs(
+export function installedSlugs(
   config: ResolvedFormBuilderConfig,
   self: PluginRouteContext["self"]
 ): { forms: string; submissions: string } {
@@ -124,7 +135,7 @@ function positiveInt(raw: string | null): number | undefined {
  * one that was asked for, so `?page=100` on a single-page list cannot answer
  * "page 100 of 1".
  */
-function toPageMeta(pagination: {
+export function toPageMeta(pagination: {
   total: number;
   limit: number;
   offset: number;
@@ -203,11 +214,27 @@ async function availabilityNow(
   return formAvailabilityNow(form, settings, { now: new Date(), taken });
 }
 
-async function readFormBySlug(
+/** A form as the public reads it: what judging its availability needs. */
+export type PublicForm = FormAvailabilityInput & {
+  id?: unknown;
+  settings?: unknown;
+  fields?: unknown;
+};
+
+/**
+ * The form at `slug`, read as the visitor, and what a visitor is told about
+ * it now: absent, closed (with its message), or open. One reading for every
+ * public endpoint that names a form by its slug, so they cannot come to
+ * disagree about which forms are open.
+ */
+export async function formAt(
   slug: string,
   ctx: PluginRouteContext,
   config: ResolvedFormBuilderConfig
-): Promise<Response> {
+): Promise<{
+  doc: PublicForm | undefined;
+  availability: ReturnType<typeof formAvailability>;
+}> {
   const slugs = installedSlugs(config, ctx.self);
 
   // Fetched by slug alone, then judged. A status filter in the query would
@@ -220,12 +247,19 @@ async function readFormBySlug(
     PUBLIC
   );
 
-  const doc = result.data?.[0] as
-    | (FormAvailabilityInput & { id?: unknown; settings?: unknown })
-    | undefined;
+  const doc = result.data?.[0] as PublicForm | undefined;
   const availability = doc
     ? await availabilityNow(doc, ctx, slugs)
     : formAvailability(doc);
+  return { doc, availability };
+}
+
+async function readFormBySlug(
+  slug: string,
+  ctx: PluginRouteContext,
+  config: ResolvedFormBuilderConfig
+): Promise<Response> {
+  const { doc, availability } = await formAt(slug, ctx, config);
 
   if (availability.kind === "absent") {
     // The same sentence every other door gives. The canonical "Not found."
@@ -389,6 +423,7 @@ async function acceptSubmission(
       metadata: {
         ipAddress: trustedClientIp(req) ?? undefined,
         userAgent: req.headers.get("user-agent") ?? undefined,
+        page: req.headers.get("referer") ?? undefined,
       },
       access: PUBLIC,
     },

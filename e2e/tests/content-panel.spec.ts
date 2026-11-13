@@ -61,10 +61,12 @@ test.beforeEach(async ({ page }) => {
   await waitForShellAnswers(page);
   // Found in the navigation: a dashboard card's title is the button that
   // opens its quick settings, so the Content card draws a second "Content".
+  // The rail's entry opens the Content overview, with the panel beside it.
   await page
     .getByRole("navigation")
-    .getByRole("button", { name: "Content", exact: true })
+    .getByRole("link", { name: "Content", exact: true })
     .click();
+  await page.waitForURL(/\/admin\/content$/);
 });
 
 test("lists Collections then Singles, each heading with its count", async ({
@@ -147,12 +149,9 @@ test("a folded heading stays folded after a reload", async ({ page }) => {
   await expect(singles).toHaveAttribute("aria-expanded", "false");
   await expect(homepage).toBeHidden();
 
+  // The overview's own address opens the panel beside it.
   await page.reload();
   await waitForShellAnswers(page);
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: "Content", exact: true })
-    .click();
   await expect(heading(page, "Singles")).toHaveAttribute(
     "aria-expanded",
     "false"

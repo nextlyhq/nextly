@@ -140,6 +140,14 @@ export interface ReconcileFileArgs {
    * or rolls back with it.
    */
   recordApplied?: (db: unknown, adopted: boolean) => Promise<void>;
+  /**
+   * What is written with the file, once its statements have run (or it is
+   * recorded without running) and before it is recorded applied: inside its
+   * transaction where it runs in one, so the two commit together; otherwise
+   * right after its last statement. A throw fails the file: in a transaction
+   * its statements roll back with it, and it is never recorded applied.
+   */
+  beforeRecorded?: () => Promise<void>;
   /** Dev/ui/db_sync event ids this file_apply supersedes (ALREADY_APPLIED). */
   supersedableEventIds?: () => Promise<string[]>;
   /**
@@ -532,7 +540,12 @@ function toDriftItem(op: Operation): DriftItem {
 async function runAndRecord(
   args: Pick<
     ReconcileFileArgs,
-    "file" | "dialect" | "repo" | "executeSql" | "recordApplied"
+    | "file"
+    | "dialect"
+    | "repo"
+    | "executeSql"
+    | "recordApplied"
+    | "beforeRecorded"
   >,
   id: string | undefined
 ): Promise<void> {
@@ -541,6 +554,7 @@ async function runAndRecord(
     file.sql,
     { source: file.filename, transaction: file.transaction ?? true },
     async (db, statementsExecuted) => {
+      await args.beforeRecorded?.();
       const bound = repo.boundTo(db);
       await markAppliedOrRefuse(
         bound,
@@ -570,7 +584,12 @@ async function runAndRecord(
 export async function runRecordedAttempt(
   args: Pick<
     ReconcileFileArgs,
-    "file" | "dialect" | "repo" | "executeSql" | "recordApplied"
+    | "file"
+    | "dialect"
+    | "repo"
+    | "executeSql"
+    | "recordApplied"
+    | "beforeRecorded"
   >
 ): Promise<void> {
   const { file, repo } = args;
@@ -636,6 +655,7 @@ async function adoptFile(args: ReconcileFileArgs): Promise<void> {
     "",
     { source: file.filename, transaction: true },
     async db => {
+      await args.beforeRecorded?.();
       await recordAlreadyApplied(file, repo.boundTo(db), supersedable);
       await args.recordApplied?.(db, true);
     }

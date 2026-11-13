@@ -166,7 +166,7 @@ describe("MySQL transaction update writes the physical table", async () => {
     expect(await stored("a")).toMatchObject({ slug: "tx", title: "Written" });
   });
 
-  it("binds a declared date, JSON document and boolean as the query builder would, and an undeclared date as the insert does", async () => {
+  it("binds a declared date, JSON document and boolean as the query builder would, and an undeclared date as the same instant", async () => {
     const document = { a: 1, b: [true, null] };
     await adapter.transaction(async ctx => {
       await ctx.update(
@@ -187,11 +187,28 @@ describe("MySQL transaction update writes the physical table", async () => {
     // a JSON string containing one.
     expect(row?.meta).toEqual(document);
     expect(row?.published).toBe(1);
-    // The undeclared column is bound as the transactional insert binds a
-    // column the model does not know: natively, by the driver. The adapter
-    // cannot encode a column it cannot see, so this pins that it stores
-    // something for it rather than which zone the driver chose.
-    expect(row?.published_at).not.toBeNull();
+    // The undeclared column stores the same UTC wall clock as the declared
+    // one, whatever zone the driver is configured with: the adapter spells
+    // the `Date` as its declared date columns do rather than leaving the
+    // reading of it to the driver.
+    expect(row?.published_at).toBe(WALL_CLOCK);
+  });
+
+  it("inserts an undeclared date inside a transaction as the same instant", async () => {
+    // The transactional insert binds a key the model does not declare
+    // through the same rule as the update above, so a row written either way
+    // holds the same value.
+    await adapter.transaction(async ctx => {
+      await ctx.insert(TABLE, {
+        id: "b",
+        slug: "second",
+        updated_at: AT,
+        published_at: AT,
+      });
+    });
+    const row = await stored("b");
+    expect(row?.updated_at).toBe(WALL_CLOCK);
+    expect(row?.published_at).toBe(WALL_CLOCK);
   });
 
   it("leaves a column alone for undefined and clears it for null", async () => {

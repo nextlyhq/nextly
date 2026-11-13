@@ -2,8 +2,10 @@ import { connection } from "next/server";
 import { Suspense } from "react";
 import {
   ADMIN_BRANDING_ELEMENT_ID,
+  ADMIN_STARTUP_SCREENS_ELEMENT_ID,
   adminBrandingJson,
   adminMetadataFor,
+  adminStartupScreensJson,
   getBrandingCss,
 } from "nextly/config";
 
@@ -15,6 +17,9 @@ const brandingCss = getBrandingCss(config.admin?.branding);
 // The configured logo, name and favicon, read by the admin before any request
 // answers, so they are right from the first paint.
 const brandingJson = adminBrandingJson(config.admin?.branding);
+// What each plugin page reads as it opens, so the admin asks for it in its
+// first request when a tab opens on that page.
+const startupScreensJson = adminStartupScreensJson(config.plugins);
 
 /**
  * The admin is never a page for search results: `noindex, nofollow` in the
@@ -57,6 +62,13 @@ export default function AdminLayout({
           type="application/json"
           id={ADMIN_BRANDING_ELEMENT_ID}
           dangerouslySetInnerHTML={{ __html: brandingJson }}
+        />
+      )}
+      {startupScreensJson && (
+        <script
+          type="application/json"
+          id={ADMIN_STARTUP_SCREENS_ELEMENT_ID}
+          dangerouslySetInnerHTML={{ __html: startupScreensJson }}
         />
       )}
       {process.env.NODE_ENV === "development" ? (

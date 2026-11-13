@@ -41,6 +41,7 @@ import { releaseBoundedRevalidate } from "../cache/release-cache-window";
 import {
   knownNoPageMetadataProvider,
   pageMetadataFor,
+  pageMetadataProviderToAsk,
   pageStructuredDataFor,
   type PageMetadataRequest,
 } from "../seo/page-metadata";
@@ -51,7 +52,7 @@ import type {
 
 import { deferToRequest } from "./defer-to-request";
 import { isMissOrDenied } from "./miss-or-denied";
-import { triggerNotFound } from "./not-found";
+import { answerNotFound } from "./not-found";
 import {
   confirmedLanguage,
   requestLanguage,
@@ -348,6 +349,16 @@ export interface SingleRouteConfig<TNode> {
   tags?: string[];
   /** Time-based revalidation for a public route. Tag-based busting needs none. */
   revalidate?: number | false;
+  /**
+   * How this route answers a request it has nothing for, in place of
+   * Next.js's `notFound()`: a site passes its own to do something for each
+   * miss, such as logging the address. The page and `generateMetadata` may
+   * both call it for one request. A handler that returns is followed by
+   * Next.js's `notFound()`; without one the route answers as before.
+   *
+   * @experimental Its name and shape may change before 1.0.
+   */
+  notFound?: () => never | Promise<never>;
 }
 
 /**
@@ -399,9 +410,10 @@ async function singlePageRequest(
   const code = config.buildMetadata
     ? await config.buildMetadata(document, context)
     : undefined;
-  // Worked out only where a provider may be asked: with none known, the
-  // route's own metadata is served and the content is not walked for it.
-  if (knownNoPageMetadataProvider()) return { code, request: null };
+  // Only where a provider can be asked: Nextly is started first where nothing
+  // has started it, and with no provider, or none reachable, the route's own
+  // metadata is served without the content being read for one.
+  if (!(await pageMetadataProviderToAsk(path))) return { code, request: null };
   const derived = config.derivedMetadata
     ? await config.derivedMetadata(document, context)
     : undefined;
@@ -476,8 +488,9 @@ export async function singlePageStructuredData(
   context: SingleContext,
   path?: string
 ): Promise<string | undefined> {
-  // Nobody to answer: the route's own metadata is not worked out for nothing.
-  if (knownNoPageMetadataProvider()) return undefined;
+  // Nobody to answer, or nobody reachable once Nextly's start was tried: the
+  // route's own metadata is not worked out for nothing.
+  if (!(await pageMetadataProviderToAsk(path))) return undefined;
   const { request } = await singlePageRequest(config, document, context, path);
   if (request === null) return undefined;
   const hints = await config.structuredDataHints?.(document, context);
@@ -520,7 +533,7 @@ function buildSingleRoute<TNode>(
       config.locale,
       getReader
     );
-    if (language === null) triggerNotFound();
+    if (language === null) return answerNotFound(config.notFound);
     return {
       language,
       context: {
@@ -693,7 +706,11 @@ function buildSingleRoute<TNode>(
     const { context, language } = await contextFor(args);
     return runWithAccessMemo(async () => {
       const document = await documentFor(context, language);
-      if (!document) return {};
+      // A miss is answered by the site's own handler here as on the page, so
+      // whichever of the two Next asks first answers it; without one, the
+      // head stays empty and the page answers the miss, as before.
+      if (!document)
+        return config.notFound ? answerNotFound(config.notFound) : {};
       return singlePageMetadata(
         config,
         document,
@@ -709,7 +726,7 @@ function buildSingleRoute<TNode>(
     // `generateMetadata`.
     return runWithAccessMemo(async () => {
       const document = await documentFor(context, language);
-      if (!document) triggerNotFound();
+      if (!document) return answerNotFound(config.notFound);
       // Asked only where a provider may answer: a site with none renders as
       // it always has, and works nothing out for it.
       const structuredData = await singlePageStructuredData(

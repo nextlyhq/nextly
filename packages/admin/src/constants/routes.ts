@@ -52,15 +52,17 @@ export const ROUTES = {
   BUILDER_FIELD_GROUPS_NEW: "/admin/builder/field-groups/new",
   BUILDER_FIELD_GROUPS_EDIT: "/admin/builder/field-groups/[slug]",
 
+  // The Content overview: every collection and Single the reader may open, in
+  // two tables. The rail's Content item and the Content panel's title lead
+  // here; COLLECTIONS and SINGLES below show one table each.
+  CONTENT: "/admin/content",
+
   // ============================================================
-  // Section landing pages (smart redirects).
+  // Section landing pages.
   //
-  // clicking a section icon in the primary sidebar
-  // hits one of these. The page is a router that picks the most-
-  // recently-created record (sorted by `created` DESC), redirects to
-  // its content URL, or renders the standard 404 when zero records
-  // exist. Field groups have no content surface, so /admin/field-groups
-  // is a static redirect to /admin/builder/field-groups instead.
+  // /admin/collections and /admin/singles are the Content overview with
+  // one kind's table. Field groups have no content surface, so
+  // /admin/field-groups is a static redirect to /admin/builder/field-groups.
   // ============================================================
   COLLECTIONS: "/admin/collections",
   SINGLES: "/admin/singles",

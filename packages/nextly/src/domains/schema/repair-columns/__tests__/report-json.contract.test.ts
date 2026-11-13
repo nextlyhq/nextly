@@ -146,6 +146,17 @@ const record = z
       .object({ reason: z.string(), heldStep: z.string().nullable() })
       .strict()
       .nullable(),
+    // A column whose conversion clears values: whether this run's consent covered it, how many it
+    // cleared, and the consent that would cover it.
+    consent: z
+      .object({
+        given: z.enum(["flag", "confirmed"]).nullable(),
+        valuesCleared: z.number().int(),
+        flag: z.string(),
+        notice: z.string().nullable(),
+      })
+      .strict()
+      .nullable(),
   })
   .strict();
 
@@ -402,6 +413,17 @@ describe("the document's shape", () => {
         "converted",
       ])
     );
+    // The skipped lossy column names the consent that would cover it.
+    expect(
+      parsed.result?.records.find(r => r.outcome === "skipped-needs-consent")
+        ?.consent
+    ).toMatchObject({
+      given: null,
+      valuesCleared: 0,
+      flag: expect.stringMatching(
+        /^--accept-data-loss=[^.]+\.[^.]+$/
+      ) as string,
+    });
     expect(parsed.exitCode).toBe(3);
   });
 

@@ -15,7 +15,7 @@
  * - **Each part apart.** A part that is refused, or fails, carries its own
  *   status and error body; the other parts are answered as usual.
  * - **Bounded.** At most {@link MAX_STARTUP_PATHS} paths, each a plain path
- *   within the admin API, never this route again.
+ *   within the admin API, never this route again ({@link isStartupPath}).
  * - **Whole.** No part is answered "unchanged" (`304`): the request names
  *   paths, not the answers the admin holds, so each part is sent in full,
  *   and a metadata part's tag (`ETag`) is not carried in it.
@@ -46,6 +46,9 @@ import { NextlyError } from "../errors/nextly-error";
 import { epochIsTrustworthy, refreshEpoch } from "../services/lib/rbac-epoch";
 
 import { servedSchemaVersion } from "./schema-version";
+import { isStartupPath, MAX_STARTUP_PATHS } from "./startup-path";
+
+export { MAX_STARTUP_PATHS } from "./startup-path";
 
 /**
  * The environment variable a site sets to `off` so the admin keeps nothing on
@@ -54,22 +57,11 @@ import { servedSchemaVersion } from "./schema-version";
  */
 const DEVICE_MEMORY_ENV = "NEXTLY_ADMIN_DEVICE_MEMORY";
 
-/** The most paths one startup request may name. */
-export const MAX_STARTUP_PATHS = 16;
-
 /**
- * A path within the admin API: a leading `/`, plain segments, an optional
- * query, never a step up (`..`) and never this route itself.
+ * A path within the admin API, by the one rule the admin and the boot check
+ * of a plugin's startup reads hold to as well.
  */
-const startupPath = z
-  .string()
-  .max(512)
-  .regex(/^\/[A-Za-z0-9._~\-/]*(\?[^#\s]*)?$/)
-  .refine(path => !path.split("?")[0].split("/").includes(".."))
-  .refine(path => {
-    const first = path.split("?")[0].split("/")[1];
-    return first !== "startup";
-  });
+const startupPath = z.string().refine(isStartupPath);
 
 const startupPaths = z.array(startupPath).min(1).max(MAX_STARTUP_PATHS);
 

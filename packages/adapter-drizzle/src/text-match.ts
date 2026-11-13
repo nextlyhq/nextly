@@ -64,16 +64,25 @@ const FOLD_EXCEPTIONS: Readonly<Record<string, string>> = {
  * collation: MySQL by its collation's Unicode version, PostgreSQL's letters outside ASCII under
  * a linguistic locale but not under `C` or `POSIX`.
  *
+ * A `json` or `jsonb` column is folded as its serialized text, as MySQL and SQLite read it: a
+ * hasMany relationship's array of ids is one. PostgreSQL has no `lower()` for either type, so
+ * the value is cast to `text` there first. For a text column the cast is no cast at all (the
+ * planner drops a cast to the type a value already has), and a `varchar` is cast to `text` by
+ * `lower()` anyway, so what a text column matches, and how, is unchanged.
+ *
  * @experimental
  * @param dialect - The dialect the statement runs on
- * @param text - The column, or any SQL expression yielding text
+ * @param text - The column, or any SQL expression yielding text or JSON
  * @returns The folded text
  */
 export function caseFolded(dialect: SupportedDialect, text: SQLWrapper): SQL {
   // `replace` exists on both, with the same arguments: a final sigma folds as {@link foldCase}
   // folds it on SQLite.
-  return dialect === "sqlite"
-    ? sql`${sql.identifier(SQLITE_FOLD_CASE_FUNCTION)}(${text})`
+  if (dialect === "sqlite") {
+    return sql`${sql.identifier(SQLITE_FOLD_CASE_FUNCTION)}(${text})`;
+  }
+  return dialect === "postgresql"
+    ? sql`replace(lower((${text})::text), ${"\u03C2"}, ${"\u03C3"})`
     : sql`replace(lower(${text}), ${"\u03C2"}, ${"\u03C3"})`;
 }
 

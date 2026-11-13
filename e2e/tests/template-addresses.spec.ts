@@ -124,11 +124,17 @@ test("serves a Schema Builder collection's entries at the address set in the adm
     const template = await draftTemplate(api, slug);
     takeBackRead = await letVisitorsRead(api, slug);
 
-    // The Templates item sits in the page builder's menu.
+    // The Templates item sits in the page builder's own panel, opened from
+    // its rail item; its name carries its count once that is read.
     await gotoAdmin(page, "/collections/templates");
-    await page.getByRole("link", { name: "Plugins", exact: true }).click();
+    await page
+      .locator("aside[data-shell-answers] nav")
+      .getByRole("link", { name: "Page Builder", exact: true })
+      .click();
     await expect(
-      page.getByRole("link", { name: "Templates", exact: true }).first()
+      page
+        .getByTestId("sub-sidebar")
+        .getByRole("link", { name: /^Templates(, \d+.*)?$/ })
     ).toBeVisible();
 
     // The address, set and published in the template's own form.

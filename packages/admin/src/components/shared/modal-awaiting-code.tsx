@@ -43,6 +43,7 @@ export function ModalAwaitingCode({
   failure,
   className = "max-h-[90vh] overflow-y-auto",
   size,
+  onCloseAutoFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -50,10 +51,20 @@ export function ModalAwaitingCode({
   /** The real dialog's own sizing, so nothing moves when it replaces this. */
   className?: string;
   size?: "xl";
+  /**
+   * Where focus goes when this closes before the code arrives: the real
+   * dialog's own focus return, so closing while it loads lands where closing
+   * it afterwards would.
+   */
+  onCloseAutoFocus?: (event: Event) => void;
 }): JSX.Element {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent {...(size ? { size } : {})} className={className}>
+      <DialogContent
+        {...(size ? { size } : {})}
+        className={className}
+        {...(onCloseAutoFocus ? { onCloseAutoFocus } : {})}
+      >
         <DialogHeader>
           <DialogTitle>{failure ? "Could not open" : "Loading…"}</DialogTitle>
           <DialogDescription className="sr-only">

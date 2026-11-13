@@ -325,6 +325,30 @@ export function settingsChangesFor(
   });
 }
 
+/**
+ * What a migration changed in the settings of the entities its snapshot
+ * records, from the newest snapshot before it (`previous`, with the meaning
+ * `settingsChanges` gives it). The same delta `migrate:create` wrote the
+ * migration for, read back from the two records: an entity the snapshot no
+ * longer records is not named, since the migration recorded nothing for it.
+ */
+export function settingsChangesBetween(
+  previous: EntitySettingsRecord | null | undefined,
+  recorded: EntitySettingsRecord
+): EntitySettingsChange[] {
+  const slugs = (kind: SettingsEntityKind) =>
+    new Set(Object.keys(recorded[RECORD_KEYS[kind]]));
+  const declared = {
+    collection: slugs("collection"),
+    single: slugs("single"),
+    fieldGroup: slugs("fieldGroup"),
+  };
+  // `settingsChanges` names an entity it finds only in `previous` removed.
+  return settingsChanges(previous, recorded, declared).filter(change =>
+    declared[change.kind].has(change.slug)
+  );
+}
+
 /** One entity's changes; see `settingsChanges` for what each word means. */
 function entityChanges(
   was: RecordedEntitySettings | undefined,

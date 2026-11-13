@@ -160,6 +160,7 @@ const WRITES = [
   "upgrade",
   "users:create-admin",
   "webhooks:prune",
+  "workflow:move-stranded",
 ];
 const PREVIEWS = [
   "media orphans",
@@ -180,6 +181,7 @@ const READS = [
   "plugins list",
   "telemetry",
   "telemetry status",
+  "workflow:stranded",
 ];
 
 describe("--dry-run and --apply by what a command does", () => {

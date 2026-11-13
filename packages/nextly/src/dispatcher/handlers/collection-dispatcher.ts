@@ -117,6 +117,7 @@ import {
   isTruthyParam,
   parseCountParam,
   parseRichTextFormat,
+  parseRichTextStyles,
   parseSelectParam,
   parseStatusParam,
   parseWhereParam,
@@ -1346,6 +1347,8 @@ const COLLECTIONS_METHODS: Record<
         select: parseSelectParam(p.select),
         where: parseWhereParam(p.where, p.whereBrackets),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
+        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+        richTextStyles: parseRichTextStyles(p.richTextStyles),
         sort,
         status,
         // i18n M4: `?locale=` + `?fallback-locale=` select the content language.
@@ -1476,6 +1479,8 @@ const COLLECTIONS_METHODS: Record<
           p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
         select: parseSelectParam(p.select),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
+        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+        richTextStyles: parseRichTextStyles(p.richTextStyles),
         status,
         // `?draft=true` overlays the pending working draft in place of the live
         // row (draft/published split), matching Payload's read-side `draft`

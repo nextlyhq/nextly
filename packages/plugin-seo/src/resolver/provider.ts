@@ -16,7 +16,7 @@ import {
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
-import { recordSlug } from "../address-record/participant";
+import { ADDRESS_RECORD_CACHE_PART } from "../address-record/store";
 import { seoSettingsCacheTags } from "../settings/single";
 
 import { resolveOrder, type SeoAnswer } from "./order";
@@ -111,7 +111,7 @@ export function seoPageMetadata(
     // without a write to itself.
     tags: () => [
       ...nextlyTags("media"),
-      ...nextlyTags(recordSlug(ctx)),
+      ...ctx.cache.tags(ADDRESS_RECORD_CACHE_PART),
       ...seoSettingsCacheTags(),
     ],
     // The page's head is derived from the one resolution, never worked out

@@ -53,7 +53,9 @@ function filled(segments: unknown): string | undefined {
     .join("");
 }
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+vi.mock("@nextlyhq/plugin-sdk/admin", async importOriginal => ({
+  // The admin's own parts the panel draws with, as they are.
+  ...(await importOriginal<typeof import("@nextlyhq/plugin-sdk/admin")>()),
   useDocumentLocale: () =>
     editing.locale === null ? null : { code: editing.locale },
   useReportUnsavedWork: (key: string, unsaved: boolean) => {
@@ -237,9 +239,9 @@ describe("a template's SEO panel", () => {
     expect(stored.at(-1)).toMatchObject({ socialTitle: [] });
 
     await user.click(screen.getByRole("button", { name: "Change" }));
-    await user.selectOptions(
-      screen.getByLabelText("Take the share image from"),
-      "cover"
+    await user.click(screen.getByLabelText("Take the share image from"));
+    await user.click(
+      await screen.findByRole("option", { name: "Cover image" })
     );
     expect(stored.at(-1)).toMatchObject({ image: { $bind: "cover" } });
   });
@@ -263,11 +265,12 @@ describe("a template's SEO panel", () => {
     const user = userEvent.setup();
     await open();
     const heading = await screen.findByLabelText("Preview with");
-    await user.selectOptions(heading, "p2");
+    await user.click(heading);
+    expect(await screen.findAllByRole("option")).toHaveLength(2);
+    await user.click(screen.getAllByRole("option")[1] as HTMLElement);
     await waitFor(() =>
       expect(sent.some(body => body.entryId === "p2")).toBe(true)
     );
-    expect(within(heading).getAllByRole("option")).toHaveLength(2);
   });
 
   it("keeps what a stored binding says beyond a variable where its text is not changed", async () => {
@@ -358,14 +361,14 @@ describe("a template's SEO panel", () => {
     ).toBeTruthy();
   });
 
-  it("draws its choices in the SEO screens' select styling", async () => {
+  it("draws its choices with the admin's own select", async () => {
     const user = userEvent.setup();
     await open();
     await user.click(screen.getByRole("button", { name: "Change" }));
     for (const label of ["Preview with", "Take the share image from"]) {
       const select = await screen.findByLabelText(label);
-      expect(select.className).toContain("nx-seo-select");
-      expect(select.closest(".nx-seo")).not.toBeNull();
+      expect(select.getAttribute("role")).toBe("combobox");
+      expect(select.tagName).toBe("BUTTON");
     }
   });
 });

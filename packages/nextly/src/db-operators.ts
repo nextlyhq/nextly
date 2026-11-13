@@ -31,3 +31,10 @@ export {
   not,
   or,
 } from "drizzle-orm";
+
+/**
+ * `increment(n)`: add `n` to a numeric column in the statement `ctx.db.update`
+ * makes (`hits = hits + n`), so concurrent updates each count. A value
+ * `ctx.db.update` reads, not a SQL fragment: it opens no raw SQL.
+ */
+export { increment, type Increment } from "./plugins/database/increment";

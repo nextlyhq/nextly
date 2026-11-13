@@ -93,7 +93,7 @@ export interface FormLimitSlugs {
 }
 
 /** The id a submission's `form` names, as an id or a populated document. */
-function formIdOf(value: unknown): string | undefined {
+export function formIdOf(value: unknown): string | undefined {
   if (typeof value === "string" && value !== "") return value;
   if (typeof value === "number") return String(value);
   if (value && typeof value === "object" && "id" in value) {

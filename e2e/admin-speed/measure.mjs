@@ -64,13 +64,13 @@ const BASE = `http://localhost:${PORT}`;
 const SECRET = "admin-speed-check-secret-not-for-production-0123456789";
 const USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 
-const STATEMENT_SLACK = 0.05;
 /**
- * A screen's statements move more than a start's from run to run, while a
- * few requests are still sometimes sent twice (`racy` in the pins); they are
- * held to this until those duplicates are gone, then to `STATEMENT_SLACK`.
+ * How far a start's or a screen's statements may move from their pin. What
+ * still moves between runs of one commit is reads on a timer (the stored
+ * schema version, the permissions epoch, the cache tags, a session check)
+ * landing inside a load or not, a few statements on any screen.
  */
-const SCREEN_STATEMENT_SLACK = 0.15;
+const STATEMENT_SLACK = 0.05;
 /** The least a growth pin allows either way, as two starts differ by a few. */
 const GROWTH_SLACK_MIN = 5;
 const ROUND_SLACK = 1;
@@ -417,8 +417,15 @@ async function sample(context, log, load, before) {
   const kept = await load(page);
   const to = await watcher.quiet();
   await page.close();
+  // How long after the load began the startup request was sent: the admin
+  // sends it as early as it can, so a later start is a slower screen even
+  // when no count moves. Reported, never pinned, as it is a time.
+  const startup = watcher.requests.find(r =>
+    r.path.endsWith("/admin/api/startup")
+  );
   return {
     kept,
+    startupStartsMs: startup === undefined ? null : startup.start - from,
     requests: watcher.requests.length,
     rounds: roundsOf(watcher.requests),
     statements: readLog(log).filter(s => s.t >= from && s.t <= to).length,
@@ -482,6 +489,7 @@ async function steady(context, log, load, { fresh, before } = {}) {
   const fewestStatements = Math.min(...samples.map(x => x.statements));
   return {
     kept: samples[0].kept,
+    startupStartsMs: median(samples.map(x => x.startupStartsMs)),
     result: {
       requests: Object.values(kinds).reduce((a, b) => a + b, 0),
       rounds: Math.min(...samples.map(x => x.rounds)),
@@ -493,6 +501,16 @@ async function steady(context, log, load, { fresh, before } = {}) {
   };
 }
 
+/** The middle of the times measured, or null when none was. */
+function median(values) {
+  const known = values.filter(v => v !== null).sort((a, b) => a - b);
+  if (known.length === 0) return null;
+  const mid = Math.floor(known.length / 2);
+  return known.length % 2 === 1
+    ? known[mid]
+    : Math.round((known[mid - 1] + known[mid]) / 2);
+}
+
 /** A full measurement of one dialect: the start and every screen. */
 async function measureDialect(dialect, dir) {
   const { database, url } = await freshDatabase(dialect);
@@ -501,7 +519,13 @@ async function measureDialect(dialect, dir) {
   // Everything acquired is released in `finally`, whichever step failed.
   let browser;
   let server;
-  const out = { start: {}, screens: {} };
+  // `timings` sits beside `screens`, not in it, so `--update-pins` never
+  // writes a time into the pins.
+  const out = { start: {}, screens: {}, timings: {} };
+  const keep = (name, measured) => {
+    out.timings[name] = { startupStartsMs: measured.startupStartsMs };
+    return measured.result;
+  };
   try {
     prepare(serverEnv(dialect, url));
     browser = await chromium.launch();
@@ -529,27 +553,37 @@ async function measureDialect(dialect, dir) {
       await page.goto(`${BASE}/admin`, { timeout: 120_000 });
       await emailBox(page).waitFor({ timeout: 120_000 });
     };
+    // Each screen's wait names something only that screen draws once its data
+    // is in. The sign-in form has a `main` and a textbox of its own, and the
+    // signed-in frame paints its outline before the server answers, so a bare
+    // `main` or the first textbox matches a screen that has not loaded, or
+    // the sign-in form drawn in its place.
+    //
+    // Signed in: the rail's column says the server has confirmed the session.
+    const signedIn = p => p.locator('aside[data-shell-answers="settled"]');
     const signIn = async page => {
       await emailBox(page).fill(USER.email);
       await page
         .getByRole("textbox", { name: /password/i })
         .fill(USER.password);
       await page.getByRole("button", { name: /sign in|log in/i }).click();
-      await page.locator("main").waitFor({ timeout: 300_000 });
+      await signedIn(page).waitFor({ timeout: 300_000 });
     };
 
     // The sign-in screen, signed out, on the started server.
-    out.screens.login = (
+    out.screens.login = keep(
+      "login",
       await steady(context, log, openForm, { fresh })
-    ).result;
+    );
 
     // Signing in through the real form, counted from the click.
-    out.screens.signin = (
+    out.screens.signin = keep(
+      "signin",
       await steady(context, log, signIn, {
         fresh,
         before: openForm,
       })
-    ).result;
+    );
 
     // The signed-in browser whose fresh tabs open the remaining screens.
     const first = await context.newPage();
@@ -557,19 +591,34 @@ async function measureDialect(dialect, dir) {
     await signIn(first);
     await first.close();
 
-    const entryLink =
-      'main a[href^="/admin/collections/posts/"]:not([href$="/create"]) >> visible=true';
-    out.screens.dashboard = (
+    // The dashboard: a widget's cell, which its outline does not draw.
+    const widgetCell = p =>
+      p
+        .getByTestId("dashboard-container")
+        .locator('[data-testid^="widget-cell-"]')
+        .first();
+    // The list: a row's way in, a link the entries table draws for each row
+    // and not over its outline rows.
+    const entryLink = p =>
+      p
+        .getByRole("table", { name: "Entries table" })
+        .locator("a[data-row-entry]")
+        .first();
+    // The edit page: the entry's own Title field.
+    const titleBox = p =>
+      p.getByRole("main").getByRole("textbox", { name: /^title/i });
+    out.screens.dashboard = keep(
+      "dashboard",
       await steady(
         context,
         log,
         async page => {
           await page.goto(`${BASE}/admin`, { timeout: 120_000 });
-          await page.locator("main").waitFor({ timeout: 120_000 });
+          await widgetCell(page).waitFor({ timeout: 120_000 });
         },
         {}
       )
-    ).result;
+    );
     const list = await steady(
       context,
       log,
@@ -577,24 +626,25 @@ async function measureDialect(dialect, dir) {
         await page.goto(`${BASE}/admin/collections/posts`, {
           timeout: 120_000,
         });
-        await page.locator(entryLink).first().waitFor({ timeout: 120_000 });
-        return page.locator(entryLink).first().getAttribute("href");
+        await entryLink(page).waitFor({ timeout: 120_000 });
+        return entryLink(page).getAttribute("href");
       },
       {}
     );
-    out.screens.list = list.result;
+    out.screens.list = keep("list", list);
     const href = list.kept;
-    out.screens.edit = (
+    out.screens.edit = keep(
+      "edit",
       await steady(
         context,
         log,
         async page => {
           await page.goto(new URL(href, BASE).toString(), { timeout: 120_000 });
-          await page.getByRole("textbox").first().waitFor({ timeout: 120_000 });
+          await titleBox(page).waitFor({ timeout: 120_000 });
         },
         {}
       )
-    ).result;
+    );
   } finally {
     await browser?.close();
     await server?.stop();
@@ -730,7 +780,7 @@ function screenProblems(label, values, pin, racy) {
       `${label} statements`,
       values.statements,
       pin.statements,
-      slackOf(pin.statements, SCREEN_STATEMENT_SLACK)
+      slackOf(pin.statements)
     ),
   ];
 }

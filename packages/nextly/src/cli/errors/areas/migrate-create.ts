@@ -162,12 +162,38 @@ export function migrationNameRequired(): CliError {
   });
 }
 
+/**
+ * No name, and `--accept-data-loss` was given a value: the option takes an optional list, so a name
+ * written after it (`--accept-data-loss remove_posts`) is read as that list.
+ */
+export function consentTookTheName(value: string): CliError {
+  return new CliError("MIGRATION_NAME_REQUIRED", {
+    what: `\`nextly migrate:create\` needs a name for the migration, and \`--accept-data-loss\` read \`${value}\` as the tables and columns it covers.`,
+    why: "`--accept-data-loss` takes an optional list, so the word after it is that list, not the migration's name.",
+    next: `Put the name first (\`nextly migrate:create ${value} --accept-data-loss\`), or give the list with \`=\` (\`--accept-data-loss=dc_posts\`).`,
+  });
+}
+
 /** `--record-snapshot` writes the app's snapshot, which a blank migration and a plugin module have none of. */
 export function recordSnapshotNeedsAppMigration(): CliError {
   return new CliError("RECORD_SNAPSHOT_NEEDS_APP_MIGRATION", {
     what: "`--record-snapshot` can't be combined with `--blank` or `--plugin`.",
     why: "It writes the app's migration and the snapshot that records which fields are translated, and a blank migration or a plugin module has no such snapshot.",
     next: "Run `nextly migrate:create --record-snapshot` on its own.",
+  });
+}
+
+/**
+ * The person at the terminal answered no to the deletions a migration would make. The data-loss
+ * consent's own code, in `migrate:create`'s words: nothing is deleted yet, so what it says is how
+ * to keep the data rather than how to delete it.
+ */
+export function migrationDeletionsDeclined(): CliError {
+  return new CliError("DATA_LOSS_DECLINED", {
+    what: "No migration was written: its deletions were not confirmed.",
+    why: "The migration would delete the data listed above, and the prompt was not answered yes.",
+    next: "To keep the data, put the removed fields or entities back in the config, or run again and accept the rename. To delete it, run again and confirm, or pass --accept-data-loss naming what it deletes.",
+    context: { reason: "migration-deletions-declined" },
   });
 }
 

@@ -32,3 +32,12 @@ export {
   not,
   or,
 } from "nextly/db-operators";
+
+/**
+ * @experimental `increment(n)`, for a numeric column in `ctx.db.update`'s
+ * `set`: the update adds `n` to the stored value in its own statement, so two
+ * at once both count. Intended to be stable; experimental until it has served
+ * a first-party plugin's counter in production. A value `ctx.db.update`
+ * reads, not SQL: it opens nothing `capabilities.db.rawSql` governs.
+ */
+export { increment, type Increment } from "nextly/db-operators";

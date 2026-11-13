@@ -221,13 +221,26 @@ function checkHoneypot(data: Record<string, unknown>): SpamCheckResult {
  * would lock out every visitor behind an untrusted proxy. The caller decides
  * what to do about an unidentifiable client; this counts only identified ones.
  */
+/**
+ * Count one request under `key` against `max` per `windowMs`, in the
+ * deployment's shared rate-limit store: whether it is allowed, and when the
+ * window resets. The plugin's one door to the limiter, for submissions and
+ * uploads alike.
+ */
+export async function countAgainstLimit(
+  key: string,
+  max: number,
+  windowMs: number
+): Promise<{ allowed: boolean; resetAt: Date }> {
+  return new RateLimiter(resolveRateLimitStore()).check(key, max, windowMs);
+}
+
 async function checkRateLimit(
   ipAddress: string,
   formSlug: string,
   config: { maxSubmissions: number; windowMs: number }
 ): Promise<SpamCheckResult> {
-  const limiter = new RateLimiter(resolveRateLimitStore());
-  const result = await limiter.check(
+  const result = await countAgainstLimit(
     `form-submit:${formSlug}:${ipAddress}`,
     config.maxSubmissions,
     config.windowMs

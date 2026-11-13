@@ -22,18 +22,28 @@ import type { Tx } from "./claim-store";
 import type { EntryClaimsDeps, OwnDesign } from "./entry-claims-hook";
 import { splitsList } from "./page-claims";
 
-/** The plugin's own read of a collection on a write's transaction. */
+/** The read options the design reads make. */
+interface DesignRead {
+  where: Record<string, unknown>;
+  pagination: { limit: number; page?: number };
+  sort?: { field: string; direction: "asc" | "desc" };
+  select: Record<string, boolean>;
+  depth: number;
+}
+
+/**
+ * The plugin's own read of a collection, on a write's transaction or, for
+ * a read with none, as last committed.
+ */
 export interface OwnDesignReads {
+  listEntries(
+    slug: string,
+    options: DesignRead
+  ): Promise<{ data: readonly unknown[] }>;
   listEntriesInTransaction(
     tx: Tx,
     slug: string,
-    options: {
-      where: Record<string, unknown>;
-      pagination: { limit: number; page?: number };
-      sort?: { field: string; direction: "asc" | "desc" };
-      select: Record<string, boolean>;
-      depth: number;
-    }
+    options: DesignRead
   ): Promise<{ data: readonly unknown[] }>;
 }
 
@@ -64,7 +74,7 @@ export function entryDesignReads(
       publishedOwnDesign(own, templates, { collection, id }, tx),
     publishedDesigns: (collection, tx) =>
       publishedDesigns(own, templates, collection, tx),
-    templatePaginates: (collection, tx) =>
+    templatePaginates: (collection, tx?) =>
       templatePaginates(own, templates, collection, tx),
   };
 }
@@ -154,9 +164,9 @@ async function templatePaginates(
   own: OwnDesignReads,
   templates: string,
   collection: string,
-  tx: Tx
+  tx?: Tx
 ): Promise<boolean> {
-  const found = await own.listEntriesInTransaction(tx, templates, {
+  const read: DesignRead = {
     where: { [TEMPLATE_COLLECTION_FIELD]: { equals: collection } },
     pagination: { limit: 1 },
     select: {
@@ -166,7 +176,11 @@ async function templatePaginates(
       [TEMPLATE_CONTENT_FIELD]: true,
     },
     depth: 0,
-  });
+  };
+  const found =
+    tx === undefined
+      ? await own.listEntries(templates, read)
+      : await own.listEntriesInTransaction(tx, templates, read);
   const row = rowOf(found.data[0]);
   return (
     row[TEMPLATE_COLLECTION_FIELD] === collection &&

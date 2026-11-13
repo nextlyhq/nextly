@@ -60,6 +60,34 @@ export function storedLanguageReader(
           .from(table);
         return `${Number(row?.rows ?? 0)}:${Number(row?.revisions ?? 0)}`;
       }, NO_TABLE),
+    fingerprintedRows: () =>
+      orNothing(
+        async () => {
+          // The fingerprint's count and revision sum, taken from the rows themselves, so
+          // one read gives both.
+          const read = await db()
+            .select<StoredLanguage & { revision: unknown }>({
+              code: table.code,
+              label: table.label,
+              direction: table.direction,
+              fallback: table.fallback,
+              position: table.position,
+              isDefault: table.isDefault,
+              active: table.active,
+              revision: table.revision,
+            })
+            .from(table);
+          const revisions = read.reduce(
+            (total, row) => total + Number(row.revision ?? 0),
+            0
+          );
+          return {
+            fingerprint: `${read.length}:${revisions}`,
+            rows: read.map(({ revision: _revision, ...row }) => row),
+          };
+        },
+        { fingerprint: NO_TABLE, rows: [] }
+      ),
     rows: () =>
       orNothing(
         () =>

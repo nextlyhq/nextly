@@ -228,9 +228,11 @@ describe.each(getConfiguredTestDialects())(
 
       const following = await layoutOf(admin);
       expect(following.source).toBe("default");
+      // A card the plan sizes by width alone takes its widget's own default
+      // height: Team's is 5 rows, so it lists people.
       expect(sized(following.placements)).toEqual([
         ["core/content-table", "12x4"],
-        ["core/team", "6x4"],
+        ["core/team", "6x5"],
       ]);
 
       signedInAs(admin);
@@ -258,9 +260,9 @@ describe.each(getConfiguredTestDialects())(
       expect(
         saved.placements.map(p => [p.id, p.widgetId, `${p.w}x${p.h}`])
       ).toEqual([["mine", "core/team", "4x4"]]);
-      // What a reset would return to is the new default.
+      // What a reset would return to is the new default, Team at its own size.
       expect(sized(saved.defaultPlacements)).toEqual([
-        ["core/team", "4x4"],
+        ["core/team", "6x5"],
         ["core/content-table", "12x4"],
       ]);
     });

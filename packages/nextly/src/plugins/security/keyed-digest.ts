@@ -280,7 +280,7 @@ export function createKeyedDigests(options: KeyedDigestsOptions): KeyedDigests {
  * where it is used, never at start.
  */
 export async function resealPluginDigestKeys(
-  store: DigestKeyStore,
+  store: Pick<DigestKeyStore, "getAll" | "compareAndSet">,
   secrets: readonly string[]
 ): Promise<void> {
   const entries = Object.entries(await store.getAll()).filter(([metaKey]) =>

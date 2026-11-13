@@ -1,12 +1,15 @@
 /**
  * How the problem list's screen arranges what the list answers: grouped by
- * kind in the list's order, and when it was last checked, in words.
+ * kind, the most serious first and each severity's kinds in the list's
+ * order, and when it was last checked, in words.
  *
  * @module admin/problem-view
  */
 import {
   KIND_ORDER,
+  KIND_SEVERITY,
   KIND_TEXT,
+  SEVERITY_ORDER,
   type Problem,
   type ProblemKind,
 } from "../problems/contract";
@@ -20,9 +23,15 @@ export interface ProblemGroup {
   problems: Problem[];
 }
 
-/** The problems grouped by kind, in the order the list draws kinds in. */
+/**
+ * The problems grouped by kind: errors first, then warnings, then notices,
+ * and within each severity in the order the list draws kinds in.
+ */
 export function groupsOf(problems: readonly Problem[]): ProblemGroup[] {
-  return KIND_ORDER.flatMap(kind => {
+  const kinds = SEVERITY_ORDER.flatMap(severity =>
+    KIND_ORDER.filter(kind => KIND_SEVERITY[kind] === severity)
+  );
+  return kinds.flatMap(kind => {
     const found = problems.filter(problem => problem.kind === kind);
     return found.length === 0
       ? []

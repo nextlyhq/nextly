@@ -33,6 +33,14 @@ export interface RenameCandidate {
   /** What happens to the values when `preservesValues` is false. */
   valueChangeReason?: string;
   defaultSuggestion: "rename" | "drop_and_add";
+  /**
+   * Set when the pair is a field-group field rather than a column: `fromColumn` and `toColumn`
+   * are the field's names, the parent table has no column for it, and its rows live in these
+   * group tables, keyed by the field's name. Accepted, those rows are re-keyed to the new name
+   * (`fieldGroupRowMoves`); declined, they stay under the old one, where nothing reads them.
+   * Only `migrate:create` asks about such a pair.
+   */
+  fieldGroupTables?: readonly string[];
 }
 
 // F4 Option E: reads Operation[] (from our diff engine), identifies

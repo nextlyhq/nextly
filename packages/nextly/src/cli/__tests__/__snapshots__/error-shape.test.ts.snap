@@ -763,6 +763,13 @@ exports[`each code, as a command ends with it > FIELD_GROUP_STORAGE_REFUSED 1`] 
   Docs: https://nextlyhq.com/docs/cli/errors/field-group-storage-refused  (FIELD_GROUP_STORAGE_REFUSED)"
 `;
 
+exports[`each code, as a command ends with it > FIELDS_LEAVING_TRANSLATION_NOT_MOVED 1`] = `
+"✗ The fields leaving translation in \`posts\` were not moved.
+  Why:  They can't be moved as the configuration says, for the reason printed above, so nothing was changed.
+  Next: Fix what the error above names, then run \`nextly db:sync\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/fields-leaving-translation-not-moved  (FIELDS_LEAVING_TRANSLATION_NOT_MOVED)"
+`;
+
 exports[`each code, as a command ends with it > I18N_RESTORE_COLLECTION_REQUIRED 1`] = `
 "✗ --collection <slug> is required.
   Why:  \`nextly i18n:restore\` brings back the archived translations of one entity, named by its slug.

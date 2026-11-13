@@ -9,6 +9,7 @@
 import {
   apiErrorMessage,
   Button,
+  SettingsRowGroup,
   usePluginRoute,
   writePluginRoute,
 } from "@nextlyhq/plugin-sdk/admin";
@@ -25,7 +26,7 @@ import {
 } from "../connections/contract";
 import { SEO_PLUGIN_NAME } from "../settings/contract";
 
-import { Icon } from "./styles";
+import { ControlNote } from "./settings-parts";
 
 /** A day and time, as the admin reads them. */
 export function whenOf(attempt: ConnectionAttempt): string {
@@ -62,6 +63,39 @@ function pathOf(address: string): string {
   }
 }
 
+/** A list's heading inside the report. */
+function ListHeading({ children }: { children: string }): JSX.Element {
+  return (
+    <span className="mb-1 block text-xs font-semibold text-foreground">
+      {children}
+    </span>
+  );
+}
+
+/** One line of a list in the report: what, and how much. */
+function ReportLine({
+  what,
+  much,
+  mono = false,
+}: {
+  what: string;
+  much: string;
+  mono?: boolean;
+}): JSX.Element {
+  return (
+    <li className="flex min-w-0 justify-between gap-3 text-sm">
+      <span
+        className={`min-w-0 [overflow-wrap:anywhere] ${mono ? "font-mono text-xs" : ""}`}
+      >
+        {what}
+      </span>
+      <span className="min-w-0 text-right text-xs [overflow-wrap:anywhere] text-muted-foreground">
+        {much}
+      </span>
+    </li>
+  );
+}
+
 /** What Search Console says about the site over the last 28 days. */
 function Report(): JSX.Element {
   const report = usePluginRoute<SearchConsoleReportBody>({
@@ -69,14 +103,11 @@ function Report(): JSX.Element {
     path: SEARCH_CONSOLE_REPORT_PATH,
   });
   if (report.pending) {
-    return <p className="nx-seo-help">Reading Search Console…</p>;
+    return <ControlNote>Reading Search Console…</ControlNote>;
   }
   if (report.error || report.data === undefined || report.data === null) {
     return (
-      <p className="nx-seo-help nx-seo-connfail" role="status">
-        <span className="nx-seo-warnc">
-          <Icon name="warn" />
-        </span>{" "}
+      <p className="mt-1.5 text-xs font-medium text-warning-text" role="status">
         {report.error
           ? apiErrorMessage(report.error)
           : "Search Console answered nothing."}
@@ -85,42 +116,40 @@ function Report(): JSX.Element {
   }
   const { clicks, queries, otherAddress, checked } = report.data;
   return (
-    <div className="nx-seo-gsc">
-      <p className="nx-seo-help">
-        <b>{clicks.toLocaleString()}</b> clicks from Google in the last 28 days.
+    <div className="mt-3 grid gap-3 border-t border-border pt-3">
+      <p className="text-sm text-foreground">
+        <b className="font-semibold">{clicks.toLocaleString()}</b> clicks from
+        Google in the last 28 days.
       </p>
       {queries.length > 0 ? (
         <div>
-          <span className="nx-seo-label">What people searched</span>
-          <ul className="nx-seo-gsclist">
+          <ListHeading>What people searched</ListHeading>
+          <ul className="grid gap-1">
             {queries.slice(0, 5).map(row => (
-              <li key={row.query}>
-                <span>{row.query}</span>
-                <span className="nx-seo-help">
-                  {row.clicks.toLocaleString()} clicks
-                </span>
-              </li>
+              <ReportLine
+                key={row.query}
+                what={row.query}
+                much={`${row.clicks.toLocaleString()} clicks`}
+              />
             ))}
           </ul>
         </div>
       ) : null}
       <div>
-        <span className="nx-seo-label">
+        <ListHeading>
           Where Google chose a different official address
-        </span>
+        </ListHeading>
         {otherAddress.length === 0 ? (
-          <p className="nx-seo-help">
-            None of the {checked} most visited pages.
-          </p>
+          <ControlNote>None of the {checked} most visited pages.</ControlNote>
         ) : (
-          <ul className="nx-seo-gsclist">
+          <ul className="grid gap-1">
             {otherAddress.map(row => (
-              <li key={row.page}>
-                <span className="nx-seo-mono">{pathOf(row.page)}</span>
-                <span className="nx-seo-help">
-                  Google uses {pathOf(row.chosen)}
-                </span>
-              </li>
+              <ReportLine
+                key={row.page}
+                mono
+                what={pathOf(row.page)}
+                much={`Google uses ${pathOf(row.chosen)}`}
+              />
             ))}
           </ul>
         )}
@@ -179,66 +208,56 @@ export function SearchConsoleRow({
 
   const failed = problem ?? state?.failed?.message;
   return (
-    <div className="nx-seo-conn">
-      <div>
-        <b>Google Search Console</b>
-        <p className="nx-seo-help">
-          See clicks, what people searched, and pages where Google chose a
-          different official address. Nextly asks Google for read-only access
-          and never changes anything there.
-        </p>
+    <SettingsRowGroup
+      label="Google Search Console"
+      description="See clicks, what people searched, and pages where Google chose a different official address. Nextly asks Google for read-only access and never changes anything there."
+    >
+      <div className="flex flex-wrap items-center gap-3">
+        {connected === undefined ? (
+          <Button
+            type="button"
+            size="sm"
+            disabled={busy || state?.configured !== true}
+            onClick={connect}
+          >
+            Connect Search Console
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={disconnect}
+          >
+            Disconnect
+          </Button>
+        )}
         {connected === undefined ? null : (
-          <p className="nx-seo-help nx-seo-connok">
-            <span className="nx-seo-okc">
-              <Icon name="check" />
-            </span>{" "}
+          <span className="text-sm font-medium text-success-text">
             Connected
             {connected.email === undefined ? "" : ` as ${connected.email}`}
             {connected.property === undefined
               ? ""
               : ` · ${propertyName(connected.property)}`}
-          </p>
-        )}
-        {state !== undefined && !state.configured ? (
-          <p className="nx-seo-help nx-seo-connfail">
-            Needs a Google sign-in in the site's configuration first, as the SEO
-            plugin's documentation shows.
-          </p>
-        ) : null}
-        {failed === undefined ? null : (
-          <p className="nx-seo-help nx-seo-connfail" role="status">
-            <span className="nx-seo-warnc">
-              <Icon name="warn" />
-            </span>{" "}
-            {failed}
-          </p>
+          </span>
         )}
       </div>
-      {connected === undefined ? (
-        <Button
-          type="button"
-          size="sm"
-          disabled={busy || state?.configured !== true}
-          onClick={connect}
+      {state !== undefined && !state.configured ? (
+        <ControlNote tone="warning">
+          Needs a Google sign-in in the site&apos;s configuration first, as the
+          SEO plugin&apos;s documentation shows.
+        </ControlNote>
+      ) : null}
+      {failed === undefined ? null : (
+        <p
+          className="mt-1.5 text-xs font-medium text-warning-text"
+          role="status"
         >
-          Connect Search Console
-        </Button>
-      ) : (
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={busy}
-          onClick={disconnect}
-        >
-          Disconnect
-        </Button>
+          {failed}
+        </p>
       )}
-      {connected?.property === undefined ? null : (
-        <div className="nx-seo-connmore">
-          <Report />
-        </div>
-      )}
-    </div>
+      {connected?.property === undefined ? null : <Report />}
+    </SettingsRowGroup>
   );
 }

@@ -2,12 +2,12 @@
 
 /**
  * `@nextlyhq/plugin-seo/admin`: the admin's SEO screens, each registered
- * under the component path the plugin names it by: the settings and redirects
- * pages, the SEO tab on each page the plugin adds SEO to and in the Page
- * Builder's Settings, its side panel line,
- * and the panel the tab draws, for any surface that edits a page's SEO, the
- * problem list, the "What search engines received" page, and the Pages and
- * addresses screen.
+ * under the component path the plugin names it by: the SEO section's
+ * screens (Overview, Pages with its Import and Inspect, Problems, Redirects
+ * and Settings), the screens left at the section's old addresses, the SEO tab
+ * on each page the plugin adds SEO to and in the Page Builder's Settings, its
+ * side panel line, and the panel the tab draws, for any surface that edits a
+ * page's SEO.
  *
  * The registration is what makes them render: the admin resolves a component
  * path through its registry, so a component exported but not registered
@@ -16,9 +16,11 @@
  * @module admin
  */
 import { registerComponents } from "@nextlyhq/plugin-sdk/admin";
+import type { JSX } from "react";
 
 import { BULK_PAGE } from "../bulk/contract";
 import { PAGES_PAGE } from "../code-pages/contract";
+import { IMPORT_PAGE, INSPECT_PAGE, OVERVIEW_PAGE } from "../overview/contract";
 import { PROBLEMS_PAGE } from "../problems/contract";
 import { RECEIVED_PAGE } from "../received/contract";
 import { REDIRECTS_PAGE } from "../redirects/contract";
@@ -27,34 +29,64 @@ import { SEO_STATUS_COMPONENT, SEO_TAB_COMPONENT } from "../tab/contributions";
 import { PAGE_BUILDER_TAB_COMPONENT } from "../template/contributions";
 
 import { PageBuilderSeoTab } from "./PageBuilderSeoTab";
-import { SeoBulkPage } from "./SeoBulkPage";
-import { SeoPagesPage } from "./SeoPagesPage";
+import { SeoBulkMoved, SeoReceivedMoved, withTrail } from "./section";
+import { SeoImportPage } from "./SeoImportPage";
+import { SeoInspectPage } from "./SeoInspectPage";
+import { SeoOverviewPage } from "./SeoOverviewPage";
+import { SeoPagesPage as PagesScreen } from "./SeoPagesPage";
 import { SeoProblemsPage } from "./SeoProblemsPage";
-import { SeoReceivedPage } from "./SeoReceivedPage";
 import { SeoRedirectsPage } from "./SeoRedirectsPage";
 import { SeoSettingsPage } from "./SeoSettingsPage";
 import { SeoTab } from "./SeoTab";
 import { SeoStatusSection } from "./status";
 
+// Each screen of the SEO section sets its trail in the top bar; the screens
+// drawn before the section had one are given it here. Each is exported under
+// the name its component path ends in, since a site's generated component map
+// registers that export.
+export const SeoPagesPage: () => JSX.Element = withTrail(PagesScreen, [
+  { label: "Pages" },
+]);
+
 // Registered as the module loads, which is when the component map imports it.
 registerComponents({
-  [SETTINGS_PAGE.component]: SeoSettingsPage,
-  [RECEIVED_PAGE.component]: SeoReceivedPage,
+  [OVERVIEW_PAGE.component]: SeoOverviewPage,
+  [PAGES_PAGE.component]: SeoPagesPage,
+  [IMPORT_PAGE.component]: SeoImportPage,
+  [INSPECT_PAGE.component]: SeoInspectPage,
+  [PROBLEMS_PAGE.component]: SeoProblemsPage,
   [REDIRECTS_PAGE.component]: SeoRedirectsPage,
+  [SETTINGS_PAGE.component]: SeoSettingsPage,
+  // The old Bulk edit address, sending a bookmark on to Pages in Edit mode.
+  [BULK_PAGE.component]: SeoBulkMoved,
+  // The old address of the check of what search engines received, sending
+  // a bookmark on to Inspect.
+  [RECEIVED_PAGE.component]: SeoReceivedMoved,
   [SEO_TAB_COMPONENT]: SeoTab,
   [PAGE_BUILDER_TAB_COMPONENT]: PageBuilderSeoTab,
   [SEO_STATUS_COMPONENT]: SeoStatusSection,
-  [PROBLEMS_PAGE.component]: SeoProblemsPage,
-  [BULK_PAGE.component]: SeoBulkPage,
-  [PAGES_PAGE.component]: SeoPagesPage,
 });
 
-export { SeoBulkPage } from "./SeoBulkPage";
+export { SeoOverviewPage } from "./SeoOverviewPage";
+export { SeoImportPage } from "./SeoImportPage";
 export { SeoProblemsPage } from "./SeoProblemsPage";
-export { SeoReceivedPage } from "./SeoReceivedPage";
-export { SeoPagesPage } from "./SeoPagesPage";
 export { SeoRedirectsPage } from "./SeoRedirectsPage";
 export { SeoSettingsPage } from "./SeoSettingsPage";
+export { SeoBulkMoved, SeoReceivedMoved } from "./section";
+/**
+ * The names these two screens were published under before they became
+ * forwards to Pages and Inspect. A site's committed component map imports
+ * each component by name, and a name this entry stops exporting fails that
+ * map's compile, so the admin could not load to rewrite it. Kept so a site
+ * upgrading from an earlier release loads; the map then names the new ones.
+ *
+ * @deprecated Use `SeoBulkMoved` and `SeoReceivedMoved`.
+ */
+export {
+  SeoBulkMoved as SeoBulkPage,
+  SeoReceivedMoved as SeoReceivedPage,
+} from "./section";
+export { SeoInspectPage } from "./SeoInspectPage";
 export { SeoTab } from "./SeoTab";
 export { PageBuilderSeoTab } from "./PageBuilderSeoTab";
 export { SeoStatusSection } from "./status";

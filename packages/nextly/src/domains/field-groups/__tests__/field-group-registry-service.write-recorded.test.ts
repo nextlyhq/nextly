@@ -9,7 +9,15 @@
  * path, creator).
  */
 
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The adapter double holds no stored schema version: registry writes run as
+// they are (`unversionedRegistryWrites`).
+vi.mock("../../schema/schema-version", async importOriginal =>
+  (
+    await import("../../../__tests__/helpers/unversioned-registry-writes")
+  ).unversionedRegistryWrites(await importOriginal())
+);
 
 import { loadDialectTables } from "../../../database/dialect-tables";
 import type { FieldGroupConfig } from "../../../field-groups/config/types";

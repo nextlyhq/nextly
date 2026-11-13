@@ -136,3 +136,76 @@ export interface DataTableSlots {
   /** Rendered next to the search/filter controls. */
   toolbarActions?: React.ReactNode;
 }
+
+/**
+ * A group of rows in a list: what its header row says. The group's rows are
+ * the list's rows that `DataTableGrouping.groupOf` places in it, in the order
+ * the list gives them.
+ */
+export interface DataTableGroup {
+  /** Names the group to `groupOf`, and to the collapsed ids. */
+  id: string;
+  /** What the group is; it also names the group to assistive technology. */
+  title: React.ReactNode;
+  /** One line under the title, saying more about the group. */
+  description?: React.ReactNode;
+  /** A status beside the title, usually a `Badge`. */
+  badge?: React.ReactNode;
+  /**
+   * What the header counts. By default the number of the group's rows in the
+   * list; pass the full total when the list is paginated and a page holds only
+   * part of the group.
+   */
+  count?: React.ReactNode;
+  /** The group's own buttons or links, at the end of its header row. */
+  actions?: React.ReactNode;
+}
+
+/**
+ * Rows drawn in groups, each under a header row. Every group listed is drawn,
+ * in the order listed, even one with no rows, since its header can carry a
+ * count and actions of its own. A row whose group is not listed is drawn after
+ * the groups, under no header.
+ */
+export interface DataTableGrouping<
+  Row extends object = Record<string, unknown>,
+> {
+  groups: readonly DataTableGroup[];
+  /** The id of the group a row belongs to. */
+  groupOf: (row: Row) => string;
+  /**
+   * Whether a group's rows can be folded away under its header, by a button
+   * on the header that says whether they are shown. Default: false.
+   */
+  collapsible?: boolean;
+  /** The folded groups, when the page owns that state. */
+  collapsedIds?: readonly string[];
+  /** The groups folded at first, when the list owns that state. */
+  defaultCollapsedIds?: readonly string[];
+  /** Called with every folded group's id after one is folded or unfolded. */
+  onCollapsedChange?: (collapsedIds: string[]) => void;
+}
+
+/**
+ * A region below a row that its toggle opens: more about the row than its
+ * cells hold, such as the items it counts.
+ */
+export interface DataTableRowDetail<
+  Row extends object = Record<string, unknown>,
+> {
+  /** What the open region holds. Called only while the row is open. */
+  render: (row: Row) => React.ReactNode;
+  /** Whether a row has a region to open. Default: every row has one. */
+  hasDetail?: (row: Row) => boolean;
+  /**
+   * The toggle's accessible name. By default "Details" followed by the text of
+   * the row's identifying cell, so each row's toggle is told apart.
+   */
+  toggleLabel?: (row: Row) => string;
+  /** The open rows' ids, when the page owns that state. */
+  expandedIds?: readonly string[];
+  /** The rows open at first, when the list owns that state. */
+  defaultExpandedIds?: readonly string[];
+  /** Called with every open row's id after one is opened or closed. */
+  onExpandedChange?: (expandedIds: string[]) => void;
+}

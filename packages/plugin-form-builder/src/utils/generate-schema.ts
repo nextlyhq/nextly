@@ -90,11 +90,31 @@ export function generateZodSchema(
 
     const fieldSchema = generateFieldSchema(field);
     if (fieldSchema) {
-      schemaShape[field.name] = fieldSchema;
+      schemaShape[field.name] = field.required
+        ? answered(fieldSchema, requiredMessage(field))
+        : fieldSchema;
     }
   }
 
   return z.object(schemaShape);
+}
+
+/** What a required field missing from a submission says. */
+function requiredMessage(field: FormField): string {
+  return customMessage(field) || `${field.label || field.name} is required`;
+}
+
+/**
+ * `schema`, after a check that an answer was given at all. A required field
+ * left out of a submission would otherwise fail on its type ("expected
+ * string, received undefined"), which tells the visitor nothing; it is
+ * refused as required instead, and the field's own checks run on an answer
+ * that is there.
+ */
+function answered(schema: z.ZodTypeAny, message: string): z.ZodTypeAny {
+  return z
+    .custom(value => value !== undefined && value !== null, { message })
+    .pipe(schema);
 }
 
 // ============================================================

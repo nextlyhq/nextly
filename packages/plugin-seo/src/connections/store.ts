@@ -7,7 +7,9 @@
  * value, so none of them reaches the admin or any API.
  *
  * What is not a credential (who is connected, how the last attempt went) is
- * kept beside them in plain text, for the Connections tab to show.
+ * kept beside them in plain text, for the Connections tab to show, with the
+ * little the Overview keeps: whether its checklist is hidden, and when old
+ * SEO values were last imported.
  *
  * @module connections/store
  */
@@ -60,6 +62,10 @@ const schema = z.object({
     .optional(),
   /** Search Console's last attempt that failed, and what to tell the person. */
   searchConsoleFailed: attempt.extend({ message: z.string() }).optional(),
+  /** The Overview's setup checklist is hidden, until someone shows it again. */
+  checklistHidden: z.boolean().optional(),
+  /** When an import of old SEO values was last applied, as an ISO time. */
+  importedAt: z.string().optional(),
 });
 
 /** What the connections hold. */
@@ -74,6 +80,8 @@ export interface ConnectionSettings {
     expiresAt: string;
   };
   searchConsoleFailed?: ConnectionAttempt & { message: string };
+  checklistHidden?: boolean;
+  importedAt?: string;
 }
 
 /**

@@ -9,7 +9,7 @@
  * @module pages/dashboard/entries/[slug]/[id]/custom-edit-view-lock.test
  */
 
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -187,6 +187,28 @@ describe("a custom collection edit view", () => {
     withCustomView();
     renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
     expect(customViewProps?.initialData).toEqual({ id: "42", title: "A post" });
+  });
+
+  it("leads back to its list under the list's own name, the plural", () => {
+    // A collection answers `label` with its one-entry name as well as its
+    // labels; the trail's step opens the list, which is called by the plural.
+    collectionSchema = {
+      name: "form-submissions",
+      slug: "form-submissions",
+      label: "Submission",
+      labels: { singular: "Submission", plural: "Submissions" },
+    };
+    withCustomView();
+    renderWithProviders(
+      <EditEntryPage params={{ slug: "form-submissions", id: "42" }} />
+    );
+    const trail = screen.getByRole("navigation", { name: "Breadcrumb" });
+    const step = within(trail).getByRole("link", { name: "Submissions" });
+    expect(step).toHaveAttribute(
+      "href",
+      expect.stringContaining("/collections/form-submissions")
+    );
+    expect(within(trail).queryByText("Submission")).toBeNull();
   });
 
   it("leaves the default form the merged entry", () => {

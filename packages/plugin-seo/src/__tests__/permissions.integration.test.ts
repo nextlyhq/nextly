@@ -8,7 +8,7 @@
  *   Single's own read or update permission beside it, which core asks of
  *   every Single, and redirects, their imports and addresses not found with
  *   nothing else, since the plugin keeps those itself.
- * - The Pages and addresses screen, its list and its save of a page with
+ * - The Pages screen, its list and its save of a page with
  *   no entry's SEO, needs `manage-seo` alone: the plugin keeps that SEO.
  * - The check of what search engines received needs `check-seo`.
  * - Where page SEO has its own permission, a person who may edit a page but
@@ -420,10 +420,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     describe("the check of what search engines received needs check-seo", () => {
-      it("answers the pages it offers, and takes a check, from someone holding it", async () => {
-        expect(
-          (await route("GET", "/received/pages", people.checker!)).status
-        ).toBe(200);
+      it("takes a check from someone holding it", async () => {
         // Past the gate: the body is refused for what it says, before
         // anything is fetched.
         expect(
@@ -434,9 +431,6 @@ describe.each(getConfiguredTestDialects())(
       it.each(["siteSeo", "reader", "postEditor"])(
         "refuses %s, who does not hold it, before anything is read or fetched",
         async who => {
-          const pages = await route("GET", "/received/pages", people[who]!);
-          expect(pages.status).toBe(403);
-          expect(pages.body.pages).toBeUndefined();
           expect(
             (
               await route("POST", "/received", people[who]!, {
@@ -770,10 +764,10 @@ describe.each(getConfiguredTestDialects())(
         (admin?.menu ?? []).map(item => [item.label, item.requiredPermission])
       );
       expect(gates).toEqual({
+        Overview: "manage-seo",
+        Pages: "manage-seo",
         Problems: undefined,
-        "Pages and addresses": "manage-seo",
         Redirects: "manage-seo",
-        "What search engines received": "check-seo",
         Settings: "manage-seo",
       });
     });
@@ -895,6 +889,16 @@ describe.each(getConfiguredTestDialects())(
           problem => problem.subject.type === "single:home"
         )
       ).toBe(false);
+      // The list says which pages it checked for them, so a page it left
+      // out is not taken for one with no problems.
+      const checkedOf = async (cookie: string) =>
+        (
+          itemOf((await route("GET", "/problems", cookie)).body).checked as {
+            type: string;
+          }[]
+        ).map(page => page.type);
+      expect(await checkedOf(postsReader)).not.toContain("single:home");
+      expect(await checkedOf(homeReader)).toContain("single:home");
       const refused = await route(
         "GET",
         "/problems",

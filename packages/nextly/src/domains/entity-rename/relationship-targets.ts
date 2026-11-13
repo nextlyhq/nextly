@@ -24,6 +24,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldConfig } from "../../collections/fields/types";
 import { NextlyError } from "../../errors";
+import { clearRegistryRowCache } from "../dynamic-collections/services/collection-row-cache";
 import { isRecord, subFieldsOf } from "../field-groups/field-group-instances";
 import { calculateSchemaHash } from "../schema/services/schema-hash";
 
@@ -256,6 +257,9 @@ export async function moveRelationshipTargets(
         },
         { and: [{ column: "id", op: "=", value: row.id }] }
       );
+      // Cleared as each row changes, so a read later in the transaction
+      // finds its new fields.
+      clearRegistryRowCache();
     }
   }
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { FieldRow } from "@nextlyhq/ui";
 import type { JSX, ReactNode } from "react";
 
 import { FormDescription, useFormField } from "@admin/components/ui/form";
@@ -47,33 +48,36 @@ export function SettingsRow({
   });
 
   return (
-    // No vertical padding here: `FormSection` applies the rhythm to every
-    // direct child, so a row that also padded itself would double it on exactly
-    // the sections that were already correct. The horizontal grid stays this
-    // component's own business — that is what makes it a two-column row rather
-    // than a stacked field.
-    <div className="grid grid-cols-1 md:grid-cols-[2fr_3fr] gap-4 md:gap-8 items-start">
-      <div className="flex flex-col">
-        <label
-          htmlFor={formItemId}
-          className="cursor-pointer text-sm font-semibold text-foreground"
-        >
-          {label}
-        </label>
-        {/* A sibling of the label rather than a child of it, and rendered
-            through FormDescription rather than as plain markup. Inside the
-            label, help text became part of the control's accessible NAME — a
-            screen reader announced the whole paragraph every time focus
-            arrived — and nothing registered it with FormControl, so it reached
-            aria-describedby not at all. FormDescription publishes its presence,
-            which is what lets FormControl name it. */}
-        {description && (
-          <FormDescription className="mt-0.5 text-xs leading-relaxed">
-            {description}
-          </FormDescription>
-        )}
-      </div>
-      <div className="w-full">{children}</div>
-    </div>
+    // The two-column grid is `FieldRow`'s, the one the plugin-facing
+    // `FieldShell` row layout draws too, so a plugin's settings row and this
+    // form-bound one cannot drift apart. No vertical padding here:
+    // `FormSection` applies the rhythm to every direct child, so a row that
+    // also padded itself would double it.
+    <FieldRow
+      aside={
+        <>
+          <label
+            htmlFor={formItemId}
+            className="cursor-pointer text-sm font-semibold text-foreground"
+          >
+            {label}
+          </label>
+          {/* A sibling of the label rather than a child of it, and rendered
+              through FormDescription rather than as plain markup. Inside the
+              label, help text became part of the control's accessible NAME — a
+              screen reader announced the whole paragraph every time focus
+              arrived — and nothing registered it with FormControl, so it
+              reached aria-describedby not at all. FormDescription publishes its
+              presence, which is what lets FormControl name it. */}
+          {description && (
+            <FormDescription className="mt-0.5 text-xs leading-relaxed">
+              {description}
+            </FormDescription>
+          )}
+        </>
+      }
+    >
+      {children}
+    </FieldRow>
   );
 }

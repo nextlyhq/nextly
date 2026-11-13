@@ -9,7 +9,10 @@ import { cn } from "../lib/utils";
 import type {
   FieldShellProps,
   FieldShellRenderProps,
+  FieldWidth,
 } from "../types/form-layout";
+
+import { FieldRow } from "./field-row";
 
 /**
  * The width cap applies to a wrapper around the control, not to the field row.
@@ -162,7 +165,8 @@ export function FieldShell({
   label,
   description,
   error,
-  width = "half",
+  width,
+  layout = "stacked",
   htmlFor,
   className,
   children,
@@ -272,25 +276,111 @@ export function FieldShell({
       : cloneElement(children, controlOverrides);
   }
 
+  const parts: FieldParts = {
+    label,
+    description,
+    error,
+    controlId: wiring.id,
+    descriptionId,
+    errorId,
+    // The row's right column is already the control's measure, so a control
+    // there fills it unless the caller caps it; stacked fields stay short.
+    width: width ?? (layout === "row" ? "fill" : "half"),
+    className,
+    control,
+  };
+  return layout === "row" ? (
+    <RowField {...parts} />
+  ) : (
+    <StackedField {...parts} />
+  );
+}
+
+/**
+ * What both layouts draw: the wiring `FieldShell` computed once, so neither
+ * layout can compute a second, differing answer to which id the label targets
+ * or which ids describe the control.
+ */
+interface FieldParts {
+  label: React.ReactNode;
+  description: React.ReactNode;
+  error: React.ReactNode;
+  controlId: string;
+  descriptionId: string;
+  errorId: string;
+  width: FieldWidth;
+  className: string | undefined;
+  control: React.ReactNode;
+}
+
+/**
+ * The settings row: the label and its help on the left, the control and any
+ * error under it on the right. The grid itself is `FieldRow`'s, so this row and
+ * the admin's own settings rows cannot disagree about it.
+ */
+function RowField(parts: FieldParts): JSX.Element {
   return (
-    <div className={cn("flex flex-col gap-1.5", className)}>
-      {label ? (
-        <label
-          htmlFor={wiring.id}
-          className="text-sm font-medium text-foreground"
+    <FieldRow
+      className={parts.className}
+      aside={
+        <>
+          {parts.label ? (
+            <label
+              htmlFor={parts.controlId}
+              className="cursor-pointer text-sm font-semibold text-foreground"
+            >
+              {parts.label}
+            </label>
+          ) : null}
+          {parts.description ? (
+            <p
+              id={parts.descriptionId}
+              className="mt-0.5 text-xs leading-relaxed text-muted-foreground"
+            >
+              {parts.description}
+            </p>
+          ) : null}
+        </>
+      }
+    >
+      <div className={controlWidth({ width: parts.width })}>
+        {parts.control}
+      </div>
+      {parts.error ? (
+        <p
+          id={parts.errorId}
+          className="mt-1.5 text-sm font-medium text-destructive"
         >
-          {label}
-        </label>
-      ) : null}
-      <div className={controlWidth({ width })}>{control}</div>
-      {description ? (
-        <p id={descriptionId} className="text-sm text-muted-foreground">
-          {description}
+          {parts.error}
         </p>
       ) : null}
-      {error ? (
-        <p id={errorId} className="text-sm font-medium text-destructive">
-          {error}
+    </FieldRow>
+  );
+}
+
+/** The stacked field: the label, then the control, its help and any error. */
+function StackedField(parts: FieldParts): JSX.Element {
+  return (
+    <div className={cn("flex flex-col gap-1.5", parts.className)}>
+      {parts.label ? (
+        <label
+          htmlFor={parts.controlId}
+          className="text-sm font-medium text-foreground"
+        >
+          {parts.label}
+        </label>
+      ) : null}
+      <div className={controlWidth({ width: parts.width })}>
+        {parts.control}
+      </div>
+      {parts.description ? (
+        <p id={parts.descriptionId} className="text-sm text-muted-foreground">
+          {parts.description}
+        </p>
+      ) : null}
+      {parts.error ? (
+        <p id={parts.errorId} className="text-sm font-medium text-destructive">
+          {parts.error}
         </p>
       ) : null}
     </div>

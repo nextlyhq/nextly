@@ -23,7 +23,8 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
-import { claimKey, sha256 } from "../../address-record/rows";
+import { keepRecord } from "../../address-record/__tests__/record-double";
+import { sha256 } from "../../address-record/rows";
 import { buildStructuredData, type StructuredDataNode } from "../graph";
 import { rulesFromOptions, type StructuredDataRules } from "../rules";
 
@@ -50,6 +51,12 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   },
 }));
 
+vi.mock("../../address-record/store", async importOriginal => ({
+  ...(await importOriginal()),
+  ...(await import("../../address-record/__tests__/record-double"))
+    .recordDouble,
+}));
+
 const ORIGIN = "https://example.com";
 
 /** The pages the address record says hold an address, by language and path. */
@@ -73,28 +80,6 @@ function context(): PluginContext {
     slug: string,
     query: { where?: Record<string, Record<string, unknown>> }
   ) => {
-    if (slug === "nx_seo_addresses") {
-      const keys = (query.where?.claimKey?.in ?? []) as string[];
-      const data = Object.entries(HELD).flatMap(([at, holder]) => {
-        const [locale = "", path = ""] = at.split("|");
-        return keys.includes(claimKey("address", locale, path))
-          ? [
-              {
-                id: at,
-                kind: "address",
-                locale,
-                path,
-                holderCollection: holder.collection,
-                holderId: "1",
-                ...(holder.label === undefined
-                  ? {}
-                  : { holderLabel: holder.label }),
-              },
-            ]
-          : [];
-      });
-      return { data };
-    }
     if (slug === "nx_seo_code_pages") {
       const key = query.where?.pathKey?.equals;
       const data = Object.entries(CODE_PAGES).flatMap(([path, name]) =>
@@ -106,7 +91,7 @@ function context(): PluginContext {
     }
     return { data: [] };
   };
-  return {
+  const ctx = {
     self: { collections: {} },
     config: {},
     publicAddresses: { defaultLanguage: async () => "en" },
@@ -132,6 +117,20 @@ function context(): PluginContext {
       singles: { list: async () => ({ total: 0, data: [] }) },
     },
   } as unknown as PluginContext;
+  keepRecord(
+    ctx,
+    Object.entries(HELD).map(([at, holder]) => {
+      const [locale = "", path = ""] = at.split("|");
+      return {
+        locale,
+        path,
+        holderCollection: holder.collection,
+        holderId: "1",
+        ...(holder.label === undefined ? {} : { holderLabel: holder.label }),
+      };
+    })
+  );
+  return ctx;
 }
 
 const BRAND: StructuredDataRules["brand"] = {

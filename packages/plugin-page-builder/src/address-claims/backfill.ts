@@ -3,11 +3,13 @@
  * has finished, so a site upgrading to the address store keeps every
  * published page at its address before a new page or list can take it.
  *
- * Run on every boot, in the background, and safe to run again: a page whose
- * claims already match what it should hold keeps them, so a pass over a site
- * that is up to date changes no claim (it only takes each page's lock row in
- * turn), and a site whose languages changed since the last boot claims its
- * pages in the new ones. Pages are claimed oldest first, by when they were
+ * Run in the background on a boot whose site has changed since the last
+ * complete pass (`start-pass`), and safe to run again: a batch of pages is
+ * read with the claims they hold, as committed, and only a page whose claims
+ * differ from what it should hold is reconciled, in a transaction of its own
+ * under its lock. So a pass over a site that is up to date changes no claim
+ * and takes no lock, and a site whose languages changed since the last boot
+ * claims its pages in the new ones. Pages are claimed oldest first, by when they were
  * made, so of two pages that clash the older keeps the address and the newer
  * waits for it, reported in the waiting report rather than refused, since
  * nobody is saving it now. A page whose address can no
@@ -21,7 +23,9 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 import {
   claimOrWait,
   claimSpaceOrWait,
+  committedHoldings,
   dropStaleClaims,
+  holdsExactly,
   lockHolder,
   reconcileHolder,
   type Claims,
@@ -57,6 +61,14 @@ export interface BackfillDeps {
     tx: Tx,
     id: string
   ) => Promise<Readonly<Record<string, unknown>> | null>;
+  /**
+   * The pages `ids` as committed, read as `readPage` reads one (its own
+   * columns, no relationship expanded, past every read hook), through the
+   * pool and with no lock: what the walk compares with the claims each holds.
+   */
+  readonly readPages: (
+    ids: readonly string[]
+  ) => Promise<readonly Readonly<Record<string, unknown>>[]>;
   readonly withTransaction: <T>(work: (tx: Tx) => Promise<T>) => Promise<T>;
   readonly warn: (message: string, context: Record<string, unknown>) => void;
   /**
@@ -231,12 +243,18 @@ export async function backfillPageClaims(deps: BackfillDeps): Promise<boolean> {
   let complete = true;
   try {
     for await (const batch of publishedPages(deps.nextly, deps.pages)) {
-      for (const row of batch) {
+      const ids = batch.flatMap(row =>
+        typeof row.id === "string" || typeof row.id === "number"
+          ? [String(row.id)]
+          : []
+      );
+      const settled = await settledAmong(deps, ids);
+      for (const id of ids) {
         // Superseded: the newer pass settles every page, and this one is
         // not complete.
         if (deps.current?.() === false) return false;
-        if (typeof row.id !== "string" && typeof row.id !== "number") continue;
-        if (!(await claimPage(deps, String(row.id)))) complete = false;
+        if (settled.has(id)) continue;
+        if (!(await claimPage(deps, id))) complete = false;
       }
     }
   } catch (error) {
@@ -246,6 +264,33 @@ export async function backfillPageClaims(deps: BackfillDeps): Promise<boolean> {
     return false;
   }
   return complete;
+}
+
+/**
+ * Which of the pages `ids` hold exactly what they should, as last committed:
+ * two reads for the whole batch, the pages and the claims they hold, rather
+ * than a transaction per page. A page left out (one changed, waiting for its
+ * address, or saved since the walk read it) is reconciled under its lock, as
+ * every page was before; one judged settled from a commit a save has since
+ * replaced is that save's to reconcile, in its own transaction.
+ */
+async function settledAmong(
+  deps: BackfillDeps,
+  ids: readonly string[]
+): Promise<ReadonlySet<string>> {
+  const settled = new Set<string>();
+  if (ids.length === 0) return settled;
+  const rows = await deps.readPages(ids);
+  const holdings = await committedHoldings(deps.claims, deps.pages, ids);
+  const asked = new Set(ids);
+  for (const row of rows) {
+    if (typeof row.id !== "string" && typeof row.id !== "number") continue;
+    const id = String(row.id);
+    if (!asked.has(id)) continue;
+    const wanted = pageClaims(row, deps.locales, deps.pathTemplate);
+    if (holdsExactly(holdings.get(id) ?? [], wanted)) settled.add(id);
+  }
+  return settled;
 }
 
 /**

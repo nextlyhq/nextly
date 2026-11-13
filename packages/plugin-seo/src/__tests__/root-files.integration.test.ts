@@ -30,7 +30,7 @@ import {
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import { catchUp, lastCatchUp } from "../address-record/catch-up";
-import { ADDRESS_RECORD_SLUG } from "../address-record/collection";
+import { forgetNote } from "../address-record/__tests__/record-tables";
 import type { ListedPagesService } from "../outputs/listing";
 import { seoPlugin, type SeoPluginOptions } from "../plugin";
 
@@ -214,20 +214,9 @@ async function image(t: TestNextly, name: string) {
 }
 
 /** Forget the fingerprint of the last catch-up, as a changed template would. */
-async function forgetFingerprint(t: TestNextly) {
-  const { items } = await t.nextly.find({
-    collection: ADDRESS_RECORD_SLUG,
-    limit: 500,
-  });
-  for (const row of items as Record<string, unknown>[]) {
-    // The fingerprint alone; the list of site types beside it stays.
-    if (row.kind === "meta" && !String(row.path).startsWith("[")) {
-      await t.nextly.delete({
-        collection: ADDRESS_RECORD_SLUG,
-        id: String(row.id),
-      });
-    }
-  }
+async function forgetFingerprint(_t: TestNextly) {
+  // The fingerprint alone; the list of site types beside it stays.
+  await forgetNote("fingerprint");
 }
 
 describe.each(getConfiguredTestDialects())(

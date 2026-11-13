@@ -17,6 +17,7 @@ import { defineCollection, text } from "nextly/config";
 import {
   CHECKS_SLUG,
   FILL_PROBE_PATH,
+  BLOCK_PAGE_PATHS,
   FRAME_PAGE_PATHS,
   PANEL_PAGE_PATHS,
   STYLE_FIXTURE_PATH,
@@ -194,6 +195,11 @@ export const styleFixturePlugin = definePlugin({
           section: "plugins",
         },
         ...Object.entries(FRAME_PAGE_PATHS).map(([path, component]) => ({
+          path,
+          component,
+          section: "plugins" as const,
+        })),
+        ...Object.entries(BLOCK_PAGE_PATHS).map(([path, component]) => ({
           path,
           component,
           section: "plugins" as const,

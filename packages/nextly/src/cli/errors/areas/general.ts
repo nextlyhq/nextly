@@ -40,8 +40,11 @@ export const GENERAL_CODES = defineCodes({
   },
 });
 
-/** Each issue of a validation error, as `path: message`. */
-function issueLines(error: NextlyError): string[] {
+/**
+ * Each issue of a validation error, as `path: message`: the words a run stopped by it prints, and
+ * a dry run's refusals repeat.
+ */
+export function issueLines(error: NextlyError): string[] {
   const data = error.publicData as
     | { errors?: Array<{ path?: unknown; message?: unknown }> }
     | undefined;

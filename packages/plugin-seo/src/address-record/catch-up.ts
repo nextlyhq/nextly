@@ -3,10 +3,11 @@
  * save: a site that had content before the plugin arrived, or whose addresses
  * a deploy moved, is recorded as its pages now stand.
  *
- * It runs only where the record is empty or the fingerprint core gives of
- * every address template differs from the one stored at the last run, and it
- * works in two passes so a deploy that moves one page off an address and
- * another onto it is no clash:
+ * It runs only where the fingerprint core gives of every address template
+ * and site type differs from the one stored at the last run, where no run has
+ * finished (a new or dropped record stores none), or where a deploy move is
+ * still owed its redirect. It works in two passes so a deploy that moves one
+ * page off an address and another onto it is no clash:
  *
  * 1. every page keeps the addresses it already holds and still resolves to,
  *    and lets go of the rest; a page that no longer exists lets go of all;
@@ -31,8 +32,6 @@
  *
  * @module address-record/catch-up
  */
-import { createHash } from "node:crypto";
-
 import {
   NextlyError,
   type AddressHolder,
@@ -52,7 +51,8 @@ import {
   pendingMoves,
   type PendingMove,
 } from "./pending-moves";
-import { recordSlug, rowOf, type RecordRow } from "./rows";
+import type { RecordRow } from "./rows";
+import { heldRows, noteKey, putNote, readNotes } from "./store";
 
 type Transaction = ParticipantTransaction["transaction"];
 
@@ -72,18 +72,14 @@ export interface CatchUpReport {
   lost: LostAddress[];
 }
 
-/** The key of the row that stores the fingerprint of the last run. */
-const FINGERPRINT_KEY = createHash("sha256")
-  .update("meta:fingerprint", "utf8")
-  .digest("hex");
+/** The key of the note that stores the fingerprint of the last run. */
+const FINGERPRINT_KEY = noteKey("fingerprint");
 
 /**
- * The key of the row that stores which types were the site's at the last
+ * The key of the note that stores which types were the site's at the last
  * run, so a holder of a type since removed is told apart from a plugin's own.
  */
-const SITE_TYPES_KEY = createHash("sha256")
-  .update("meta:site-types", "utf8")
-  .digest("hex");
+const SITE_TYPES_KEY = noteKey("site-types");
 
 /** How many rows or pages one read takes. */
 const PAGE = 200;
@@ -192,78 +188,25 @@ const holderKey = (holder: AddressHolder) =>
 const sameAddress = (a: HeldAddress, b: HeldAddress) =>
   a.locale === b.locale && a.path === b.path && a.range === b.range;
 
-/** The stored fingerprint row, found by its key: one row read. */
-async function storedFingerprint(
-  ctx: PluginContext
-): Promise<{ id: string; value: unknown } | undefined> {
-  const { data } = await ctx.services.ownCollections.listEntries(
-    recordSlug(ctx),
-    {
-      where: { claimKey: { equals: FINGERPRINT_KEY } },
-      pagination: { limit: 1, page: 1 },
-      depth: 0,
-    }
-  );
-  const [row] = data as Record<string, unknown>[];
-  return row === undefined
-    ? undefined
-    : { id: String(row.id), value: row.path };
-}
-
-/** Whether the record holds any address at all: one row read at most. */
-async function holdsAny(ctx: PluginContext): Promise<boolean> {
-  const { data } = await ctx.services.ownCollections.listEntries(
-    recordSlug(ctx),
-    {
-      where: { kind: { in: ["address", "range"] } },
-      pagination: { limit: 1, page: 1 },
-      depth: 0,
-    }
-  );
-  return (data as unknown[]).length > 0;
-}
-
-/** A stored meta row: its id, and the value it keeps. */
-interface MetaRow {
-  id: string;
-  value: unknown;
-}
-
 /**
- * The record's rows: held addresses, the stored fingerprint, and the types
- * that were the site's at the last run.
+ * The stored fingerprint and site-types notes, found by their keys, and
+ * whether any deploy move is still owed its redirect: one read.
  */
-async function readRecord(ctx: PluginContext): Promise<{
-  held: RecordRow[];
-  fingerprint?: MetaRow;
-  siteTypes?: MetaRow;
+async function storedGate(ctx: PluginContext): Promise<{
+  fingerprint?: string;
+  siteTypes?: string;
+  pending: boolean;
 }> {
-  const held: RecordRow[] = [];
-  let fingerprint: MetaRow | undefined;
-  let siteTypes: MetaRow | undefined;
-  for (let page = 1; ; page++) {
-    const { data } = await ctx.services.ownCollections.listEntries(
-      recordSlug(ctx),
-      {
-        where: { kind: { in: ["address", "range", "meta"] } },
-        pagination: { limit: PAGE, page },
-        sort: { field: "claimKey", direction: "asc" },
-        depth: 0,
-      }
-    );
-    for (const entry of data as Record<string, unknown>[]) {
-      if (entry.claimKey === FINGERPRINT_KEY) {
-        fingerprint = { id: String(entry.id), value: entry.path };
-      } else if (entry.claimKey === SITE_TYPES_KEY) {
-        siteTypes = { id: String(entry.id), value: entry.path };
-      } else if (entry.kind !== "meta") {
-        held.push(rowOf(entry));
-      }
-    }
-    if ((data as unknown[]).length < PAGE) {
-      return { held, fingerprint, siteTypes };
-    }
-  }
+  const { notes, pending } = await readNotes(
+    ctx,
+    [FINGERPRINT_KEY, SITE_TYPES_KEY],
+    true
+  );
+  return {
+    fingerprint: notes.get(FINGERPRINT_KEY) ?? undefined,
+    siteTypes: notes.get(SITE_TYPES_KEY) ?? undefined,
+    pending,
+  };
 }
 
 /**
@@ -439,11 +382,11 @@ async function siteTypeKeys(ctx: PluginContext): Promise<string[]> {
     .sort();
 }
 
-/** The site types a stored meta row names; none where it names nothing usable. */
-function typesIn(row: MetaRow | undefined): Set<string> {
-  if (typeof row?.value !== "string") return new Set();
+/** The site types a stored note names; none where it names nothing usable. */
+function typesIn(value: string | undefined): Set<string> {
+  if (value === undefined) return new Set();
   try {
-    const parsed: unknown = JSON.parse(row.value);
+    const parsed: unknown = JSON.parse(value);
     return new Set(
       Array.isArray(parsed)
         ? parsed.filter((each): each is string => typeof each === "string")
@@ -572,60 +515,59 @@ async function runCatchUp(
   options: CatchUpOptions
 ): Promise<CatchUpReport> {
   const fingerprint = await ctx.publicAddresses.fingerprint();
-  // The stored fingerprint by its key, and whether any address is recorded:
-  // an unchanged start reads no more than that.
-  const stored = await storedFingerprint(ctx);
+  // Skipped on its inputs alone, never on what the record holds: a site none
+  // of whose pages holds an address keeps only these notes, and would
+  // otherwise walk every page at every start. The fingerprint covers every
+  // site type by kind and name, so a type added or removed changes it; the
+  // site-types row is written beside it in the same run, and one missing
+  // means that run never finished. A full uninstall drops the record with
+  // both rows, so a reinstall runs the whole catch-up again.
+  const stored = await storedGate(ctx);
   if (
-    stored?.value === fingerprint &&
-    (await holdsAny(ctx)) &&
-    (await pendingMoves(ctx)).length === 0
+    stored.fingerprint === fingerprint &&
+    stored.siteTypes !== undefined &&
+    !stored.pending
   ) {
     return NOTHING;
   }
-  const record = await readRecord(ctx);
+  const held = await heldRows(ctx);
   const siteTypes = await siteTypeKeys(ctx);
   const pages = await everyPage(ctx, options);
   await options.afterListing?.();
-  const was = heldBefore(record.held);
+  const was = heldBefore(held);
   const expected: Expected = new Map(
     [...was].map(([key, entry]) => [key, [...entry.holds]])
   );
   const kept = await keepWhatStands(ctx, pages, was, expected);
   await letGoOfTheGone(ctx, was, kept, expected, {
     now: new Set(siteTypes),
-    before: typesIn(record.siteTypes),
+    before: typesIn(stored.siteTypes),
   });
   await options.afterReleases?.();
   const { recorded, lost } = await claimTheNew(ctx, pages, kept, expected);
   await redirectOwedMoves(ctx);
-  await storeMeta(
+  await storeNote(
     ctx,
-    record.siteTypes?.id,
+    stored.siteTypes,
     SITE_TYPES_KEY,
     JSON.stringify(siteTypes)
   );
   // Stored last: a start interrupted before this point runs it all again.
-  await storeMeta(ctx, record.fingerprint?.id, FINGERPRINT_KEY, fingerprint);
+  await storeNote(ctx, stored.fingerprint, FINGERPRINT_KEY, fingerprint);
   return { ran: true, recorded, lost };
 }
 
-/** Keep `value` in the meta row `key`, made where it is not there yet. */
-async function storeMeta(
+/**
+ * Keep `value` in the note `key`. A note already keeping `value` is left
+ * alone, so a start where nothing moved writes nothing.
+ */
+async function storeNote(
   ctx: PluginContext,
-  id: string | undefined,
+  stored: string | undefined,
   key: string,
   value: string
 ): Promise<void> {
-  if (id === undefined) {
-    await ctx.services.collections.createEntry(recordSlug(ctx), {
-      claimKey: key,
-      kind: "meta",
-      path: value,
-    });
-    return;
+  if (stored !== value) {
+    await putNote(ctx, key, value, { absent: stored === undefined });
   }
-  await ctx.services.collections.updateEntry(recordSlug(ctx), id, {
-    path: value,
-    _overwrite: true,
-  });
 }

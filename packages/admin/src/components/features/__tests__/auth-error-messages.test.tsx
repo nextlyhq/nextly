@@ -38,6 +38,11 @@ vi.mock("@admin/lib/api/csrf", () => ({
 }));
 vi.mock("@admin/services/authApi", () => ({ verifyEmail }));
 vi.mock("@admin/lib/navigation", () => ({ navigateTo }));
+// The register form is under test, so the app takes sign-ups: the page draws
+// its form only then (`useRegistrationOpen`, read from setup-status).
+vi.mock("@admin/hooks/useSetupStatus", () => ({
+  useRegistrationOpen: () => true,
+}));
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({ logoText: "Acme Docs", logoUrl: null }),
   useAppName: () => "Acme Docs",

@@ -5,7 +5,14 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { LIST_SORT, neighbourQueries } from "./submission-list-scope";
+import {
+  exportAddress,
+  LIST_SORT,
+  listWhere,
+  neighbourQueries,
+  scopeFromSearch,
+  submissionPageAddress,
+} from "./submission-list-scope";
 
 interface Row {
   id: string;
@@ -85,5 +92,56 @@ describe("a submission's neighbours in its list", () => {
       // Its place: how many come before it.
       expect(newer).toHaveLength(index);
     }
+  });
+});
+
+describe("the list's dates", () => {
+  const from = "2026-11-01T00:00:00.000Z";
+  const to = "2026-11-06T00:00:00.000Z";
+
+  it("filter when it was sent: the first moment in, the end moment out", () => {
+    expect(listWhere({ status: "all", from, to })).toEqual({
+      status: { not_equals: "spam" },
+      submittedAt: { greater_than_equal: from, less_than: to },
+    });
+    expect(listWhere({ status: "new", from })).toEqual({
+      status: { equals: "new" },
+      submittedAt: { greater_than_equal: from },
+    });
+    expect(listWhere({ status: "all" })).not.toHaveProperty("submittedAt");
+  });
+
+  it("travel to a submission's page and back unchanged", () => {
+    const scope = { form: "f1", status: "read" as const, from, to };
+    const address = submissionPageAddress("form-submissions", "s1", scope);
+    expect(scopeFromSearch(address.slice(address.indexOf("?")))).toEqual(scope);
+    // A list with no dates keeps the address it had.
+    expect(
+      submissionPageAddress("form-submissions", "s1", {
+        form: "f1",
+        status: "all",
+      })
+    ).toBe("/admin/collections/form-submissions/s1?status=all&form=f1");
+  });
+
+  it("read a date that is not one as no bound", () => {
+    expect(scopeFromSearch("?status=all&from=soon&to=2026-11-06")).toEqual({
+      status: "all",
+      to: "2026-11-06T00:00:00.000Z",
+    });
+  });
+
+  it("go to the export with the list's scope, and the ticked ids", () => {
+    const address = new URL(
+      exportAddress({ form: "f1", status: "all", from }, "csv", ["a", "b"]),
+      "http://localhost"
+    );
+    expect(Object.fromEntries(address.searchParams)).toEqual({
+      status: "all",
+      form: "f1",
+      from,
+      format: "csv",
+      ids: "a,b",
+    });
   });
 });

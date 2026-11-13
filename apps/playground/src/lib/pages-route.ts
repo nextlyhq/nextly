@@ -16,6 +16,7 @@ import {
   namedQueriesOf,
   pageBuilderLayouts,
 } from "@nextlyhq/plugin-page-builder";
+import { notFoundLogged } from "@nextlyhq/plugin-seo/next";
 
 import { pageBuilderPlugin } from "../../nextly.config";
 import { siteReader, SITE_STYLE_CONTEXT, SITE_STYLES } from "./site-content";
@@ -66,4 +67,9 @@ export const pagesRoute: BlocksPageConfig = {
       ? { openGraph: { images: [{ url: derived.image }] } }
       : {}),
   }),
+  // A path this route has nothing for is answered not found through the SEO
+  // plugin, which lists it under Redirects › Not found, once per request,
+  // where the plugin is on. Logged here, where the route decides, rather than
+  // from `app/not-found.tsx`, which Next.js renders for every page.
+  notFound: notFoundLogged,
 };

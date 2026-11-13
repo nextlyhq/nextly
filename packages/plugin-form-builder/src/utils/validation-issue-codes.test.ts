@@ -102,3 +102,25 @@ describe("validation issue codes", () => {
     ).toEqual({ email: "REQUIRED", bio: "INVALID" });
   });
 });
+
+describe("a required answer left out of a submission", () => {
+  it("is refused as required, by the field's label, not as a wrong type", () => {
+    const consent: FormFieldConfig = {
+      name: "privacy",
+      label: "Privacy",
+      type: "consent",
+      required: true,
+      agreementText: "I agree to the privacy policy",
+    } as FormFieldConfig;
+    const result = generateZodSchema([email, consent]).safeParse({});
+    expect(result.success).toBe(false);
+    const messages = result.success
+      ? []
+      : result.error.issues.map(issue => [issue.path.join("."), issue.message]);
+    expect(messages).toEqual([
+      ["email", "Email is required"],
+      ["privacy", "Privacy is required"],
+    ]);
+    expect(JSON.stringify(messages)).not.toMatch(/expected|received/i);
+  });
+});

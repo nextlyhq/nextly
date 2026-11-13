@@ -110,6 +110,36 @@ export interface StatementSession {
 }
 
 /**
+ * The open transaction a call is made inside, as
+ * `DrizzleAdapter.transactionInFlow` answers it: something to key what the
+ * transaction alone may reuse, and whether what the call's part of it did
+ * has since been undone.
+ *
+ * @experimental
+ */
+export interface TransactionInFlow {
+  /**
+   * Stands for the transaction: the same object for every call made inside
+   * it, from any part joined to it, and a new one for each attempt and each
+   * transaction. Held by nothing once the transaction has ended, so a
+   * `WeakMap` keyed by it lets go of what it holds.
+   */
+  readonly transaction: object;
+  /**
+   * Whether any part of the transaction has rolled back to its savepoint
+   * since this was asked: what was read before may describe a write the
+   * rollback took away, whichever part wrote it and whichever read it.
+   */
+  undone(): boolean;
+  /**
+   * Whether `executor` runs on this transaction's connection: a Drizzle
+   * handle a context of this transaction built. A handle on the pool, or on
+   * another transaction, answers false.
+   */
+  runsOn(executor: unknown): boolean;
+}
+
+/**
  * Transaction context for executing operations within a transaction.
  *
  * @remarks

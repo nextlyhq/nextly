@@ -1,35 +1,19 @@
 /**
  * The page for an address nothing on the site answers, worded as Next.js's
- * own, and the SEO plugin told which address was asked for, so it can be
- * listed under Redirects › Not found and given a redirect.
+ * own.
  *
- * The log is written beneath a Suspense boundary: reading the request's
- * headers makes that part dynamic, and under Cache Components dynamic work
- * outside a boundary fails the build. Where the SEO plugin is not on, or the
- * request did not pass through the site's Proxy, nothing is logged.
+ * It logs nothing. Next.js renders this page's element on every request, for
+ * every page, so a log written from here would count every page view as an
+ * address not found. The SEO plugin's log is written where a route decides
+ * it has nothing for a request instead: the content routes are handed
+ * `notFoundLogged` as their `notFound` (`lib/pages-route.ts`,
+ * `lib/block-pages-route.ts`).
  */
-import { logNotFound } from "@nextlyhq/plugin-seo";
-import { headers } from "next/headers";
-import { connection } from "next/server";
-import { Suspense } from "react";
-
-async function LogThisAddress(): Promise<null> {
-  // Only a visitor's request is logged: a prerender of the page waits here
-  // for good, so it neither counts a visit nor reads the time while
-  // prerendering, which Next.js refuses.
-  await connection();
-  await logNotFound(await headers());
-  return null;
-}
-
 export default function NotFound() {
   return (
     <main style={{ padding: "48px 16px", textAlign: "center" }}>
       <h1 style={{ fontSize: 24, fontWeight: 600, margin: 0 }}>404</h1>
       <p style={{ marginTop: 8 }}>This page could not be found.</p>
-      <Suspense fallback={null}>
-        <LogThisAddress />
-      </Suspense>
     </main>
   );
 }

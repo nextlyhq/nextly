@@ -71,7 +71,12 @@ import {
 } from "@nextlyhq/adapter-drizzle/version-check";
 import { and, eq, getColumns } from "drizzle-orm";
 import type { AnyRelations, Column, SQL } from "drizzle-orm";
-import { getTableConfig, type MySqlTable } from "drizzle-orm/mysql-core";
+import {
+  getTableConfig,
+  mysqlTable,
+  timestamp,
+  type MySqlTable,
+} from "drizzle-orm/mysql-core";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import type {
   Pool as CallbackPool,
@@ -86,6 +91,15 @@ import type {
 } from "mysql2/promise";
 
 import { boundPoolWait, type QueueingPool } from "./pool-wait";
+
+/**
+ * A date field's column as the schema generator declares it on MySQL:
+ * `timestamp`. Its encoder writes the UTC wall clock, which is what a `Date`
+ * bound to an undeclared key is spelled as, whatever zone mysql2 is given.
+ */
+const DATE_FIELD_COLUMN = mysqlTable("nextly_date_field", {
+  at: timestamp("at"),
+}).at;
 
 // mysql2 type definitions use mixin patterns that TypeScript struggles with.
 // We define explicit interfaces for the methods we need.
@@ -1519,6 +1533,13 @@ export class MySqlAdapter extends DrizzleAdapter {
     );
   }
 
+  /** A `Date` on an undeclared key is spelled as a date field's column spells it. */
+  protected override undeclaredDateColumn(): {
+    mapToDriverValue(value: unknown): unknown;
+  } {
+    return DATE_FIELD_COLUMN;
+  }
+
   /** A table-level `primaryKey({ columns })`, read through the MySQL table config. */
   protected override compositePrimaryKey(
     tableObj: Record<string, unknown>
@@ -1725,8 +1746,10 @@ export class MySqlAdapter extends DrizzleAdapter {
       },
 
       // Adapter-built, as `insert` above is; `transactionUpdate` says why.
-      // A column the model does not declare binds natively, as every value
-      // on this path's insert does.
+      // A column the model does not declare binds natively, except a `Date`,
+      // spelled as a date field's column spells it (as this path's insert
+      // spells one), and a structured value, sent as JSON
+      // (`bindUnmodeledStructuredAsJson`).
       update: this.transactionUpdate(
         txDb,
         async statement => {

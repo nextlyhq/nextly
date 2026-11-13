@@ -3,23 +3,20 @@
  * through: read once for the whole list beforehand, and answered from that
  * read, the same as one read per address would answer.
  */
-import { createHash } from "node:crypto";
-
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { addressHolders, withAddressHolders } from "../participant";
 
-/** A stored claim key, spelled as the record stores it. */
-const key = (kind: string, locale: string, path: string) =>
-  createHash("sha256")
-    .update(`${kind}:${locale}|${path}`, "utf8")
-    .digest("hex");
+import { keepRecord, type DoubleRow } from "./record-double";
 
-const ROWS = [
+vi.mock("../store", async importOriginal => ({
+  ...(await importOriginal()),
+  ...(await import("./record-double")).recordDouble,
+}));
+
+const ROWS: DoubleRow[] = [
   {
-    id: "r1",
-    claimKey: key("address", "en", "/about"),
     kind: "address",
     locale: "en",
     path: "/about",
@@ -27,8 +24,6 @@ const ROWS = [
     holderId: "1",
   },
   {
-    id: "r2",
-    claimKey: key("range", "en", "/news"),
     kind: "range",
     locale: "en",
     path: "/news",
@@ -39,26 +34,11 @@ const ROWS = [
 
 /** A context over the rows above, counting the record's reads. */
 function context() {
-  const reads: unknown[] = [];
   const ctx = {
     self: { collections: {} },
     publicAddresses: { defaultLanguage: async () => "en" },
-    services: {
-      ownCollections: {
-        listEntries: async (
-          _slug: string,
-          query: { where: { claimKey: { in: string[] } } }
-        ) => {
-          reads.push(query);
-          return {
-            data: ROWS.filter(row =>
-              query.where.claimKey.in.includes(row.claimKey)
-            ),
-          };
-        },
-      },
-    },
   } as unknown as PluginContext;
+  const { reads } = keepRecord(ctx, ROWS);
   return { ctx, reads };
 }
 

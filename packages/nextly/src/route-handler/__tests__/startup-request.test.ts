@@ -130,11 +130,31 @@ describe("the startup request", () => {
     ]);
   });
 
+  it("answers a plugin route under its scoped name, as a plugin page reads it", async () => {
+    // A plugin's routes answer under its package name, `@scope/name`
+    // included, which is how a page's declared startup reads are spelled.
+    const path = "/plugins/@acme/seo/overview/checklist";
+    const answer = vi.fn(async (_request: Request, params: string[]) =>
+      json({ asked: params })
+    );
+
+    const response = await handleStartupRequest(startup([path]), answer);
+
+    expect(response.status).toBe(200);
+    expect((await partsOf(response)).get(path)).toEqual({
+      path,
+      status: 200,
+      body: { asked: ["plugins", "@acme", "seo", "overview", "checklist"] },
+    });
+  });
+
   it.each([
     ["no path", []],
     ["a path outside the admin API", ["https://elsewhere.test/me"]],
     ["a step up", ["/me/../../secrets"]],
     ["this route again", ["/startup?path=/me"]],
+    ["a path too long to be one", [`/p${"x".repeat(512)}`]],
+    ["a path with a space", ["/me /you"]],
     [
       "too many paths",
       Array.from({ length: MAX_STARTUP_PATHS + 1 }, (_, i) => `/p${i}`),

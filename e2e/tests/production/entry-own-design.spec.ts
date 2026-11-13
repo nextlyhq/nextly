@@ -6,7 +6,7 @@ import {
   type Page,
 } from "@playwright/test";
 
-import { gotoAdmin } from "../support/admin";
+import { gotoAdmin, tableRow } from "../support/admin";
 import { answeredNotFound } from "../support/not-found";
 import { test } from "../support/visible";
 import { signIn } from "../support/production-sign-in";
@@ -351,12 +351,7 @@ test.describe("an entry's own design", () => {
       await expect(
         page.getByRole("columnheader", { name: "Design", exact: true })
       ).toBeVisible({ timeout: 30_000 });
-      // A row that opens its entry is a button; the phone-width card drawing
-      // the same entry stays hidden.
-      const row = (title: string) =>
-        page
-          .getByRole("button", { name: new RegExp(title) })
-          .filter({ visible: true });
+      const row = (title: string) => tableRow(page, title);
       await expect(
         row(REDESIGNED.title).locator('[data-own-design="published"]')
       ).toHaveText("Own design");

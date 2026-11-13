@@ -68,6 +68,14 @@ import {
   QUEUED_EMAIL_PRUNE_JOB,
 } from "./queued-email-job";
 import type { QueuedErasureDb } from "./queued-erasure";
+import {
+  changeRecipients,
+  changesObserved,
+  type FinalRecipient,
+  notifyQueuedEmailChange,
+  type QueuedEmailChange,
+  type QueuedEmailRecipient,
+} from "./queued-send-changes";
 import type { EmailService } from "./services/email-service";
 import { markHtml, TrustedHtml } from "./services/liquid-engine";
 import { toAddressList } from "./services/recipients";
@@ -454,7 +462,7 @@ export async function storeQueuedEmail(
   // Sealed before anything is written, so a message that cannot be stored
   // (variables that refer to themselves) refuses the queue with nothing left.
   const message = sealQueuedMessage(input.message, id, input.secrets);
-  const { id: jobId } = await enqueueInTransaction(tx, input.dialect, {
+  const { id: jobId } = await enqueueInTransaction(tx, {
     slug: QUEUED_EMAIL_JOB,
     input: { queuedId: id },
     runAt: null,
@@ -575,7 +583,8 @@ const ATTEMPTABLE: QueuedEmailState[] = ["waiting", "sending"];
 export type QueuedEmailSender = Pick<
   EmailService,
   "send" | "sendWithTemplate" | "withTemplateCopies"
->;
+> &
+  Partial<Pick<EmailService, "withRecipientReport">>;
 
 /** What an attempt needs. */
 export interface QueuedAttemptDeps {
@@ -626,12 +635,33 @@ export function thrownAttemptFailure(error: unknown): EmailFailure {
   };
 }
 
-/** Send the message once. Undefined when it was sent, else why it was not. */
+/** The key every attempt at `message` is sent with. */
+function attemptKey(message: QueuedMessage, id: string): string {
+  const given =
+    message.kind === "template"
+      ? message.options.idempotencyKey
+      : message.send.idempotencyKey;
+  return given ?? queuedEmailKey(id);
+}
+
+/** The key the caller queued `message` with, when it gave one. */
+function callerKey(message: QueuedMessage): string | undefined {
+  return message.kind === "template"
+    ? message.options.idempotencyKey
+    : message.send.idempotencyKey;
+}
+
+/**
+ * Send the message once. Undefined when it was sent, else why it was not.
+ * Every final recipient, with what became of it, goes to `report`.
+ */
 async function sendOnce(
   sender: QueuedEmailSender,
   message: QueuedMessage,
-  id: string
+  id: string,
+  report: (recipients: FinalRecipient[]) => void
 ): Promise<EmailFailure | undefined> {
+  const reporting = sender.withRecipientReport?.(report) ?? sender;
   try {
     const outcome =
       message.kind === "template"
@@ -640,16 +670,15 @@ async function sendOnce(
           // them now.
           await (
             message.templateCopies
-              ? sender.withTemplateCopies(message.templateCopies)
-              : sender
+              ? reporting.withTemplateCopies(message.templateCopies)
+              : reporting
           ).sendWithTemplate(message.slug, message.to, message.variables, {
             ...message.options,
-            idempotencyKey:
-              message.options.idempotencyKey ?? queuedEmailKey(id),
+            idempotencyKey: attemptKey(message, id),
           })
-        : await sender.send({
+        : await reporting.send({
             ...message.send,
-            idempotencyKey: message.send.idempotencyKey ?? queuedEmailKey(id),
+            idempotencyKey: attemptKey(message, id),
           });
     return outcome.success
       ? undefined
@@ -668,12 +697,230 @@ function storedFailure(failure: EmailFailure): string {
   });
 }
 
+/** A queued email as an attempt reads it after a change. */
+interface HeldRow {
+  state: QueuedEmailState;
+  message: string | null;
+}
+
+/** One change an attempt makes to a queued email's row. */
+interface RowChange {
+  /** The values written, fenced on the row being attemptable. */
+  values: Record<string, unknown>;
+  /** The state the write leaves, which it must read back to have happened. */
+  to: QueuedEmailState;
+  /**
+   * What the plugin that queued it is told, from the row as the write left
+   * it; nothing when it returns undefined.
+   */
+  describe?: (held: HeldRow) => QueuedEmailChange | undefined;
+}
+
+/**
+ * Make `change` to the queued email `row`, in a transaction of its own, and
+ * tell the plugin that queued it in that transaction: a handler that throws
+ * undoes the change, and the attempt that made it is tried again. Answers
+ * the row as the write left it, or undefined when it is gone.
+ */
+async function changeRow(
+  adapter: DrizzleAdapter,
+  row: { id: string; scope: string },
+  change: RowChange,
+  at: Date
+): Promise<HeldRow | undefined> {
+  const table = emailQueueTableFor(adapter.getCapabilities().dialect);
+  return runAdapterTransaction<HeldRow | undefined, TransactionContext>(
+    run => adapter.transaction(ctx => run(ctx)),
+    async tx => {
+      const db = tx.getDrizzle<QueueDb>();
+      await db
+        .update(table)
+        .set({ ...change.values, updatedAt: at.getTime() })
+        .where(and(eq(table.id, row.id), inArray(table.state, ATTEMPTABLE)));
+      const [held] = (await db
+        .select({ state: table.state, message: table.message })
+        .from(table)
+        .where(eq(table.id, row.id))
+        .limit(1)) as HeldRow[];
+      if (held?.state !== change.to) return held;
+      const told = changesObserved(row.scope)
+        ? change.describe?.(held)
+        : undefined;
+      if (told) await notifyQueuedEmailChange(tx, row.scope, told);
+      return held;
+    }
+  );
+}
+
+/** What every change of one attempt says about it. */
+interface AttemptFacts {
+  queuedId: string;
+  attempt: number;
+  at: Date;
+  idempotencyKey?: string;
+}
+
+/** A change of the attempt `facts` describe, as its plugin is told it. */
+function changeOf(
+  facts: AttemptFacts,
+  rest: Omit<QueuedEmailChange, keyof AttemptFacts>
+): QueuedEmailChange {
+  return {
+    queuedId: facts.queuedId,
+    ...(facts.idempotencyKey !== undefined
+      ? { idempotencyKey: facts.idempotencyKey }
+      : {}),
+    attempt: facts.attempt,
+    at: facts.at,
+    ...rest,
+  };
+}
+
+/**
+ * Settle a queued email `state`, telling its plugin. A sent email's message
+ * is cleared as it settles: nothing sends it again, and it is not held a
+ * moment longer than that. A failed one keeps its message until the row is
+ * pruned (`pruneQueuedEmails`).
+ */
+async function settleRow(
+  adapter: DrizzleAdapter,
+  row: { id: string; scope: string },
+  facts: AttemptFacts,
+  settled: Omit<QueuedEmailChange, keyof AttemptFacts> & {
+    state: "sent" | "failed" | "cancelled";
+  }
+): Promise<void> {
+  const { state, failure } = settled;
+  await changeRow(
+    adapter,
+    row,
+    {
+      values: {
+        state,
+        ...(failure ? { failure: storedFailure(failure) } : {}),
+        ...(state === "sent" ? { message: null } : {}),
+        settledAt: facts.at.getTime(),
+      },
+      to: state,
+      describe: () => changeOf(facts, settled),
+    },
+    facts.at
+  );
+  if (state === "failed" && failure) logQueuedEmailFailed(row.id, failure);
+}
+
+/**
+ * Start an attempt: the email is `sending` from here, and its plugin is told.
+ * Answers the message to send, or undefined when there is none to send.
+ *
+ * Read in the same transaction as the write: an erasure that committed since
+ * the first read cancelled the email, and the fenced write then changed
+ * nothing. Once it reads `sending`, an erasure leaves the state alone and
+ * clears the message, and this attempt is the one already with the provider.
+ */
+async function startAttempt(
+  deps: QueuedAttemptDeps,
+  row: { id: string; scope: string },
+  facts: AttemptFacts
+): Promise<QueuedMessage | undefined> {
+  let opened: QueuedMessage | undefined;
+  const held = await changeRow(
+    deps.adapter,
+    row,
+    {
+      values: { state: "sending" },
+      to: "sending",
+      describe: current => {
+        if (current.message === null) return undefined;
+        opened = openQueuedMessage(current.message, row.id, deps.secrets);
+        const key = opened ? callerKey(opened) : undefined;
+        facts.idempotencyKey = key;
+        return changeOf(facts, { state: "sending" });
+      },
+    },
+    facts.at
+  );
+  if (held?.state !== "sending") return undefined;
+  // Cleared by a cancel or an erasure before this attempt took it: nothing
+  // is sent. A cancel reported itself as it was made.
+  if (held.message === null) {
+    await settleRow(deps.adapter, row, facts, {
+      state: "cancelled",
+      cancel: { by: "request" },
+    });
+    return undefined;
+  }
+  opened ??= openQueuedMessage(held.message, row.id, deps.secrets);
+  if (!opened) {
+    await settleRow(deps.adapter, row, facts, {
+      state: "failed",
+      failure: {
+        retryable: false,
+        reason: "The queued message could not be read.",
+      },
+    });
+    return undefined;
+  }
+  facts.idempotencyKey = callerKey(opened);
+  return opened;
+}
+
+/**
+ * Leave a queued email to be tried again after a retryable failure, telling
+ * its plugin. One whose message a cancel cleared while this attempt was with
+ * the provider is cancelled instead, with no attempt to follow.
+ */
+/** Whether a cancel cleared the email's message while its attempt ran. */
+async function messageCleared(
+  adapter: DrizzleAdapter,
+  id: string
+): Promise<boolean> {
+  const db = adapter.getDrizzle<QueueDb>();
+  const table = emailQueueTableFor(adapter.getCapabilities().dialect);
+  const [held] = (await db
+    .select({ message: table.message })
+    .from(table)
+    .where(eq(table.id, id))
+    .limit(1)) as Array<{ message: string | null }>;
+  return held !== undefined && held.message === null;
+}
+
+async function awaitRetry(
+  adapter: DrizzleAdapter,
+  row: { id: string; scope: string },
+  facts: AttemptFacts,
+  failed: { failure: EmailFailure; recipients?: QueuedEmailRecipient[] }
+): Promise<boolean> {
+  const held = await changeRow(
+    adapter,
+    row,
+    {
+      values: { state: "waiting", failure: storedFailure(failed.failure) },
+      to: "waiting",
+      describe: current =>
+        current.message === null
+          ? undefined
+          : changeOf(facts, { state: "retrying", ...failed }),
+    },
+    facts.at
+  );
+  if (held?.message !== null) return true;
+  await settleRow(adapter, row, facts, {
+    state: "cancelled",
+    ...failed,
+    cancel: { by: "request" },
+  });
+  return false;
+}
+
 /**
  * Make one attempt at a queued email: the `email:send` job's handler.
  *
  * Does nothing for an email that is settled or gone, so a job run twice
  * attempts once. Throws only to have the job queue retry a retryable
- * failure; every other outcome is recorded on the email's row.
+ * failure; every other outcome is recorded on the email's row. Each change
+ * of the row is made in a transaction of its own, in which the plugin that
+ * queued the email is told of it (`queued-send-changes`).
  */
 export async function attemptQueuedEmail(
   deps: QueuedAttemptDeps,
@@ -689,60 +936,50 @@ export async function attemptQueuedEmail(
     .limit(1)) as Array<{ id: string; scope: string; state: QueuedEmailState }>;
   if (!row || !ATTEMPTABLE.includes(row.state)) return;
 
-  const now = context.now.getTime();
-  const record = (values: Record<string, unknown>) =>
-    db
-      .update(table)
-      .set({ ...values, updatedAt: now })
-      .where(and(eq(table.id, row.id), inArray(table.state, ATTEMPTABLE)));
-  // A sent email's message is cleared as it settles: nothing sends it again,
-  // and it is not held a moment longer than that. A failed one keeps its
-  // message until the row is pruned (`pruneQueuedEmails`).
-  const settle = async (state: QueuedEmailState, failure?: EmailFailure) => {
-    await record({
-      state,
-      ...(failure ? { failure: storedFailure(failure) } : {}),
-      ...(state === "sent" ? { message: null } : {}),
-      settledAt: now,
-    });
-    if (state === "failed" && failure) logQueuedEmailFailed(row.id, failure);
+  const facts: AttemptFacts = {
+    queuedId: row.id,
+    attempt: context.attempt,
+    at: context.now,
   };
+  const message = await startAttempt(deps, row, facts);
+  if (!message) return;
 
-  await record({ state: "sending" });
-  // Read again: an erasure that committed since the first read cancelled the
-  // email, and the fenced write above then changed nothing. Once this reads
-  // `sending`, an erasure leaves the state alone and clears the message, and
-  // this attempt is the one already with the provider.
-  const [held] = (await db
-    .select({ state: table.state, message: table.message })
-    .from(table)
-    .where(eq(table.id, row.id))
-    .limit(1)) as Array<{ state: QueuedEmailState; message: string | null }>;
-  if (held?.state !== "sending") return;
-  // Cleared by an erasure: nothing is sent.
-  if (held.message === null) {
-    await settle("cancelled");
-    return;
-  }
-  const message = openQueuedMessage(held.message, row.id, deps.secrets);
-  if (!message) {
-    await settle("failed", {
-      retryable: false,
-      reason: "The queued message could not be read.",
-    });
-    return;
-  }
-
-  const failure = await sendOnce(deps.sender(row.scope), message, row.id);
+  let finals: FinalRecipient[] = [];
+  const failure = await sendOnce(
+    deps.sender(row.scope),
+    message,
+    row.id,
+    reported => {
+      finals = reported;
+    }
+  );
+  // Digested before the change's transaction opens: the plugin's digest key
+  // is read on a connection of its own the first time.
+  const recipients = changesObserved(row.scope)
+    ? await changeRecipients(row.scope, finals)
+    : undefined;
+  const told = recipients ? { recipients } : {};
   if (!failure) {
-    await settle("sent");
+    await settleRow(deps.adapter, row, facts, { state: "sent", ...told });
     return;
   }
   if (!failure.retryable || context.attempt >= QUEUED_EMAIL_MAX_ATTEMPTS) {
-    await settle("failed", failure);
+    // A cancel that reached this attempt while it was with the provider
+    // cleared its message: the email ends cancelled, as a retryable failure
+    // of it does in `awaitRetry`, not failed.
+    await settleRow(
+      deps.adapter,
+      row,
+      facts,
+      (await messageCleared(deps.adapter, row.id))
+        ? { state: "cancelled", failure, ...told, cancel: { by: "request" } }
+        : { state: "failed", failure, ...told }
+    );
     return;
   }
-  await record({ state: "waiting", failure: storedFailure(failure) });
+  if (!(await awaitRetry(deps.adapter, row, facts, { failure, ...told }))) {
+    return;
+  }
   // To the job queue, which records this as the attempt's error and backs off.
   throw new NextlyError({
     code: "EXTERNAL_SERVICE_ERROR",
@@ -781,7 +1018,7 @@ export function createQueuedEmailJob(
             resolved.adapter,
             input.queuedId,
             error,
-            context.now
+            context
           ).catch(() => undefined);
         }
         throw error;
@@ -792,24 +1029,47 @@ export function createQueuedEmailJob(
 
 /**
  * Settle a queued email failed when its last attempt threw, unless it has
- * settled already.
+ * settled already, telling its plugin. Should its plugin's handler fail even
+ * then, the email is settled failed without telling it, logged: an email
+ * no attempt follows must not be left waiting for one.
  */
 async function failExhausted(
   adapter: DrizzleAdapter,
   id: string,
   error: unknown,
-  at: Date
+  context: Pick<JobContext, "attempt" | "now">
 ): Promise<void> {
   const table = emailQueueTableFor(adapter.getCapabilities().dialect);
   const failure = thrownAttemptFailure(error);
+  const [row] = (await adapter
+    .getDrizzle<QueueDb>()
+    .select({ id: table.id, scope: table.scope })
+    .from(table)
+    .where(eq(table.id, id))
+    .limit(1)) as Array<{ id: string; scope: string }>;
+  if (!row) return;
+  const facts = { queuedId: id, attempt: context.attempt, at: context.now };
+  try {
+    await settleRow(adapter, row, facts, { state: "failed", failure });
+    return;
+  } catch (notified) {
+    getNextlyLogger().error({
+      kind: "queued-email-change-not-told",
+      message:
+        "A queued email failed for good, and the plugin that queued it could not be told.",
+      queuedId: id,
+      scope: row.scope,
+      error: notified instanceof Error ? notified.message : String(notified),
+    });
+  }
   await adapter
     .getDrizzle<QueueDb>()
     .update(table)
     .set({
       state: "failed",
       failure: storedFailure(failure),
-      settledAt: at.getTime(),
-      updatedAt: at.getTime(),
+      settledAt: context.now.getTime(),
+      updatedAt: context.now.getTime(),
     })
     .where(and(eq(table.id, id), inArray(table.state, ATTEMPTABLE)));
   logQueuedEmailFailed(id, failure);

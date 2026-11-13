@@ -41,8 +41,8 @@ type DocumentTrailInput =
 /**
  * The trail for a document.
  *
- * "Content" leads to the section of the document's own kind, which is where
- * the admin's content navigation lands for that kind. A document being created
+ * "Content" leads to the Content overview, and a Single's "Singles" to the
+ * overview's Singles table. A document being created
  * is called "New <singular>" whatever has been typed, since it is not that
  * document yet; one with no readable title is "Untitled", as its title field
  * says.
@@ -52,7 +52,7 @@ function documentTrail(input: DocumentTrailInput): HeaderTrailValue {
   if (input.kind === "single") {
     return {
       steps: [
-        { label: "Content", href: ROUTES.SINGLES },
+        { label: "Content", href: ROUTES.CONTENT },
         { label: "Singles", href: ROUTES.SINGLES },
       ],
       current: title ?? (input.label || "Untitled"),
@@ -60,7 +60,7 @@ function documentTrail(input: DocumentTrailInput): HeaderTrailValue {
   }
   return {
     steps: [
-      { label: "Content", href: ROUTES.COLLECTIONS },
+      { label: "Content", href: ROUTES.CONTENT },
       {
         label: input.pluralLabel,
         href: buildRoute(ROUTES.COLLECTION_ENTRIES, {

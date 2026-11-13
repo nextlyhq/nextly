@@ -190,6 +190,10 @@ export async function countAsCaller(
   const query: WidgetQuery = {
     source: `collection:${collection}`,
     op: "count",
+    // Every entry the reader may open, drafts included, as the collection's
+    // own list counts them: a read naming no status counts published entries
+    // only. A `where` still narrows it, to drafts for one.
+    status: "all",
     ...(where === undefined ? {} : { where }),
   };
   const result = await requireNextly().count({

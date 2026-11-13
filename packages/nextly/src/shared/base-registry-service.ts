@@ -15,7 +15,11 @@
 import crypto from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { SqlParam, WhereCondition } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SqlParam,
+  TransactionContext,
+  WhereCondition,
+} from "@nextlyhq/adapter-drizzle/types";
 
 // PR 4 of unified-error-system migration: ServiceError → NextlyError.
 // Subclasses (collection/single/field-group-registry-service) still throw
@@ -23,10 +27,23 @@ import type { SqlParam, WhereCondition } from "@nextlyhq/adapter-drizzle/types";
 // of scope for this PR but inherit the throw-based contract automatically
 // for all `getRecordOrThrow` / `updateRecordMigrationStatus` paths.
 import { toDbError } from "../database/errors";
+import { dashboardPinsPresent } from "../domains/dashboard/dashboard-pins";
 import {
+  cachedRegistryListing,
   cachedRegistryRow,
   clearRegistryRowCache,
+  registryReadTransaction,
+  registryRowOnTransaction,
 } from "../domains/dynamic-collections/services/collection-row-cache";
+import {
+  countRegistryWriteOn,
+  writeRegistryRows,
+} from "../domains/schema/schema-version";
+import {
+  deleteEntityRegistryRow,
+  type DeletedEntity,
+  mediaUsageTablePresent,
+} from "../domains/versions/entity-teardown";
 import { NextlyError } from "../errors";
 
 import { BaseService } from "./base-service";
@@ -262,11 +279,13 @@ export abstract class BaseRegistryService<
    * Get a record by slug, returning null if not found.
    *
    * Where the service reads rows from the cache (`readsRowsFromCache`), outside a transaction the
-   * row comes from the registry row cache (`cachedRegistryRow`): a copy,
-   * at most a second old for a change made elsewhere, and current for one made here, since every
-   * registry write in this process clears it. A Single's and a component's every read looks its
-   * row up, a component's once per dynamic-zone row. Inside a transaction it is read on the
-   * transaction, uncached, so the transaction sees its own writes.
+   * row comes from the registry row cache (`cachedRegistryRow`): a copy, read again once the
+   * stored count of registry writes moves (a change made elsewhere is seen within
+   * `REGISTRY_ROW_STALENESS_MS`), and current for one made here, since every registry write in
+   * this process clears it. A Single's and a component's every read looks its
+   * row up, a component's once per dynamic-zone row. Read on a transaction, it comes from that
+   * transaction's memo (`registryRowOnTransaction`), so the transaction sees its own writes and
+   * no other transaction does; inside one but through the pool, it is read every time.
    */
   protected async getRecordBySlug(
     slug: string,
@@ -285,13 +304,29 @@ export abstract class BaseRegistryService<
           // holds its own, which can stall against a small pool.
           executor
         )) as Record<string, unknown> | undefined) ?? null;
+      // Read on a transaction, every service's lookup is held by that
+      // transaction's memo, whether or not it caches outside one: the
+      // transaction then reads each row once, and sees its own writes.
+      const transaction = registryReadTransaction(this.adapter, executor);
       const result =
-        this.readsRowsFromCache &&
-        executor === undefined &&
-        !this.adapter.transactionOpenInFlow()
-          ? // Its own key space: `getCollection` caches collection rows of another shape.
-            await cachedRegistryRow(this.adapter, `record:${table}`, slug, read)
-          : await read();
+        transaction !== undefined
+          ? await registryRowOnTransaction(
+              transaction,
+              `record:${table}`,
+              slug,
+              read
+            )
+          : this.readsRowsFromCache &&
+              executor === undefined &&
+              !this.adapter.transactionOpenInFlow()
+            ? // Its own key space: `getCollection` caches collection rows of another shape.
+              await cachedRegistryRow(
+                this.adapter,
+                `record:${table}`,
+                slug,
+                read
+              )
+            : await read();
 
       return result ? this.deserializeRecord(result) : null;
     } catch (error) {
@@ -328,8 +363,8 @@ export abstract class BaseRegistryService<
   /**
    * The record as stored, read past the registry row cache, throwing NOT_FOUND if missing: for a
    * write that bases itself on the stored row, such as one that checks or advances its schema
-   * version. A row up to a second old would let two changes made a moment apart, on two
-   * instances, advance the version once between them.
+   * version. A cached row from before another instance's change would let two changes made a
+   * moment apart, on two instances, advance the version once between them.
    */
   protected async getRecordForWrite(slug: string): Promise<TRecord> {
     return this.getRecordOrThrow(slug, this.adapter.getDrizzle());
@@ -364,22 +399,40 @@ export abstract class BaseRegistryService<
   }
 
   /**
-   * Every registered slug, as a slug-only projection.
+   * Every record as stored, oldest first, handed to `view` and answered with
+   * what it returns: the one listing every narrower read of the whole
+   * registry derives from, so they cannot come to disagree.
    *
-   * For a caller that needs the registry as a CANDIDATE LIST -- names to
-   * authorize one by one, a scope to bound a cross-entity read by -- and
-   * nothing else about the records. `getAllRecords` selects and deserializes
-   * every column, the fields JSON included, so a caller that wanted the names
-   * alone materialized the whole registry on every request, ahead of the
-   * paginated query it was scoping.
+   * Outside a transaction it comes from the registry cache
+   * (`cachedRegistryListing`), read again only once the registry has changed:
+   * a change this process makes clears it, and one made elsewhere is seen once
+   * the stored count of registry writes is read again. Inside a transaction,
+   * or through an adapter that cannot say whether one is open, it is read
+   * every time, on the transaction where the read is routed to one. So is a
+   * read that decides a write (`forWrite`): one listing up to a read interval
+   * old would let a write on this instance miss a change another made a
+   * moment before, as `findRecordForWrite` keeps a row's.
    */
-  async getAllSlugs(): Promise<string[]> {
+  protected async listStored<T>(
+    view: (rows: readonly Readonly<Record<string, unknown>>[]) => T,
+    { forWrite = false }: { forWrite?: boolean } = {}
+  ): Promise<T> {
     try {
-      const rows = await this.adapter.select<{ slug: string }>(
-        await this.resolveRegistryTableName(),
-        { columns: ["slug"] }
-      );
-      return rows.map(row => row.slug);
+      const table = await this.resolveRegistryTableName();
+      const read = (): Promise<Record<string, unknown>[]> =>
+        this.adapter.select<Record<string, unknown>>(table, {
+          orderBy: [{ column: "createdAt", direction: "asc" }],
+        });
+      const adapter = this.adapter as Partial<
+        Pick<DrizzleAdapter, "transactionOpenInFlow">
+      >;
+      const cached =
+        !forWrite &&
+        typeof adapter.transactionOpenInFlow === "function" &&
+        !adapter.transactionOpenInFlow();
+      return cached
+        ? await cachedRegistryListing(this.adapter, table, read, view)
+        : view(await read());
     } catch (error) {
       if (NextlyError.is(error)) throw error;
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
@@ -387,36 +440,139 @@ export abstract class BaseRegistryService<
   }
 
   /**
-   * Every record with only its slug and `columns` read, deserialized as a
-   * record is.
-   *
-   * For a caller that needs a few presentation columns of every record (its
-   * labels) and nothing else. `getAllRecords` selects and
-   * deserializes every column, the fields JSON included; here only the named
-   * columns are read, and every other field of the result is left at the
-   * value its deserializer gives an absent column.
+   * Every record, oldest first, from the registry cache outside a
+   * transaction (`listStored`): for a read that decides no write, such as a
+   * screen or a widget listing what the registry holds. A copy each, so a
+   * change to one reaches no other caller.
    */
+  protected getAllRecordsForRead(): Promise<TRecord[]> {
+    return this.listStored(rows =>
+      rows.map(row =>
+        this.deserializeRecord(structuredClone(row) as Record<string, unknown>)
+      )
+    );
+  }
+
+  /**
+   * Every registered slug, derived from the listing (`listStored`).
+   *
+   * For a caller that needs the registry as a CANDIDATE LIST -- names to
+   * authorize one by one, a scope to bound a cross-entity read by -- and
+   * nothing else about the records.
+   */
+  async getAllSlugs(): Promise<string[]> {
+    return this.listStored(rows => rows.map(row => String(row.slug)));
+  }
+
   /**
    * Every record with only its slug, whether it is translated, and its fields: what a run that
    * judges translations columns needs from each entity, without the rest of the row.
    */
   async getAllTranslationShapes(): Promise<TRecord[]> {
-    return this.getAllRecordsWithColumns(["localized", "fields"]);
+    // A migration decides from them, so they are read as stored.
+    return this.getAllRecordsWithColumns(["localized", "fields"], {
+      forWrite: true,
+    });
   }
 
+  /**
+   * Every record with only its slug and `columns` (named as stored, each one
+   * word), deserialized as a record is, derived from the listing
+   * (`listStored`). For a caller that needs a few columns of every record
+   * (its labels) and nothing else; every other field of the result is left at
+   * the value its deserializer gives an absent column. `forWrite` reads them
+   * as stored, for a caller that decides a write from them.
+   */
   protected async getAllRecordsWithColumns(
-    columns: readonly string[]
+    columns: readonly string[],
+    options: { forWrite?: boolean } = {}
   ): Promise<TRecord[]> {
-    try {
-      const rows = await this.adapter.select<Record<string, unknown>>(
-        await this.resolveRegistryTableName(),
-        { columns: ["slug", ...columns] }
-      );
-      return rows.map(row => this.deserializeRecord(row));
-    } catch (error) {
-      if (NextlyError.is(error)) throw error;
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
-    }
+    const kept = ["slug", ...columns];
+    return this.listStored(
+      rows =>
+        rows.map(row =>
+          this.deserializeRecord(
+            structuredClone(
+              Object.fromEntries(
+                kept.filter(name => name in row).map(name => [name, row[name]])
+              )
+            )
+          )
+        ),
+      options
+    );
+  }
+
+  /**
+   * Run `write`, a write of this registry's rows, so the stored schema
+   * version's count moves with it (`writeRegistryRows`): inside an open
+   * registry write it runs there and counts towards that write's version;
+   * otherwise in a transaction of its own beside the version, where the
+   * service's own reads and writes run too. Another copy of the app follows
+   * the registry by that count, so a write that left it where it was would
+   * go unseen there. `wrote`, where given, says from what `write` answered
+   * whether it changed a row; the count moves only then.
+   */
+  protected writeRegistry<T>(
+    write: () => Promise<T>,
+    wrote?: (result: T) => boolean
+  ): Promise<T> {
+    return writeRegistryRows(this.adapter, write, wrote ? { wrote } : {});
+  }
+
+  /**
+   * Update `slug`'s row of the registry table `table` with `updateData`,
+   * moving the stored schema version's count with it (`writeRegistry`), and
+   * clear the cached rows. Answers the rows written: none where no row has
+   * the slug, which each caller reports in its own words.
+   */
+  protected async updateRowBySlug<R>(
+    table: string,
+    slug: string,
+    updateData: Record<string, unknown>
+  ): Promise<R[]> {
+    const results = await this.writeRegistry(() =>
+      this.adapter.update<R>(table, updateData, this.whereEq("slug", slug), {
+        returning: "*",
+      })
+    );
+    // The cached registry row is now out of date.
+    clearRegistryRowCache();
+    return results;
+  }
+
+  /**
+   * Delete `slug`'s registry row and what goes with it
+   * (`deleteEntityRegistryRow`) in one transaction, with the stored schema
+   * version's count, and clear the cached rows once it has committed. The
+   * tables the sweep depends on are asked about before the transaction opens
+   * (see `DashboardTables`).
+   */
+  protected async deleteEntityRow(
+    kind: "collection" | "single",
+    slug: string
+  ): Promise<DeletedEntity> {
+    const tables = {
+      dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
+      mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
+    };
+    const deleted = await this.adapter.transaction(async tx => {
+      const removed = await deleteEntityRegistryRow(tx, kind, slug, tables);
+      await this.countWriteOn(tx);
+      return removed;
+    });
+    // Once the transaction has committed, so no read in between keeps the
+    // row it is deleting.
+    clearRegistryRowCache();
+    return deleted;
+  }
+
+  /**
+   * Count a write of this registry's rows made on `tx`, a transaction the
+   * caller opened and commits (`countRegistryWriteOn`).
+   */
+  protected countWriteOn(tx: TransactionContext): Promise<void> {
+    return countRegistryWriteOn(tx, this.dialect);
   }
 
   /**
@@ -519,14 +675,11 @@ export abstract class BaseRegistryService<
         updateData.last_migration_id = migrationId;
       }
 
-      const results = await this.adapter.update(
+      const results = await this.updateRowBySlug(
         await this.resolveRegistryTableName(),
-        updateData,
-        this.whereEq("slug", slug),
-        { returning: "*" }
+        slug,
+        updateData
       );
-      // The cached registry row is now out of date.
-      clearRegistryRowCache();
 
       if (results.length === 0) {
         // §13.8: generic public message; resource type + slug go to logContext.

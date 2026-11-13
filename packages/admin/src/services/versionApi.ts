@@ -232,19 +232,6 @@ export interface AutosaveDetail {
   startingVersionUnknown?: boolean;
 }
 
-/** What a restore reports back. */
-export interface RestoreVersionResponse {
-  message: string;
-  restoredFrom: number;
-  /** The document's version after the restore. */
-  _rev?: string;
-  /**
-   * Snapshot keys the current schema no longer accepts. A restore with a
-   * non-empty list succeeded but did not bring the document back in full.
-   */
-  droppedFields: string[];
-}
-
 /** What a rename reports back: the version's metadata, without its snapshot. */
 export interface SetVersionLabelResponse {
   message: string;
@@ -315,25 +302,6 @@ export const versionApi = {
 
   get: (scope: VersionScope, versionNo: number): Promise<VersionDetail> =>
     protectedApi.get<VersionDetail>(`${basePath(scope)}/${versionNo}`),
-
-  /**
-   * Put the document back to an earlier version. A write, not a read: the
-   * server resubmits the stored snapshot through the ordinary update path and
-   * records the result as a new version.
-   */
-  restore: (
-    scope: VersionScope,
-    versionNo: number,
-    /**
-     * The version of the document the restore writes over, as the editor
-     * holds it: a restore is refused when the document changed since.
-     */
-    version?: string
-  ): Promise<RestoreVersionResponse> =>
-    protectedApi.post<RestoreVersionResponse>(
-      `${basePath(scope)}/${versionNo}/restore`,
-      version ? { [DOCUMENT_VERSION_KEY]: version } : {}
-    ),
 
   /**
    * Name a version, or clear its name with `null`.

@@ -7,6 +7,7 @@ export { DataTable } from "./DataTable";
 export type { DataTableProps } from "./DataTable";
 export { DataTableView } from "./DataTableView";
 export type { DataTableViewProps, DataTableSelection } from "./DataTableView";
+export { isListEmpty } from "./row-groups";
 export {
   defineCellRenderer,
   getCellRenderer,
@@ -41,4 +42,7 @@ export type {
   RowAction,
   BulkAction,
   DataTableSlots,
+  DataTableGroup,
+  DataTableGrouping,
+  DataTableRowDetail,
 } from "./types";

@@ -12,13 +12,13 @@
  *
  * @module import/payload
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
-
 import { isRecord } from "../plain-values";
 
 import {
+  ImportFileRefused,
   count,
   idText,
+  originOfAddress,
   pathOfAddress,
   textValue,
   type ImageRef,
@@ -88,10 +88,10 @@ function parsedJson(text: string): unknown {
   try {
     return JSON.parse(text);
   } catch {
-    throw NextlyError.invalidInput({
-      message: "This isn't a Payload export: it isn't JSON.",
-      logContext: { reason: "seo-import-payload-not-json" },
-    });
+    throw new ImportFileRefused(
+      "This isn't a Payload export: it isn't JSON.",
+      "seo-import-payload-not-json"
+    );
   }
 }
 
@@ -130,15 +130,16 @@ function recordOf(
   locale: string | undefined,
   values: ImportedValues
 ): ImportedRecord {
-  const path = pathOfAddress(
-    textValue(document.url) ?? textValue(document.path)
-  );
+  const address = textValue(document.url) ?? textValue(document.path);
+  const path = pathOfAddress(address);
+  const origin = path === undefined ? undefined : originOfAddress(address);
   const slug = textValue(inLanguage(document.slug, locale).value);
   const ownTitle = textValue(inLanguage(document.title, locale).value);
   return {
     label: ownTitle ?? slug ?? path ?? idText(document.id) ?? "Untitled",
     match: {
       ...(path === undefined ? {} : { path }),
+      ...(origin === undefined ? {} : { origin }),
       ...(slug === undefined ? {} : { slug }),
     },
     values,
@@ -169,10 +170,10 @@ export function readPayload(
 ): ParsedSource {
   const documents = documentsOf(parsedJson(text));
   if (documents.length === 0) {
-    throw NextlyError.invalidInput({
-      message: "This Payload export holds no documents.",
-      logContext: { reason: "seo-import-payload-empty" },
-    });
+    throw new ImportFileRefused(
+      "This Payload export holds no documents.",
+      "seo-import-payload-empty"
+    );
   }
   const from: ParsedSource["from"] = {};
   const noticed: Noticed = { perLanguage: false, imagesById: 0 };

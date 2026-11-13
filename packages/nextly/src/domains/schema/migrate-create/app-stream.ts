@@ -41,6 +41,7 @@ import {
   onlyElements,
   withEntityContributions,
 } from "../extension/entity-contributions";
+import { isManagedIndexName } from "../pipeline/diff/index-util";
 import type {
   ContributedElements,
   NextlySchemaSnapshot,
@@ -525,7 +526,7 @@ export function foreignTableSides(input: {
  * a contributor's `col.enum()` adds to a table with none of its own is then
  * emitted, and dropped again when the contribution is withdrawn.
  */
-function tracking(side: TableSpec, other: TableSpec): TableSpec {
+export function tracking(side: TableSpec, other: TableSpec): TableSpec {
   return {
     ...side,
     ...(other.checks !== undefined && side.checks === undefined
@@ -654,4 +655,213 @@ export function mergeContributions(
     };
   }
   return out;
+}
+
+/**
+ * A contribution the database holds, as the live table says it holds it.
+ *
+ * The compiled stream says what the app contributes NOW, and a config edited
+ * since the last push names elements the database has never received — or has
+ * received under a different definition. An adoption that recorded the
+ * compiled shape as present would tell the next generation the work was done:
+ * a column no migration ever brought, or a type change no migration ever
+ * applied. So an element survives only when the live table carries its name,
+ * and a survivor is recorded as the DATABASE defines it — the owner's own
+ * shape comes from the compile either way, so the owner's drift is never
+ * mixed into what this decides, and the app's own pending changes stay
+ * pending, as they do for every table adopted from the database.
+ */
+export function standingContribution(input: {
+  /** The table as compiled, owner's declaration plus the app's elements. */
+  spec: TableSpec;
+  /** What the app contributes to it, by element name. */
+  elements: ContributedElements;
+  /** The same table as the database holds it. */
+  live: TableSpec;
+}): { spec: TableSpec; elements: ContributedElements } {
+  const carries = (names: readonly string[], kind: keyof TableSpec) => {
+    const present = new Set(
+      ((input.live[kind] ?? []) as { name: string }[]).map(e => e.name)
+    );
+    return names.filter(name => present.has(name));
+  };
+  const elements: ContributedElements = {
+    columns: carries(input.elements.columns, "columns"),
+    indexes: carries(input.elements.indexes, "indexes"),
+    foreignKeys: carries(input.elements.foreignKeys, "foreignKeys"),
+    checks: carries(input.elements.checks, "checks"),
+  };
+  // The copy keeps what the live table keeps, as the live table has it. An
+  // element the compile adds that the database lacks is dropped and stays
+  // pending; one the database holds under an older definition is recorded
+  // under that definition, so the difference is what the next migration
+  // emits. A dimension the spec leaves untracked stays untracked.
+  const asHeld = <T extends { name: string }>(
+    own: readonly T[] | undefined,
+    held: readonly T[] | undefined,
+    contributed: readonly string[],
+    standing: readonly string[]
+  ): T[] | undefined =>
+    own === undefined
+      ? undefined
+      : own.flatMap(element => {
+          if (!contributed.includes(element.name)) return [element];
+          if (!standing.includes(element.name)) return [];
+          const live = (held ?? []).find(one => one.name === element.name);
+          return live === undefined ? [] : [live];
+        });
+  return {
+    spec: {
+      ...input.spec,
+      columns:
+        asHeld(
+          input.spec.columns,
+          input.live.columns,
+          input.elements.columns,
+          elements.columns
+        ) ?? [],
+      ...(input.spec.indexes !== undefined
+        ? {
+            indexes: asHeld(
+              input.spec.indexes,
+              input.live.indexes,
+              input.elements.indexes,
+              elements.indexes
+            ),
+          }
+        : {}),
+      ...(input.spec.foreignKeys !== undefined
+        ? {
+            foreignKeys: asHeld(
+              input.spec.foreignKeys,
+              input.live.foreignKeys,
+              input.elements.foreignKeys,
+              elements.foreignKeys
+            ),
+          }
+        : {}),
+      ...(input.spec.checks !== undefined
+        ? {
+            checks: asHeld(
+              input.spec.checks,
+              input.live.checks,
+              input.elements.checks,
+              elements.checks
+            ),
+          }
+        : {}),
+    },
+    elements,
+  };
+}
+
+/**
+ * Elements standing on an owner's table that no declaration explains.
+ *
+ * Compared against the owner's bare declaration and everything contributed
+ * now, an element neither names is one an app hook contributed and the config
+ * has since withdrawn — the one fact nothing records, because an attribution
+ * only exists while the contribution does. Left alone, an adoption would
+ * keep the orphan on this database while fresh environments never receive
+ * it, so the caller refuses and names them instead.
+ */
+export function unexplainedElements(input: {
+  /** The owner's declaration, bare of every contribution. */
+  bare: TableSpec;
+  /** What is contributed to the table now, by element name. */
+  elements: ContributedElements;
+  /** The table as the database holds it. */
+  live: TableSpec;
+  /** The core tables' names: a bare declaration the dialect bundle wrote. */
+  core: ReadonlySet<string>;
+  /**
+   * Per-table column names the database keeps though nothing declares them —
+   * `media.sizes` and the retired `access_rules` columns, which the core
+   * reconcile retains until an operator removes them. Scoped by table name so
+   * a withdrawn contribution sharing one of those names on another table is
+   * still flagged.
+   */
+  retained: ReadonlyMap<string, ReadonlySet<string>>;
+}): string[] {
+  return [
+    ...new Set([
+      ...unexplainedColumns(input),
+      ...unexplainedIndexes(input),
+      ...unexplainedChecks(input),
+    ]),
+  ].sort();
+}
+
+/** Live columns on an owner's table that neither declaration nor retention explains. */
+function unexplainedColumns(input: {
+  bare: TableSpec;
+  elements: ContributedElements;
+  live: TableSpec;
+  retained: ReadonlyMap<string, ReadonlySet<string>>;
+}): string[] {
+  const explained = new Set([
+    ...input.bare.columns.map(column => column.name),
+    ...input.elements.columns,
+    ...(input.retained.get(input.bare.name) ?? []),
+  ]);
+  return input.live.columns
+    .filter(column => !explained.has(column.name))
+    .map(column => column.name);
+}
+
+/**
+ * Live indexes on an owner's table that neither declaration nor contribution explains.
+ *
+ * Matches by index name (as `unexplainedColumns` and `unexplainedChecks` do)
+ * rather than definition shape: every plugin index derives a deterministic
+ * `idx_`/`uq_` name through `resolveIndexName` (as every contributed index
+ * does), so matching by name flags withdrawn app indexes without refusing a
+ * pending owner index whose columns, uniqueness, predicate or expression
+ * changed. On core tables, dialect bundles declare column uniques and
+ * partial indexes outside `bare.indexes` under non-managed names (`*_key`,
+ * `*_unique`, etc.), so unmanaged core indexes are skipped while withdrawn
+ * index-only contributions are caught.
+ */
+function unexplainedIndexes(input: {
+  bare: TableSpec;
+  elements: ContributedElements;
+  live: TableSpec;
+  core: ReadonlySet<string>;
+}): string[] {
+  if (input.bare.indexes === undefined || input.live.indexes === undefined) {
+    return [];
+  }
+  const isCore = input.core.has(input.bare.name);
+  const explained = new Set([
+    ...input.bare.indexes.map(index => index.name),
+    ...input.elements.indexes,
+  ]);
+  return input.live.indexes
+    .filter(
+      index =>
+        (!isCore || isManagedIndexName(index.name)) &&
+        !explained.has(index.name)
+    )
+    .map(index => index.name);
+}
+
+/** Live checks on an owner's table that neither declaration nor contribution explains. */
+function unexplainedChecks(input: {
+  bare: TableSpec;
+  elements: ContributedElements;
+  live: TableSpec;
+}): string[] {
+  if (input.live.checks === undefined) return [];
+  const explained = new Set([
+    ...(input.bare.checks ?? []).map(check => check.name),
+    ...input.elements.checks,
+  ]);
+  return input.live.checks
+    .filter(check => !explained.has(check.name))
+    .map(check => check.name);
+}
+
+/** The core tables' names, as the dialect's own declaration writes them. */
+export function coreTableNames(dialect: SupportedDialect): Set<string> {
+  return new Set(coreTableSpecs(dialect).keys());
 }

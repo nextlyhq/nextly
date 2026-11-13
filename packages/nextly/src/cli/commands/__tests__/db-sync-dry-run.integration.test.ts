@@ -18,6 +18,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -200,6 +201,11 @@ function normalised(text: string, project: string, url: string): string[] {
           /\d+ system \+ (\d+) collection permission\(s\) created \(\d+ total\)/,
           "<n> system + $1 collection permission(s) created (<n> total)"
         )
+        // A later sync creates only the collection's own, but its total still counts the core's.
+        .replace(
+          /(Permissions: \d+ collection permission\(s\) created) \(\d+ total\)/,
+          "$1 (<n> total)"
+        )
         // A box's padding follows the width of the timing it frames.
         .replace(/ {2,}\|$/, " |")
         .trimEnd()
@@ -215,7 +221,11 @@ async function syncedWorld(dialect: SupportedDialect): Promise<{
 }> {
   const world = await lockWorld(dialect, { fresh: true });
   const adapter = await world.connect();
-  const project = mkdtempSync(join(tmpdir(), "nextly-db-sync-dry-"));
+  // By its real path: the CLI prints the config it loaded by that, and on
+  // macOS the temporary directory is reached through a symbolic link.
+  const project = realpathSync(
+    mkdtempSync(join(tmpdir(), "nextly-db-sync-dry-"))
+  );
   writeFileSync(join(project, "nextly.config.ts"), CONFIG_V1);
   await migrateCore({
     extensionSchema: undefined,
@@ -678,7 +688,9 @@ describe.each(LOCK_DIALECTS)(
       // A database of its own that nothing has set up: no core tables, no registries.
       world = await lockWorld(dialect, { fresh: true });
       adapter = await world.connect();
-      project = mkdtempSync(join(tmpdir(), "nextly-db-sync-dry-fresh-"));
+      project = realpathSync(
+        mkdtempSync(join(tmpdir(), "nextly-db-sync-dry-fresh-"))
+      );
       writeFileSync(join(project, "nextly.config.ts"), CONFIG_V2);
     }, 120_000);
 

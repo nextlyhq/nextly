@@ -88,8 +88,8 @@ describe("form-builder.beforeEmail D63 filter seam (A8)", () => {
     expect(form).toMatchObject({ item: { id: expect.any(String) } });
     const formId = (form as { item: { id: string } }).item.id;
 
-    // Creating a submission fires the awaited afterCreate hook →
-    // handleSubmissionCreated → seam → sendWithTemplate.
+    // Creating a submission queues its notifications in the write's
+    // transaction, through the seam, and sends them once it commits.
     await current.nextly.create({
       collection: "form-submissions",
       data: {

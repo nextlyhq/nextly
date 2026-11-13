@@ -10,7 +10,10 @@
 import type { PaginationMeta } from "../../api/response-shapes";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { HookWarning } from "../../hooks/side-effect-warnings";
-import type { RichTextOutputFormat } from "../../lib/rich-text-html";
+import type {
+  RichTextOutputFormat,
+  RichTextStyles,
+} from "../../lib/rich-text-html";
 import type { Principal } from "../../plugins/principals/types";
 import type { TrustBound } from "../../services/collections/trust-grant";
 
@@ -31,7 +34,10 @@ export type {
   QueryOperator,
   FieldCondition,
 } from "../../services/collections/query-operators";
-export type { RichTextOutputFormat } from "../../lib/rich-text-html";
+export type {
+  RichTextOutputFormat,
+  RichTextStyles,
+} from "../../lib/rich-text-html";
 
 /**
  * Canonical Direct API list-response shape.
@@ -641,6 +647,30 @@ export interface DirectAPIConfig extends LanguageOptionsFrom<GeneratedTypes> {
    * ```
    */
   richTextFormat?: RichTextOutputFormat;
+
+  /**
+   * How rich text HTML is styled, where `richTextFormat` returns HTML.
+   *
+   * - `"default"`: Nextly's own look as inline styles, so the HTML reads well
+   *   in a page whose CSS resets every element.
+   * - `"none"`: no style Nextly adds. Every element carries a class in the
+   *   `nextly-rich-text-` namespace and alignment is a class, so the site's
+   *   stylesheet decides the look. Styles an author chose in the editor (a
+   *   text colour, a button's colours) are kept.
+   *
+   * @default "default"
+   *
+   * @example
+   * ```typescript
+   * const posts = await nextly.find({
+   *   collection: 'posts',
+   *   richTextFormat: 'html',
+   *   richTextStyles: 'none',
+   * });
+   * // posts.items[0].content => '<p class="nextly-rich-text-paragraph">...</p>'
+   * ```
+   */
+  richTextStyles?: RichTextStyles;
 
   /**
    * Ignore document locks.

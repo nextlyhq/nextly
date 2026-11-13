@@ -17,8 +17,10 @@ import {
 import { defineCollection, text, textarea } from "nextly";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { keptSeoContext } from "../../not-found/report";
 import { seoPlugin } from "../../plugin";
 import { ADDRESS_RECORD_SLUG } from "../collection";
+import { heldRows } from "../store";
 
 let current: TestNextly | undefined;
 
@@ -86,19 +88,20 @@ async function publish(t: TestNextly, collection: string, slug: string) {
   return String(created.item.id);
 }
 
+/** The SEO plugin's context, once a boot has started it. */
+function seoContext(): PluginContext {
+  const seo = keptSeoContext();
+  if (seo === undefined) throw new Error("the SEO plugin never started");
+  return seo;
+}
+
 /** The record's address rows, as `locale|path` → `collection:id`. */
-async function recorded(t: TestNextly) {
-  const { items } = await t.nextly.find({
-    collection: ADDRESS_RECORD_SLUG,
-    limit: 500,
-  });
+async function recorded(_t?: TestNextly) {
   return Object.fromEntries(
-    (items as Record<string, unknown>[])
-      .filter(row => row.kind === "address" || row.kind === "range")
-      .map(row => [
-        `${row.locale}|${row.path}`,
-        `${row.holderCollection}:${row.holderId}`,
-      ])
+    (await heldRows(seoContext())).map(row => [
+      `${row.address?.locale}|${row.address?.path}`,
+      `${row.holder?.collection}:${row.holder?.id}`,
+    ])
   );
 }
 
@@ -131,7 +134,7 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    it("keeps its record under the name a site renames it to", async () => {
+    it("keeps its record where a site renamed the earlier collection", async () => {
       current = await createTestNextly({
         dialect,
         plugins: [
@@ -151,14 +154,7 @@ describe.each(getConfiguredTestDialects())(
 
       const page = await publish(current, "pages", "hello");
 
-      const { items } = await current.nextly.find({
-        collection: "seo_addresses",
-      });
-      expect(
-        (items as Record<string, unknown>[])
-          .filter(row => row.kind === "address")
-          .map(row => `${row.path}:${row.holderId}`)
-      ).toEqual([`/hello:${page}`]);
+      expect(await recorded()).toEqual({ "en|/hello": `pages:${page}` });
     });
 
     it("saving a holder again leaves the same rows", async () => {

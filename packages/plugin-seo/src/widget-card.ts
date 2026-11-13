@@ -31,6 +31,8 @@ import {
   KIND_ORDER,
   KIND_TEXT,
   PROBLEMS_PAGE_HREF,
+  problemsToFix,
+  severityCounts,
   type Problem,
 } from "./problems/contract";
 
@@ -171,9 +173,11 @@ export function seoIssuesWidget(
 export const SEO_PROBLEMS_ATTENTION_ID = "seo/problems";
 
 /**
- * The card's count as one line of the Needs attention card: every problem
- * the list shows the person, linked to the list; none where the card is
- * withheld.
+ * The card's count as one line of the Needs attention card: the errors and
+ * warnings the list shows the person, counted as the list and the Overview
+ * count them, linked to the list; none where the card is withheld. The SEO
+ * menu's Problems item shows the same number as its badge. Notices wait on
+ * the list without asking for attention.
  *
  * 🔴 It names every collection SEO is added to, so core shows it to anyone
  * who may read one of them and lets it read those, as that person. The list
@@ -190,7 +194,8 @@ export function seoProblemsAttentionItem(
     id: SEO_PROBLEMS_ATTENTION_ID,
     label: "SEO problems",
     collections: [first, ...rest],
-    count: async input => (await listFor(setup, input)).length,
+    count: async input =>
+      problemsToFix(severityCounts(await listFor(setup, input))),
     link: PROBLEMS_LINK,
   });
 }

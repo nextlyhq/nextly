@@ -11,8 +11,8 @@
  * recoverable. A provider that cannot be reached leaves the submission
  * unchecked, and says so in the log: an outage must not send every real
  * submission to spam. A form whose check has no secret configured is
- * accepted unchecked, as before bot checks were verified, with a warning at
- * start and in Settings.
+ * accepted unchecked, as before bot checks were verified, with a warning in
+ * the log (see `warnUncheckedSiteDefault`) and in Settings.
  *
  * @module handlers/bot-check
  */
@@ -230,9 +230,9 @@ export function botTokensOf(payload: Record<string, unknown>): BotTokens {
 
 /**
  * A request-made submission's bot check: none when its form's check is off,
- * or names a provider missing its secret or site key (accepted unchecked, as
- * warned at start and in Settings); a spam verdict when the token fails or
- * is missing.
+ * or names a provider missing its secret or site key (accepted unchecked,
+ * and said in the log the first time, see `warnUncheckedSubmission`); a spam
+ * verdict when the token fails or is missing.
  */
 export async function judgeBotCheck(input: {
   settings: { botCheck?: BotCheckMode; captchaSiteKey?: string };
@@ -240,12 +240,17 @@ export async function judgeBotCheck(input: {
   tokens: BotTokens;
   ip: string | undefined;
   fetch: VerifyFetch | undefined;
+  /** The form's slug, named in the warning when its check cannot run. */
+  form?: string;
   warn: (message: string, context: Record<string, unknown>) => void;
 }): Promise<{ isSpam: true; reason: BotProvider } | undefined> {
   const provider = botProviderOf(input.settings.botCheck, input.spam);
   if (provider === undefined) return undefined;
   const keys = readyKeys(provider, input.spam, input.settings);
-  if (keys === undefined) return undefined;
+  if (keys === undefined) {
+    warnUncheckedSubmission(provider, input.spam, input.form, input.warn);
+    return undefined;
+  }
   const verdict = await judgeBotToken({
     provider,
     secret: keys.secret,
@@ -263,47 +268,113 @@ export async function judgeBotCheck(input: {
   return verdict === "fail" ? { isSpam: true, reason: provider } : undefined;
 }
 
+type Warn = (message: string, context: Record<string, unknown>) => void;
+
+/** What the log is told about `provider` missing a key, naming the options. */
+function uncheckedMessage(provider: BotProvider): string {
+  return `Form Builder: the ${provider === "recaptcha" ? "reCAPTCHA" : "Turnstile"} bot check is in use without both of its keys, so its submissions are accepted unchecked. Set spamProtection.${provider}.secretKey and spamProtection.${provider}.siteKey in the plugin's options.`;
+}
+
 /**
- * Warn, once at start, for each bot check that is in use (the site default,
- * or named by a form) without both of its keys, naming the options: those
- * forms' submissions are accepted unchecked until it is. Reads at most the
- * first 500 forms; a failure to read them is not a reason to stop the start.
+ * The providers a submission has already been warned about since the
+ * plugin's last start, by the plugin's bot-check options. Keyed by the
+ * options object, which each `formBuilder()` call resolves once, so two
+ * installs of the plugin in one process keep apart, and an options object
+ * no longer used is let go.
  */
-export async function warnUncheckedBotChecks(input: {
-  spam: SpamProtection;
-  forms: () => Promise<readonly object[]>;
-  readSettings: (stored: unknown) => {
-    botCheck?: BotCheckMode;
-    captchaSiteKey?: string;
+const saidForSubmissions = new WeakMap<SpamProtection, Set<BotProvider>>();
+
+/**
+ * At start, from the plugin's options alone: the site default's check, when
+ * it is in use without both of its keys. Every form left on "Site default"
+ * is accepted unchecked until it has them.
+ *
+ * A form that names a check of its own is not read for here: reading the
+ * forms cost every start a round trip to say something that matters only
+ * when such a form is saved (`warnUncheckedFormCheck`) or submitted
+ * (`judgeBotCheck`), which is where it is said instead. A start also
+ * forgets which providers submissions were warned about, so a restart or a
+ * reload says it again, as the warning at start always did.
+ */
+export function warnUncheckedSiteDefault(
+  spam: SpamProtection,
+  warn: Warn
+): void {
+  saidForSubmissions.set(spam, new Set());
+  const provider = botProviderOf("default", spam);
+  if (provider && readyKeys(provider, spam, {}) === undefined) {
+    warn(uncheckedMessage(provider), { provider });
+  }
+}
+
+/**
+ * When a form is saved: the check it names itself, when that check has not
+ * both of its keys. Said at every such save, since the person saving it is
+ * the one who can act; a form on "Site default" or "Off" is not, the site
+ * default's having been said at start.
+ */
+export function warnUncheckedFormCheck(
+  settings: { botCheck?: BotCheckMode; captchaSiteKey?: string },
+  spam: SpamProtection,
+  form: string | undefined,
+  warn: Warn
+): void {
+  const named = settings.botCheck;
+  if (named !== "recaptcha" && named !== "turnstile") return;
+  if (readyKeys(named, spam, settings) === undefined) {
+    warn(uncheckedMessage(named), {
+      provider: named,
+      ...(form ? { form } : {}),
+    });
+  }
+}
+
+/**
+ * `warnUncheckedFormCheck` for a forms save, as its `beforeChange` hook is
+ * handed it: only a save that carries settings chose a check, and the form
+ * is named by the slug it is saved with, or the one it had.
+ */
+export function warnSavedFormCheck(
+  context: unknown,
+  spam: SpamProtection,
+  warn: Warn
+): void {
+  const { data, originalData } = context as {
+    data?: Record<string, unknown>;
+    originalData?: Record<string, unknown>;
   };
-  warn: (message: string, context: Record<string, unknown>) => void;
-}): Promise<void> {
-  let forms: readonly object[] = [];
-  try {
-    forms = await input.forms();
-  } catch {
-    forms = [];
+  if (data?.settings === undefined) return;
+  const slug = data.slug ?? originalData?.slug;
+  warnUncheckedFormCheck(
+    normalizeFormSettings(data.settings),
+    spam,
+    typeof slug === "string" ? slug : undefined,
+    warn
+  );
+}
+
+/**
+ * When a submission is accepted unchecked because its check is missing a
+ * key: said for the first such submission of each provider since the
+ * plugin's start, naming its form, and not again for every one after it.
+ */
+function warnUncheckedSubmission(
+  provider: BotProvider,
+  spam: SpamProtection,
+  form: string | undefined,
+  warn: Warn
+): void {
+  let said = saidForSubmissions.get(spam);
+  if (said === undefined) {
+    said = new Set();
+    saidForSubmissions.set(spam, said);
   }
-  const counts = new Map<BotProvider, number>();
-  for (const form of forms) {
-    const settings = input.readSettings(
-      (form as { settings?: unknown }).settings
-    );
-    const provider = botProviderOf(settings.botCheck, input.spam);
-    if (provider && readyKeys(provider, input.spam, settings) === undefined) {
-      counts.set(provider, (counts.get(provider) ?? 0) + 1);
-    }
-  }
-  const siteDefault = botProviderOf("default", input.spam);
-  if (siteDefault && readyKeys(siteDefault, input.spam, {}) === undefined) {
-    counts.set(siteDefault, counts.get(siteDefault) ?? 0);
-  }
-  for (const [provider, forms] of counts) {
-    input.warn(
-      `Form Builder: the ${provider === "recaptcha" ? "reCAPTCHA" : "Turnstile"} bot check is in use without both of its keys, so its submissions are accepted unchecked. Set spamProtection.${provider}.secretKey and spamProtection.${provider}.siteKey in the plugin's options.`,
-      { provider, forms }
-    );
-  }
+  if (said.has(provider)) return;
+  said.add(provider);
+  warn(uncheckedMessage(provider), {
+    provider,
+    ...(form ? { form } : {}),
+  });
 }
 
 /** What Settings is told about the site's bot checks and rate limit. */

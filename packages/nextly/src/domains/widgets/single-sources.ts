@@ -44,7 +44,7 @@ interface RegisteredSingle {
 }
 
 interface SingleRegistrySurface {
-  getAllSingles(): Promise<RegisteredSingle[]>;
+  getAllSinglesForRead(): Promise<RegisteredSingle[]>;
 }
 
 /**
@@ -61,7 +61,8 @@ async function readRegisteredSingles(): Promise<
     const registry = container.get<SingleRegistrySurface>(
       "singleRegistryService"
     );
-    return await registry.getAllSingles();
+    // From the registry cache, as the collections' sources read theirs.
+    return await registry.getAllSinglesForRead();
   } catch (error) {
     getNextlyLogger().error({
       kind: "widget-single-sources-unavailable",

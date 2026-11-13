@@ -54,7 +54,7 @@
 
 import { Column, getColumns, is, SQL, sql } from "drizzle-orm";
 
-import { isJsonColumn } from "./column-kinds";
+import { isJsonColumn, valueForJsonColumn } from "./column-kinds";
 import { buildDrizzleWhere } from "./drizzle-where";
 import type { WhereClause } from "./types";
 import type { SupportedDialect } from "./types/core";
@@ -106,20 +106,6 @@ function isBindableColumn(value: unknown): value is BindableColumn {
     typeof (value as { mapToDriverValue?: unknown }).mapToDriverValue ===
       "function"
   );
-}
-
-/**
- * A JSON column's encoder serializes whatever it is given, so a value that
- * arrives already serialized would be serialized twice. The query-builder path
- * parses such a string first; this keeps the same bytes on the wire.
- */
-function valueForJsonColumn(value: unknown): unknown {
-  if (typeof value !== "string") return value;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return value;
-  }
 }
 
 /**

@@ -63,6 +63,18 @@ export interface RecordingPolicyReader {
 }
 
 /** Slugs the live code-first config owns, per scope. */
+/**
+ * A registry a production start read once (`di/start-reads`): whether it is there, its columns
+ * as the catalog reports them (undefined when it does not), and every row.
+ */
+export interface SharedRegistryReads {
+  read(table: string): Promise<{
+    exists: boolean;
+    columns: ReadonlySet<string> | undefined;
+    rows(): Promise<Record<string, unknown>[]>;
+  }>;
+}
+
 export interface ConfigOwnedSlugs {
   collections: Set<string>;
   singles: Set<string>;
@@ -145,6 +157,42 @@ function singlesTable(dialect: SupportedDialect): PolicyTable {
   return loadedDialect(dialect).tables.dynamicSingles;
 }
 
+/** The registry table each scope's stored policies are kept in. */
+const REGISTRY_TABLE: Record<WebhookRecordingScope, string> = {
+  collection: "dynamic_collections",
+  single: "dynamic_singles",
+};
+
+/**
+ * {@link collectScope} over the start's one reading of the registry: the same rows, the same
+ * decisions, and `null` where the table or its `webhooks` column is not there, as reading them
+ * tolerates. Undefined when the catalog does not describe the table, so it is read as before.
+ */
+async function sharedScope(
+  registry: SharedRegistryReads,
+  scope: WebhookRecordingScope,
+  tableName: string,
+  configSlugs: Set<string>
+): Promise<
+  Array<{ scope: WebhookRecordingScope; slug: string }> | null | undefined
+> {
+  const read = await registry.read(tableName);
+  if (!read.exists) return null;
+  if (read.columns === undefined) return undefined;
+  if (!read.columns.has("webhooks")) return null;
+  return optOutsOf(
+    (await read.rows())
+      .filter(row => row.webhooks !== null && row.webhooks !== undefined)
+      .map(row => ({
+        slug: typeof row.slug === "string" ? row.slug : null,
+        source: typeof row.source === "string" ? row.source : null,
+        webhooks: row.webhooks as StoredPolicyRow["webhooks"],
+      })),
+    scope,
+    configSlugs
+  );
+}
+
 async function collectScope(
   db: PolicyQuery,
   scope: WebhookRecordingScope,
@@ -163,7 +211,15 @@ async function collectScope(
     })
     .from(table)
     .where(isNotNull(table.webhooks));
+  return optOutsOf(rows, scope, configSlugs);
+}
 
+/** The stored opt-outs among `rows`, skipping config-owned ones. */
+function optOutsOf(
+  rows: readonly StoredPolicyRow[],
+  scope: WebhookRecordingScope,
+  configSlugs: Set<string>
+): Array<{ scope: WebhookRecordingScope; slug: string }> {
   const optOuts: Array<{ scope: WebhookRecordingScope; slug: string }> = [];
   for (const row of rows) {
     const slug = row.slug;
@@ -195,7 +251,9 @@ async function collectScope(
  */
 export async function publishStoredWebhookRecordingPolicies(
   adapter: RecordingPolicyReader,
-  configSlugs: ConfigOwnedSlugs
+  configSlugs: ConfigOwnedSlugs,
+  /** The registries a production start read once, when it is one. */
+  registry?: SharedRegistryReads
 ): Promise<void> {
   const dialect = adapter.getCapabilities().dialect;
   const db = adapter.getDrizzle<PolicyQuery>();
@@ -212,13 +270,15 @@ export async function publishStoredWebhookRecordingPolicies(
     db,
     "collection",
     collectionsTable(dialect),
-    configSlugs.collections
+    configSlugs.collections,
+    registry
   );
   const singles = await collectScopeTolerantly(
     db,
     "single",
     singlesTable(dialect),
-    configSlugs.singles
+    configSlugs.singles,
+    registry
   );
 
   if (collections === null && singles === null) {
@@ -244,9 +304,14 @@ async function collectScopeTolerantly(
   db: PolicyQuery,
   scope: WebhookRecordingScope,
   table: PolicyTable,
-  configSlugs: Set<string>
+  configSlugs: Set<string>,
+  registry: SharedRegistryReads | undefined
 ): Promise<Array<{ scope: WebhookRecordingScope; slug: string }> | null> {
   try {
+    const shared = registry
+      ? await sharedScope(registry, scope, REGISTRY_TABLE[scope], configSlugs)
+      : undefined;
+    if (shared !== undefined) return shared;
     return await collectScope(db, scope, table, configSlugs);
   } catch (error) {
     if (isPreMigrationRegistry(error)) return null;

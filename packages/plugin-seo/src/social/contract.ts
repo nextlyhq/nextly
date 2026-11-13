@@ -51,6 +51,41 @@ export function shareImageSizeProblem(image: {
   return undefined;
 }
 
+/**
+ * The picture formats some networks don't show on a card, by file type, and
+ * what the problem list says of each. X's cards take JPEG, PNG, WebP and
+ * GIF; an SVG is shown by none of the networks, and AVIF and WebP by fewer
+ * apps than JPEG and PNG, which every network shows.
+ */
+const FORMATS_NOT_SHOWN: Readonly<Record<string, string>> = {
+  svg: "An SVG image, which networks don't show on a card",
+  avif: "An AVIF image, which X and many apps don't show on a card",
+  webp: "A WebP image, which some apps don't show on a card",
+};
+
+/**
+ * Why a picture at `url` may not show on a card: its file type, read from
+ * the address's last segment, is one some networks don't show. Nothing for
+ * a JPEG, PNG or GIF, or an address that names no file type, such as an
+ * image a route draws (`/og?title=...`).
+ */
+export function shareImageFormatProblem(url: string): string | undefined {
+  const format = imageFormatOf(url);
+  return format === undefined ? undefined : FORMATS_NOT_SHOWN[format];
+}
+
+/**
+ * A picture's file type, in lower case, read from the last segment of its
+ * address: nothing where the address names none, such as an image a route
+ * draws (`/og?title=...`).
+ */
+export function imageFormatOf(url: string): string | undefined {
+  const path = url.split(/[?#]/, 1)[0] ?? "";
+  const last = path.slice(path.lastIndexOf("/") + 1);
+  const dot = last.lastIndexOf(".");
+  return dot <= 0 ? undefined : last.slice(dot + 1).toLowerCase();
+}
+
 /** Where the action answers, under the plugin's routes. */
 export const SHARE_IMAGE_ROUTE_PATH = "/share-image";
 

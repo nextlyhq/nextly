@@ -7,7 +7,7 @@
  */
 import { expect, type Page } from "@playwright/test";
 
-import { gotoAdmin } from "./support/admin";
+import { gotoAdmin, tableRow } from "./support/admin";
 import { includingHidden, test } from "./support/test";
 
 const RUN = Date.now().toString(36);
@@ -57,8 +57,7 @@ test("sets up the Log provider: logged, not sent, then turned on", async ({
   await expect(page).toHaveURL(/\/admin\/settings\/email\/sending$/, {
     timeout: 30_000,
   });
-  // Rows render as buttons: the whole row opens the provider.
-  const row = page.getByRole("button", { name: new RegExp(name) });
+  const row = tableRow(page, name);
   await expect(row).toBeVisible();
   await expect(row.getByText("Off")).toHaveCount(0);
 });
@@ -83,9 +82,7 @@ test("refuses SMTP settings at the check, says what to check, and saves nothing"
     page.getByRole("heading", { name: /Connect SMTP/ })
   ).toBeVisible();
   await gotoAdmin(page, "/settings/email/sending");
-  await expect(
-    page.getByRole("button", { name: new RegExp(name) })
-  ).toHaveCount(0);
+  await expect(tableRow(page, name)).toHaveCount(0);
 });
 
 for (const [label, fields] of [

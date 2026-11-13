@@ -4,6 +4,7 @@
  */
 import type { Command } from "commander";
 
+import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
 import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
@@ -23,7 +24,7 @@ export function registerMigrateCreateCommand(program: Command): void {
     // same spelling, is what `canPrompt` reads for this command's prompts.
     .option(
       "--accept-renames",
-      "ADVANCED: auto-accept all rename candidates in non-interactive mode",
+      "ADVANCED: auto-accept all rename candidates in non-interactive mode, a renamed field group's (its rows move to the new name) included",
       false
     )
     .option(
@@ -39,6 +40,8 @@ export function registerMigrateCreateCommand(program: Command): void {
       "--no-transaction",
       "Write a unit that runs outside a transaction: with --blank, a file whose first line is the marker; with --plugin, a module with transaction: false that you can edit"
     )
+    // A migration that deletes data is written only with this consent, or a yes at a terminal.
+    .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP)
     .action(
       lazyAction(
         async () => (await import("./migrate-create")).migrateCreateAction

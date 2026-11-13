@@ -2,19 +2,15 @@
  * A form submission saved inside a caller's transaction emails only once that
  * transaction commits.
  *
- * The notification is sent from the submission's `afterCreate` hook, and a
- * write made inside a caller's transaction runs that hook inside it, before it
- * commits. An email cannot be taken back: sent there, it goes out for a
+ * The notification is queued inside the transaction that stores the
+ * submission, which for a write made inside a caller's transaction is the
+ * caller's. An email cannot be taken back: sent there, it would go out for a
  * submission a rollback then removes, and its delivery record, written on
- * another connection, outlives the rollback too.
+ * another connection, would outlive the rollback too.
  *
  * So, for a submission saved in a transaction:
  * - rolled back: no email is sent and no delivery is recorded;
  * - committed: the email is sent, and recorded, exactly once.
- *
- * Not covered: on a pool of one connection the commit waits, since the hook
- * reads the parent form through the collection service, whose read path does
- * not run on a caller's transaction.
  *
  * The provider is a real one that captures what it is handed, so a send goes
  * through the email service and records its delivery as any send does; a spy

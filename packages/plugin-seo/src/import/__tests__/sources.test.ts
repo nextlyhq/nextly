@@ -40,7 +40,9 @@ describe("Rank Math's CSV", () => {
     expect(parsed.records).toEqual([
       {
         label: "old",
-        match: { path: "/old", slug: "old" },
+        // The origin the address was written with, which names its language
+        // on a site whose languages have domains of their own.
+        match: { path: "/old", origin: "https://old.example", slug: "old" },
         values: { title: "A, title", hidden: true },
         variables: "rankMath",
         redirect: {

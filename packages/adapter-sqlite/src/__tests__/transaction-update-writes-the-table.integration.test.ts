@@ -132,6 +132,24 @@ describe("SQLite transaction update writes the physical table", () => {
     expect(row?.published_at).toBe(Math.floor(at.getTime() / 1000));
   });
 
+  it("inserts an undeclared date inside a transaction as the same instant", async () => {
+    // The transactional insert binds a key the model does not declare
+    // through the same rule as the update above, so a row written either way
+    // holds the same seconds.
+    const at = new Date("2026-09-11T10:00:00.000Z");
+    await adapter.transaction(async ctx => {
+      await ctx.insert(TABLE, {
+        id: "b",
+        slug: "second",
+        updated_at: at,
+        published_at: at,
+      });
+    });
+    const row = await stored("b");
+    expect(row?.updated_at).toBe(Math.floor(at.getTime() / 1000));
+    expect(row?.published_at).toBe(Math.floor(at.getTime() / 1000));
+  });
+
   it("leaves a column alone for undefined and clears it for null", async () => {
     await adapter.transaction(async ctx => {
       await ctx.update(TABLE, { slug: "second", title: undefined }, byId("a"));

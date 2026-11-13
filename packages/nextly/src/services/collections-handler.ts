@@ -34,7 +34,10 @@ import {
 import type { FieldSources } from "../domains/versions/restored-from";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
-import type { RichTextOutputFormat } from "../lib/rich-text-html";
+import type {
+  RichTextOutputFormat,
+  RichTextStyles,
+} from "../lib/rich-text-html";
 import type { CacheRevalidator } from "../revalidation/types";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { ValidationIssue } from "../shared/lib/entry-validation";
@@ -792,6 +795,8 @@ export class CollectionsHandler {
      * - "both": Return object with both { json, html } properties
      */
     richTextFormat?: RichTextOutputFormat;
+    /** How rich text HTML is styled: `"none"` for classes only. */
+    richTextStyles?: RichTextStyles;
     /**
      * Sort order for results.
      * Prefix with `-` for descending.
@@ -931,6 +936,8 @@ export class CollectionsHandler {
      * - "both": Return object with both { json, html } properties
      */
     richTextFormat?: RichTextOutputFormat;
+    /** How rich text HTML is styled: `"none"` for classes only. */
+    richTextStyles?: RichTextStyles;
     /** User context for access control */
     user?: UserContext;
     /** When true, bypass all access control checks */

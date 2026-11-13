@@ -26,6 +26,11 @@
  * package registers them. The editor is `@nextlyhq/builder`; blocks render
  * through `@nextlyhq/blocks-react`.
  */
+// The Settings place this plugin offers others, typed in `AdminPlaces`: imported
+// so the published declarations carry the augmentation, and a plugin adding a
+// tab there type-checks its place against what this one declares.
+import "./settings-place-contract";
+
 export { namedQueriesOf, pageBuilder } from "./plugin";
 export type { PageBuilderOptions } from "./plugin";
 export type {

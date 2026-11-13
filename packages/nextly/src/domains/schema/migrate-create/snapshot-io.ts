@@ -96,6 +96,24 @@ export function carriesRegistryMetadata(
   return file.entities !== undefined;
 }
 
+/**
+ * Whether a parsed snapshot file is in the older shape a template's
+ * hand-written migration ships (the blog template's): its entities listed as
+ * `collections` and `singles`, with no `migrationHash`. It records no tables,
+ * so a migration beside it runs verbatim, and no `entities`, so it is no
+ * registry source; the rows it lists are added where absent
+ * (`registerFromMigrations`). The one reading of that shape, for every reader
+ * of a migration's snapshot.
+ */
+export function isOlderFormatSnapshot(parsed: unknown): boolean {
+  return (
+    parsed !== null &&
+    typeof parsed === "object" &&
+    !("migrationHash" in parsed) &&
+    ("collections" in parsed || "singles" in parsed)
+  );
+}
+
 /** Empty snapshot used for "first migration" (no prior state). */
 export const EMPTY_SNAPSHOT: NextlySchemaSnapshot = { tables: [] };
 

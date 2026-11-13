@@ -27,14 +27,16 @@ describe("the side panel's SEO line", () => {
     expect(screen.queryByTestId("seo-status")).toBeNull();
   });
 
-  it("says the page is listed, with what there is to fix", () => {
+  it("says what there is to check, and that a page with nothing to check is listed", () => {
     line();
     act(() =>
       publishSeoStatus(KEY, { listing: "listed", count: 2, typeLabel: "Post" })
     );
-    expect(screen.getByTestId("seo-status")).toHaveTextContent(
-      "Listed · 2 to fix"
+    expect(screen.getByTestId("seo-status")).toHaveTextContent(/^2 to check$/);
+    act(() =>
+      publishSeoStatus(KEY, { listing: "listed", count: 0, typeLabel: "Post" })
     );
+    expect(screen.getByTestId("seo-status")).toHaveTextContent(/^Listed$/);
   });
 
   it("says the page is hidden, by itself or with its whole type", () => {

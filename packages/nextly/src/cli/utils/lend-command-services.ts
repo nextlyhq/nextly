@@ -46,7 +46,10 @@ import type { Logger } from "../../services/shared";
  * With `queue: false` no jobs queue is lent, for a write whose content expiry
  * is recorded in the same transaction as the change itself (a first
  * `nextly migrate` run's one commit): there is no gap between the change and
- * its expiry for a job queued ahead to cover, and none is queued.
+ * its expiry for a job queued ahead to cover, and none is queued. A job queued
+ * on that transaction would commit or roll back with the change it guards, so
+ * it could owe nothing the transaction does not record already; the queue is
+ * left out for that, not for how the transaction would store the job.
  */
 export async function withCommandServicesLent<T>(
   adapter: DrizzleAdapter,

@@ -33,6 +33,7 @@ import { useAppName } from "@admin/context/providers/BrandingProvider";
 import { useApi } from "@admin/hooks/useApi";
 import { useAuthRefusal } from "@admin/hooks/useAuthRefusal";
 import { useServerAnswered } from "@admin/hooks/useServerAnswered";
+import { useRegistrationOpen } from "@admin/hooks/useSetupStatus";
 import { getCsrfToken } from "@admin/lib/api/csrf";
 import { apiErrorMessage, type ApiError } from "@admin/lib/api/parseApiError";
 import type { ActionResponse } from "@admin/lib/api/response-types";
@@ -197,6 +198,29 @@ function ServerWaitNote({
       </p>
       {stalled ? <SessionStallNotice /> : null}
     </>
+  );
+}
+
+/**
+ * The offer to sign up, made only where the app takes sign-ups
+ * (`auth.allowRegistration`, off by default), and only once setup-status has
+ * said so: offered on an app that takes none, it led to a form the server
+ * refuses once it has been filled in.
+ */
+function SignUpOffer(): JSX.Element | null {
+  if (useRegistrationOpen() !== true) return null;
+  return (
+    <div className="mt-8 text-left">
+      <p className="text-muted-foreground">
+        Don&apos;t have an account?{" "}
+        <Link
+          href={ROUTES.REGISTER}
+          className="text-primary cursor-pointer font-medium transition-colors"
+        >
+          Sign up
+        </Link>
+      </p>
+    </div>
   );
 }
 
@@ -588,17 +612,7 @@ export function Login(): JSX.Element {
               <AuthUiExtrasAfter authUi={authUi} />
             </div>
           )}
-          <div className="mt-8 text-left">
-            <p className="text-muted-foreground">
-              Don&apos;t have an account?{" "}
-              <Link
-                href={ROUTES.REGISTER}
-                className="text-primary cursor-pointer font-medium transition-colors"
-              >
-                Sign up
-              </Link>
-            </p>
-          </div>
+          <SignUpOffer />
         </>
       )}
     </AuthFormCard>

@@ -107,6 +107,41 @@ describe("the desktop Plugins panel", () => {
 });
 
 describe("a plugin's own panel", () => {
+  it("names its menu by the plugin without repeating the panel's title over it", () => {
+    render(
+      <SidebarProvider defaultOpen>
+        <SubSidebarContent
+          selectedMain="standalone-acme"
+          standaloneLabel="Acme"
+          contentSearch=""
+          onContentSearchChange={() => undefined}
+          hasCollectionsSection
+          hasSinglesSection
+          pluginSearch=""
+          onPluginSearchChange={() => undefined}
+          isActive={() => false}
+          hasPermission={() => true}
+          canAccessApiKeys
+          canAccessWebhooks
+          pluginCollectionsForSection={
+            [
+              { id: "c1", name: "forms", labels: { plural: "Forms" } },
+            ] as unknown as ApiCollection[]
+          }
+          showBuilder
+          hasPanel={() => true}
+        />
+      </SidebarProvider>
+    );
+
+    // The panel's own title band says "Acme" already; the content under it
+    // does not say it a second time.
+    expect(screen.queryByText("Acme")).toBeNull();
+    // Assistive technology still hears whose menu it is.
+    const nav = screen.getByRole("navigation", { name: "Acme" });
+    expect(nav).toContainElement(screen.getByRole("link", { name: "Forms" }));
+  });
+
   it("draws its collections with the icon every panel draws for a collection", () => {
     render(
       <SidebarProvider defaultOpen>

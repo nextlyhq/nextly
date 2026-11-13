@@ -41,7 +41,7 @@ import {
   notResumed,
   progressFinding,
   readLiveState,
-  stepName,
+  progressStepName,
 } from "./resume";
 import type { ColumnFinding, RepairEntity } from "./types";
 
@@ -190,9 +190,9 @@ async function unfinishedRecords(
         {
           ...NO_RUN_FACTS,
           progress: {
-            recordedStep: stepName(progress.step, progress.steps),
+            recordedStep: progressStepName(progress, progress.step),
             liveStep:
-              reached === null ? null : stepName(reached, progress.steps),
+              reached === null ? null : progressStepName(progress, reached),
           },
           // A column matching no step of its conversion is failed, and left to its owner.
           failure:

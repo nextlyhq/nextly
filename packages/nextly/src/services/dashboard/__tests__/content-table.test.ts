@@ -182,10 +182,10 @@ beforeEach(() => {
   narrowedSingles = {};
   containerGet.mockImplementation((name: string) => {
     if (name === "collectionRegistryService") {
-      return { getAllCollections: () => Promise.resolve(collections) };
+      return { getAllCollectionsForRead: () => Promise.resolve(collections) };
     }
     if (name === "singleRegistryService") {
-      return { getAllSingles: () => Promise.resolve(singles) };
+      return { getAllSinglesForRead: () => Promise.resolve(singles) };
     }
     if (name === "activityLogService") return { getRecentEdits };
     throw new Error(`unexpected container.get("${name}")`);
@@ -892,5 +892,87 @@ describe("the Content table's rows", () => {
     expect(answer.rows.map(row => row.slug)).toEqual(["posts"]);
     expect(collectionsOf(count)).toEqual(new Set(["posts"]));
     expect(answer.total).toBe(1);
+  });
+});
+
+describe("the Content overview's rows", () => {
+  function overview() {
+    return makeService().getContentOverview({
+      scope: someResources([
+        ...collections.map(c => c.slug),
+        ...singles.map(s => s.slug),
+      ]),
+      caller: CALLER,
+    });
+  }
+
+  it("answers a row for every collection and Single, past any page the card draws", async () => {
+    // Sixty collections, half with the Draft / Published lifecycle: more than
+    // a card's page and more than its ranking reads.
+    collections = Array.from({ length: 60 }, (_, i) =>
+      collection(`c${String(i).padStart(2, "0")}`, `C${i}`, i % 2 === 0)
+    );
+    singles = [{ slug: "home", label: "Home", tableName: "single_home" }];
+    entries = { c00: { all: 7, draft: 3 } };
+
+    const rows = await overview();
+
+    expect(rows).toHaveLength(61);
+    expect(new Set(rows.map(row => row.slug))).toEqual(
+      new Set([...collections.map(c => c.slug), "home"])
+    );
+    // 🔴 Every collection counted, and the drafts by the list's Draft filter
+    // only where the lifecycle exists: a page of the card would count fewer.
+    expect(collectionsOf(count)).toEqual(new Set(collections.map(c => c.slug)));
+    const drafts = count.mock.calls.filter(
+      ([asked]) => askedFor(asked as Parameters<typeof askedFor>[0]) === "draft"
+    );
+    expect(drafts).toHaveLength(30);
+    expect(rows.find(row => row.slug === "c00")).toMatchObject({
+      kind: "collection",
+      count: 7,
+      draft: 3,
+    });
+    expect(rows.find(row => row.slug === "c01")).toMatchObject({
+      draft: null,
+    });
+    // Each collection's newest entry read once, as the reader.
+    expect(find).toHaveBeenCalledTimes(60);
+    expect(find).toHaveBeenCalledWith(
+      expect.objectContaining({ overrideAccess: false, user: CALLER.user })
+    );
+    // One read of the trail's window for the whole answer.
+    expect(getRecentEdits).toHaveBeenCalledTimes(1);
+  });
+
+  it("names who changed a Single last, and whether the reader may update it", async () => {
+    singles = [{ slug: "home", label: "Home", tableName: "single_home" }];
+    stored = {
+      single_home: {
+        id: "doc-home",
+        updated_at: new Date("2026-10-29T09:00:00Z"),
+      },
+    };
+    windowAnswer = {
+      edits: [
+        save("home", "2026-10-29T09:00:00.000Z", {
+          userName: "Ayesha",
+          subjectKind: "single",
+          entryId: "doc-home",
+        }),
+      ],
+      hasMore: false,
+    };
+    mayUpdate.mockResolvedValue(false);
+
+    const [row] = await overview();
+
+    expect(row).toMatchObject({
+      kind: "single",
+      slug: "home",
+      updatedAt: "2026-10-29T09:00:00.000Z",
+      userName: "Ayesha",
+      canUpdate: false,
+    });
   });
 });

@@ -33,6 +33,12 @@ export const SETTINGS_DOCUMENT_ROUTE_PATH = "/settings/document";
 /** What the settings document route answers. */
 export interface SettingsDocumentBody {
   single: string;
+  /**
+   * The production addresses `NEXTLY_PRODUCTION_ADDRESSES` names on the
+   * server, which win over the saved ones; empty where it is unset, and then
+   * the settings' own are used.
+   */
+  serverAddresses: string[];
 }
 
 /** Where the settings screen reads its content types, under the plugin's routes. */

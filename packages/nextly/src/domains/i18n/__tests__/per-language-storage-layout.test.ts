@@ -13,7 +13,7 @@ const live = vi.hoisted(() => ({
   lowerCaseTableNames: 1,
 }));
 vi.mock("../../schema/pipeline/diff/introspect-live", () => ({
-  introspectLiveSnapshot: () => Promise.resolve({ tables: live.tables }),
+  introspectLiveColumns: () => Promise.resolve({ tables: live.tables }),
 }));
 
 import { NextlyError } from "../../../errors/nextly-error";

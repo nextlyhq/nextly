@@ -8,8 +8,6 @@
  * panel's open state all read it rather than listing the two sections again.
  */
 
-import { ROUTES } from "@admin/constants/routes";
-
 /** The rail id of the Content item. */
 export const CONTENT_RAIL_ID = "content";
 
@@ -17,12 +15,6 @@ export const CONTENT_RAIL_ID = "content";
 const CONTENT_SECTIONS = ["collections", "singles"] as const;
 
 export type ContentSection = (typeof CONTENT_SECTIONS)[number];
-
-/** Each part's address, where the rail's fallback goes. */
-const CONTENT_SECTION_HREF: Readonly<Record<ContentSection, string>> = {
-  collections: ROUTES.COLLECTIONS,
-  singles: ROUTES.SINGLES,
-};
 
 /** Whether a section is one of the Content item's. */
 export function isContentSection(section: string): section is ContentSection {
@@ -37,10 +29,10 @@ export function railItemOf(section: string): string {
 /**
  * The section selecting the Content item opens.
  *
- * The item is a button, not a link: it opens the panel and navigates nowhere.
- * Already in a content section the reader can see, it stays there; otherwise
- * it opens the first kind the reader may read, so a reader of Singles alone is
- * never shown the Collections part, which they cannot open.
+ * Selecting it opens the panel (and, where the item is a link, the Content
+ * overview with it). Already in a content section the reader can see, it
+ * stays there; otherwise it opens the first kind the reader may read, so a
+ * reader of Singles alone is never shown a section they cannot open.
  */
 export function contentSectionToOpen(
   current: string,
@@ -63,27 +55,6 @@ export function sectionShown<S extends string>(
   return isContentSection(selected)
     ? contentSectionToOpen(selected, available)
     : selected;
-}
-
-/**
- * Where the Content item goes when selected: nowhere while it has a panel to
- * open, and to the part it would have opened when the panel is suppressed.
- */
-export function contentItemHref({
-  panelShown,
-  current,
-  available,
-}: {
-  /** Whether the Content panel can open on this surface. */
-  panelShown: boolean;
-  current: string;
-  available: Readonly<Record<ContentSection, boolean>>;
-}): string {
-  // A surface that suppresses the panel leaves selecting Content nothing to
-  // show, so the item goes to the part it would have opened instead.
-  return panelShown
-    ? "#"
-    : CONTENT_SECTION_HREF[contentSectionToOpen(current, available)];
 }
 
 /**

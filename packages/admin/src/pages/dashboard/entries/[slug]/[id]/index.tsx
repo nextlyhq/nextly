@@ -579,6 +579,10 @@ export default function EditEntryPage({
   }
 
   const collectionLabel = collection.label || collection.name || slug;
+  // The trail's step leads to the collection's list, so it says what the
+  // list and the default editor's trail say: the plural ("Submissions"),
+  // not the one-entry label a collection may also answer as `label`.
+  const listLabel = collection.labels?.plural || collectionLabel;
   // Cast entry to Record<string, unknown> for getEntryTitle helper
   const entryData = entry as unknown as Record<string, unknown>;
   const entryTitle = getEntryTitle(entryData, id, collection.admin?.useAsTitle);
@@ -640,7 +644,7 @@ export default function EditEntryPage({
           breadcrumbs={
             <EditEntryBreadcrumbs
               collectionSlug={slug}
-              collectionLabel={collectionLabel}
+              collectionLabel={listLabel}
               entryTitle={entryTitle}
             />
           }

@@ -26,6 +26,7 @@
  * @module domains/email/plugin-send-forgetting
  */
 
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { z } from "zod";
 
 import { getDialectTables } from "../../database/index";
@@ -48,6 +49,7 @@ import {
   eraseKeyedDeliveries,
   type RecipientErasureCapableDb,
 } from "./erase-recipient";
+import { tellCancelReached } from "./queued-cancel";
 import {
   cancelQueuedEmailsAmong,
   type EmailQueueTables,
@@ -60,6 +62,21 @@ const OPERATION = "ctx.services.email.forgetSends";
 /** A transaction as forgetting uses it: its Drizzle handle. */
 interface ForgettingTransaction {
   getDrizzle<D = unknown>(): D;
+}
+
+/**
+ * Whether `tx` is the adapter's whole transaction, as every adapter hands
+ * its work: what telling the plugin binds its handles to.
+ */
+function isTransactionContext(
+  tx: ForgettingTransaction
+): tx is ForgettingTransaction & TransactionContext {
+  const candidate = tx as Partial<TransactionContext>;
+  return (
+    typeof candidate.select === "function" &&
+    typeof candidate.insert === "function" &&
+    typeof candidate.execute === "function"
+  );
 }
 
 /**
@@ -169,7 +186,7 @@ export async function forgetPluginSends(
         )
       );
     }
-    await cancelQueuedEmailsAmong(
+    const reached = await cancelQueuedEmailsAmong(
       db,
       {
         dialect,
@@ -179,6 +196,17 @@ export async function forgetPluginSends(
       scope,
       queuedIds
     );
+    // The plugin is told in the same transaction, as every cancel tells it;
+    // refused rather than left untold where it cannot be.
+    if (!isTransactionContext(tx)) {
+      throw NextlyError.internal({
+        logContext: {
+          operation: OPERATION,
+          reason: "the transaction cannot be handed to the plugin",
+        },
+      });
+    }
+    await tellCancelReached(tx, dialect, reached, { by: "sender" });
   };
 
   if (options.tx !== undefined) {

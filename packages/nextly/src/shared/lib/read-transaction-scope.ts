@@ -190,6 +190,26 @@ export function readsOnTransaction(value: object): boolean {
   return viewed.has(value);
 }
 
+/** The transaction each view reads on. */
+const viewTransactions = new WeakMap<object, TransactionContext>();
+
+/**
+ * The executor a read made through `value` runs on at this call, when
+ * `value` is a view whose reads run on its transaction
+ * ({@link readsOnTransaction}) and its scope is still the calling flow's:
+ * that transaction's own Drizzle handle. Undefined for an adapter, or a view
+ * kept past its scope's end, whose reads reach the pool.
+ */
+export function readExecutorOfView(value: object): unknown {
+  const adapter = viewed.get(value);
+  const tx = viewTransactions.get(value);
+  return adapter !== undefined &&
+    tx !== undefined &&
+    readTransactionOf(adapter) === tx
+    ? tx.getDrizzle()
+    : undefined;
+}
+
 /**
  * The adapter a service reads through: `adapter` itself, or inside
  * {@link runReadsInTransaction} a view of it whose reads run on the scope's
@@ -208,6 +228,7 @@ export function adapterForReads(adapter: DrizzleAdapter): DrizzleAdapter {
     view = readingOn(adapter, tx);
     byTransaction.set(tx, view);
     viewed.set(view, adapter);
+    viewTransactions.set(view, tx);
   }
   return view;
 }

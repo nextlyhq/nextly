@@ -28,26 +28,19 @@ describe("page-builder admin identity", () => {
     expect(plugin.admin?.appearance?.label).not.toBe(plugin.name);
   });
 
-  it("stays in the plugins section, so its own name is not a second main-rail item", () => {
+  it("names itself once in the rail: its menu items move into its own panel", () => {
     const plugin = pageBuilder();
     const menu = plugin.contributes?.admin?.menu ?? [];
 
-    // The neighbouring case, and the reason the form builder carries a similar
-    // assertion: it takes `placement: "standalone"` and contributes NO menu
-    // item, so "Forms" appears exactly once. This plugin does the opposite — it
-    // contributes its own menu entries — so taking standalone placement too
-    // would put "Page Builder" in the main rail beside the entries it already
-    // puts there, as two names for one feature.
-    expect(plugin.admin?.placement).toBeUndefined();
+    // Placed standalone, the plugin's name is its rail item, and its menu
+    // items are listed in that item's panel rather than under a "Page
+    // Builder" heading in the Plugins panel, so the name appears once.
+    expect(plugin.admin?.placement).toBe("standalone");
 
-    // The pairing is the property, so the menu being non-empty is what makes
-    // the placement assertion above mean anything: standalone placement is
-    // only a duplication when something is already listed. Which entries
-    // those are is not this test's question — asserting the whole list here
-    // made adding a screen look like a change to the plugin's identity, and a
-    // line naming one of them did the same thing more quietly. Which sources
-    // offer which screen is asserted in `composition-stores.test.ts`, where
-    // the navigation reasoning lives.
+    // The pairing is the property: standalone placement only gives the
+    // items somewhere else to be when there are items. Which entries those
+    // are is asserted in `overview/admin-panel.test.ts`.
     expect(menu.length).toBeGreaterThan(0);
+    expect(menu.every(item => item.section === undefined)).toBe(true);
   });
 });

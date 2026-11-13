@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { submissionsCollection } from "../collections/submissions";
+import { group, select, text } from "nextly";
+
+import {
+  submissionExtensionFields,
+  submissionsCollection,
+} from "../collections/submissions";
 import { formBuilder } from "../plugin";
 
 /**
@@ -73,5 +78,45 @@ describe("form-builder contributes.admin (P5 dogfood)", () => {
         fields: ["form", "submittedAt", "status"],
       },
     });
+  });
+});
+
+describe("the fields a host adds to submissions", () => {
+  it("are the collection's fields that are not the plugin's own", () => {
+    const { config } = formBuilder({
+      formSubmissionOverrides: {
+        fields: [
+          select({
+            name: "priority",
+            label: "Priority",
+            options: [
+              { label: "Low", value: "low" },
+              { label: "High", value: "high" },
+            ],
+          }),
+          text({ name: "source" }),
+          // Kept out of the admin by the host: not shown.
+          text({ name: "crmId", admin: { hidden: true } }),
+          // Shown only when a condition holds, which the page does not judge.
+          text({
+            name: "followUp",
+            admin: { condition: { field: "priority", equals: "high" } },
+          }),
+          // Holds fields of its own, one hidden: not shown whole.
+          group({
+            name: "routing",
+            fields: [text({ name: "secret", admin: { hidden: true } })],
+          }),
+        ],
+      },
+    });
+    expect(submissionExtensionFields(config)).toEqual([
+      { name: "priority", label: "Priority", type: "select" },
+      { name: "source", label: "source", type: "text" },
+    ]);
+  });
+
+  it("are none on a plain install", () => {
+    expect(submissionExtensionFields(formBuilder().config)).toEqual([]);
   });
 });

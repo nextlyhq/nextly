@@ -609,6 +609,13 @@ describe("judgeColumn", () => {
           class: "lossy",
           rows: { first: [{ id: "2" }], count: 1 },
         },
+        // Clearing the unparseable value would leave a null the column does not allow; named in
+        // the order its row was read, before the next row's null.
+        {
+          kind: "cleared-under-not-null",
+          class: "blocked",
+          rows: { first: [{ id: "2" }], count: 1 },
+        },
         {
           kind: "null-under-not-null",
           class: "blocked",
@@ -616,6 +623,73 @@ describe("judgeColumn", () => {
         },
       ]);
     }
+  });
+
+  it("a value that would be cleared, where the column is to stay or become NOT NULL, blocks the column", async () => {
+    // No row holds a null: only the clearing would make one, which the column refuses, so the
+    // value would have to be invented.
+    for (const conversion of [
+      pg("text", "jsonb", { compareAs: "json" }),
+      my("text", "json", { compareAs: "json" }),
+    ]) {
+      const required: ColumnConversion = {
+        ...conversion,
+        from: { ...conversion.from, nullable: false },
+        to: { ...conversion.to, nullable: false },
+      };
+      const values =
+        conversion.dialect === "mysql"
+          ? rows(mysqlJson('{"a":1}', true), mysqlJson("", false))
+          : rows('{"a":1}', "");
+      const judgement = await judgeColumn(required, values);
+      expect(judgement.class).toBe("blocked");
+      expect(kinds(judgement)).toEqual(["not-json", "cleared-under-not-null"]);
+      expect(idsOf(judgement, "cleared-under-not-null")).toEqual(["2"]);
+      // The same values where a null is allowed are only lossy: a positive control that the
+      // nullability, not the value, decides.
+      const optional = await judgeColumn(
+        { ...required, to: { ...required.to, nullable: true } },
+        values
+      );
+      expect(optional.class).toBe("lossy");
+      expect(kinds(optional)).toEqual(["not-json"]);
+    }
+    // SQLite: a word an integer column becoming a non-null real would keep as text.
+    const sqliteRequired: ColumnConversion = {
+      ...lite("integer", "real", { compareAs: "number" }),
+      to: { type: "real", nullable: false },
+    };
+    const sqliteJudgement = await judgeColumn(
+      sqliteRequired,
+      rows(sqlite("1", "integer"), sqlite("word", "text"))
+    );
+    expect(sqliteJudgement.class).toBe("blocked");
+    expect(kinds(sqliteJudgement)).toEqual([
+      "kept-unreadable",
+      "cleared-under-not-null",
+    ]);
+  });
+
+  it("hands every row a reason names to a caller that asks, past the bound the report keeps", async () => {
+    const toJsonb = pg("text", "jsonb", { compareAs: "json" });
+    const many = Array.from({ length: AFFECTED_ROWS_BOUND + 5 }, () => "");
+    const noted: Array<[ConversionReasonKind, string]> = [];
+    const judgement = await judgeColumn(toJsonb, rows('{"a":1}', ...many), {
+      noteRow: (kind, key) => {
+        noted.push([
+          kind,
+          "id" in key ? key.id : `${key.parent}/${key.locale}`,
+        ]);
+      },
+    });
+    // The report keeps the first keys and the count; the caller gets every one.
+    expect(judgement.reasons[0]?.rows?.first).toHaveLength(AFFECTED_ROWS_BOUND);
+    expect(judgement.reasons[0]?.rows?.count).toBe(many.length);
+    expect(noted).toHaveLength(many.length);
+    expect(noted.map(([, id]) => id)).toEqual(
+      many.map((_, i) => String(i + 2))
+    );
+    expect(new Set(noted.map(([kind]) => kind))).toEqual(new Set(["not-json"]));
   });
 
   it("names rows by id and by parent and locale, never by value", async () => {

@@ -24,10 +24,11 @@ import {
 import type { JSX } from "react";
 import { useEffect, useState } from "react";
 
+import { SegmentedChoice } from "@admin/components/ui/segmented-choice";
+
 import { useCardTier } from "../frame/tier";
 
 import type { QuickSetting } from "./quick-setting";
-import { SegmentedChoice } from "./SegmentedChoice";
 
 export interface CardQuickSettingProps {
   setting: QuickSetting;

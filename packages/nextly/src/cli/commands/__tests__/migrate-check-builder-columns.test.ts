@@ -223,19 +223,36 @@ async function recordedAs(column: string, type: string): Promise<void> {
 describe.each(["sqlite", "postgresql", "mysql"] as const)(
   "a keyed Builder text field on %s",
   dialect => {
-    /** `migrate:create` over a Builder-only project of `manifest`. */
-    async function create(manifest: unknown) {
+    /**
+     * `migrate:create` over a Builder-only project of `manifest`, with the data-loss consent
+     * `acceptDataLoss` names, if any. It runs where nobody can be asked, so a file that deletes
+     * data is written only under a consent covering it.
+     */
+    async function create(manifest: unknown, acceptDataLoss?: string) {
       process.env.DB_DIALECT = dialect;
       process.env.DATABASE_URL = URLS[dialect](dir);
       _resetEnvCache();
       await writeFile(join(dir, "ui-schema.json"), JSON.stringify(manifest));
       return run(context => {
         setNonInteractive(true);
-        return runMigrateCreate("keyed", { cwd: dir }, context).finally(() =>
-          setNonInteractive(false)
-        );
+        return runMigrateCreate(
+          "keyed",
+          {
+            cwd: dir,
+            ...(acceptDataLoss === undefined ? {} : { acceptDataLoss }),
+          },
+          context
+        ).finally(() => setNonInteractive(false));
       });
     }
+
+    /**
+     * The consent naming `column` of every Builder table. A MySQL `MODIFY` gives the column its
+     * table's default character set, which `migrate:create` cannot read without the database, so
+     * it judges a widening there as any type change: a deletion in the column, needing consent.
+     */
+    const consentFor = (column: string) =>
+      TABLES.map(table => `${table}.${column}`).join(",");
     const check = () => run(context => runMigrateCheck({ cwd: dir }, context));
 
     it("keeps a unique one bounded where MySQL can key it, with no drift", async () => {
@@ -308,7 +325,7 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
 
         // Unique turned off: the key goes, and the column widens to what the field states.
         const plain = manifestWith({ name: "code", type: "text" });
-        const widened = await create(plain);
+        const widened = await create(plain, consentFor("code"));
 
         expect(widened.code, widened.said.join("\n")).toBeUndefined();
         const files = sqlFiles();
@@ -348,7 +365,16 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
         expect((await create(manifest)).code).toBeUndefined();
         await recordedAs("summary", "varchar(255)");
 
-        expect((await create(manifest)).code).toBeUndefined();
+        // Without the database, the widening is judged as any MySQL type change: a run that
+        // cannot ask refuses it, naming each column, and writes nothing.
+        const refused = await create(manifest);
+        expect(refused.code).toBe(1);
+        const said = refused.said.join("\n");
+        for (const table of TABLES) expect(said).toContain(`${table}.summary`);
+        expect(sqlFiles()).toHaveLength(1);
+
+        const widened = await create(manifest, consentFor("summary"));
+        expect(widened.code, widened.said.join("\n")).toBeUndefined();
 
         const files = sqlFiles();
         expect(files).toHaveLength(2);
@@ -384,6 +410,12 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
     const code = { name: "code", type: "text", unique: true };
     const note = { name: "note", type: "text" };
 
+    /**
+     * `migrate:create` of the collection translated or shared, where nobody can be asked.
+     * Turning translation off drops the collection's translation table once the default
+     * language's values move back, which needs consent naming it as `nextly migrate` will, so a
+     * disable is run with that consent and the test judges what is written.
+     */
     async function create(localized: boolean, fields: object[]) {
       process.env.DB_DIALECT = dialect;
       process.env.DATABASE_URL = URLS[dialect](dir);
@@ -394,9 +426,14 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       );
       return run(context => {
         setNonInteractive(true);
-        return runMigrateCreate("translation", { cwd: dir }, context).finally(
-          () => setNonInteractive(false)
-        );
+        return runMigrateCreate(
+          "translation",
+          {
+            cwd: dir,
+            ...(localized ? {} : { acceptDataLoss: "dc_cases_locales" }),
+          },
+          context
+        ).finally(() => setNonInteractive(false));
       }, translatedProject);
     }
 

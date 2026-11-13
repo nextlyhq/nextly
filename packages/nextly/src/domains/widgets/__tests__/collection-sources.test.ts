@@ -55,7 +55,7 @@ const containerGet = container.get as ReturnType<typeof vi.fn>;
 function registryHolds(rows: Row[]): void {
   containerGet.mockImplementation((name: string) => {
     if (name === "collectionRegistryService") {
-      return { getAllCollections: async () => rows };
+      return { getAllCollectionsForRead: async () => rows };
     }
     throw new Error(`unexpected container.get("${name}") in this test`);
   });
@@ -75,7 +75,7 @@ function registryHoldsWithTables(
   const listTables = vi.fn(async () => tables);
   containerGet.mockImplementation((name: string) => {
     if (name === "collectionRegistryService") {
-      return { getAllCollections: async () => rows };
+      return { getAllCollectionsForRead: async () => rows };
     }
     if (name === "adapter") return { listTables };
     throw new Error(`unexpected container.get("${name}") in this test`);

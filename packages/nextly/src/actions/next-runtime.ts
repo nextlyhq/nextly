@@ -34,7 +34,11 @@
  */
 import { createRequire } from "node:module";
 
-import { requireNextApi } from "../runtime/next-api";
+import { requireNextApi, requireNextNavigation } from "../runtime/next-api";
+import {
+  NEXT_HTTP_ERROR_FALLBACK_CODE,
+  NEXT_REDIRECT_CODE,
+} from "../runtime/next-control-flow";
 
 export type HeadersFn = () => Promise<{ get(name: string): string | null }>;
 export type UnstableRethrow = (err: unknown) => void;
@@ -58,9 +62,9 @@ export function getHeaders(): HeadersFn {
  */
 export function getUnstableRethrow(): UnstableRethrow {
   if (cachedUnstableRethrow) return cachedUnstableRethrow;
-  cachedUnstableRethrow = unstableRethrowFrom(() =>
-    createRequire(import.meta.url)("next/navigation")
-  );
+  // Next's server build of next/navigation, which reaches none of the client
+  // contexts a deployment can lack (`requireNextNavigation`).
+  cachedUnstableRethrow = unstableRethrowFrom(requireNextNavigation);
   return cachedUnstableRethrow;
 }
 
@@ -104,9 +108,11 @@ const CONTROL_FLOW_DIGESTS = new Set([
   "HANGING_PROMISE_REJECTION",
   "NEXT_PRERENDER_INTERRUPTED",
 ]);
+// The codes the not-found and redirect fallbacks build their digests from, so
+// what one builds is what this passes through.
 const CONTROL_FLOW_DIGEST_PREFIXES = [
-  "NEXT_REDIRECT;",
-  "NEXT_HTTP_ERROR_FALLBACK;",
+  `${NEXT_REDIRECT_CODE};`,
+  `${NEXT_HTTP_ERROR_FALLBACK_CODE};`,
 ];
 
 /**

@@ -66,7 +66,7 @@ exports[`a real db:sync on mysql > prints and changes what it did before the dry
   "ℹ Syncing user fields...",
   "✓ No user custom fields defined (code or UI)",
   "ℹ Syncing permissions...",
-  "✓ Permissions: 6 collection permission(s) created (56 total)",
+  "✓ Permissions: 6 collection permission(s) created (<n> total)",
   "──────────────────────────────────────────────────",
   "✓ Dev sync completed in <time>",
 ]
@@ -229,7 +229,7 @@ exports[`a real db:sync on postgresql > prints and changes what it did before th
   "ℹ Syncing user fields...",
   "✓ No user custom fields defined (code or UI)",
   "ℹ Syncing permissions...",
-  "✓ Permissions: 6 collection permission(s) created (56 total)",
+  "✓ Permissions: 6 collection permission(s) created (<n> total)",
   "──────────────────────────────────────────────────",
   "✓ Dev sync completed in <time>",
 ]
@@ -392,7 +392,7 @@ exports[`a real db:sync on sqlite > prints and changes what it did before the dr
   "ℹ Syncing user fields...",
   "✓ No user custom fields defined (code or UI)",
   "ℹ Syncing permissions...",
-  "✓ Permissions: 6 collection permission(s) created (56 total)",
+  "✓ Permissions: 6 collection permission(s) created (<n> total)",
   "──────────────────────────────────────────────────",
   "✓ Dev sync completed in <time>",
 ]

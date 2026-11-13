@@ -5,11 +5,14 @@
  * the comment. A move refused, for an unknown or deactivated person, a stage the workflow does not
  * have or one that allows publishing, or no comment, moves nothing.
  *
- * Driven through the two functions the commands run, `strandedReviewStates` and
- * `moveStrandedReviewStates`, on the workflows the configuration registers, as the commands hand
+ * `--dry-run` lists the documents the move would take, judged as the move judges them, and its
+ * refusals, writing nothing.
+ *
+ * Driven through the functions the commands run, `strandedReviewStates`,
+ * `moveStrandedReviewStates` and the dry run's `strandedMoveDryRun`, on the workflows the configuration registers, as the commands hand
  * them, and once through the table resolver the commands install (`installStrandedRunResolver`).
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../../config";
 import { defineWorkflow } from "../../../domains/workflows/define-workflow";
@@ -27,7 +30,10 @@ import {
   stateOf,
   workflowEvents,
 } from "../../../domains/workflows/__tests__/helpers/step-harness";
-import { installStrandedRunResolver } from "../workflow-stranded";
+import {
+  installStrandedRunResolver,
+  strandedMoveDryRun,
+} from "../workflow-stranded";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -91,10 +97,13 @@ const memo = defineWorkflow({
   ],
 });
 const drafts = { status: true, versions: { drafts: true } } as const;
+/** This file's own table prefix, so its tables are never another file's; the slugs are unchanged. */
+const TABLE_PREFIX = "wst_";
 
 let t: TestNextly | undefined;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await t?.destroy();
   t = undefined;
 });
@@ -111,6 +120,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     collections: [
       defineCollection({
         slug: "posts",
+        dbName: `${TABLE_PREFIX}posts`,
         localized: true,
         ...drafts,
         workflow: desk,
@@ -118,12 +128,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
       defineCollection({
         slug: "pages",
+        dbName: `${TABLE_PREFIX}pages`,
         ...drafts,
         workflow: desk,
         fields: [text({ name: "title" })],
       }),
       defineCollection({
         slug: "notes",
+        dbName: `${TABLE_PREFIX}notes`,
         ...drafts,
         workflow: memo,
         fields: [text({ name: "title" })],
@@ -132,12 +144,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     singles: [
       defineSingle({
         slug: "home",
+        dbName: `${TABLE_PREFIX}home`,
         ...drafts,
         workflow: desk,
         fields: [text({ name: "headline" })],
       }),
       defineSingle({
         slug: "about",
+        dbName: `${TABLE_PREFIX}about`,
         ...drafts,
         workflow: memo,
         fields: [text({ name: "headline" })],
@@ -418,6 +432,85 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await strandedReviewStates(app().adapter, { workflows })
       ).toHaveLength(4);
+    });
+    it("dry-runs a move: names the documents the move then takes, and the move's refusals, writing nothing", async () => {
+      await boot(dialect);
+      const { both, one, page } = await strandedInstall();
+      const workflows = [...registeredWorkflows()];
+      const dryRun = (
+        over: Partial<Parameters<typeof strandedMoveDryRun>[0]>
+      ) =>
+        strandedMoveDryRun({
+          adapter: app().adapter,
+          workflows,
+          collection: "posts",
+          to: "draft",
+          as: "ANN@example.test",
+          comment: "Archive was retired.",
+          ...over,
+        });
+      const byTarget = (a: { target: string }, b: { target: string }) =>
+        a.target.localeCompare(b.target);
+
+      // A dry run takes no lock, so it opens no transaction: SQLite's would take the write lock.
+      const transactions = vi.spyOn(app().adapter, "transaction");
+      const plan = await dryRun({});
+      expect(transactions).not.toHaveBeenCalled();
+      transactions.mockRestore();
+      expect(plan.refusals ?? []).toEqual([]);
+      // The part of `one` in `legal`, a stage the workflow has, and the unnamed page are no part of it.
+      expect([...plan.changes].sort(byTarget)).toEqual(
+        [
+          {
+            action: "move",
+            target: `collection posts ${both} (en, es) from "archive" to "draft"`,
+          },
+          {
+            action: "move",
+            target: `collection posts ${one} (en) from "archive" to "draft"`,
+          },
+        ].sort(byTarget)
+      );
+
+      // Refused where the move is refused, in the words the real run prints.
+      expect(await dryRun({ to: "approved" })).toEqual({
+        changes: [],
+        refusals: [
+          'to: "approved" allows publishing, so a move into it would approve content nobody approved. Name a stage before review.',
+        ],
+      });
+      expect(await dryRun({ as: "zed@example.test" })).toEqual({
+        changes: [],
+        refusals: [
+          'as: "zed@example.test" is deactivated, so moves cannot be recorded as theirs.',
+        ],
+      });
+
+      // Nothing was written: every part is where it was, and no move was recorded.
+      for (const [slug, id, part] of [
+        ["posts", both, "en"],
+        ["posts", both, "es"],
+        ["posts", one, "en"],
+        ["pages", page, null],
+      ] as const) {
+        expect(await stateOf(app(), partOf(slug, id, part))).toMatchObject({
+          stage: "archive",
+          revision: 1,
+        });
+        expect(await moves(slug, id)).toEqual([]);
+      }
+
+      // The real move then takes exactly the documents the dry run named.
+      const moved = await moveStrandedReviewStates(app().adapter, {
+        workflows,
+        collection: "posts",
+        to: "draft",
+        as: "ann@example.test",
+        comment: "Archive was retired.",
+      });
+      expect(moved.map(each => each.document.entryId).sort()).toEqual(
+        [both, one].sort()
+      );
     });
   }
 );

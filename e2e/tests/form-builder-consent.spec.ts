@@ -99,14 +99,18 @@ test("stores the text agreed to, shows it, and never offers it for editing", asy
     .first()
     .click();
 
-  const sheet = page.getByRole("dialog");
-  await expect(sheet.getByText(`“${AGREEMENT}”`)).toBeVisible();
-  await expect(sheet.getByText("Agreed", { exact: true })).toBeVisible();
+  // A submission opens as its own page; its answers are one region of it.
+  await expect(page.getByRole("heading", { name: `Ada ${stamp}` })).toBeVisible(
+    { timeout: 30_000 }
+  );
+  const answers = page.getByRole("region", { name: "Answers" });
+  await expect(answers.getByText(`“${AGREEMENT}”`)).toBeVisible();
+  await expect(answers.getByText("Agreed", { exact: true })).toBeVisible();
 
-  await sheet.getByRole("button", { name: "Edit" }).click();
-  await expect(sheet.getByRole("textbox", { name: "Name" })).toBeVisible();
-  await expect(sheet.getByText("A consent cannot be edited")).toBeVisible();
-  // Nothing in the drawer would change it.
-  await expect(sheet.getByRole("checkbox")).toHaveCount(0);
-  await expect(sheet.getByRole("switch")).toHaveCount(0);
+  await answers.getByRole("button", { name: "Edit answers" }).click();
+  await expect(answers.getByRole("textbox", { name: "Name" })).toBeVisible();
+  await expect(answers.getByText("A consent cannot be edited")).toBeVisible();
+  // Nothing among the answers being edited would change it.
+  await expect(answers.getByRole("checkbox")).toHaveCount(0);
+  await expect(answers.getByRole("switch")).toHaveCount(0);
 });

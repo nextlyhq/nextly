@@ -49,6 +49,25 @@ export const SEEDED_USER = {
 export const SESSION_MAX_AGE_MS = 10 * 60_000;
 
 /**
+ * Whether the page's context holds a session cookie within `timeoutMs`. The
+ * cookie is HTTP-only, so the page cannot be asked; the context's jar is read
+ * again until it appears or the time runs out.
+ *
+ * @param {import("@playwright/test").Page} page
+ * @param {number} timeoutMs
+ * @returns {Promise<boolean>}
+ */
+async function sessionIssued(page, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const cookies = await page.context().cookies();
+    if (cookies.some(cookie => cookie.name === "nextly_session")) return true;
+    if (Date.now() >= deadline) return false;
+    await page.waitForTimeout(250);
+  }
+}
+
+/**
  * Signs in and stores the session at `file`.
  *
  * The playground's `admin.devAutoLogin` issues a real session for
@@ -93,8 +112,11 @@ export async function signIn(baseURL, file = STORAGE_STATE) {
     // hydration, so the session is only real once a screen has drawn.
     await page.locator("main").waitFor({ state: "visible", timeout: 60_000 });
 
-    const cookies = await page.context().cookies();
-    if (!cookies.some(cookie => cookie.name === "nextly_session")) {
+    // A drawn screen is not yet a session: the signed-out screens draw a
+    // `main` landmark too, so the sign-in screen can be showing while dev
+    // auto-login, or the sign-in just submitted, is still being answered. The
+    // session cookie itself is what this waits for.
+    if (!(await sessionIssued(page, 60_000))) {
       throw new Error(
         "[e2e] The admin rendered but issued no session cookie. " +
           "Dev auto-login does not fire for 127.0.0.1 — check baseURL is localhost."

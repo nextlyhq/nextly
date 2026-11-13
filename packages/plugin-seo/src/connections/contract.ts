@@ -56,8 +56,11 @@ export interface SearchConsoleState {
 /** What the connections route answers. */
 export interface ConnectionsBody {
   searchConsole: SearchConsoleState;
-  /** IndexNow's last attempt to tell search engines, where it made one. */
-  indexNow: { last?: ConnectionAttempt };
+  /**
+   * IndexNow: whether the settings switch it on, and its last attempt to
+   * tell search engines, where it made one.
+   */
+  indexNow: { switchedOn?: boolean; last?: ConnectionAttempt };
 }
 
 /** What the connect route answers: where to send the person to sign in. */

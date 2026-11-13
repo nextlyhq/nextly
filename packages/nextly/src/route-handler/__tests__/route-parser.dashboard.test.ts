@@ -38,6 +38,18 @@ describe("dashboard routes", () => {
     });
   });
 
+  it("resolves the Content overview's route, and nothing below it", () => {
+    expect(parseRestRoute(["dashboard", "content"], "GET")).toMatchObject({
+      service: "dashboard",
+      method: "getDashboardContent",
+    });
+    expect(
+      parseRestRoute(["dashboard", "content", "extra"], "GET").method
+    ).not.toBe("getDashboardContent");
+    // A read only: no other verb reaches it.
+    expect(parseRestRoute(["dashboard", "content"], "POST")).toEqual({});
+  });
+
   it("does not claim a path with extra segments after a GET route", () => {
     expect(
       parseRestRoute(["dashboard", "stats", "extra"], "GET").method

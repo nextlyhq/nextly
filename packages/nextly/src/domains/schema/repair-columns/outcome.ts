@@ -101,6 +101,21 @@ export interface ConversionFailure {
 }
 
 /**
+ * How the run's consent met a lossy column: whether it covered clearing the column's values, how
+ * many this run cleared, and the consent that would cover it.
+ */
+export interface ColumnConsentFacts {
+  /** How consent reached the column: the data-loss consent naming it, or a yes at the terminal. */
+  given: "flag" | "confirmed" | null;
+  /** The values this run cleared. */
+  valuesCleared: number;
+  /** The consent that covers the column, as its owner would type it. */
+  flag: string;
+  /** Why the consent given, or the yes, did not lead to the clearing; null where nothing to say. */
+  notice: string | null;
+}
+
+/**
  * What the run established about a column beyond its finding. A dry run establishes only the
  * lock; the rest are an apply's.
  */
@@ -110,6 +125,8 @@ export interface ColumnRunFacts {
   failure: ConversionFailure | null;
   /** This run finished converting the column. */
   converted: boolean;
+  /** How the run's consent met the column, where the column's conversion clears values. */
+  consent: ColumnConsentFacts | null;
 }
 
 /** The facts of a column nothing beyond its finding was established for. */
@@ -118,6 +135,7 @@ export const NO_RUN_FACTS: ColumnRunFacts = {
   progress: null,
   failure: null,
   converted: false,
+  consent: null,
 };
 
 /** The class a finding's judgement and conversion give, or null where it was not classed. */
@@ -144,7 +162,9 @@ function outcomesThatHold(
       facts.lock !== null || finding.kind === "definition-unreadable",
     blocked: cls === "blocked",
     "needs-consent": mode === "dry-run" && cls === "lossy",
-    "skipped-needs-consent": mode === "apply" && cls === "lossy",
+    // A lossy column this run converted under consent is converted, not skipped.
+    "skipped-needs-consent":
+      mode === "apply" && cls === "lossy" && !facts.converted,
     "would-convert": mode === "dry-run" && cls === "safe",
     converted: facts.converted,
   };

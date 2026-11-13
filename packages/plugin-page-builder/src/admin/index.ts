@@ -35,6 +35,7 @@ import {
   COMPONENT_LIST_TOOLS_COMPONENT,
   DELETE_COMPONENT_REPLACEMENT_COMPONENT,
   ENTRY_DESIGN_SECTION_COMPONENT,
+  OVERVIEW_PAGE_COMPONENT,
   REMOVE_LAYOUT_ACTION_COMPONENT,
   TEMPLATE_DELETE_COMPONENT,
   TEMPLATE_DESIGN_DETAILS_COMPONENT,
@@ -69,6 +70,7 @@ import {
 import { PageBuilderView } from "./editor/PageBuilderView";
 import { registerEntryDesignColumn } from "./entry-design-column";
 import { EntryDesignSection } from "./EntryDesignSection";
+import { PageBuilderOverview } from "./overview/PageBuilderOverview";
 import { RemoveLayoutToolbarSlot } from "./RemoveLayoutAction";
 import { TemplateAddressField } from "./TemplateAddressField";
 import { TemplateCollectionField } from "./TemplateCollectionField";
@@ -124,6 +126,8 @@ const COMPONENTS = {
   [BUILDER_VIEW_COMPONENT]: PageBuilderView,
   // "Remove Layout…" in a Layout's document bar.
   [REMOVE_LAYOUT_ACTION_COMPONENT]: RemoveLayoutToolbarSlot,
+  // The overview the rail item opens.
+  [OVERVIEW_PAGE_COMPONENT]: PageBuilderOverview,
   // The "Bindings to fix" page and its dashboard card.
   [BINDINGS_TO_FIX_PAGE_COMPONENT]: BindingsToFixPage,
   [BINDINGS_TO_FIX_CARD_COMPONENT]: BindingsToFixCard,
@@ -165,6 +169,7 @@ export {
   ComponentStoreDeleteHost,
   DeleteComponentReplacement,
   EntryDesignSection,
+  PageBuilderOverview,
   PageBuilderView,
   RemoveLayoutToolbarSlot,
   TemplateAddressField,

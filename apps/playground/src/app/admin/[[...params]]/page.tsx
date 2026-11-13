@@ -24,6 +24,9 @@ import "../../../plugins/item-place-fixture/admin";
 // The widget check's page, for the e2e suite's widget accessibility check; its
 // board is fetched only when that page is drawn.
 import "../../../plugins/widget-check-fixture/admin";
+// The startup read fixture's page, for the e2e suite's check that a plugin
+// page's declared read is asked for inside the startup request.
+import "../../../plugins/startup-read-fixture/admin";
 
 export default function AdminPage() {
   return <RootLayout />;

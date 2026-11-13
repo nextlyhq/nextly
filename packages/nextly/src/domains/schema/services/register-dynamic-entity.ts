@@ -49,6 +49,13 @@ export interface RegisterDynamicEntityArgs {
    * ownership decides rather than the caller.
    */
   builderOwned: boolean | undefined;
+  /**
+   * Whether a missing translation table is created here. Default true. A
+   * production start passes false: it defines no structure, so an entity whose
+   * translation table no migration made is registered as it is, and its reads
+   * and writes say the table is not ready (`isCompanionReady`).
+   */
+  createMissingCompanion?: boolean;
 }
 
 export async function registerDynamicEntitySchema(
@@ -83,18 +90,21 @@ export async function registerDynamicEntitySchema(
   if (!localized) return;
 
   // Created here if a migration has not already (idempotent), so a code-first
-  // localized entity works without a manual migrate.
-  const { ensureCompanionTable } = await import(
-    "../../i18n/runtime/companion-io"
-  );
-  await ensureCompanionTable(adapter, {
-    builtBy: builtByFor(args.kind, args.builderOwned),
-    slug: tableName,
-    tableName,
-    fields,
-    dialect,
-    status: companionStatus,
-  });
+  // localized entity works without a manual migrate, where the caller may
+  // define structure.
+  if (args.createMissingCompanion !== false) {
+    const { ensureCompanionTable } = await import(
+      "../../i18n/runtime/companion-io"
+    );
+    await ensureCompanionTable(adapter, {
+      builtBy: builtByFor(args.kind, args.builderOwned),
+      slug: tableName,
+      tableName,
+      fields,
+      dialect,
+      status: companionStatus,
+    });
+  }
 
   const { buildCompanionRuntimeTable } = await import(
     "../../i18n/runtime/companion-registration"

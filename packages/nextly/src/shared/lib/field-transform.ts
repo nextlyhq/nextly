@@ -21,6 +21,7 @@ import {
   formatRichTextOutput,
   isRichTextValue,
   type RichTextOutputFormat,
+  type RichTextStyles,
 } from "./rich-text-html";
 
 // ============================================================
@@ -106,6 +107,29 @@ function buildFieldMap(fields: FieldConfig[]): Map<string, FieldConfig> {
   }
 
   return map;
+}
+
+/**
+ * A copy of `data` with each value a declared field holds replaced by what
+ * `visit` returns for it. An empty value, or a key no field declares, passes
+ * through untouched. The walk every field-shaped read transform here makes.
+ */
+function mapDeclaredValues(
+  data: Record<string, unknown>,
+  fields: FieldConfig[],
+  visit: (value: unknown, field: FieldConfig, key: string) => unknown
+): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...data };
+  const fieldMap = buildFieldMap(fields);
+
+  for (const [key, value] of Object.entries(result)) {
+    if (value === undefined || value === null) continue;
+    const field = fieldMap.get(key);
+    if (!field) continue;
+    result[key] = visit(value, field, key);
+  }
+
+  return result;
 }
 
 /**
@@ -402,38 +426,25 @@ export function transformFromStorage(
   data: Record<string, unknown>,
   fields: FieldConfig[]
 ): Record<string, unknown> {
-  const result: Record<string, unknown> = { ...data };
-  const fieldMap = buildFieldMap(fields);
-
-  for (const [key, value] of Object.entries(result)) {
-    if (value === undefined || value === null) {
-      continue;
-    }
-
-    const field = fieldMap.get(key);
-
-    // Pass through unknown fields
-    if (!field) {
-      continue;
-    }
-
+  return mapDeclaredValues(data, fields, (value, field, key) => {
     // Only parse JSON serializable types
     if (!isJSONSerializableType(field.type)) {
-      continue;
+      return value;
     }
 
     try {
       // Parse JSON strings back to objects
       if (typeof value === "string") {
         try {
-          result[key] = JSON.parse(value);
+          return JSON.parse(value) as unknown;
         } catch {
           // If parsing fails, keep original value
           // This handles cases where the string is not valid JSON
-          result[key] = value;
+          return value;
         }
       }
       // If already an object/array, keep as-is (database might have returned parsed data)
+      return value;
     } catch (error) {
       throw NextlyError.validation({
         errors: [
@@ -451,9 +462,7 @@ export function transformFromStorage(
         },
       });
     }
-  }
-
-  return result;
+  });
 }
 
 /**
@@ -639,6 +648,8 @@ export function coerceDateFieldsToDate(
  * @param data - Entry data containing rich text fields
  * @param fields - Field configurations for the collection/single
  * @param format - The desired output format for rich text fields
+ * @param styles - How the HTML is styled: Nextly's inline look (`"default"`)
+ *   or classes only, for a site's own CSS (`"none"`). Ignored for JSON.
  * @returns Data with rich text fields transformed to the requested format
  *
  * @example
@@ -654,67 +665,41 @@ export function coerceDateFieldsToDate(
 export function transformRichTextFields(
   data: Record<string, unknown>,
   fields: FieldConfig[],
-  format: RichTextOutputFormat = "json"
+  format: RichTextOutputFormat = "json",
+  styles: RichTextStyles = "default"
 ): Record<string, unknown> {
   // If format is JSON, no transformation needed (default behavior)
   if (format === "json") {
     return data;
   }
 
-  const result: Record<string, unknown> = { ...data };
-  const fieldMap = buildFieldMap(fields);
+  // A nested row (a repeater's item, a group's value) in the same format.
+  const nested = (
+    row: Record<string, unknown>,
+    nestedFields: FieldConfig[]
+  ): Record<string, unknown> =>
+    transformRichTextFields(row, nestedFields, format, styles);
 
-  for (const [key, value] of Object.entries(result)) {
-    if (value === undefined || value === null) {
-      continue;
-    }
-
-    const field = fieldMap.get(key);
-
-    // Pass through unknown fields
-    if (!field) {
-      continue;
-    }
-
-    // Handle rich text fields
+  return mapDeclaredValues(data, fields, (value, field) => {
     if (field.type === "richText") {
-      if (isRichTextValue(value)) {
-        result[key] = formatRichTextOutput(value, format);
-      }
-      continue;
+      return isRichTextValue(value)
+        ? formatRichTextOutput(value, format, { styles })
+        : value;
     }
 
-    // Handle nested rich text in repeater fields
-    if (field.type === "repeater") {
-      const arrayField = field as { fields?: FieldConfig[] };
-      if (Array.isArray(value) && arrayField.fields) {
-        result[key] = value.map(item => {
-          if (typeof item === "object" && item !== null) {
-            return transformRichTextFields(
-              item as Record<string, unknown>,
-              arrayField.fields!,
-              format
-            );
-          }
-          return item;
-        });
-      }
-      continue;
+    // Rich text nested in a repeater's rows or in a group.
+    const nestedFields = (field as { fields?: FieldConfig[] }).fields;
+    if (field.type === "repeater" && Array.isArray(value) && nestedFields) {
+      return value.map(item =>
+        typeof item === "object" && item !== null
+          ? nested(item as Record<string, unknown>, nestedFields)
+          : item
+      );
+    }
+    if (field.type === "group" && typeof value === "object" && nestedFields) {
+      return nested(value as Record<string, unknown>, nestedFields);
     }
 
-    // Handle nested rich text in groups
-    if (field.type === "group") {
-      const groupField = field as { fields?: FieldConfig[] };
-      if (typeof value === "object" && value !== null && groupField.fields) {
-        result[key] = transformRichTextFields(
-          value as Record<string, unknown>,
-          groupField.fields,
-          format
-        );
-      }
-      continue;
-    }
-  }
-
-  return result;
+    return value;
+  });
 }

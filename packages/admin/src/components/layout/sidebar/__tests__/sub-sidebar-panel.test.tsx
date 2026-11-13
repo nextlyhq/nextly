@@ -43,7 +43,7 @@ function renderPanel({
       <SubSidebarPanel
         isMobile={isMobile}
         selectedMain={selectedMain}
-        visibleMenuItemIds={["dashboard", "settings"]}
+        visibleMenuItemIds={["dashboard", "settings", "collections", "singles"]}
         isFolderTreeVisible={false}
         standaloneLabel=""
         content={{} as never}
@@ -125,5 +125,32 @@ describe("SubSidebarPanel on the narrow layout", () => {
 
     renderPanel({ suppress: false, isMobile: true, selectedMain: "settings" });
     expect(widthClasses()).toEqual(["w-64"]);
+  });
+});
+
+describe("SubSidebarPanel's title", () => {
+  it("goes to the Content overview from the Content panel, from either kind", () => {
+    renderPanel({ suppress: false, selectedMain: "collections" });
+    expect(screen.getByRole("link", { name: "Content" })).toHaveAttribute(
+      "href",
+      "/admin/content"
+    );
+    cleanup();
+
+    renderPanel({ suppress: false, selectedMain: "singles" });
+    expect(screen.getByRole("link", { name: "Content" })).toHaveAttribute(
+      "href",
+      "/admin/content"
+    );
+  });
+
+  it("only names the other panels", () => {
+    // The control: the title is a link because it is Content's, not because
+    // every title became one.
+    renderPanel({ suppress: false, selectedMain: "settings" });
+    expect(screen.getByText("settings")).not.toHaveAttribute("href");
+    expect(screen.getAllByRole("link").map(link => link.textContent)).toEqual([
+      "API Keys",
+    ]);
   });
 });

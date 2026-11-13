@@ -46,6 +46,31 @@ export const SYNC_CODES = defineCodes({
       },
     ],
   },
+  FIELDS_LEAVING_TRANSLATION_NOT_MOVED: {
+    cause:
+      "`db:sync` could not move the values of a field that stops being translated, so the field keeps them in its translations table.",
+    from: [
+      {
+        code: "CONFLICT",
+        reason: "fields-leaving-translation-not-moved",
+        describe: error => {
+          const entities = Array.isArray(error.logContext?.entities)
+            ? (error.logContext.entities as unknown[]).map(String)
+            : [];
+          const named =
+            entities.map(e => `\`${e}\``).join(", ") || "some entities";
+          return {
+            what: `The fields leaving translation in ${named} were not moved.`,
+            why:
+              error.logContext?.changed === true
+                ? "The move stopped part-way, at the error printed above. Every value is still in the translations table."
+                : "They can't be moved as the configuration says, for the reason printed above, so nothing was changed.",
+            next: "Fix what the error above names, then run `nextly db:sync` again.",
+          };
+        },
+      },
+    ],
+  },
   PROMOTE_COLLECTION_NOT_FOUND: {
     cause:
       "`db:sync --promote` names a collection the Schema Builder has no record of.",

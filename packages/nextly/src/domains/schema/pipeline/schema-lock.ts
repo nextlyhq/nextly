@@ -82,6 +82,13 @@ import {
   type MigrationSession,
 } from "../../field-groups/migration/session";
 
+import {
+  UNIT_COMMENT_CLOSE,
+  UNIT_COMMENT_OPEN,
+  unitComment,
+  unitOf,
+} from "./lock-statement-unit";
+
 /** The table the one schema lock lives in. */
 export const SCHEMA_LOCK_TABLE = "nextly_schema_lock";
 
@@ -171,8 +178,13 @@ export type SchemaLockHolder =
       readonly owner: string;
       /** The database's id for the session running it. */
       readonly session: string;
-      /** The start of the statement, without its marker. */
-      readonly statement: string;
+      /**
+       * What the statement was sent for: its migration file or ledger key, or the command that
+       * sent it; null where its marker names nothing readable. Never the statement's text: a
+       * hand-written statement can hold a literal value, such as a key or a password, that must
+       * not reach a message or a log.
+       */
+      readonly unit: string | null;
     };
 
 /** What the work is handed: the field-group session the lock holds beside its own row. */
@@ -237,6 +249,8 @@ export type SchemaLockOutcome<T> =
 interface HeldHere {
   readonly adapter: DrizzleAdapter;
   readonly claim: string;
+  /** The command holding the lock, which names a statement sent for no unit. */
+  readonly command: string;
   readonly session: MigrationSession;
   released: boolean;
   /** Throws the lost-lock refusal unless the hold can still show it holds the lock. */
@@ -280,25 +294,35 @@ function schemaLockMarker(claim: string): string {
 }
 
 /**
+ * What follows the claim's comment on every statement `held` marks: the comment naming the unit it
+ * was sent for, or, for a statement sent for none, the command holding the lock, so a run refused
+ * by the statement can name it without reading its text (`lock-statement-unit`).
+ */
+function markerOf(held: HeldHere, unit: string | undefined): string {
+  return `${schemaLockMarker(held.claim)} ${unitComment(unit ?? held.command)}`;
+}
+
+/**
  * `markedForSchemaLock` for a statement built as Drizzle SQL: the claim's comment goes first, so a
  * run taking the lock over finds it by the same prefix. Anything else is returned as it is.
  */
 export function markedSqlForSchemaLock(statement: unknown): unknown {
   const held = heldNow();
   if (held === undefined || !is(statement, SQL)) return statement;
-  return sql`${sql.raw(`${schemaLockMarker(held.claim)} `)}${statement}`;
+  return sql`${sql.raw(markerOf(held, undefined))}${statement}`;
 }
 
 /**
  * `statement` marked with the claim of the lock this context holds, so a run that takes over a
  * lapsed lock can find it still running in the database and stop it (`outlastEarlierStatements`).
  * Unmarked outside every holder.
+ *
+ * `unit` is the migration file or ledger key the statement belongs to; without one, the statement
+ * is named by the command holding the lock.
  */
-export function markedForSchemaLock(statement: string): string {
+export function markedForSchemaLock(statement: string, unit?: string): string {
   const held = heldNow();
-  return held === undefined
-    ? statement
-    : `${schemaLockMarker(held.claim)} ${statement}`;
+  return held === undefined ? statement : `${markerOf(held, unit)}${statement}`;
 }
 
 /** The `logContext.reason` every refusal of a run that lost the schema lock carries. */
@@ -513,7 +537,7 @@ function earlierHolderOf(before: RowState, claim: string): string | undefined {
 }
 
 /** Claim the row, or report who holds it. */
-async function claimRow(
+function claimRow(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,
   claim: string,
@@ -1570,6 +1594,7 @@ async function runHeld<T>(
         const held: HeldHere = {
           adapter: hold.adapter,
           claim: hold.claim,
+          command: hold.options.command,
           session,
           released: false,
           assertHeld: () => hold.assertHeld(),
@@ -1670,8 +1695,11 @@ export async function withSchemaLock<T>(
   }
 }
 
-/** A statement of an earlier holder still running, as the database lists it. */
-type EarlierStatement = { session: unknown; statement: unknown };
+/**
+ * A statement of an earlier holder still running, as the database lists it: its session, and the
+ * still-encoded unit its marker names (`unitOf` decodes it), or null.
+ */
+type EarlierStatement = { session: unknown; unit: unknown };
 
 /**
  * The statements marked with `claim` (see `markedForSchemaLock`) that are running on the database
@@ -1679,21 +1707,38 @@ type EarlierStatement = { session: unknown; statement: unknown };
  * run cannot claim the row while a statement of the holder is still running. Only a running
  * statement is listed: one that has ended inside a transaction left open lands nothing unless that
  * transaction commits, which its run refuses once it cannot show it holds the lock.
+ *
+ * Only the unit comment's content is read back, cut out by the database itself, never the
+ * statement: its text can hold a literal value that must not leave the database through a refusal
+ * or a log. A comment whose closing is missing, as where PostgreSQL kept only the start of a long
+ * statement, reads as none, so a name cut short is never passed on as a whole one.
  */
 function earlierStatementsQuery(
   dialect: SupportedDialect,
   claim: string
 ): SQL | undefined {
   const marker = schemaLockMarker(claim);
+  const unitPrefix = `${marker} ${UNIT_COMMENT_OPEN}`;
+  // Where the encoded unit starts, 1-based and in characters, as both databases count a string's
+  // positions; an integer built here, so it is written into the statement rather than bound.
+  const unitStart = sql.raw(String([...unitPrefix].length + 1));
   if (dialect === "postgresql") {
-    return sql`SELECT ${id("pid")} AS ${id("session")}, ${id("query")} AS ${id("statement")}
+    return sql`SELECT ${id("pid")} AS ${id("session")},
+          CASE WHEN position(${unitPrefix} in ${id("query")}) = 1
+              AND position(${UNIT_COMMENT_CLOSE} in substr(${id("query")}, ${unitStart})) > 0
+            THEN split_part(substr(${id("query")}, ${unitStart}), ${UNIT_COMMENT_CLOSE}, 1)
+          END AS ${id("unit")}
         FROM ${id("pg_stat_activity")}
         WHERE ${id("state")} IN ('active', 'idle in transaction', 'idle in transaction (aborted)')
           AND position(${marker} in ${id("query")}) = 1
           AND ${id("pid")} <> pg_backend_pid()`;
   }
   if (dialect === "mysql") {
-    return sql`SELECT ${id("ID")} AS ${id("session")}, ${id("INFO")} AS ${id("statement")}
+    return sql`SELECT ${id("ID")} AS ${id("session")},
+          CASE WHEN LOCATE(${unitPrefix}, ${id("INFO")}) = 1
+              AND LOCATE(${UNIT_COMMENT_CLOSE}, SUBSTRING(${id("INFO")}, ${unitStart})) > 0
+            THEN SUBSTRING_INDEX(SUBSTRING(${id("INFO")}, ${unitStart}), ${UNIT_COMMENT_CLOSE}, 1)
+          END AS ${id("unit")}
         FROM ${id("information_schema")}.${id("PROCESSLIST")}
         WHERE ${id("COMMAND")} = 'Query' AND LOCATE(${marker}, ${id("INFO")}) = 1
           AND ${id("ID")} <> CONNECTION_ID()`;
@@ -1744,6 +1789,18 @@ function cancelStatement(
 }
 
 /**
+ * The statement a refusal names: one that names what it was sent for, where any does, over one
+ * that names nothing. `running` is never empty here.
+ */
+function namedStatement(
+  running: readonly EarlierStatement[]
+): EarlierStatement {
+  return (
+    running.find(statement => unitOf(statement.unit) !== null) ?? running[0]
+  );
+}
+
+/**
  * A run that took over a lapsed lock outlasts the earlier holder's statements before its first
  * change: it asks the database to stop each one still running, and waits until none is, so no
  * change of the earlier holder lands after one of this run's. A statement that outlives the wait
@@ -1783,15 +1840,12 @@ async function outlastEarlierStatements(
       // finds that claim and waits for its statements in turn, where a freed row would let it
       // start beside one still running.
       await handBackToEarlier(hold, claim);
-      const first = running[0];
+      const named = namedStatement(running);
       throw wait.refusal({
         kind: "earlier-statement",
         owner: claim,
-        session: String(first.session),
-        statement: String(first.statement)
-          .slice(schemaLockMarker(claim).length)
-          .trim()
-          .slice(0, 80),
+        session: String(named.session),
+        unit: unitOf(named.unit),
       });
     }
     for (const statement of running) {
@@ -1952,10 +2006,11 @@ export function describeHolder(
         "clear it with `nextly migrate --force-unlock`."
       );
     case "earlier-statement":
+      // What it was sent for and its session, never its text, which can hold a literal value.
       return (
-        `a statement the earlier holder of the lock (${processOf(holder.owner)}) sent is still ` +
-        `running in database session ${holder.session} (\`${holder.statement}\`) and did not stop ` +
-        "when asked. Stop that session."
+        `a statement${holder.unit === null ? "" : ` for \`${holder.unit}\``} that the earlier ` +
+        `holder of the lock (${processOf(holder.owner)}) sent is still running in database ` +
+        `session ${holder.session} and did not stop when asked. Stop that session.`
       );
   }
 }

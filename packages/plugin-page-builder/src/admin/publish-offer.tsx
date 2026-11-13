@@ -36,7 +36,7 @@ import {
   Checkbox,
   toast,
 } from "@nextlyhq/ui";
-import { Component, PanelsTopLeft, TriangleAlert } from "lucide-react";
+import { Component, PanelRight, TriangleAlert } from "lucide-react";
 import {
   useEffect,
   useId,
@@ -488,7 +488,7 @@ export function PublishOfferDialog({
               const key = keyOf(entry);
               const withheld = withheldBecause(entry);
               const checkboxId = `${listId}-${key}`;
-              const Icon = entry.kind === "layout" ? PanelsTopLeft : Component;
+              const Icon = entry.kind === "layout" ? PanelRight : Component;
               return (
                 <li key={key} className="flex items-center gap-3 px-3 py-2">
                   {withheld === null ? (

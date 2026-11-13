@@ -505,12 +505,25 @@ export type {
 /**
  * Field authoring — the factories and `FieldConfig` type a plugin uses to build
  * the fields it contributes (`contributes.collections` / `contributes.extend`).
- * @public Exercised by `plugin-seo` (its `seo` field group). Field factories
- *   graduate here as first-party plugins exercise them (D55); more can be added
- *   the same way.
+ * @public Exercised by `plugin-seo` (its `seo` field group) and
+ *   `plugin-form-builder` (its internal `form-uploads` and
+ *   `form-submission-sends` collections, typed `CollectionConfig`, with
+ *   `date`, `json` and `number` fields: a send's when, its recipients and
+ *   cancel causes, and its attempts). Intended to be stable, as the other
+ *   factories here are. Field factories graduate here as first-party plugins
+ *   exercise them; more can be added the same way.
  */
-export { text, textarea, checkbox, upload, group } from "nextly";
-export type { FieldConfig } from "nextly";
+export {
+  text,
+  textarea,
+  checkbox,
+  upload,
+  group,
+  date,
+  json,
+  number,
+} from "nextly";
+export type { FieldConfig, CollectionConfig } from "nextly";
 
 /**
  * Which fields a level addresses, with presentational groups flattened.
@@ -731,6 +744,13 @@ export type {
   PluginMediaService,
   PluginEmailService,
   ForgetSendsInput,
+  QueuedEmailChangeHandler,
+  QueuedEmailChange,
+  QueuedEmailCancelCause,
+  QueuedEmailRecipient,
+  QueuedRecipientOutcome,
+  QueuedEmailStanding,
+  QueuedEmailStatus,
   PluginVersionsService,
   PluginCollectionTransaction,
   PluginVersionPins,
@@ -980,6 +1000,15 @@ export type {
   PluginCollectionView,
   PluginMenuItem,
 } from "nextly";
+
+/**
+ * @experimental One read a plugin page makes as it opens, declared on the page
+ * as `contributes.admin.pages[].startupReads`: a route of the plugin's own,
+ * named as `usePluginRoute` names it. A fresh tab that opens on the page asks
+ * for it inside the admin's startup request, in its first round, and the
+ * page's own read takes that answer. See `STABILITY.md`.
+ */
+export type { PluginPageStartupRead } from "nextly";
 
 /**
  * @experimental What a standalone plugin declares about its own panel

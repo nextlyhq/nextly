@@ -5,7 +5,8 @@ import type { JSX } from "react";
 import { useState } from "react";
 import { FormProvider } from "react-hook-form";
 
-import { ArrowRight, Loader2 } from "@admin/components/icons";
+import { SignupLoading } from "@admin/components/features/auth-signup-skeleton";
+import { ArrowLeft, ArrowRight, Loader2 } from "@admin/components/icons";
 import { AuthFormCard } from "@admin/components/shared/auth/AuthFormCard";
 import { AuthRefusalNotice } from "@admin/components/shared/auth/AuthRefusalNotice";
 import {
@@ -13,18 +14,52 @@ import {
   type SignupFormValues,
   useSignupForm,
 } from "@admin/components/shared/auth/AuthSignupFields";
+import { AuthStatusCard } from "@admin/components/shared/auth/AuthStatusCard";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { useAppName } from "@admin/context/providers/BrandingProvider";
 import { useApi } from "@admin/hooks/useApi";
 import { useAuthRefusal } from "@admin/hooks/useAuthRefusal";
+import { useRegistrationOpen } from "@admin/hooks/useSetupStatus";
 import { getCsrfToken } from "@admin/lib/api/csrf";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ActionResponse } from "@admin/lib/api/response-types";
 import { navigateTo } from "@admin/lib/navigation";
 
+/**
+ * The register page: its form where the app takes sign-ups
+ * (`auth.allowRegistration`, off by default), and where it takes none, a
+ * card that says so and leads back to sign-in, rather than a form the server
+ * refuses once it has been filled in. Until setup-status has answered, the
+ * page's loading frame.
+ */
 export function Signup(): JSX.Element {
+  const registrationOpen = useRegistrationOpen();
+  if (registrationOpen === undefined) return <SignupLoading />;
+  return registrationOpen ? <SignupForm /> : <RegistrationClosed />;
+}
+
+/** What the register page says where the app takes no sign-ups. */
+function RegistrationClosed(): JSX.Element {
+  const appName = useAppName();
+  return (
+    <AuthStatusCard
+      title="Registration Is Closed"
+      description={`${appName} doesn't take sign-ups. Ask an administrator for an account.`}
+    >
+      <Link
+        href={ROUTES.LOGIN}
+        className="inline-flex items-center text-primary cursor-pointer font-medium transition-colors"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Back to Sign In
+      </Link>
+    </AuthStatusCard>
+  );
+}
+
+function SignupForm(): JSX.Element {
   const { api } = useApi();
   const appName = useAppName();
 

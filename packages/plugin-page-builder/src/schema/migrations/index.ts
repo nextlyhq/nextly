@@ -15,6 +15,7 @@ import migration6 from "./20261106_084948_318_create_usage_index_tables";
 import migration7 from "./20261106_095219_741_add_breakpoint_removal_undoes";
 import migration8 from "./20261106_104001_085_create_token_usage_table";
 import migration9 from "./20261107_174750_902_create_binding_report_tables";
+import migration10 from "./20261112_193109_764_seed_composition_graph_lock";
 
 export const migrations: PluginMigration[] = [
   migration0,
@@ -27,4 +28,5 @@ export const migrations: PluginMigration[] = [
   migration7,
   migration8,
   migration9,
+  migration10,
 ];

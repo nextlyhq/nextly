@@ -64,7 +64,7 @@ export function statusKeyOf(context: SidebarSectionProps["context"]): string {
   return `collection:${context.collection}:${context.entryId ?? ""}`;
 }
 
-/** The line itself: `Listed · 2 to fix`, `Hidden from search`. */
+/** The line itself: `2 to check`, `Listed`, `Hidden from search`. */
 export function SeoStatusSection({ context }: SidebarSectionProps): ReactNode {
   const status = useSeoStatus(statusKeyOf(context));
   if (status === undefined) return null;
@@ -78,18 +78,12 @@ export function SeoStatusSection({ context }: SidebarSectionProps): ReactNode {
         <>Hidden · all {inSentence(status.typeLabel)} pages</>
       ) : status.listing === "page" ? (
         "Hidden from search"
+      ) : status.count > 0 ? (
+        <span className="font-medium text-warning-text">
+          {status.count} to check
+        </span>
       ) : (
-        <>
-          Listed
-          {status.count > 0 ? (
-            <>
-              {" · "}
-              <span className="font-semibold text-warning-text">
-                {status.count} to fix
-              </span>
-            </>
-          ) : null}
-        </>
+        "Listed"
       )}
     </p>
   );

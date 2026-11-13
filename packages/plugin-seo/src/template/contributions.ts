@@ -24,24 +24,3 @@ export const PAGE_BUILDER_TAB: AdminContribution = {
   label: "SEO",
   component: PAGE_BUILDER_TAB_COMPONENT,
 };
-
-/**
- * What the Page Builder hands a tab at its place, as it declares it. Restated
- * rather than imported, so this plugin never depends on the Page Builder's
- * package.
- */
-interface PageBuilderSettingsContext {
-  userId: string;
-  document: "page" | "template";
-  collection: string;
-  entryId: string | null;
-  draws: { collection: string; entryId: string | null } | null;
-}
-
-declare module "@nextlyhq/plugin-sdk" {
-  interface AdminPlaces {
-    "nextlyhq-plugin-page-builder.settings": {
-      context: PageBuilderSettingsContext;
-    };
-  }
-}

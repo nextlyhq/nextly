@@ -18,6 +18,7 @@ function facts(answer: SeoAnswer): PageFacts {
     subject: { type: "posts", id: "7", label: "Harbour walk" },
     answer,
     canonicalIsOwn: true,
+    canonicalConfirmed: false,
     shareImage: [],
     structuredData: [],
     images: [],

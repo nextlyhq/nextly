@@ -15,9 +15,11 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { FieldGroupSchemaService } from "../../../domains/field-groups/services/field-group-schema-service";
 import { col } from "../../../domains/schema/extension/dsl";
 import type { SchemaOwner } from "../../../domains/schema/extension/types";
 import { NextlyError } from "../../../errors/nextly-error";
+import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { ContributedColumn } from "../access";
 import { createPluginDatabase } from "../plugin-database";
 
@@ -378,6 +380,59 @@ describe("what a plugin may not reach on the same table", () => {
       )
     );
     expect(NextlyError.isForbidden(refused)).toBe(true);
+  });
+});
+
+describe("a column contributed to a field group's table", () => {
+  // The production SQLite field-group table, whose key is declared on the
+  // table rather than on its `id` column.
+  const GROUP = "comp_fx_meta";
+  const service = new FieldGroupSchemaService("sqlite");
+  const runtime = service.generateRuntimeSchema(
+    GROUP,
+    [{ name: "note", type: "text" }] as never,
+    { typeColumn: STORAGE_FORMAT.columns.type }
+  );
+
+  it("is written and read by the row's id", async () => {
+    for (const part of service
+      .generateMigrationSQL(GROUP, [{ name: "note", type: "text" }] as never)
+      .split("--> statement-breakpoint")) {
+      const statement = part
+        .split("\n")
+        .filter(line => !line.trim().startsWith("--"))
+        .join("\n")
+        .trim();
+      if (statement) sqlite.exec(statement);
+    }
+    sqlite.exec(`ALTER TABLE ${GROUP} ADD COLUMN fx_score TEXT`);
+    sqlite.exec(
+      `INSERT INTO ${GROUP} (id, _parent_id, _parent_table, _parent_field, _order, created_at, updated_at) ` +
+        `VALUES ('row-1', 'p1', 'dc_posts', 'meta', 0, 0, 0)`
+    );
+    const db = drizzle({ client: sqlite, relations });
+    const surface = createPluginDatabase({
+      dialect: "sqlite",
+      owner: FX,
+      dependsOn: new Set(),
+      owners: () => new Map(),
+      tables: () => ({}),
+      tableList: () => [],
+      db: () => db,
+      relationalDb: () => db,
+      transaction: async fn =>
+        fn({ db, relationalDb: db, afterCommit: () => undefined }),
+      contributions: () =>
+        new Map([[GROUP, [contribution("fx_score", "fxScore", FX)]]]),
+      entityTable: name => (name === GROUP ? runtime : undefined),
+    });
+    const scores = surface.contributed(GROUP, {
+      fxScore: col.text({ nullable: true }),
+    });
+
+    await scores.set("row-1", { fxScore: "9" });
+
+    expect(await scores.get("row-1")).toEqual({ id: "row-1", fxScore: "9" });
   });
 });
 

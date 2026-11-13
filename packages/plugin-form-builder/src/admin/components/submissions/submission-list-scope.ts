@@ -1,9 +1,14 @@
 /**
  * Which submissions a list shows, carried from the list to a submission's
- * page so its previous and next move through the same list: the form it is
- * fixed to or filtered by, and the status tab. One place builds the list's
- * query from it, so the page cannot step through a different list than the
- * one it was opened from.
+ * page so its previous and next move through the same list, and to the
+ * export so it exports what the list shows: the form it is fixed to or
+ * filtered by, the status tab, and the dates it was sent between. One place
+ * builds the list's query from it, so the page cannot step through a
+ * different list than the one it was opened from, and the export cannot
+ * read a different one.
+ *
+ * Pure, with no browser or React import: the export route on the server
+ * reads a request's scope with these same functions.
  *
  * @module admin/components/submissions/submission-list-scope
  */
@@ -24,6 +29,25 @@ export interface SubmissionListScope {
   /** The form the list is fixed to or filtered by; every form when absent. */
   form?: string;
   status: StatusTab;
+  /** Sent at or after this moment (an ISO date and time); no bound when absent. */
+  from?: string;
+  /** Sent before this moment, which it leaves out; no bound when absent. */
+  to?: string;
+}
+
+/**
+ * The scope's dates as a filter of `submittedAt`, or none for any date. The
+ * upper bound is exclusive, so a range ending at the start of a day leaves
+ * that day out, whatever the precision a dialect stores the time with.
+ */
+function sentBetween(
+  scope: SubmissionListScope
+): Record<string, string> | undefined {
+  if (!scope.from && !scope.to) return undefined;
+  return {
+    ...(scope.from ? { greater_than_equal: scope.from } : {}),
+    ...(scope.to ? { less_than: scope.to } : {}),
+  };
 }
 
 /** The list's filter as the entries API takes it. */
@@ -34,6 +58,8 @@ export function listWhere(scope: SubmissionListScope): Record<string, unknown> {
   // export does.
   where.status =
     scope.status === "all" ? { not_equals: "spam" } : { equals: scope.status };
+  const sent = sentBetween(scope);
+  if (sent) where.submittedAt = sent;
   return where;
 }
 
@@ -95,26 +121,40 @@ export function neighbourQueries(
   };
 }
 
-/** The scope as a submission page's address carries it. */
-function scopeParam(scope: SubmissionListScope): string {
+/** The scope as an address carries it: a submission page's, or the export's. */
+function scopeParams(scope: SubmissionListScope): URLSearchParams {
   const params = new URLSearchParams({ status: scope.status });
   if (scope.form) params.set("form", scope.form);
-  return params.toString();
+  if (scope.from) params.set("from", scope.from);
+  if (scope.to) params.set("to", scope.to);
+  return params;
+}
+
+/** A moment an address names, as an ISO date and time; none for anything else. */
+function momentOf(text: string | null): string | undefined {
+  if (!text) return undefined;
+  const at = Date.parse(text);
+  return Number.isNaN(at) ? undefined : new Date(at).toISOString();
 }
 
 /**
- * The scope a page's address carries, read defensively: an unknown status
- * reads as "all", so a hand-edited address still lists something.
+ * The scope an address carries, read defensively: an unknown status reads as
+ * "all" and a date that is not one as no bound, so a hand-edited address
+ * still lists something.
  */
 export function scopeFromSearch(search: string): SubmissionListScope {
   const params = new URLSearchParams(search);
   const status = params.get("status");
   const form = params.get("form");
+  const from = momentOf(params.get("from"));
+  const to = momentOf(params.get("to"));
   return {
     status: STATUS_TABS.includes(status as StatusTab)
       ? (status as StatusTab)
       : "all",
     ...(form ? { form } : {}),
+    ...(from ? { from } : {}),
+    ...(to ? { to } : {}),
   };
 }
 
@@ -124,5 +164,24 @@ export function submissionPageAddress(
   id: string,
   scope: SubmissionListScope
 ): string {
-  return `/admin/collections/${encodeURIComponent(submissionsSlug)}/${encodeURIComponent(id)}?${scopeParam(scope)}`;
+  return `/admin/collections/${encodeURIComponent(submissionsSlug)}/${encodeURIComponent(id)}?${scopeParams(scope).toString()}`;
+}
+
+/** The export route, as the admin's API serves it. */
+const EXPORT_ROUTE =
+  "/admin/api/plugins/@nextlyhq/plugin-form-builder/submissions/export";
+
+/**
+ * The export of what a list shows, in `format`: every submission its scope
+ * matches, or, given `ids`, exactly those (the rows ticked in it).
+ */
+export function exportAddress(
+  scope: SubmissionListScope,
+  format: "csv" | "json",
+  ids?: readonly string[]
+): string {
+  const params = scopeParams(scope);
+  params.set("format", format);
+  if (ids !== undefined) params.set("ids", ids.join(","));
+  return `${EXPORT_ROUTE}?${params.toString()}`;
 }

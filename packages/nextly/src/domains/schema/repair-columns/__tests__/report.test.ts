@@ -184,6 +184,73 @@ describe("one record and one line per class", () => {
     expect(record(lossy, {}, "apply").outcome).toBe("skipped-needs-consent");
   });
 
+  it("a lossy column's record says the consent that covers it, and why one given did not", () => {
+    const lossy: DiffersFinding = {
+      ...textToJson,
+      judgement: {
+        class: "lossy",
+        reasons: [
+          {
+            kind: "not-json",
+            class: "lossy",
+            rows: { first: [{ id: "7" }], count: 1 },
+          },
+        ],
+      },
+    };
+    const dry = record(lossy);
+    expect(dry.consent).toEqual({
+      given: null,
+      valuesCleared: 0,
+      flag: "--accept-data-loss=dc_posts.links",
+      notice: null,
+    });
+    expect(formatRecord(dry)).toContain(
+      "To convert it, clearing the named values, run with --apply and --accept-data-loss=dc_posts.links."
+    );
+
+    const notice =
+      "--accept-data-loss without a list does not cover a repair: name the column, --accept-data-loss=dc_posts.links";
+    const skipped = record(
+      lossy,
+      {
+        consent: {
+          given: null,
+          valuesCleared: 0,
+          flag: "--accept-data-loss=dc_posts.links",
+          notice,
+        },
+      },
+      "apply"
+    );
+    expect(skipped.outcome).toBe("skipped-needs-consent");
+    expect(formatRecord(skipped)).toContain(`${notice}.`);
+
+    const cleared = record(
+      lossy,
+      {
+        converted: true,
+        consent: {
+          given: "confirmed",
+          valuesCleared: 1,
+          flag: "--accept-data-loss=dc_posts.links",
+          notice: null,
+        },
+      },
+      "apply"
+    );
+    expect(cleared.outcome).toBe("converted");
+    expect(formatRecord(cleared)).toContain(
+      "Cleared 1 value, as confirmed at the terminal."
+    );
+    expect(formatRecord(cleared)).not.toContain("To convert it");
+  });
+
+  it("a column that clears nothing carries no consent", () => {
+    expect(record(textToJson).consent).toBeNull();
+    expect(record(textToJson, { converted: true }, "apply").consent).toBeNull();
+  });
+
   it("a blocked column says what the owner can change, for its rows and for what it cannot keep", () => {
     const r = record({
       ...textToJson,

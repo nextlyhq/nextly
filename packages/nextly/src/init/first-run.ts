@@ -31,6 +31,7 @@ import {
   emitDdl,
   tableConstraintOps,
 } from "../domains/schema/pipeline/ddl-emitter";
+import { tableExistsAtStart } from "../domains/schema/pipeline/diff/start-catalog-scope";
 import type {
   ForeignKeySpec,
   NextlySchemaSnapshot,
@@ -110,6 +111,68 @@ export type EnsureFirstRunSetupResult =
   | { ranSetup: false; reason: "already_initialized" | "probe_failed" };
 
 const PROBE_TABLE = "nextly_schema_events";
+
+/**
+ * The refusal of a production start against a database `nextly migrate` has
+ * not set up, built in one place so its code and wording cannot drift.
+ *
+ * One message whatever the start found missing, the tables or the PostgreSQL
+ * schema they live in: either way the deploy skipped `nextly migrate`, and
+ * running it is what the operator does next.
+ */
+export function databaseNotSetUp(cause?: unknown): NextlyError {
+  return new NextlyError({
+    code: "NEXTLY_DATABASE_NOT_SET_UP",
+    publicMessage:
+      "The database has not been set up for Nextly, and a production start " +
+      "creates no table. Run `nextly migrate` against it, then start the app " +
+      "again.",
+    ...(cause instanceof Error ? { cause } : {}),
+  });
+}
+
+/**
+ * Refuse a production start against a database with no Nextly tables, the
+ * case `ensureFirstRunSetup` would otherwise set up.
+ *
+ * Asked of the table that start probes first, the migration ledger: every
+ * database `nextly migrate` or a start has set up holds it, and no other
+ * software creates it. Several cold starts against one empty database would
+ * race to create it without a lock, and a half-made schema serves nobody, so
+ * a production start that does not run the migrations itself creates nothing
+ * and says to run `nextly migrate`. Reading the probe is the only statement.
+ * In `next build`, `refuseUnmigratedDatabaseInBuild` answers instead, naming
+ * the build.
+ */
+export async function assertDatabaseSetUp(
+  adapter: Pick<AdapterLike, "tableExists"> &
+    Partial<Pick<AdapterLike, "getDrizzle">>
+): Promise<void> {
+  // At a production start, answered from its one reading of the catalog.
+  if (await tableExistsAtStart(adapter, PROBE_TABLE)) return;
+  throw databaseNotSetUp();
+}
+
+/**
+ * In `next build`, refuse a database with no Nextly tables.
+ *
+ * The build sets up nothing: it may point at a database other deployments
+ * share, and a database with no Nextly tables is one whose deploy skipped
+ * `nextly migrate`. Saying so names the fix, where creating the schema here
+ * would race every other worker of the build without the schema lock, and
+ * reading on would fail each page with a missing table instead. Asked of the
+ * table the first start probes for, so the two agree on what "set up" means.
+ */
+export async function refuseUnmigratedDatabaseInBuild(
+  adapter: Pick<DrizzleAdapter, "tableExists">
+): Promise<void> {
+  if (await adapter.tableExists(PROBE_TABLE)) return;
+  throw new NextlyError({
+    code: "NEXTLY_DATABASE_NOT_MIGRATED",
+    publicMessage:
+      "The database has no Nextly tables. Run `nextly migrate` before `next build`.",
+  });
+}
 
 /**
  * The schema lock as a first start takes it: the one lock `migrate` and every schema change hold,
@@ -540,15 +603,16 @@ async function runCoreSchemaChecks(
   logger: LoggerLike
 ): Promise<void> {
   if (process.env.NODE_ENV !== "development") {
-    const [{ introspectLiveSnapshot }, { RETIRED_ACCESS_RULES_TABLES }] =
+    const [{ introspectLiveColumns }, { RETIRED_ACCESS_RULES_TABLES }] =
       await Promise.all([
         import("../domains/schema/pipeline/diff/introspect-live"),
         import("./retired-access-rules"),
       ]);
+    // Their columns alone: the warning asks only whether the column is there.
     await warnOfRetiredAccessRules(
       adapter,
       logger,
-      await introspectLiveSnapshot(adapter.getDrizzle(), adapter.dialect, [
+      await introspectLiveColumns(adapter.getDrizzle(), adapter.dialect, [
         ...RETIRED_ACCESS_RULES_TABLES,
       ])
     );
@@ -667,7 +731,9 @@ export async function ensureFirstRunSetup(
   // will continue and downstream queries will surface the real issue.
   let probeExists: boolean;
   try {
-    probeExists = await adapter.tableExists(PROBE_TABLE);
+    // At a production start, answered from its one reading of the catalog, as
+    // the empty-database refusal before it was.
+    probeExists = await tableExistsAtStart(adapter, PROBE_TABLE);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn(

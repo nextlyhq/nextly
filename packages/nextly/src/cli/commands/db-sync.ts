@@ -67,14 +67,12 @@ import { loadBuilderEntities } from "../../di/load-dynamic-tables";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
 import { registerComponentSchemas } from "../../domains/field-groups/services/register-field-group-schemas";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
-import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import {
   ACCEPT_DATA_LOSS_ENV,
   resolveDataLossConsent,
 } from "../../domains/schema/migrate/data-loss-consent";
 import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
-import { describeError } from "../../errors/index";
 import { assertConfiguredAddresses } from "../../shared/address-rule";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
 import { reportDryRun } from "../dry-run";
@@ -105,17 +103,13 @@ import { hasSchemaToSync } from "../utils/has-schema";
 import { formatDuration } from "../utils/logger";
 
 import {
-  ensureLocalizedCompanions,
   judgeOrphanRemoval,
   performPermissionSeeding,
-  publishExtensionSchema,
-  syncCollections,
-  syncComponents,
-  syncSingles,
   syncUserFields,
 } from "./dev-build";
 import { ensureCoreTables } from "./dev-server";
 import { createDebouncedSync } from "./dev-watcher";
+import { syncSchemaInOrder } from "./sync-schema";
 
 // ============================================================================
 // Types
@@ -380,67 +374,9 @@ export async function runDbSync(
           // no, or a consent leaving one out, ends the run with none deleted.
           await judgeOrphanRemoval(configResult, adapter, options, context);
 
-          // Every entity as the registry records it before the syncs below rewrite it, so the
-          // companion pass after them can tell a field this run newly translates from one
-          // translated before it.
-          const recordedBefore =
-            options.autoSync !== false
-              ? await readRecordedEntities(
-                  adapter as unknown as DrizzleAdapter,
-                  configResult.config,
-                  error =>
-                    logger.warn(
-                      `The registry could not be read, so no translations column is judged this run: ${describeError(error)}`
-                    )
-                )
-              : undefined;
-
-          // Before the pushes, so an entity gaining localization has its existing content copied
-          // into the companion while the main table still carries it. The drop the push then
-          // applies is a cleanup rather than a loss.
-          //
-          // Inside the pinned scope for the same reason the pass after the syncs is: a companion
-          // holds the localized subset of the same fields and has to resolve plugin types against
-          // the config being materialized.
-          if (options.autoSync !== false) {
-            await ensureLocalizedCompanions(
-              configResult.config,
-              adapter,
-              context,
-              "beforeApply",
-              { recordedBefore }
-            );
-          }
-
-          // Before the pushes, which plan plugin tables and contributed
-          // elements from it.
-          await publishExtensionSchema(configResult, adapter, context);
-          await syncCollections(configResult, adapter, options, context);
-          await syncSingles(configResult, adapter, options, context);
-          await syncComponents(configResult, adapter, options, context);
-
-          // Step 5.6: Create the `_locales` companion of every localized entity, which
-          // the push pipeline does not manage. Runs after all three syncs because the
-          // companion references its main table. Without this, `db:sync` left the
-          // registry saying "localized" with no table to hold translations until the
-          // app next booted, and writes in that window overwrote the default language.
-          //
-          // Gated on the same flag as the rest of the schema push: this issues DDL and
-          // can copy rows, so `--no-auto-sync` — chosen precisely to keep physical
-          // schema changes in migration files — must suppress it too.
-          //
-          // Inside the pinned scope with the syncs it follows: a companion holds the
-          // localized subset of the same fields, so it has to resolve plugin types
-          // against the config the main tables were just materialized from.
-          if (options.autoSync !== false) {
-            await ensureLocalizedCompanions(
-              configResult.config,
-              adapter,
-              context,
-              "afterApply",
-              { recordedBefore }
-            );
-          }
+          // The registry read, the companion passes, the pushes and the move of fields a translated
+          // entity makes shared, in one order (`syncSchemaInOrder`).
+          await syncSchemaInOrder(configResult, adapter, options, context);
 
           if (collectionCount === 0) {
             logger.warn("No collections defined in config");

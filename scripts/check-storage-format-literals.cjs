@@ -192,6 +192,10 @@ function collectHits(pattern, opts = {}) {
     "--exclude-dir=.next",
     "--exclude-dir=.turbo",
     "--exclude-dir=build",
+    // The per-file declarations `packages/nextly`'s build writes before
+    // bundling them (`tsconfig.dts.json`'s outDir). Generated, and they spell
+    // out every literal type, so a tree built locally would fail the gate.
+    "--exclude-dir=.dts-tmp",
   ];
   let out = "";
   try {
@@ -208,7 +212,7 @@ function collectHits(pattern, opts = {}) {
     .split("\n")
     .filter(Boolean)
     .filter(l => !l.includes("node_modules"))
-    .filter(l => !/\/(dist|\.next|\.turbo)\//.test(l))
+    .filter(l => !/\/(dist|\.next|\.turbo|\.dts-tmp)\//.test(l))
     .filter(l => !ALLOWED.some(a => a.test(l)))
     .filter(l => !allowMatches.some(a => a.test(l)))
     // Comments and doc blocks describe the format; they do not read it.

@@ -1,6 +1,7 @@
 /**
- * How the redirects screen says who added a redirect and when, and when an
- * address not found was last asked for: short, in the reader's own clock.
+ * How the redirects screen says when a redirect last answered a visitor,
+ * and when an address not found was last asked for: short, in the reader's
+ * own clock.
  *
  * @module admin/redirect-format
  */
@@ -25,31 +26,6 @@ function shortDay(when: Date, now: Date = new Date()): string {
   });
 }
 
-/** When a redirect was added: `Just now`, or its day. */
-function addedWhen(iso: string | null, now: Date = new Date()): string {
-  if (iso === null) return "";
-  const when = new Date(iso);
-  if (Number.isNaN(when.getTime())) return "";
-  return now.getTime() - when.getTime() < MINUTE
-    ? "Just now"
-    : shortDay(when, now);
-}
-
-/** When a redirect was added, or edited where it was edited since. */
-export function changedWhen(
-  addedAt: string | null,
-  editedAt: string | null,
-  now: Date = new Date()
-): string {
-  const added = addedAt === null ? Number.NaN : Date.parse(addedAt);
-  const edited = editedAt === null ? Number.NaN : Date.parse(editedAt);
-  if (!Number.isNaN(edited) && !Number.isNaN(added) && edited - added > 2000) {
-    const when = addedWhen(editedAt, now);
-    return `Edited ${when === "Just now" ? "just now" : when}`;
-  }
-  return addedWhen(addedAt, now);
-}
-
 /** When an address was last asked for: `2 hours ago`, `Today, 08:12`, `Yesterday`, `Nov 7`. */
 export function lastSeenWhen(iso: string, now: Date = new Date()): string {
   const when = new Date(iso);
@@ -71,14 +47,4 @@ export function lastSeenWhen(iso: string, now: Date = new Date()): string {
   yesterday.setDate(now.getDate() - 1);
   if (sameDay(when, yesterday)) return "Yesterday";
   return shortDay(when, now);
-}
-
-/** A person's initials, for the small circle beside their name. */
-export function initialsOf(name: string): string {
-  return name
-    .split(/\s+/)
-    .filter(part => part !== "")
-    .slice(0, 2)
-    .map(part => part[0]?.toUpperCase() ?? "")
-    .join("");
 }

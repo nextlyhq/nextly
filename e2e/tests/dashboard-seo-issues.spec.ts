@@ -5,7 +5,8 @@
  * extending the `seo-pages` collection, which no other spec writes.
  *
  * Both count the SEO problem list, as the person looking may read it: the
- * card draws it by kind, and the line counts it whole. Each is compared with
+ * card draws it by kind, and the line counts its errors and warnings, as the
+ * SEO section's Overview counts them. Each is compared with
  * what the list's own route answers the same person, read once the save's
  * check of the pages this spec writes has kept their problems.
  *
@@ -267,9 +268,27 @@ test("its count is a Needs attention line linked to the problem list", async ({
   page,
 }) => {
   const stamp = Date.now().toString(36);
+  // A title longer than Google shows, a notice the line leaves to the list.
   const title = `SEO e2e attention ${stamp} ${"t".repeat(60)}`;
   await writePage(title, `seo-e2e-attention-${stamp}`);
-  const problems = counted(await listNaming(page.request, title)).length;
+  await listNaming(page.request, title);
+  // The errors and warnings, as the SEO section's Overview counts them for
+  // the same person, from the same list; setup answered, so the Overview is
+  // drawn rather than sending a first visit on to it.
+  await ok(
+    await page.request.patch(`${API}/singles/seo-settings`, {
+      data: { setupStep: 3, _overwrite: true },
+    })
+  );
+  await gotoAdmin(page, "/plugins/nextlyhq-plugin-seo/overview");
+  const health = page.getByRole("region", { name: "Search health" });
+  const countOf = async (name: string) =>
+    Number(
+      (
+        await health.getByRole("listitem").filter({ hasText: name }).innerText()
+      ).replace(/\D+/g, "")
+    );
+  const problems = (await countOf("Errors")) + (await countOf("Warnings"));
   const shown = problems > 99 ? "99+" : String(problems);
 
   await gotoAdmin(page, "/");

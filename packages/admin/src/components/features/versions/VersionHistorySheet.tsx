@@ -13,7 +13,7 @@
 
 import { X } from "lucide-react";
 import type { JSX } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppression";
 import { useReserveSidePanel } from "@admin/components/layout/SidePanelReservation";
@@ -32,14 +32,12 @@ import {
 } from "@admin/components/ui";
 import {
   useDocumentEvents,
-  useRestoreVersion,
   useSetVersionLabel,
   useVersion,
   useVersions,
 } from "@admin/hooks/queries/useVersions";
 import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
-import { refusedAsChangedSince } from "@admin/lib/document-version";
 import { navigateTo } from "@admin/lib/navigation";
 import type { VersionScope } from "@admin/services/versionApi";
 
@@ -47,11 +45,14 @@ import { useDocumentHistory } from "./document-history-context";
 import { useHistoryAddress } from "./history-address";
 import { loadedWindow } from "./history-story";
 import { HistoryStoryList } from "./HistoryStoryList";
-import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
+import { restoreIntoEditor } from "./restore-into-editor";
+import { restorePlan, restoresInEditor } from "./restore-plan";
+import { RestoreFieldsDialog } from "./RestoreFieldsDialog";
 import { useMarkVersionSeen } from "./useMarkVersionSeen";
 import { newestInLocale, predecessorOf } from "./version-pairing";
 import { VersionLabelDialog } from "./VersionLabelDialog";
 import { versionsHref } from "./versions-href";
+import { useViewedRemovedFields } from "./viewed-version-host";
 
 // How many extra history pages the panel will auto-fetch while searching for a
 // previewed version's previous same-locale version before deferring to the
@@ -173,9 +174,7 @@ export function VersionHistorySheet({
   scope,
   canRestore = false,
   writesRefused = false,
-  liveStatus = null,
   entityLocalized,
-  liveDirty = false,
   restoreRefused = false,
   lifecycle = false,
   editingLocale = null,
@@ -242,7 +241,9 @@ export function VersionHistorySheet({
   } = list;
   const detail = useVersion({ scope, versionNo: selected, enabled: open });
 
-  const { setViewing, setRestore, versionFor } = useDocumentHistory();
+  const { viewing, setViewing, setRestore, editor } = useDocumentHistory();
+  // The fields the version holds that the content type no longer has.
+  const removedFields = useViewedRemovedFields(scope, viewing);
   const viewedSnapshot = detail.data?.snapshot;
   const viewedLocale = detail.data?.locale ?? null;
   const viewedLoading = detail.isLoading;
@@ -291,42 +292,6 @@ export function VersionHistorySheet({
   // version is read with that page stepped aside, and the comparison bar
   // leads back.
   const steppedAside = open && !roomBeside && selected !== null;
-
-  const restore = useRestoreVersion({
-    scope,
-    // With the editor's version of the document in the language the restore
-    // writes, so a restore over changes made since is refused.
-    ...(versionFor ? { versionFor } : {}),
-    onSuccess: result => {
-      setConfirmingRestore(false);
-      onOpenChange(false);
-      // A restore can succeed while leaving parts behind: a field the schema no
-      // longer has, one the restorer may not read, or one they may not write.
-      // Saying so beats a clean success message that overstates what came
-      // back. The message names no cause and no outcome, since the list mixes
-      // them: a field the schema dropped has no current value to keep.
-      if (result.droppedFields.length > 0) {
-        toast.success(
-          `Restored version ${result.restoredFrom}. ` +
-            `${result.droppedFields.length} field(s) were not restored: ` +
-            result.droppedFields.join(", ")
-        );
-        return;
-      }
-      toast.success(`Restored version ${result.restoredFrom}.`);
-    },
-    onError: error => {
-      // A refused restore must say so. The dialog stays open on failure so the
-      // action is still there to retry, and silence would read as the click
-      // simply not having registered.
-      setConfirmingRestore(false);
-      toast.error(
-        refusedAsChangedSince(error)
-          ? "Someone changed this document since you opened it. Load its current version, then restore again."
-          : apiErrorMessage(error) || "Could not restore this version."
-      );
-    },
-  });
 
   const versions = list.data?.pages.flatMap(page => page.items) ?? [];
 
@@ -378,6 +343,50 @@ export function VersionHistorySheet({
   // the fallback for a version a link names beyond the rows loaded.
   const viewedAbout =
     versions.find(v => v.versionNo === selected) ?? detail.data ?? null;
+
+  // The fields a restore would put back into the editor, listed when the
+  // person asks to restore: against the form as it stands at that moment.
+  const restoreRows = useMemo(() => {
+    if (!confirmingRestore || !editor || !detail.data) return [];
+    const snapshot = detail.data.snapshot;
+    return restorePlan({
+      fields: editor.fields,
+      snapshot:
+        typeof snapshot === "object" && snapshot !== null
+          ? (snapshot as Record<string, unknown>)
+          : {},
+      current: editor.currentValues(),
+      dirty: editor.dirtyFields(),
+      withheld: viewedWithheld,
+      canEdit: editor.canEdit,
+      ...(editor.translatable ? { translatable: editor.translatable } : {}),
+      removed: removedFields,
+      // The version's language, so one that holds none restores only its
+      // shared fields on a translated document.
+      versionLocale: detail.data.locale,
+    });
+  }, [confirmingRestore, editor, detail.data, viewedWithheld, removedFields]);
+
+  /**
+   * Put the chosen fields into the editor as unsaved edits. Nothing is
+   * stored: the person's own save or publish is the only write, and the toast
+   * offers to take the restore back.
+   */
+  const restoreChosen = useCallback(
+    (names: string[]) => {
+      if (!editor || selected === null) return;
+      setConfirmingRestore(false);
+      onOpenChange(false);
+      restoreIntoEditor({
+        editor,
+        rows: restoreRows,
+        names,
+        versionNo: selected,
+        savedAt: viewedAbout?.createdAt ?? null,
+      });
+    },
+    [editor, selected, restoreRows, onOpenChange, viewedAbout]
+  );
   // The scope is read through a ref, keyed by `scopeId`: the object is rebuilt
   // on every render, and publishing it as a dependency would republish the
   // version, re-rendering the editor, every time.
@@ -500,7 +509,13 @@ export function VersionHistorySheet({
       return;
     }
     setRestore({
-      canRestore,
+      // A restore puts values into an editor, so it is offered only where one
+      // is there to take them.
+      // And only into the editor of the version's own language.
+      canRestore:
+        canRestore &&
+        editor !== undefined &&
+        restoresInEditor(viewedAbout?.locale, editor.locale),
       request: requestRestore,
       returnToCurrent,
       // Where the page steps aside, the version is all that is on screen, so
@@ -532,6 +547,8 @@ export function VersionHistorySheet({
     openCurrentComparison,
     roomBeside,
     setRestore,
+    editor,
+    viewedAbout,
   ]);
 
   // When previewing a version whose previous same-locale version has not loaded
@@ -874,27 +891,18 @@ export function VersionHistorySheet({
 
         {/* Rendered inside the sheet but outside its content, so its own portal
           is independent of the panel's. */}
-        {selected !== null ? (
-          <RestoreConfirmDialog
+        {selected !== null && editor ? (
+          <RestoreFieldsDialog
             open={confirmingRestore}
             onOpenChange={setConfirmingRestore}
             versionNo={selected}
-            isPublished={liveStatus === "published"}
-            unsavedChanges={liveDirty}
-            hasWithheldFields={viewedWithheld.length > 0}
-            confirmDisabled={restoreRefused}
-            isRestoring={restore.isPending}
+            rows={restoreRows}
+            {...(editor.language ? { language: editor.language } : {})}
             // Re-checked at confirm time: the restore trigger can vanish while
             // the dialog is open (a claim arriving mid-dialog), and an open
             // dialog must not restore past a refusal that arrived after it.
-            onConfirm={() => {
-              if (canRestore && !restoreRefused) {
-                restore.mutate({
-                  versionNo: selected,
-                  // The language the restore writes: the version's own.
-                  locale: viewedAbout?.locale ?? null,
-                });
-              }
+            onConfirm={names => {
+              if (canRestore && !restoreRefused) restoreChosen(names);
             }}
           />
         ) : null}

@@ -801,18 +801,16 @@ describe.each(getConfiguredTestDialects())(
       ]).toEqual(["done", "done"]);
 
       // Naming a Spanish version, as trusted code may, is an event of Spanish.
-      await t
-        .getService("versionsService")
-        .setLabel(
-          {
-            scopeKind: "collection",
-            scopeSlug: "regional_drafts",
-            entryId: id,
-          },
-          es!,
-          "Spanish name",
-          { actor: { type: "system" } }
-        );
+      await t.getService("versionsService").setLabel(
+        {
+          scopeKind: "collection",
+          scopeSlug: "regional_drafts",
+          entryId: id,
+        },
+        es!,
+        "Spanish name",
+        { actor: { type: "system" } }
+      );
       const subject = {
         kind: "collection" as const,
         slug: "regional_drafts",

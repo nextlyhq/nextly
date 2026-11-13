@@ -3,10 +3,18 @@
  * fails naming the supported range, and only Next.js not being installed at all
  * reads as running outside a Next.js app.
  */
+import { createRequire } from "node:module";
+
 import { describe, expect, it } from "vitest";
 
 import { supportedFrameworkRanges } from "../framework-versions";
-import { loadNextModule, requireNextApi } from "../next-api";
+import {
+  isMissingFromChain,
+  loadNextModule,
+  NEXT_NAVIGATION_SERVER_ENTRY,
+  requireNextApi,
+  requireNextNavigation,
+} from "../next-api";
 
 /** Node's error for `specifier` not being installed, as `require` throws it. */
 function notInstalled(specifier: string): Error {
@@ -70,5 +78,58 @@ describe("loadNextModule", () => {
         throw broken;
       })
     ).toThrow(broken);
+  });
+});
+
+describe("isMissingFromChain", () => {
+  it("is a module the entry requires being missing, the entry itself found", () => {
+    expect(
+      isMissingFromChain(
+        notInstalled(
+          "next/dist/server/route-modules/pages/vendored/contexts/app-router-context"
+        ),
+        "next/navigation"
+      )
+    ).toBe(true);
+  });
+
+  it("is not the entry itself being missing", () => {
+    expect(
+      isMissingFromChain(notInstalled("next/navigation"), "next/navigation")
+    ).toBe(false);
+  });
+
+  it("is not any other failure", () => {
+    expect(
+      isMissingFromChain(new SyntaxError("Unexpected token"), "next/navigation")
+    ).toBe(false);
+  });
+});
+
+/**
+ * On the server nextly loads Next's server build of `next/navigation`, which
+ * reaches none of the client contexts that, through Next's require hook, pull
+ * in the pages router's runtime. Held to the installed Next.js: a release that
+ * moves the file or drops one of the APIs nextly calls fails here rather than
+ * falling back unnoticed.
+ */
+describe("requireNextNavigation", () => {
+  const require = createRequire(import.meta.url);
+
+  it("loads Next's server build, which has every navigation API nextly calls", () => {
+    const serverBuild = require(NEXT_NAVIGATION_SERVER_ENTRY) as Record<
+      string,
+      unknown
+    >;
+    expect(requireNextNavigation()).toBe(serverBuild);
+    for (const name of ["notFound", "permanentRedirect", "unstable_rethrow"]) {
+      expect(typeof serverBuild[name]).toBe("function");
+    }
+  });
+
+  it("is what loadNextModule answers for next/navigation", () => {
+    expect(loadNextModule("next/navigation")).toBe(
+      require(NEXT_NAVIGATION_SERVER_ENTRY)
+    );
   });
 });

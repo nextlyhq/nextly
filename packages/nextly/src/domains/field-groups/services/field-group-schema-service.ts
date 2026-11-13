@@ -36,6 +36,7 @@ import {
   real as sqliteReal,
   numeric as sqliteNumeric,
   index as sqliteIndex,
+  primaryKey as sqlitePrimaryKey,
 } from "drizzle-orm/sqlite-core";
 
 import {
@@ -615,7 +616,12 @@ export class FieldGroupSchemaService {
     contributed: readonly ExtensionColumn[]
   ): unknown {
     const columns: Record<string, unknown> = {
-      id: sqliteText("id").primaryKey(),
+      // NOT NULL, with the key declared on the table below rather than on the
+      // column. On SQLite a primary key that is not an INTEGER takes NULL
+      // unless it says NOT NULL, as the CREATE above does, and drizzle-kit
+      // drops NOT NULL from a column-level key: a push that rebuilt this
+      // table wrote an id that takes NULL. A table-level key keeps it.
+      id: sqliteText("id").notNull(),
       _parent_id: sqliteText(STORAGE_FORMAT.columns.parentId).notNull(),
       _parent_table: sqliteText(STORAGE_FORMAT.columns.parentTable).notNull(),
       _parent_field: sqliteText(STORAGE_FORMAT.columns.parentField).notNull(),
@@ -640,6 +646,8 @@ export class FieldGroupSchemaService {
       columns as Record<string, never>,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle table column accessor is dialect-typed
       (table: any) => ({
+        // Unnamed, so drizzle-kit names it as it reads the live table's key.
+        pk: sqlitePrimaryKey({ columns: [table.id] }),
         parentIdx: sqliteIndex(
           `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`
         ).on(table._parent_id, table._parent_table, table._parent_field),

@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeEach, vi, beforeAll } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The adapter double holds no stored schema version: registry writes run as
+// they are (`unversionedRegistryWrites`).
+vi.mock("../../schema/schema-version", async importOriginal =>
+  (
+    await import("../../../__tests__/helpers/unversioned-registry-writes")
+  ).unversionedRegistryWrites(await importOriginal())
+);
 
 // The sync asks the reconcile service to clear a diverged mark on a code-managed group. Mocked so
 // the ASK is observable: the repair itself is proved in its own suite, and running it here would

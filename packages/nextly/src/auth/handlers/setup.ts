@@ -23,6 +23,7 @@ import {
   jsonResponse,
 } from "./handler-utils";
 import { storeNewRefreshToken } from "./issue-session";
+import type { RegisterHandlerDeps } from "./register";
 
 /**
  * The strategy the first administrator's session is recorded under.
@@ -101,9 +102,15 @@ function setupCompleteResponse(): Response {
   });
 }
 
+/**
+ * GET /auth/setup-status: what the admin's signed-out screens need to know
+ * before anyone signs in. Read once per page by the route guards, the setup
+ * form and the sign-in and register screens alike.
+ */
 export async function handleSetupStatus(
   request: Request,
-  deps: Pick<SetupHandlerDeps, "hasAdministrator" | "setupToken">
+  deps: Pick<SetupHandlerDeps, "hasAdministrator" | "setupToken"> &
+    Pick<RegisterHandlerDeps, "allowRegistration">
 ): Promise<Response> {
   try {
     const isSetup = await deps.hasAdministrator();
@@ -115,10 +122,15 @@ export async function handleSetupStatus(
     // respondData payload" rule.
     // `requiresSetupToken` tells the admin's setup form to ask for the token,
     // and where it is found; it says nothing about the token itself.
+    // `allowRegistration` is the flag the register route is refused by, so
+    // the sign-in page offers "Sign up", and the register page its form, only
+    // where a registration would be taken. It tells nobody more than a
+    // registration attempt's own refusal does.
     return respondData({
       isSetup,
       requiresInitialUser: !isSetup,
       requiresSetupToken: !isSetup && deps.setupToken.required,
+      allowRegistration: deps.allowRegistration,
     });
   } catch (err) {
     // Surface a 503 rather than synthesising a default `isSetup` -- the

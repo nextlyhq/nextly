@@ -100,12 +100,21 @@ function mysqlClaims(rows: Row[], unseen: readonly string[] = []) {
       ownCollections: {
         listEntries: async (_slug: string, options: Read) =>
           read(options, "none"),
+        // A read for update of a lock row is how one is held.
         listEntriesInTransaction: async (
           _tx: unknown,
           _slug: string,
           options: Read,
           { lock }: { lock: string }
-        ) => read(options, lock),
+        ) => {
+          const found = read(options, lock);
+          if (lock === "update") {
+            for (const row of found.data) {
+              if (row.kind === "lock") locked.push(String(row.claimKey));
+            }
+          }
+          return found;
+        },
       },
       collections: {
         // One row per stored key, as the unique index keeps it.
@@ -127,15 +136,14 @@ function mysqlClaims(rows: Row[], unseen: readonly string[] = []) {
           rows.push(row);
           return row;
         },
+        // Nothing in the store is ever updated: a lock row is held by
+        // reading it for update, never by writing it.
         updateEntryInTransaction: async (
           _tx: unknown,
           _slug: string,
           id: string
         ) => {
-          const row = rows.find(each => each.id === id);
-          if (row?.kind !== "lock") throw new Error(`updated ${id}`);
-          locked.push(String(row.claimKey));
-          return { item: row };
+          throw new Error(`updated ${id}`);
         },
         deleteEntryInTransaction: async (
           _tx: unknown,

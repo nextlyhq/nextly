@@ -59,6 +59,8 @@ import {
 import { adapterDialect, rowLockServer } from "./audit-log-writer";
 import {
   markHoldsDeletionLock,
+  PRINCIPAL_DIGEST_KEY_META_KEY,
+  principalDigestKeyIsCurrent,
   readPrincipalDigests,
   resealPrincipalDigestKey,
   type DigestSubject,
@@ -240,13 +242,28 @@ export async function beginStaffUserDeletion(
  */
 export async function resealPrincipalDigestKeyAtBoot(
   adapter: PrincipalErasureAdapter,
-  secrets: readonly string[]
+  secrets: readonly string[],
+  /**
+   * The stored key as the start's one read of the meta rows found it, keyed by meta key. Given,
+   * a key that is absent or already sealed under the current secret is judged from it, and the
+   * locked transaction below runs only for one that needs resealing.
+   */
+  storedValues?: () => Promise<Record<string, unknown>>
 ): Promise<void> {
   const dialect = adapterDialect(adapter);
   if (!dialect) return;
   const server = rowLockServer(adapter, dialect);
   const { meta } = principalErasureTables(dialect, false);
   try {
+    if (
+      storedValues &&
+      principalDigestKeyIsCurrent(
+        (await storedValues())[PRINCIPAL_DIGEST_KEY_META_KEY],
+        secrets
+      )
+    ) {
+      return;
+    }
     await runAdapterTransaction(adapter.transaction.bind(adapter), tx =>
       resealPrincipalDigestKey(
         tx.getDrizzle<PrincipalErasureDb>(),

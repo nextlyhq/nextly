@@ -33,14 +33,15 @@ export function commandAt(program: Command, path: readonly string[]): Command {
 }
 
 /**
- * `--version`, `--help`, an unknown command and every command's `--help`,
- * each as the arguments after `nextly`.
+ * `--version`, `--help`, an unknown command (alone and asked for its help)
+ * and every command's `--help`, each as the arguments after `nextly`.
  */
 export function answerOnlyInvocations(program: Command): string[][] {
   return [
     ["--version"],
     ["--help"],
     [UNKNOWN_COMMAND],
+    [UNKNOWN_COMMAND, "--help"],
     ...commandPaths(program).map(path => [...path, "--help"]),
   ];
 }

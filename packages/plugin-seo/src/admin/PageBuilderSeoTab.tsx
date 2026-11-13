@@ -19,6 +19,9 @@ import {
   type DocumentTabProps,
   type PlaceTabProps,
 } from "@nextlyhq/plugin-sdk/admin";
+// The Page Builder's place, typed for this tab's props: imported here so the
+// published declarations of the admin entry carry the augmentation.
+import "./page-builder-place";
 import type { ReactNode } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 

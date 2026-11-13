@@ -37,6 +37,13 @@ export interface TransactionFrame {
   active: boolean;
   /** True once this part, or this outermost transaction, rolled back. */
   rolledBack: boolean;
+  /**
+   * How many parts joined to this outermost transaction have rolled back to
+   * their savepoint. Only the outermost transaction's count is used: what
+   * any call inside the transaction read before one of them may describe a
+   * write that is gone (`TransactionInFlow.undone`).
+   */
+  rollbacks: number;
   /** True once this outermost transaction has committed or rolled back. */
   finished: boolean;
   /**
@@ -231,6 +238,7 @@ export function openFrame(place: FramePlace): TransactionFrame {
     enclosing: parent ? undefined : place.enclosing,
     active: true,
     rolledBack: false,
+    rollbacks: 0,
     finished: false,
     writesAfterClosing: 0,
     held: [],

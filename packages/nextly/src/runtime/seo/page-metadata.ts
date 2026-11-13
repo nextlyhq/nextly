@@ -388,6 +388,20 @@ async function startForProviders(path: string | undefined): Promise<void> {
 }
 
 /**
+ * Whether a page-metadata provider can be asked for a page: its providers
+ * settled first (`startForProviders`), so a worker nothing has started yet
+ * starts Nextly before a route works out what the page's content offers a
+ * provider, not after. A start that cannot be made leaves nobody to ask, so
+ * that content is not read for an answer the route would never receive.
+ */
+export async function pageMetadataProviderToAsk(
+  path: string | undefined
+): Promise<boolean> {
+  await startForProviders(path);
+  return capabilityProvider(PAGE_METADATA_CAPABILITY) !== undefined;
+}
+
+/**
  * JSON with object keys sorted at every depth, so the same input is the same
  * text however its objects were built.
  */

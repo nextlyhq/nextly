@@ -146,12 +146,35 @@ export const Grid: ForwardRefExoticComponent<
 );
 Grid.displayName = "Grid";
 
+/** A stat's tone: the status a dot before its value marks, as a badge's does. */
+type StatTone = "success" | "warning" | "destructive" | "info";
+
+/** Each tone's dot, in the status's solid colour (the same as `Badge`'s). */
+const STAT_TONE_DOT: Record<StatTone, string> = {
+  success: "bg-success-solid",
+  warning: "bg-warning-solid",
+  destructive: "bg-danger-solid",
+  info: "bg-info-solid",
+};
+
 /** @experimental */
 export interface StatProps extends HTMLAttributes<HTMLDivElement> {
   /** Muted label above the value. */
   label: string;
   /** The emphasized value (string or node). */
   value: ReactNode;
+  /**
+   * A dot before the value in a status's colour, such as `warning` beside
+   * "Should improve". It only marks the value: the value's own words say
+   * what it means, so colour is never the only sign. No dot when unset.
+   */
+  tone?: StatTone;
+  /**
+   * `compact` draws the value smaller (20px rather than 24px), for a figure
+   * that leads a small card, with its label as the card's semibold title.
+   * Default `default`.
+   */
+  size?: "default" | "compact";
 }
 
 /** Labelled metric block for dashboard-style plugin widgets.
@@ -160,11 +183,50 @@ export interface StatProps extends HTMLAttributes<HTMLDivElement> {
 export const Stat: ForwardRefExoticComponent<
   PropsWithoutRef<StatProps> & RefAttributes<HTMLDivElement>
 > = forwardRef<HTMLDivElement, StatProps>(
-  ({ label, value, className, ...props }, ref) => (
-    <div ref={ref} className={cn("flex flex-col gap-1", className)} {...props}>
-      <span className="text-sm text-muted-foreground">{label}</span>
-      <span className="text-2xl font-semibold text-foreground">{value}</span>
-    </div>
-  )
+  ({ label, value, tone, size = "default", className, ...props }, ref) => {
+    const compact = size === "compact";
+    const figure = (
+      <span
+        className={cn(
+          "font-semibold text-foreground",
+          compact ? "text-xl" : "text-2xl"
+        )}
+      >
+        {value}
+      </span>
+    );
+    return (
+      <div
+        ref={ref}
+        className={cn("flex flex-col", compact ? "gap-3" : "gap-1", className)}
+        {...props}
+      >
+        <span
+          className={cn(
+            "text-sm text-muted-foreground",
+            compact && "font-semibold"
+          )}
+        >
+          {label}
+        </span>
+        {/* Without a tone the value is drawn as it always was, unwrapped. */}
+        {tone === undefined ? (
+          figure
+        ) : (
+          <span className="flex items-center gap-2.5">
+            <span
+              aria-hidden="true"
+              data-stat-tone={tone}
+              className={cn(
+                "size-2.5 shrink-0 rounded-full",
+                STAT_TONE_DOT[tone]
+              )}
+            />
+            {figure}
+          </span>
+        )}
+      </div>
+    );
+  }
 );
 Stat.displayName = "Stat";

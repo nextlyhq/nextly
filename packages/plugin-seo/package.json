@@ -17,6 +17,11 @@
       "types": "./dist/admin/index.d.ts",
       "import": "./dist/admin/index.js",
       "default": "./dist/admin/index.js"
+    },
+    "./next": {
+      "types": "./dist/next/index.d.ts",
+      "import": "./dist/next/index.js",
+      "default": "./dist/next/index.js"
     }
   },
   "files": [
@@ -32,13 +37,14 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@nextlyhq/plugin-sdk": "workspace:*",
     "zod": "^4.6.7"
   },
   "peerDependencies": {
     "@nextlyhq/admin": "0.0.2-alpha.75",
-    "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/ui": "workspace:^",
     "lucide-react": ">=0.400.0",
+    "next": "^16.4.1",
     "nextly": "0.0.2-alpha.75",
     "react": "^19.3.0",
     "react-hook-form": "^7.66.0",
@@ -52,6 +58,9 @@
       "optional": true
     },
     "lucide-react": {
+      "optional": true
+    },
+    "next": {
       "optional": true
     },
     "react": {
@@ -68,7 +77,6 @@
     "@nextlyhq/admin": "workspace:*",
     "@nextlyhq/blocks-react": "workspace:*",
     "@nextlyhq/plugin-page-builder": "workspace:*",
-    "@nextlyhq/plugin-sdk": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
     "@nextlyhq/ui": "workspace:*",
     "@testing-library/jest-dom": "^6.9.1",
@@ -79,6 +87,7 @@
     "@types/react-dom": "19.3.0",
     "jsdom": "^27.1.0",
     "lucide-react": "^0.544.0",
+    "next": "^16.4.2",
     "nextly": "workspace:*",
     "react": "19.3.1",
     "react-dom": "19.3.1",

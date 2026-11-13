@@ -218,11 +218,8 @@ describe("resolveItemHref", () => {
     ).toBe("#");
   });
 
-  it("gives the Content item the href it is handed, and none by default", () => {
+  it("sends the Content item to the Content overview", () => {
     const content = makeItem({ id: "content", label: "Content", href: "#" });
-    expect(resolveItemHref(content, [], NO_READER)).toBe("#");
-    expect(
-      resolveItemHref(content, [], NO_READER, undefined, false, ROUTES.SINGLES)
-    ).toBe(ROUTES.SINGLES);
+    expect(resolveItemHref(content, [], NO_READER)).toBe("/admin/content");
   });
 });

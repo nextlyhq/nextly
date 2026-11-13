@@ -10,7 +10,10 @@
  * @module lib/device-memory/server-answer
  */
 import { BASE_URL } from "@admin/lib/api/fetcher";
-import { startupResponseHeaders } from "@admin/lib/api/startup-request";
+import {
+  sendStartupRequest,
+  startupResponseHeaders,
+} from "@admin/lib/api/startup-request";
 
 import {
   applyRememberingSwitch,
@@ -49,10 +52,7 @@ async function serverHeaders(): Promise<Headers | null> {
   const fromStartup = await startupResponseHeaders();
   if (fromStartup !== null) return fromStartup;
   try {
-    const response = await fetch(
-      `${BASE_URL}/startup?path=${encodeURIComponent("/auth/session")}`,
-      { credentials: "include", headers: { accept: "application/json" } }
-    );
+    const response = await sendStartupRequest(BASE_URL, ["/auth/session"]);
     return response.ok ? response.headers : null;
   } catch {
     return null;

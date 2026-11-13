@@ -331,7 +331,7 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | Method          | Path                                                   | Description                                                                                                                                                                                          | Auth                                                            |
 | --------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
 | `GET` / `HEAD`  | `/api/health`                                          | Liveness + DB probe.                                                                                                                                                                                 | Public                                                          |
-| `GET`           | `/admin/api/auth/setup-status`                         | Whether the setup wizard has run.                                                                                                                                                                    | Public                                                          |
+| `GET`           | `/admin/api/auth/setup-status`                         | Whether the setup wizard has run, whether it needs a setup token, and whether the app takes sign-ups (`allowRegistration`).                                                                          | Public                                                          |
 | `POST`          | `/admin/api/auth/setup`                                | Run the first-boot setup wizard (creates super admin).                                                                                                                                               | Public, one-shot                                                |
 | `GET`           | `/admin/api/auth/session`                              | Current session info from the cookie.                                                                                                                                                                | Cookie                                                          |
 | `GET`           | `/admin/api/auth/csrf`                                 | CSRF token (when applicable).                                                                                                                                                                        | Public                                                          |
@@ -448,6 +448,7 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `GET`           | `/admin/api/dashboard/stats`                           | Admin dashboard stats.                                                                                                                                                                               | Cookie                                                          |
 | `GET`           | `/admin/api/dashboard/recent-entries`                  | Recent activity.                                                                                                                                                                                     | Cookie                                                          |
 | `GET`           | `/admin/api/dashboard/activity`                        | Activity feed.                                                                                                                                                                                       | Cookie                                                          |
+| `GET`           | `/admin/api/dashboard/content`                         | Every collection and Single you may read, one row each: entries, drafts, last edit and who made it.                                                                                                  | Cookie                                                          |
 | `GET`           | `/admin/api/schema/journal`                            | Schema migration journal (super-admin only).                                                                                                                                                         | Cookie + super admin                                            |
 | `GET` / `PATCH` | `/admin/api/general-settings`                          | Project-wide settings.                                                                                                                                                                               | `read-settings` to read, `update-settings` to change            |
 | `GET`           | `/admin/api/translations`                              | One language's translation worklist across every localized collection: `?locale=es&state=missing&limit=50`. See [Languages](#languages).                                                             | Signed in; which rows come back is each collection's read rule  |
@@ -548,7 +549,7 @@ The setup wizard is a one-shot path that runs only when no super admin exists:
 
 ```bash
 curl http://localhost:3000/admin/api/auth/setup-status
-# {"ok":true,"completed":false}
+# {"isSetup":false,"requiresInitialUser":true,"requiresSetupToken":false,"allowRegistration":false}
 
 curl -X POST http://localhost:3000/admin/api/auth/setup \
   -H "Content-Type: application/json" \
@@ -952,6 +953,20 @@ A date (`createdAt`, `updatedAt`, or a `date` field of the collection itself) is
 ?where[createdAt][greater_than_equal]=2026-09-01&where[createdAt][less_than]=2026-10-01
 ```
 
+#### Filtering a has-many relationship
+
+A relationship or upload with `hasMany: true` holds a list of related entries. On such a field the operators match by membership in that list:
+
+| Operator     | Keeps                                                                                 | Query string example            |
+| ------------ | ------------------------------------------------------------------------------------- | ------------------------------- |
+| `in`         | Entries related to at least one of the ids.                                           | `where[tags][in]=<id-1>,<id-2>` |
+| `equals`     | Entries related to that id, whatever else they are related to.                        | `where[tags][equals]=<id>`      |
+| `not_in`     | Entries related to none of the ids, including entries with no related entries at all. | `where[tags][not_in]=<id>`      |
+| `not_equals` | Entries not related to that id, including entries with no related entries at all.     | `where[tags][not_equals]=<id>`  |
+| `exists`     | Entries whose field is set (`true`) or not set (`false`).                             | `where[tags][exists]=true`      |
+
+An id is matched whole, never as part of another id. `contains`, `search` and `like` are refused on such a field with a `400` whose `error.code` is `VALIDATION_ERROR`, naming the filter in `error.data.errors` with the code `FILTER_OPERATOR_NOT_FOR_LIST`; use `in` with the related entry's id instead. To filter by something about the related entries, such as a tag's name, look up their ids first. The same holds for the Direct API's `where`. A relationship that can point to more than one collection, or one stored as many-to-many, is not covered by this.
+
 For nested AND / OR you can either pass URL-encoded JSON via `where=...`, or use the index syntax:
 
 ```
@@ -1040,6 +1055,21 @@ the parameter to get every field.
 ?richTextFormat=json       # Lexical JSON (default)
 ?richTextFormat=both       # { json, html }
 ```
+
+### richTextStyles
+
+How the HTML that `richTextFormat=html` or `both` returns is styled:
+
+```
+?richTextStyles=default    # Nextly's look, as inline styles (default)
+?richTextStyles=none       # classes only, for your own CSS
+```
+
+With `none`, no element carries a style Nextly adds. Each one has a class in the
+`nextly-rich-text-` namespace, alignment is a class too, and styles an author chose in the
+editor (a text colour, a button's colours) are kept. The classes are listed under
+[Styling rich text HTML](/docs/configuration/fields#styling-rich-text-html). A value other
+than these two returns the default look, as an unknown `richTextFormat` returns JSON.
 
 ### Languages
 

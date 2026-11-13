@@ -65,6 +65,51 @@ describe("seoPlugin extend (integration)", () => {
     expect(persisted?.noindex).toBe(true);
   });
 
+  it("saves a title and description longer than Google shows", async () => {
+    current = await createTestNextly({
+      collections: [pages()],
+      plugins: [seoPlugin({ collections: ["pages"] })],
+    });
+    // rext.ai's longest live title (83 characters) and a 190-character
+    // description: search engines cut them by width, they never refuse them.
+    const title =
+      "Best AI SEO tools for small businesses: from keywords to published content | Rext AI";
+    const description = `${"A description longer than Google shows. ".repeat(4)}It runs on.`;
+    expect(title.length).toBeGreaterThan(60);
+    expect(description.length).toBeGreaterThan(160);
+
+    const created = await current.nextly.create({
+      collection: "pages",
+      data: {
+        slug: "long",
+        title: "Long",
+        seo: { metaTitle: title, metaDescription: description },
+      },
+    });
+
+    const seo = (created.item as { seo?: Record<string, unknown> }).seo;
+    expect(seo?.metaTitle).toBe(title);
+    expect(seo?.metaDescription).toBe(description);
+  });
+
+  it("refuses a longer title where the site asks for hard limits", async () => {
+    current = await createTestNextly({
+      collections: [pages()],
+      plugins: [seoPlugin({ collections: ["pages"], hardLengthLimits: true })],
+    });
+
+    await expect(
+      current.nextly.create({
+        collection: "pages",
+        data: {
+          slug: "long",
+          title: "Long",
+          seo: { metaTitle: "x".repeat(61) },
+        },
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
   it("does not add seo when the plugin is absent (proves the plugin adds it)", async () => {
     current = await createTestNextly({ collections: [pages()] });
 

@@ -30,6 +30,7 @@ function facts(over: Partial<PageFacts> = {}): PageFacts {
       robots: { value: { index: true, follow: true }, from: "site" },
     },
     canonicalIsOwn: true,
+    canonicalConfirmed: false,
     shareImage: [],
     structuredData: [],
     images: [],
@@ -96,7 +97,9 @@ describe("pageProblems", () => {
       })
     );
     expect(kinds(past)).toEqual(["longTitle", "longDescription"]);
-    expect(past[0]?.what).toBe("61 characters");
+    // A warning with the length measured: the value is saved and served.
+    expect(past[0]?.what).toBe("61 characters, Google shows about 60");
+    expect(past[1]?.what).toBe("161 characters, Google shows about 160");
   });
 
   it("counts characters, not UTF-16 units, so emoji are not counted twice", () => {
@@ -129,6 +132,17 @@ describe("pageProblems", () => {
       tab: "seo",
       field: "canonical",
     });
+  });
+
+  it("reports no canonical a person confirmed, as the page first appeared elsewhere", () => {
+    const confirmed = pageProblems({
+      ...withAnswer({
+        canonical: { value: "https://first.example/harbour", from: "page" },
+      }),
+      canonicalIsOwn: false,
+      canonicalConfirmed: true,
+    });
+    expect(confirmed).toEqual([]);
   });
 
   it("reports a missing share image, and each share image problem with its fix", () => {

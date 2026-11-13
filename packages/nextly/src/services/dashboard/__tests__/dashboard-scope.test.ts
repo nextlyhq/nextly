@@ -113,10 +113,12 @@ beforeEach(() => {
     (name: string) => {
       if (name === "activityLogService") return { countRecentActivity };
       if (name === "collectionRegistryService") {
-        return { getAllCollections: vi.fn().mockResolvedValue(COLLECTIONS) };
+        return {
+          getAllCollectionsForRead: vi.fn().mockResolvedValue(COLLECTIONS),
+        };
       }
       if (name === "singleRegistryService") {
-        return { getAllSingles: vi.fn().mockResolvedValue(SINGLES) };
+        return { getAllSinglesForRead: vi.fn().mockResolvedValue(SINGLES) };
       }
       // `getStats` also fans out to `fieldGroupRegistryService` and reads
       // `api_keys` via a raw query; neither is registered here. Both call

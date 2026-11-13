@@ -36,6 +36,23 @@ describe("groupsOf", () => {
         "Google may show only one of them. Give each page its own title.",
     });
   });
+
+  it("draws the most serious kinds first, each severity's kinds in the list's order", () => {
+    // The list's order puts a page left out of the sitemap (a warning)
+    // before a page with no title (an error); the error comes first.
+    const groups = groupsOf([
+      problem("longTitle", "a"),
+      problem("notListed", "b"),
+      problem("noTitle", "c"),
+      problem("redirectChain", "d"),
+    ]);
+    expect(groups.map(g => g.kind)).toEqual([
+      "noTitle",
+      "redirectChain",
+      "notListed",
+      "longTitle",
+    ]);
+  });
 });
 
 describe("checkedWords", () => {

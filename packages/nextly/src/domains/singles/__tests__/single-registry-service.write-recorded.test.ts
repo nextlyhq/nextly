@@ -9,7 +9,15 @@
  * sync does besides writing the row (permission seeding).
  */
 
-import { afterEach, describe, it, expect, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The adapter double holds no stored schema version: registry writes run as
+// they are (`unversionedRegistryWrites`).
+vi.mock("../../schema/schema-version", async importOriginal =>
+  (
+    await import("../../../__tests__/helpers/unversioned-registry-writes")
+  ).unversionedRegistryWrites(await importOriginal())
+);
 
 import type { SingleConfig } from "../../../singles/config/types";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";

@@ -8,6 +8,8 @@ import { describe, expect, it } from "vitest";
 import {
   noAddressProblems,
   productionAddressProblems,
+  proxyProblems,
+  PROXY_WIRING_NOTE,
   listingProblems,
   redirectChainProblems,
   sharedValueProblems,
@@ -190,5 +192,47 @@ describe("listingProblems", () => {
         { place: "page", tab: "content" },
       ],
     ]);
+  });
+});
+
+describe("proxyProblems", () => {
+  it("lists saved redirects the Proxy never served, with the wiring for a developer", () => {
+    const [problem, ...rest] = proxyProblems(
+      { state: "not-wired", lastSeen: null },
+      3
+    );
+    expect(rest).toEqual([]);
+    expect(problem).toMatchObject({
+      kind: "proxyNotWired",
+      subject: { label: "Whole site" },
+      fix: { place: "developer", note: PROXY_WIRING_NOTE },
+    });
+    expect(problem?.what).toBe(
+      "3 redirects are saved but not served: proxy.ts is not wired, so no request has reached the site's Proxy."
+    );
+    expect(PROXY_WIRING_NOTE).toContain("createNextlyProxy");
+  });
+
+  it("names the day a Proxy that stopped running last ran", () => {
+    expect(
+      proxyProblems(
+        { state: "quiet", lastSeen: "2026-10-01T08:00:00.000Z" },
+        1
+      )[0]?.what
+    ).toBe(
+      "1 redirect is saved but not served: no request has reached the site's Proxy since 2026-10-01."
+    );
+  });
+
+  it("lists nothing while the Proxy runs, or where no redirect is saved", () => {
+    expect(
+      proxyProblems(
+        { state: "running", lastSeen: "2026-11-12T08:00:00.000Z" },
+        5
+      )
+    ).toEqual([]);
+    expect(proxyProblems({ state: "not-wired", lastSeen: null }, 0)).toEqual(
+      []
+    );
   });
 });

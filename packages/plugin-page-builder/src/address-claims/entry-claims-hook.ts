@@ -163,10 +163,10 @@ export interface EntryClaimsDeps {
   /**
    * Whether `collection`'s published template splits a list into pages
    * (false where it has none published), read on `tx`, the write's own
-   * transaction, so a template's write is read as it leaves the template.
-   * Asked only for an entry its template draws.
+   * transaction, so a template's write is read as it leaves the template;
+   * as last committed without one.
    */
-  readonly templatePaginates: (collection: string, tx: Tx) => Promise<boolean>;
+  readonly templatePaginates: (collection: string, tx?: Tx) => Promise<boolean>;
   /**
    * The entries of `collection` among `ids`, published or not, as the
    * write's transaction `tx` sees them, in one read: the hook asks at most
@@ -187,9 +187,11 @@ export interface EntryClaimsDeps {
     ReadonlyMap<string, readonly string[]>
   >;
   /**
-   * Whether `collection` is one whose writes never move an entry's address:
-   * the page builder's own collections, whose documents are not entries
-   * served under a template address.
+   * Whether `collection` is one whose writes never move an entry's address,
+   * known without a read: the page builder's own collections, whose
+   * documents are not entries served under a template address, and one the
+   * site's code declares that no template may serve and no address in code
+   * names, such as another plugin's private records.
    */
   readonly neverServed: (collection: string) => boolean;
   /**
@@ -212,9 +214,10 @@ export interface EntryClaimsDeps {
    * Whether `collection` has a Draft/Published lifecycle: without one,
    * every entry is live, whatever a field named `status` holds. Read on
    * `tx`, the write's own transaction, so a save asking takes no second
-   * connection from the pool while it holds one.
+   * connection from the pool while it holds one; as last committed without
+   * one.
    */
-  readonly lifecycle: (collection: string, tx: Tx) => Promise<boolean>;
+  readonly lifecycle: (collection: string, tx?: Tx) => Promise<boolean>;
   /** The Pages collection's slug, as the host named it. */
   readonly pages: string;
   /** Whether the start-up pass has claimed every existing page. */
@@ -258,6 +261,55 @@ export interface EntryClaimsDeps {
    * from the pool while the save holds one.
    */
   readonly describe: (tx: Tx) => DescribeHolder;
+}
+
+/**
+ * Everything about a collection itself, its entries aside, that decides
+ * what its entries hold, each asked of {@link EntryClaimsDeps} as the claims
+ * ask it: where it is served (its address declared in code, else its
+ * template's), whether its template is published and splits a list into
+ * pages, whether it may be served at all (a `slug` field, not localized),
+ * whether its entries have a Draft/Published lifecycle, and the languages
+ * an address is held in. The start-up pass decides each collection from it,
+ * and the pass's mark is taken over it, so whatever changes what the pass
+ * would do changes the mark: a new question the claims ask belongs here.
+ */
+export interface CollectionClaimInputs {
+  readonly declared: readonly string[] | null;
+  readonly template: ServingTemplate | null;
+  readonly templatePaginates: boolean;
+  readonly servable: boolean;
+  readonly lifecycle: boolean;
+  readonly locales: readonly string[];
+}
+
+/**
+ * The {@link CollectionClaimInputs} of `collection`: on `known.tx` where
+ * given, else as last committed, with any answer already read (`template`,
+ * read under the collection's lock; `servable`, read before a transaction
+ * opened) taken as is.
+ */
+export async function collectionClaimInputs(
+  deps: EntryClaimsDeps,
+  collection: string,
+  known: {
+    readonly tx?: Tx;
+    readonly template?: ServingTemplate | null;
+    readonly servable?: boolean;
+  } = {}
+): Promise<CollectionClaimInputs> {
+  const { tx } = known;
+  return {
+    declared: deps.addresses.get(collection) ?? null,
+    template:
+      known.template === undefined
+        ? await deps.templateOf(collection, tx)
+        : known.template,
+    templatePaginates: await deps.templatePaginates(collection, tx),
+    servable: known.servable ?? (await servable(deps, collection, tx)),
+    lifecycle: await deps.lifecycle(collection, tx),
+    locales: deps.locales(),
+  };
 }
 
 /** The slice of an in-transaction write the hooks read. */
@@ -1337,11 +1389,16 @@ async function storedOrNone(
  * first time. A pass over entries that already hold what they should writes
  * nothing. Never throws: a collection it cannot settle is warned about and
  * left for the next start.
+ *
+ * @returns Whether every collection was settled, the stored addresses read
+ *   included.
  */
 export async function settleEntryClaimsAtStart(
   deps: EntryClaimsPassDeps
-): Promise<void> {
-  const stored = (await storedOrNone(deps)) ?? new Map();
+): Promise<boolean> {
+  const read = await storedOrNone(deps);
+  const stored = read ?? new Map();
+  let settled = read !== null;
   const collections = new Set([...deps.addresses.keys(), ...stored.keys()]);
   for (const collection of collections) {
     try {
@@ -1352,12 +1409,14 @@ export async function settleEntryClaimsAtStart(
         settleAtStart(deps, tx, collection, eligible)
       );
     } catch (error) {
+      settled = false;
       deps.warn("Could not settle the addresses of a collection's entries.", {
         collection,
         error: String(error),
       });
     }
   }
+  return settled;
 }
 
 /**
@@ -1375,14 +1434,19 @@ async function settleAtStart(
   collection: string,
   eligible: boolean
 ): Promise<void> {
-  const template = await templateUnderLock(deps, tx, collection);
-  if (!eligible) {
+  // Decided from the same answers the pass's mark is taken over.
+  const inputs = await collectionClaimInputs(deps, collection, {
+    tx,
+    template: await templateUnderLock(deps, tx, collection),
+    servable: eligible,
+  });
+  if (!inputs.servable) {
     await releaseCollection(deps, tx, collection);
     return;
   }
-  const address = deps.addresses.get(collection) ?? template?.address ?? null;
+  const address = inputs.declared ?? inputs.template?.address ?? null;
   if (address === null) return;
-  await (template?.published === true
+  await (inputs.template?.published === true
     ? settleEntries(deps, tx, collection, address)
     : settleUnserved(deps, tx, collection, address));
 }
@@ -1396,12 +1460,14 @@ async function settleAtStart(
  * release is warned about and left for the next start, as is everything when
  * the stored addresses cannot be read, since a collection served at one would
  * otherwise lose its entries' claims.
+ *
+ * @returns Whether every undeclared collection was released.
  */
 export async function releaseUndeclared(
   deps: EntryClaimsPassDeps
-): Promise<void> {
+): Promise<boolean> {
   const stored = await storedOrNone(deps);
-  if (stored === null) return;
+  if (stored === null) return false;
   const known = new Set([
     deps.pages,
     ...deps.addresses.keys(),
@@ -1418,20 +1484,23 @@ export async function releaseUndeclared(
     deps.warn("Could not read the address claims to sweep.", {
       error: String(error),
     });
-    return;
+    return false;
   }
+  let released = true;
   for (const collection of new Set(stale.map(holder => holder.collection))) {
     try {
       await deps.withTransaction(tx =>
         releaseUnaddressed(deps, tx, collection)
       );
     } catch (error) {
+      released = false;
       deps.warn("Could not release an undeclared collection's addresses.", {
         collection,
         error: String(error),
       });
     }
   }
+  return released;
 }
 
 /**

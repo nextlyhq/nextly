@@ -56,3 +56,35 @@ describe("setup status", () => {
     expect(mockGet).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("whether the app takes sign-ups", () => {
+  it("is the server's answer", async () => {
+    mockGet.mockResolvedValue({ isSetup: true, allowRegistration: true });
+    await expect(readSetupState()).resolves.toMatchObject({
+      allowRegistration: true,
+    });
+  });
+
+  it("is no, as the server's default is, where the answer does not say yes", async () => {
+    for (const answer of [
+      { isSetup: true, allowRegistration: false },
+      // An older server, which does not say.
+      { isSetup: true },
+      { isSetup: true, allowRegistration: "true" },
+    ]) {
+      resetSetupStatusCache();
+      mockGet.mockResolvedValue(answer);
+      await expect(readSetupState()).resolves.toMatchObject({
+        allowRegistration: false,
+      });
+    }
+  });
+
+  it("is no on the fail-safe path", async () => {
+    mockGet.mockRejectedValue(new Error("503"));
+    await expect(readSetupState()).resolves.toMatchObject({
+      answered: false,
+      allowRegistration: false,
+    });
+  });
+});
