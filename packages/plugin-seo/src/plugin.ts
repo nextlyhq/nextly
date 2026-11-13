@@ -30,6 +30,12 @@ import {
   addressRecord,
   releaseOnCollectionDelete,
 } from "./address-record/participant";
+import {
+  ADDRESS_RECORD_CACHE_PART,
+  ADDRESS_RECORD_CHANGED,
+  prepareRecordMove,
+  recordReady,
+} from "./address-record/store";
 import { BULK_PAGE } from "./bulk/contract";
 import { bulkRoutes } from "./bulk/route";
 import { codePagesCollection } from "./code-pages/collection";
@@ -667,10 +673,13 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       types: [...targets, ...singleTargets],
       pagePermissions,
     }),
-    // The record that keeps each public address to one page, the redirects
-    // whose From addresses it holds, the log of addresses not found, and
-    // what the problem list's checks found.
+    // The redirects whose From addresses the address record holds, the log
+    // of addresses not found, and what the problem list's checks found.
     collections: [
+      // The collection the address record was kept in before it moved to the
+      // plugin's own tables. Still declared so the rows a site already has
+      // are kept, and moved to the tables at start (`recordReady`); nothing
+      // writes it any more.
       addressRecordCollection(),
       redirectsCollection(),
       // The collection the not-found log was kept in before it moved to the
@@ -960,8 +969,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       }
       // The site-wide record that keeps each public address to one page:
       // asked on every save, and told what each document holds after it.
+      prepareRecordMove(ctx);
       ctx.publicAddresses.participate(addressRecord(ctx));
       releaseOnCollectionDelete(ctx);
+      // A page head reads who holds its address, so a change to that
+      // expires the heads, once it commits.
+      ctx.events.on(ADDRESS_RECORD_CHANGED, () =>
+        ctx.cache.expire(ADDRESS_RECORD_CACHE_PART)
+      );
       // A redirect saved here applies from this server's next request.
       ctx.events.on(REDIRECTS_CHANGED, () => redirectKeys.forget());
       // Kept for the routes that answer not found, which log through it, and
@@ -983,7 +998,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       stopIndexNow = undefined;
       await stop?.();
     },
-    onReady(ctx) {
+    async onReady(ctx) {
+      // Awaited, so the start waits for it: the address record an earlier
+      // version kept in a collection moves to the plugin's table before this
+      // process answers any save, or a page could take an address the
+      // collection says another holds. One read once it has moved.
+      await recordReady(ctx);
       // Started, not awaited: it waits for the boot to finish, and brings the
       // record up to date with content saved while the plugin was absent or
       // addresses a deploy moved.

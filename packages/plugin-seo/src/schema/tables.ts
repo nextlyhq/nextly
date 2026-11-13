@@ -28,7 +28,7 @@ export const SCHEMA_PREFIX = "seo";
  * The schema version the database must have applied before the plugin starts.
  * It moves with every migration module.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /** The columns of {@link notFoundLog}, as `defineTable` checks and publishes them. */
 type NotFoundLogColumns = {
@@ -92,5 +92,98 @@ export const notFoundLog: TableDefinition<"not_found", NotFoundLogColumns> =
     }
   );
 
+/** The columns of {@link addressClaims}, as `defineTable` checks and publishes them. */
+type AddressClaimsColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly claimKey: ColumnBuilder<string, false, false>;
+  readonly kind: ColumnBuilder<string, false, false>;
+  readonly locale: ColumnBuilder<string, false, false>;
+  readonly path: ColumnBuilder<string, false, false>;
+  readonly holderCollection: ColumnBuilder<string, true, false>;
+  readonly holderId: ColumnBuilder<string, true, false>;
+  readonly holderLabel: ColumnBuilder<string, true, false>;
+  readonly taken: ColumnBuilder<number, false, true>;
+};
+
+/**
+ * The record of who holds each public address, so no two pages are served
+ * at one address in one language: one row per address a page holds
+ * (`address`), per range of addresses held as one, such as a paginated
+ * list's later pages (`range`), and per lock row a save takes before it reads
+ * (`lock`).
+ *
+ * `claimKey` is the SHA-256 of what the row stands for, so one address is one
+ * row on every dialect whatever its length or collation, and the unique index
+ * on it is what refuses a second holder. A lock row is taken by adding one to
+ * `taken`, a one-row update that holds the row's lock until the transaction
+ * ends. Written only on the transaction of the save that changes it.
+ */
+export const addressClaims: TableDefinition<"addresses", AddressClaimsColumns> =
+  defineTable<"addresses", AddressClaimsColumns>(
+    "addresses",
+    {
+      id: col.id(),
+      claimKey: col.char(64),
+      kind: col.varchar(16),
+      locale: col.varchar(64),
+      // Long text, so an address of any length fits.
+      path: col.longText(),
+      holderCollection: col.varchar(255, { nullable: true }),
+      holderId: col.varchar(255, { nullable: true }),
+      // A title of any length.
+      holderLabel: col.longText({ nullable: true }),
+      taken: col.integer({ default: 0 }),
+    },
+    {
+      indexes: [
+        { columns: ["claimKey"], unique: true },
+        // A save finds the rows of the page it changes by holder.
+        { columns: ["holderCollection", "holderId"] },
+        // A range finds the addresses below it within its language.
+        { columns: ["locale"] },
+      ],
+    }
+  );
+
+/** The columns of {@link addressNotes}, as `defineTable` checks and publishes them. */
+type AddressNotesColumns = {
+  readonly id: ColumnBuilder<string, false, false> & {
+    readonly generated: "uuidv7";
+  };
+  readonly noteKey: ColumnBuilder<string, false, false>;
+  readonly kind: ColumnBuilder<string, false, false>;
+  readonly value: ColumnBuilder<string, true, false>;
+  readonly taken: ColumnBuilder<number, false, true>;
+};
+
+/**
+ * What the plugin notes beside the address record, one row per note: the
+ * fingerprint and site types of the last catch-up, when the Proxy last ran,
+ * the site's standing (`meta`), and each redirect a deploy's move still owes
+ * (`pending`, its value the page and the address as JSON). `noteKey` is the
+ * SHA-256 of the note's name, unique. `taken` is added to where a note row is
+ * held as a lock, as the record's own lock rows are.
+ */
+export const addressNotes: TableDefinition<"notes", AddressNotesColumns> =
+  defineTable<"notes", AddressNotesColumns>(
+    "notes",
+    {
+      id: col.id(),
+      noteKey: col.char(64),
+      kind: col.varchar(16),
+      value: col.longText({ nullable: true }),
+      taken: col.integer({ default: 0 }),
+    },
+    {
+      indexes: [{ columns: ["noteKey"], unique: true }, { columns: ["kind"] }],
+    }
+  );
+
 /** Every table this plugin declares, in the order its migrations create them. */
-export const SEO_TABLES: readonly [typeof notFoundLog] = [notFoundLog];
+export const SEO_TABLES: readonly [
+  typeof notFoundLog,
+  typeof addressClaims,
+  typeof addressNotes,
+] = [notFoundLog, addressClaims, addressNotes];

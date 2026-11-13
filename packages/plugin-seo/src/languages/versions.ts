@@ -19,14 +19,11 @@ import {
   type PublicAddressType,
 } from "@nextlyhq/plugin-sdk";
 
-import { recordSlug, rowOf } from "../address-record/participant";
+import { addressesOf } from "../address-record/store";
 import { originOf } from "../origin";
 import type { SeoAnswer } from "../resolver/order";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
 import { MAX_LOC_LENGTH, publishedWhere } from "../sitemap";
-
-/** How many record rows one read takes. */
-const RECORD_PAGE = 500;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -65,9 +62,9 @@ export async function servedAt(
 export type HeldLanguages = Map<string, Set<string>>;
 
 /**
- * The paths each of `ids` holds in the record, by id and then by language,
- * read a page at a time: every language at once, so a page's versions cost
- * one read for a whole batch of pages.
+ * The paths each of `ids` holds in the record, by id and then by language:
+ * every language at once, so a page's versions cost one read for a whole
+ * batch of pages.
  */
 export async function heldLanguages(
   ctx: PluginContext,
@@ -75,34 +72,15 @@ export async function heldLanguages(
   ids: readonly string[]
 ): Promise<Map<string, HeldLanguages>> {
   const held = new Map<string, HeldLanguages>();
-  if (ids.length === 0) return held;
-  for (let page = 1; ; page++) {
-    const { data } = await ctx.services.ownCollections.listEntries(
-      recordSlug(ctx),
-      {
-        where: {
-          and: [
-            { kind: { equals: "address" } },
-            { holderCollection: { equals: collection } },
-            { holderId: { in: [...ids] } },
-          ],
-        },
-        sort: { field: "claimKey", direction: "asc" },
-        pagination: { limit: RECORD_PAGE, page },
-        depth: 0,
-      }
-    );
-    const rows = (data as unknown[]).map(rowOf);
-    for (const row of rows) {
-      if (row.holder === null || row.address === null) continue;
-      const languages = held.get(row.holder.id) ?? new Map();
-      const paths = languages.get(row.address.locale) ?? new Set<string>();
-      paths.add(row.address.path);
-      languages.set(row.address.locale, paths);
-      held.set(row.holder.id, languages);
-    }
-    if (rows.length < RECORD_PAGE) return held;
+  for (const row of await addressesOf(ctx, collection, ids)) {
+    if (row.holder === null || row.address === null) continue;
+    const languages = held.get(row.holder.id) ?? new Map();
+    const paths = languages.get(row.address.locale) ?? new Set<string>();
+    paths.add(row.address.path);
+    languages.set(row.address.locale, paths);
+    held.set(row.holder.id, languages);
   }
+  return held;
 }
 
 /**
