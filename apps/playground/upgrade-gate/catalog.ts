@@ -51,33 +51,42 @@ const ELEMENTS = [
  * under the same name with other columns reads as `change index`.
  */
 export function operationsBetween(before: Catalog, after: Catalog): string[] {
-  const operations: string[] = [];
-  for (const table of Object.keys(after)) {
-    if (!(table in before)) operations.push(`create table ${table}`);
-  }
+  const operations = Object.keys(after)
+    .filter(table => !(table in before))
+    .map(table => `create table ${table}`);
   for (const table of Object.keys(before)) {
-    if (!(table in after)) {
-      operations.push(`drop table ${table}`);
-      continue;
-    }
-    for (const { key, noun, add, drop } of ELEMENTS) {
-      const was = before[table][key];
-      const now = after[table][key];
-      for (const [name, definition] of Object.entries(now)) {
-        if (!(name in was)) {
-          operations.push(`${add} ${noun} ${table}.${name}: ${definition}`);
-        } else if (was[name] !== definition) {
-          operations.push(
-            `change ${noun} ${table}.${name}: ${was[name]} -> ${definition}`
-          );
-        }
-      }
-      for (const name of Object.keys(was)) {
-        if (!(name in now)) operations.push(`${drop} ${noun} ${table}.${name}`);
-      }
-    }
+    operations.push(
+      ...(table in after
+        ? tableOperations(table, before[table], after[table])
+        : [`drop table ${table}`])
+    );
   }
   return operations.sort();
+}
+
+/** The operations on one table both catalogs hold, element by element. */
+function tableOperations(
+  table: string,
+  before: TableShape,
+  after: TableShape
+): string[] {
+  const operations: string[] = [];
+  for (const { key, noun, add, drop } of ELEMENTS) {
+    const was = before[key];
+    const now = after[key];
+    for (const [name, definition] of Object.entries(now)) {
+      if (!(name in was)) {
+        operations.push(`${add} ${noun} ${table}.${name}: ${definition}`);
+      } else if (was[name] !== definition) {
+        operations.push(
+          `change ${noun} ${table}.${name}: ${was[name]} -> ${definition}`
+        );
+      }
+    }
+    const dropped = Object.keys(was).filter(name => !(name in now));
+    operations.push(...dropped.map(name => `${drop} ${noun} ${table}.${name}`));
+  }
+  return operations;
 }
 
 /** One operation an upgrade from the baseline may plan, and why it is safe. */
@@ -99,7 +108,7 @@ export interface GateVerdict {
 }
 
 /** The allowlist's operations for one dialect. */
-export function allowedOn(
+function allowedOn(
   allowlist: readonly AllowedOperation[],
   dialect: Dialect
 ): string[] {

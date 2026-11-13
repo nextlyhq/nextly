@@ -16,7 +16,12 @@ import Sqlite from "better-sqlite3";
 import mysql from "mysql2/promise";
 import pg from "pg";
 
-import { emptyTable, type Catalog, type Dialect } from "./catalog";
+import {
+  emptyTable,
+  type Catalog,
+  type Dialect,
+  type TableShape,
+} from "./catalog";
 
 const run = promisify(execFile);
 
@@ -327,6 +332,99 @@ function tableIn(catalog: Catalog, table: string) {
   return catalog[table];
 }
 
+/** The words that state an element, the empty ones left out. */
+function words(...parts: (string | false | null | undefined)[]): string {
+  return parts.filter(Boolean).join(" ");
+}
+
+type SqliteDb = InstanceType<typeof Sqlite>;
+
+/** A SQLite table's columns, from `PRAGMA table_xinfo`. */
+function sqliteColumns(db: SqliteDb, table: string): Record<string, string> {
+  const columns = db.prepare(`PRAGMA table_xinfo("${table}")`).all() as {
+    name: string;
+    type: string;
+    notnull: number;
+    dflt_value: string | null;
+    pk: number;
+    hidden: number;
+  }[];
+  return Object.fromEntries(
+    columns.map(column => [
+      column.name,
+      words(
+        column.type.toLowerCase() || "(no type)",
+        column.notnull ? "not null" : "null",
+        column.dflt_value !== null && `default ${column.dflt_value}`,
+        column.pk > 0 && `primary key ${column.pk}`,
+        column.hidden > 0 && "generated"
+      ),
+    ])
+  );
+}
+
+/**
+ * A SQLite table's indexes into `shape`. One made by CREATE INDEX keeps the
+ * name Nextly chose, with the WHERE of a partial one. One a UNIQUE or PRIMARY
+ * KEY constraint made is numbered by position, so it is named by what it
+ * covers, as a constraint.
+ */
+function sqliteIndexes(db: SqliteDb, table: string, shape: TableShape): void {
+  const indexes = db.prepare(`PRAGMA index_list("${table}")`).all() as {
+    name: string;
+    unique: number;
+    origin: string;
+    partial: number;
+  }[];
+  for (const index of indexes) {
+    const keyColumns = (
+      db.prepare(`PRAGMA index_info("${index.name}")`).all() as {
+        name: string | null;
+      }[]
+    )
+      .map(column => column.name ?? "(expression)")
+      .join(", ");
+    if (index.origin !== "c") {
+      const kind = index.origin === "pk" ? "primary key" : "unique";
+      shape.constraints[`${kind} (${keyColumns})`] = kind;
+      continue;
+    }
+    const { sql } = db
+      .prepare("SELECT sql FROM sqlite_master WHERE name = ?")
+      .get(index.name) as { sql: string };
+    const where = /\bWHERE\b([\s\S]*)$/i.exec(sql)?.[1].trim();
+    shape.indexes[index.name] = words(
+      index.unique > 0 && "unique",
+      `(${keyColumns})`,
+      where !== undefined && `where ${where}`
+    );
+  }
+}
+
+/** A SQLite table's foreign keys into `shape`, named by what they join. */
+function sqliteForeignKeys(
+  db: SqliteDb,
+  table: string,
+  shape: TableShape
+): void {
+  const keys = db.prepare(`PRAGMA foreign_key_list("${table}")`).all() as {
+    id: number;
+    table: string;
+    from: string;
+    to: string | null;
+    on_update: string;
+    on_delete: string;
+  }[];
+  const byId = Map.groupBy(keys, key => key.id);
+  for (const parts of byId.values()) {
+    const [first] = parts;
+    const from = parts.map(part => part.from).join(", ");
+    const to = parts.map(part => part.to ?? "(primary key)").join(", ");
+    shape.constraints[`foreign key (${from}) -> ${first.table}`] =
+      `references ${first.table} (${to}) on update ${first.on_update} on delete ${first.on_delete}`;
+  }
+}
+
 function readSqliteCatalog(url: string): Catalog {
   const db = new Sqlite(sqliteFile(url), { readonly: true });
   try {
@@ -338,72 +436,9 @@ function readSqliteCatalog(url: string): Catalog {
       .all() as { name: string }[];
     for (const { name } of tables) {
       const shape = tableIn(catalog, name);
-      const columns = db.prepare(`PRAGMA table_xinfo("${name}")`).all() as {
-        name: string;
-        type: string;
-        notnull: number;
-        dflt_value: string | null;
-        pk: number;
-        hidden: number;
-      }[];
-      for (const column of columns) {
-        shape.columns[column.name] = [
-          column.type.toLowerCase() || "(no type)",
-          column.notnull ? "not null" : "null",
-          column.dflt_value === null ? "" : `default ${column.dflt_value}`,
-          column.pk ? `primary key ${column.pk}` : "",
-          column.hidden ? "generated" : "",
-        ]
-          .filter(Boolean)
-          .join(" ");
-      }
-      const indexes = db.prepare(`PRAGMA index_list("${name}")`).all() as {
-        name: string;
-        unique: number;
-        origin: string;
-        partial: number;
-      }[];
-      for (const index of indexes) {
-        const keyColumns = (
-          db.prepare(`PRAGMA index_info("${index.name}")`).all() as {
-            name: string | null;
-          }[]
-        ).map(column => column.name ?? "(expression)");
-        const definition = `${index.unique ? "unique " : ""}(${keyColumns.join(", ")})${index.partial ? " partial" : ""}`;
-        if (index.origin === "c") {
-          // Created by CREATE INDEX: its name is the one Nextly chose. The
-          // statement says what it covers, the WHERE of a partial one included.
-          const { sql } = db
-            .prepare("SELECT sql FROM sqlite_master WHERE name = ?")
-            .get(index.name) as { sql: string };
-          const where = /\bWHERE\b([\s\S]*)$/i.exec(sql);
-          shape.indexes[index.name] = where
-            ? `${definition} where ${where[1].trim()}`
-            : definition;
-        } else {
-          // A UNIQUE or PRIMARY KEY constraint's own index: SQLite numbers
-          // its name by position, so it is named by what it covers.
-          const kind = index.origin === "pk" ? "primary key" : "unique";
-          shape.constraints[`${kind} (${keyColumns.join(", ")})`] = kind;
-        }
-      }
-      const keys = db.prepare(`PRAGMA foreign_key_list("${name}")`).all() as {
-        id: number;
-        table: string;
-        from: string;
-        to: string | null;
-        on_update: string;
-        on_delete: string;
-      }[];
-      const byId = new Map<number, typeof keys>();
-      for (const key of keys)
-        byId.set(key.id, [...(byId.get(key.id) ?? []), key]);
-      for (const parts of byId.values()) {
-        const from = parts.map(part => part.from).join(", ");
-        const to = parts.map(part => part.to ?? "(primary key)").join(", ");
-        shape.constraints[`foreign key (${from}) -> ${parts[0].table}`] =
-          `references ${parts[0].table} (${to}) on update ${parts[0].on_update} on delete ${parts[0].on_delete}`;
-      }
+      shape.columns = sqliteColumns(db, name);
+      sqliteIndexes(db, name, shape);
+      sqliteForeignKeys(db, name, shape);
     }
     const triggers = db
       .prepare(
@@ -454,16 +489,13 @@ async function readPostgresCatalog(url: string): Promise<Catalog> {
         WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p')
           AND a.attnum > 0 AND NOT a.attisdropped`
     )) {
-      tableIn(catalog, column.tableName).columns[column.name] = [
+      tableIn(catalog, column.tableName).columns[column.name] = words(
         column.type,
         column.notNull ? "not null" : "null",
-        column.defaultValue === null
-          ? ""
-          : `${column.generated ? "generated" : "default"} ${column.defaultValue}`,
-        column.identity ? "identity" : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
+        column.defaultValue !== null &&
+          `${column.generated ? "generated" : "default"} ${column.defaultValue}`,
+        column.identity !== "" && "identity"
+      );
     }
     for (const index of await query<{
       tableName: string;
@@ -516,157 +548,149 @@ async function readPostgresCatalog(url: string): Promise<Catalog> {
   }
 }
 
+type MysqlQuery = <Row>(sql: string) => Promise<Row[]>;
+
+/** A MySQL database's columns into `catalog`, for the tables it holds. */
+async function mysqlColumns(query: MysqlQuery, catalog: Catalog) {
+  for (const column of await query<{
+    tableName: string;
+    name: string;
+    type: string;
+    nullable: string;
+    defaultValue: string | null;
+    extra: string;
+    collation: string | null;
+  }>(
+    `SELECT table_name AS tableName, column_name AS name, column_type AS type,
+            is_nullable AS nullable, column_default AS defaultValue,
+            extra AS extra, collation_name AS collation
+       FROM information_schema.columns WHERE table_schema = DATABASE()`
+  )) {
+    const shape = catalog[column.tableName];
+    // A view's columns are listed too; only base tables are in the catalog.
+    if (shape === undefined) continue;
+    shape.columns[column.name] = words(
+      column.type,
+      column.nullable === "YES" ? "null" : "not null",
+      column.defaultValue !== null && `default ${column.defaultValue}`,
+      column.extra.toLowerCase(),
+      column.collation !== null && `collate ${column.collation}`
+    );
+  }
+}
+
+/** A MySQL database's indexes into `catalog`, each with its key parts in order. */
+async function mysqlIndexes(query: MysqlQuery, catalog: Catalog) {
+  const parts = await query<{
+    tableName: string;
+    name: string;
+    nonUnique: number;
+    column: string | null;
+    expression: string | null;
+    subPart: number | null;
+    type: string;
+  }>(
+    `SELECT table_name AS tableName, index_name AS name, non_unique AS nonUnique,
+            column_name AS \`column\`, expression AS expression,
+            sub_part AS subPart, index_type AS type
+       FROM information_schema.statistics WHERE table_schema = DATABASE()
+      ORDER BY table_name, index_name, seq_in_index`
+  );
+  const byIndex = Map.groupBy(parts, part => `${part.tableName}.${part.name}`);
+  for (const [first, ...rest] of byIndex.values()) {
+    const keyParts = [first, ...rest].map(
+      part =>
+        `${part.column ?? part.expression ?? "?"}${part.subPart ? `(${part.subPart})` : ""}`
+    );
+    tableIn(catalog, first.tableName).indexes[first.name] = words(
+      Number(first.nonUnique) === 0 && "unique",
+      first.type.toLowerCase(),
+      `(${keyParts.join(", ")})`
+    );
+  }
+}
+
+/** A MySQL database's foreign keys into `catalog`. */
+async function mysqlForeignKeys(query: MysqlQuery, catalog: Catalog) {
+  const parts = await query<{
+    tableName: string;
+    name: string;
+    column: string;
+    referencedTable: string;
+    referencedColumn: string;
+    onUpdate: string;
+    onDelete: string;
+  }>(
+    `SELECT k.table_name AS tableName, k.constraint_name AS name,
+            k.column_name AS \`column\`, k.referenced_table_name AS referencedTable,
+            k.referenced_column_name AS referencedColumn,
+            r.update_rule AS onUpdate, r.delete_rule AS onDelete
+       FROM information_schema.key_column_usage k
+       JOIN information_schema.referential_constraints r
+         ON r.constraint_schema = k.constraint_schema
+        AND r.constraint_name = k.constraint_name
+        AND r.table_name = k.table_name
+      WHERE k.table_schema = DATABASE() AND k.referenced_table_name IS NOT NULL
+      ORDER BY k.table_name, k.constraint_name, k.ordinal_position`
+  );
+  const byKey = Map.groupBy(parts, part => `${part.tableName}.${part.name}`);
+  for (const [first, ...rest] of byKey.values()) {
+    const all = [first, ...rest];
+    tableIn(catalog, first.tableName).constraints[first.name] =
+      `foreign key (${all.map(part => part.column).join(", ")}) references ${first.referencedTable} (${all.map(part => part.referencedColumn).join(", ")}) on update ${first.onUpdate.toLowerCase()} on delete ${first.onDelete.toLowerCase()}`;
+  }
+}
+
+/** A MySQL database's check constraints and triggers into `catalog`. */
+async function mysqlChecksAndTriggers(query: MysqlQuery, catalog: Catalog) {
+  for (const check of await query<{
+    tableName: string;
+    name: string;
+    clause: string;
+  }>(
+    `SELECT t.table_name AS tableName, c.constraint_name AS name,
+            c.check_clause AS clause
+       FROM information_schema.check_constraints c
+       JOIN information_schema.table_constraints t
+         ON t.constraint_schema = c.constraint_schema
+        AND t.constraint_name = c.constraint_name
+      WHERE c.constraint_schema = DATABASE() AND t.constraint_type = 'CHECK'`
+  )) {
+    tableIn(catalog, check.tableName).constraints[check.name] =
+      `check ${check.clause}`;
+  }
+  for (const trigger of await query<{
+    tableName: string;
+    name: string;
+    timing: string;
+    event: string;
+    statement: string;
+  }>(
+    `SELECT event_object_table AS tableName, trigger_name AS name,
+            action_timing AS timing, event_manipulation AS event,
+            action_statement AS statement
+       FROM information_schema.triggers WHERE trigger_schema = DATABASE()`
+  )) {
+    tableIn(catalog, trigger.tableName).triggers[trigger.name] =
+      `${trigger.timing.toLowerCase()} ${trigger.event.toLowerCase()} ${trigger.statement.replace(/\s+/g, " ").trim()}`;
+  }
+}
+
 async function readMysqlCatalog(url: string): Promise<Catalog> {
   const connection = await mysqlConnection(url);
   try {
     const catalog: Catalog = {};
-    const query = async <Row>(sql: string) =>
+    const query: MysqlQuery = async <Row>(sql: string) =>
       (await connection.query(sql))[0] as Row[];
     for (const { name } of await query<{ name: string }>(
       "SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'"
     )) {
       tableIn(catalog, name);
     }
-    for (const column of await query<{
-      tableName: string;
-      name: string;
-      type: string;
-      nullable: string;
-      defaultValue: string | null;
-      extra: string;
-      collation: string | null;
-    }>(
-      `SELECT table_name AS tableName, column_name AS name, column_type AS type,
-              is_nullable AS nullable, column_default AS defaultValue,
-              extra AS extra, collation_name AS collation
-         FROM information_schema.columns WHERE table_schema = DATABASE()`
-    )) {
-      if (!(column.tableName in catalog)) continue;
-      catalog[column.tableName].columns[column.name] = [
-        column.type,
-        column.nullable === "YES" ? "null" : "not null",
-        column.defaultValue === null ? "" : `default ${column.defaultValue}`,
-        column.extra.toLowerCase(),
-        column.collation ? `collate ${column.collation}` : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-    }
-    const indexColumns = new Map<string, string[]>();
-    const indexHeads = new Map<
-      string,
-      { table: string; name: string; head: string }
-    >();
-    for (const part of await query<{
-      tableName: string;
-      name: string;
-      nonUnique: number;
-      column: string | null;
-      expression: string | null;
-      subPart: number | null;
-      type: string;
-    }>(
-      `SELECT table_name AS tableName, index_name AS name, non_unique AS nonUnique,
-              column_name AS \`column\`, expression AS expression, sub_part AS subPart,
-              index_type AS type
-         FROM information_schema.statistics WHERE table_schema = DATABASE()
-        ORDER BY table_name, index_name, seq_in_index`
-    )) {
-      const key = `${part.tableName}\u0000${part.name}`;
-      indexHeads.set(key, {
-        table: part.tableName,
-        name: part.name,
-        head: `${Number(part.nonUnique) === 0 ? "unique " : ""}${part.type.toLowerCase()}`,
-      });
-      indexColumns.set(key, [
-        ...(indexColumns.get(key) ?? []),
-        `${part.column ?? part.expression ?? "?"}${part.subPart ? `(${part.subPart})` : ""}`,
-      ]);
-    }
-    for (const [key, { table, name, head }] of indexHeads) {
-      tableIn(catalog, table).indexes[name] =
-        `${head} (${indexColumns.get(key)!.join(", ")})`;
-    }
-    const foreignKeys = new Map<
-      string,
-      {
-        table: string;
-        name: string;
-        from: string[];
-        to: string[];
-        references: string;
-        rules: string;
-      }
-    >();
-    for (const part of await query<{
-      tableName: string;
-      name: string;
-      column: string;
-      referencedTable: string;
-      referencedColumn: string;
-      onUpdate: string;
-      onDelete: string;
-    }>(
-      `SELECT k.table_name AS tableName, k.constraint_name AS name,
-              k.column_name AS \`column\`, k.referenced_table_name AS referencedTable,
-              k.referenced_column_name AS referencedColumn,
-              r.update_rule AS onUpdate, r.delete_rule AS onDelete
-         FROM information_schema.key_column_usage k
-         JOIN information_schema.referential_constraints r
-           ON r.constraint_schema = k.constraint_schema
-          AND r.constraint_name = k.constraint_name
-          AND r.table_name = k.table_name
-        WHERE k.table_schema = DATABASE() AND k.referenced_table_name IS NOT NULL
-        ORDER BY k.table_name, k.constraint_name, k.ordinal_position`
-    )) {
-      const key = `${part.tableName}\u0000${part.name}`;
-      const entry = foreignKeys.get(key) ?? {
-        table: part.tableName,
-        name: part.name,
-        from: [],
-        to: [],
-        references: part.referencedTable,
-        rules: `on update ${part.onUpdate.toLowerCase()} on delete ${part.onDelete.toLowerCase()}`,
-      };
-      entry.from.push(part.column);
-      entry.to.push(part.referencedColumn);
-      foreignKeys.set(key, entry);
-    }
-    for (const key of foreignKeys.values()) {
-      tableIn(catalog, key.table).constraints[key.name] =
-        `foreign key (${key.from.join(", ")}) references ${key.references} (${key.to.join(", ")}) ${key.rules}`;
-    }
-    for (const check of await query<{
-      tableName: string;
-      name: string;
-      clause: string;
-    }>(
-      `SELECT t.table_name AS tableName, c.constraint_name AS name,
-              c.check_clause AS clause
-         FROM information_schema.check_constraints c
-         JOIN information_schema.table_constraints t
-           ON t.constraint_schema = c.constraint_schema
-          AND t.constraint_name = c.constraint_name
-        WHERE c.constraint_schema = DATABASE() AND t.constraint_type = 'CHECK'`
-    )) {
-      tableIn(catalog, check.tableName).constraints[check.name] =
-        `check ${check.clause}`;
-    }
-    for (const trigger of await query<{
-      tableName: string;
-      name: string;
-      timing: string;
-      event: string;
-      statement: string;
-    }>(
-      `SELECT event_object_table AS tableName, trigger_name AS name,
-              action_timing AS timing, event_manipulation AS event,
-              action_statement AS statement
-         FROM information_schema.triggers WHERE trigger_schema = DATABASE()`
-    )) {
-      tableIn(catalog, trigger.tableName).triggers[trigger.name] =
-        `${trigger.timing.toLowerCase()} ${trigger.event.toLowerCase()} ${trigger.statement.replace(/\s+/g, " ").trim()}`;
-    }
+    await mysqlColumns(query, catalog);
+    await mysqlIndexes(query, catalog);
+    await mysqlForeignKeys(query, catalog);
+    await mysqlChecksAndTriggers(query, catalog);
     return catalog;
   } finally {
     await connection.end();
