@@ -15,7 +15,9 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import type { StatusFilter } from "../../lib/status-filter";
+import type { FieldGroupReach } from "../../shared/lib/password-fields";
 
+import { isFieldLocalized } from "./classify-fields";
 import {
   buildTranslationStatusCondition,
   SOURCE_LOCALES_KEY,
@@ -150,6 +152,47 @@ function stripEachLanguage(
 }
 
 /**
+ * `reach` for values keyed by language: every language's values beside a row
+ * (`_allLocales`), or a row read of every translation. Each translated
+ * field's value is a map of language to value, so a password walk told so
+ * descends into each language's value in turn.
+ */
+export function keyedByLanguageReach(reach: FieldGroupReach): FieldGroupReach {
+  return {
+    ...reach,
+    keyedByLanguage: field =>
+      isFieldLocalized(field as Parameters<typeof isFieldLocalized>[0], true),
+  };
+}
+
+/** Every language's values beside `row` (`_allLocales`), when it carries them. */
+export function valuesBesideRow(
+  row: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  const every = row[ALL_LOCALES_KEY];
+  return isValues(every) ? every : undefined;
+}
+
+/**
+ * `value` with every plain object and array in it copied, so a later change
+ * to the original's nested values leaves this one as it was; any other value
+ * is shared. The evidence a rule is judged on is taken this way, so a pass
+ * that withholds a nested value from the row cannot withhold it from the
+ * evidence too.
+ */
+export function detachedCopy<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(detachedCopy) as T;
+  if (isValues(value)) {
+    const proto: unknown = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) return value;
+    return Object.fromEntries(
+      Object.entries(value).map(([key, inner]) => [key, detachedCopy(inner)])
+    ) as T;
+  }
+  return value;
+}
+
+/**
  * Decode every language's stored value of `name` beside a row
  * (`_allLocales`) with `decode`, as the row's own value of the field was. The
  * side map is read from the translations table as stored, so on a driver that
@@ -195,7 +238,9 @@ export async function judgeEachLanguage(
     Object.keys(every).map(name => [name, {}])
   );
   for (const code of codes) {
-    const inLanguage: Record<string, unknown> = { ...evidence };
+    // Detached, so one language's pass cannot withhold a nested value from
+    // the evidence the next language's rules read.
+    const inLanguage: Record<string, unknown> = detachedCopy(evidence);
     delete inLanguage[ALL_LOCALES_KEY];
     delete inLanguage[SOURCE_LOCALES_KEY];
     for (const [name, value] of Object.entries(every)) {

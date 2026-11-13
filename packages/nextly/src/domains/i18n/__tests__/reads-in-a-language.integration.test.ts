@@ -11,7 +11,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   defineCollection,
   defineSingle,
+  group,
   json,
+  password,
   relationship,
   text,
 } from "../../../config";
@@ -37,6 +39,9 @@ const GUARDED = "rlang_guarded";
 const NOTES = "rlang_notes";
 const POSTS = "rlang_posts";
 const AUTHORS = "rlang_authors";
+
+// What DATA's collection read hook was shown beside each row it read.
+const besideSeen: unknown[] = [];
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -74,6 +79,15 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         localized: true,
         status: true,
         access: { read: () => true },
+        hooks: {
+          afterRead: [
+            ({ data }: { data?: Record<string, unknown> }) => {
+              besideSeen.push(
+                JSON.parse(JSON.stringify(data?._allLocales ?? null))
+              );
+            },
+          ],
+        },
         fields: [
           text({ name: "title" }),
           json({ name: "meta", localized: true }),
@@ -98,6 +112,38 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
                 locale?: string;
               }) => !(data?.flag === "private" && locale === "es"),
             },
+          }),
+          // Shared, with a value hidden from every reader by its own rule.
+          group({
+            name: "settings",
+            localized: false,
+            fields: [
+              text({ name: "visibility", access: { read: () => false } }),
+            ],
+          }),
+          // Translated, and withheld in Spanish where the hidden visibility
+          // says the document is private.
+          text({
+            name: "blurb",
+            access: {
+              read: ({
+                data,
+                locale,
+              }: {
+                data?: Record<string, unknown>;
+                locale?: string;
+              }) =>
+                !(
+                  (data?.settings as Record<string, unknown> | undefined)
+                    ?.visibility === "private" && locale === "es"
+                ),
+            },
+          }),
+          // Translated, holding a password in every language.
+          group({
+            name: "vault",
+            localized: true,
+            fields: [text({ name: "label" }), password({ name: "pin" })],
           }),
           // Masked by its read hook in every language.
           text({
@@ -775,6 +821,97 @@ describe.each(getConfiguredTestDialects())(
       expect(read.json.teaser).toBe("en teaser");
       const every = read.json._allLocales as Record<string, unknown>;
       expect(every.teaser).toEqual({ en: "en teaser" });
+    }, 90_000);
+
+    // The row's own pass withholds a nested value from the row; each
+    // language's rule is still shown it, as the row's rule was.
+    it("judges each language's value on the row's nested hidden values too", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: DATA,
+        locale: "en",
+        data: {
+          title: "One",
+          settings: { visibility: "private" },
+          blurb: "en blurb",
+          status: "published",
+        },
+      });
+      const id = String(created.item.id);
+      await t.nextly.update({
+        collection: DATA,
+        id,
+        locale: "es",
+        data: {
+          title: "Uno",
+          blurb: "es blurb",
+          status: "published",
+          _overwrite: true,
+        },
+      });
+      // The row read in Spanish withholds its Spanish value: the rule reads
+      // the hidden nested value there.
+      const spanish = await restGet(
+        ["collections", DATA, "entries", id],
+        "?locale=es"
+      );
+      expect(spanish.status, JSON.stringify(spanish.json)).toBe(200);
+      expect(spanish.json).not.toHaveProperty("blurb");
+      const read = await restGet(
+        ["collections", DATA, "entries", id],
+        "?locale=en&translations=all"
+      );
+      expect(read.status, JSON.stringify(read.json)).toBe(200);
+      expect(read.json.blurb).toBe("en blurb");
+      const every = read.json._allLocales as Record<string, unknown>;
+      expect(every.blurb).toEqual({ en: "en blurb" });
+    }, 90_000);
+
+    // A password inside a translated group is cleared from every language's
+    // values before any hook is shown them, as it is from the row.
+    it("clears a password in every language before a read hook sees it", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: DATA,
+        locale: "en",
+        data: {
+          title: "One",
+          vault: { label: "Key", pin: "en-pin-1234" },
+          status: "published",
+        },
+      });
+      const id = String(created.item.id);
+      await t.nextly.update({
+        collection: DATA,
+        id,
+        locale: "es",
+        data: {
+          title: "Uno",
+          vault: { label: "Llave", pin: "es-pin-1234" },
+          status: "published",
+          _overwrite: true,
+        },
+      });
+      besideSeen.length = 0;
+      const read = (await t.nextly.findByID({
+        collection: DATA,
+        id,
+        locale: "en",
+        translations: "all",
+      })) as Record<string, unknown>;
+      // Present in every language, so a missing pin is the strip's doing.
+      expect(read._allLocales).toMatchObject({
+        vault: { en: { label: "Key" }, es: { label: "Llave" } },
+      });
+      expect(besideSeen.length).toBeGreaterThan(0);
+      for (const seen of besideSeen) {
+        const vault = (seen as Record<string, unknown> | null)?.vault as
+          | Record<string, Record<string, unknown> | null>
+          | undefined;
+        expect(vault?.en?.label).toBe("Key");
+        expect(vault?.en).not.toHaveProperty("pin");
+        expect(vault?.es).not.toHaveProperty("pin");
+      }
     }, 90_000);
 
     // A read carrying every language's values is judged by the read rule in

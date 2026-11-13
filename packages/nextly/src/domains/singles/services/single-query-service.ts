@@ -148,9 +148,12 @@ import {
 } from "../../i18n/per-language-storage";
 import {
   ALL_LOCALES_KEY,
+  detachedCopy,
   judgeEachLanguage,
+  keyedByLanguageReach,
   narrowToRowFields,
   publishedInLanguageCondition,
+  valuesBesideRow,
 } from "../../i18n/read-in-language";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
@@ -1224,8 +1227,9 @@ export class SingleQueryService extends BaseService {
       await fieldGroupPass?.(entry, fieldGroupCaller);
     };
     // The document as its own pass finds it, before that pass withholds
-    // anything: each language's rules are judged on the same evidence.
-    const evidence = { ...doc };
+    // anything, nested values included: each language's rules are judged on
+    // the same evidence.
+    const evidence = detachedCopy(doc);
     await finishFields(doc);
     // Every language's values beside the document go through the same
     // pipeline, asked in that language: a rule answering by value or by
@@ -1477,6 +1481,16 @@ export class SingleQueryService extends BaseService {
       );
       if (singleHasPassword) {
         stripPasswordFieldValues(doc, singleMeta.fields, passwordReach);
+        // Every language's values beside it too: a password inside a
+        // translated group or repeater is cleared in every language.
+        const every = valuesBesideRow(doc);
+        if (every) {
+          stripPasswordFieldValues(
+            every,
+            singleMeta.fields,
+            keyedByLanguageReach(passwordReach)
+          );
+        }
       }
       stripServerOnlyColumns(doc, singleMeta.tableName);
 

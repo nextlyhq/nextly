@@ -155,7 +155,6 @@ import {
 import { passwordReachOf } from "../../field-groups/password-reach";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
-import { isFieldLocalized } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
   buildLocalizedOrderExpr,
@@ -179,9 +178,12 @@ import {
 import { storesPerLanguage } from "../../i18n/per-language-storage";
 import {
   ALL_LOCALES_KEY,
+  detachedCopy,
   judgeEachLanguage,
+  keyedByLanguageReach,
   narrowToRowFields,
   publishedInLanguageCondition,
+  valuesBesideRow,
 } from "../../i18n/read-in-language";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import {
@@ -2887,23 +2889,24 @@ export class CollectionQueryService extends BaseService {
     // A read of every translation returns each translated field keyed by
     // language, the fields `decodeJsonFieldValues` decodes that way.
     const inline = await passwordReachOf(fields, this.fieldGroupDataService);
+    const eachLanguage = keyedByLanguageReach(inline);
     const reach: FieldGroupReach =
-      params.locale === EVERY_TRANSLATION
-        ? {
-            ...inline,
-            keyedByLanguage: field =>
-              isFieldLocalized(
-                field as Parameters<typeof isFieldLocalized>[0],
-                true
-              ),
-          }
-        : inline;
+      params.locale === EVERY_TRANSLATION ? eachLanguage : inline;
 
     // (1) Before any afterRead hook — collection, stored, or field-level — so a
     // hook receiving the hash cannot copy it into an allowed property the later
     // redaction does not look at. The final strip below stays as defense in
     // depth.
     this.redactServerOnlyFields(rows, fields, tableName, reach);
+    // Every language's values beside each row too, before any hook: a
+    // password inside a translated group or repeater is cleared in every
+    // language as it is in the row.
+    for (const row of rows) {
+      const every = valuesBesideRow(row);
+      if (every) {
+        this.redactServerOnlyFields([every], fields, tableName, eachLanguage);
+      }
+    }
 
     // (2) On SQLite these columns come back as strings, and a hook is
     // documented against the configured value.
@@ -3099,8 +3102,9 @@ export class CollectionQueryService extends BaseService {
     };
     for (const row of finalData) {
       // The row as its own pass finds it, before that pass withholds
-      // anything: each language's rules are judged on the same evidence.
-      const evidence = { ...row };
+      // anything, nested values included: each language's rules are judged
+      // on the same evidence.
+      const evidence = detachedCopy(row);
       await finishFields(row);
       // Every language's values beside the row go through the same pipeline,
       // asked in that language: a rule answering by value or by language,
