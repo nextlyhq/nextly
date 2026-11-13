@@ -250,6 +250,41 @@ describe("scheduling from the Publishing section", () => {
     expect(screen.queryByRole("button", { name: "Schedule…" })).toBeNull();
   });
 
+  it("holds the place of the reason the offer is off, too, while the schedule is checked", async () => {
+    // A reader who may not schedule now (a colleague holds the document):
+    // the answer draws the offer with the reason under it, so the place
+    // held for it must be as tall.
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(() => {}));
+    function Withheld(props: { children: ReactNode }) {
+      const inner = Editor({ children: props.children });
+      if (hosted.current !== null) {
+        const [id] = Object.keys(hosted.current.bindings ?? {});
+        hosted.current = {
+          ...hosted.current,
+          bindings: {
+            ...hosted.current.bindings,
+            [id]: {
+              ...hosted.current.bindings![id]!,
+              disabledReason: "Someone else is editing this document.",
+            },
+          },
+        } as typeof hosted.current;
+      }
+      return inner;
+    }
+    render(
+      <Withheld>
+        <PublishingSection document={DOCUMENT} />
+      </Withheld>
+    );
+    const checking = await screen.findByText("Checking releases");
+    const body = checking.parentElement!;
+    const held = body.querySelector("p.text-xs");
+    expect(held?.textContent).toBe("Someone else is editing this document.");
+    expect(held?.className.split(/\s+/)).toContain("invisible");
+    expect(held?.getAttribute("aria-hidden")).toBe("true");
+  });
+
   it("offers nothing to a person who may not create releases, since every way makes or joins one", async () => {
     grants.missing = ["create-content-releases"];
     showEditor();

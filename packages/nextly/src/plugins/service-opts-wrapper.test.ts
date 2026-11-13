@@ -891,3 +891,70 @@ describe("listEntriesInTransaction", () => {
     expect(m.listEntries).not.toHaveBeenCalled();
   });
 });
+
+describe("a plugin's field rewrite", () => {
+  const rewrite = {
+    field: "layout",
+    expectedVersion: "7",
+    set: { value: null },
+    reason: "Layout 'Wide' was deleted",
+  };
+  const done = { version: "8", copies: [{ form: "live", locale: null }] };
+
+  function services() {
+    const collections = { rewriteField: vi.fn().mockResolvedValue(done) };
+    const singles = {
+      rewriteField: vi.fn().mockResolvedValue({
+        success: true,
+        statusCode: 200,
+        data: done,
+      }),
+    };
+    const facade = wrap(
+      collections as never,
+      deps,
+      "@acme/layouts",
+      () => singles as never
+    );
+    return { collections, singles, facade };
+  }
+
+  it("takes a Single's to the Singles service, naming the plugin from its identity", async () => {
+    const { collections, singles, facade } = services();
+    await expect(
+      facade.rewriteField({ single: "site", ...rewrite })
+    ).resolves.toEqual(done);
+    expect(singles.rewriteField).toHaveBeenCalledWith({
+      request: { single: "site", ...rewrite },
+      user: undefined,
+      overrideAccess: true,
+      authenticatedScope: undefined,
+      plugin: "@acme/layouts",
+    });
+    expect(collections.rewriteField).not.toHaveBeenCalled();
+  });
+
+  it("takes an entry's to the collection service", async () => {
+    const { collections, singles, facade } = services();
+    await facade.rewriteField({ collection: "pages", id: "p1", ...rewrite });
+    expect(collections.rewriteField).toHaveBeenCalledWith(
+      { collection: "pages", id: "p1", ...rewrite },
+      SYSTEM_CTX,
+      "@acme/layouts"
+    );
+    expect(singles.rewriteField).not.toHaveBeenCalled();
+  });
+
+  it("answers a Single's refusal as the error it is", async () => {
+    const { singles, facade } = services();
+    singles.rewriteField.mockResolvedValueOnce({
+      success: false,
+      statusCode: 409,
+      code: "STALE_VERSION",
+      message: "Out of date",
+    });
+    await expect(
+      facade.rewriteField({ single: "site", ...rewrite })
+    ).rejects.toMatchObject({ code: "STALE_VERSION" });
+  });
+});

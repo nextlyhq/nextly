@@ -53,6 +53,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../domains/i18n/per-language-storage";
+import { participatingOwners } from "../domains/public-addresses/participants";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import {
   clearActiveExtensionSchema,
@@ -151,6 +152,10 @@ import {
   singleHookNamespace,
 } from "../hooks/register-single-hooks";
 import type { HookOwner } from "../hooks/types";
+import {
+  currentConfiguredExtensions,
+  publishConfiguredExtensions,
+} from "../plugins/extended-types";
 import { getInitializedPlugins } from "../plugins/initialized-plugins";
 import type { PluginDefinition } from "../plugins/plugin-context";
 import { publishPluginDependencies } from "../plugins/plugin-dependencies";
@@ -1043,6 +1048,18 @@ function stageConfigHooks(newConfig: {
       registry.setSuspendedOwners(
         [...candidates].filter(owner => !stillRunning.has(owner))
       );
+      // A plugin switched off, or on again, may change which plugins keep
+      // public addresses unique: the set is read now, as this reload leaves
+      // it, and kept after the reload in the order reloads ran, never
+      // failing it.
+      const owners = participatingOwners();
+      void import("../domains/public-addresses/participation")
+        .then(({ queueParticipation }) => queueParticipation(owners))
+        .catch((error: unknown) => {
+          consoleLogger.warn(
+            `[Nextly] The plugins keeping public addresses could not be recorded after a reload: ${String(error)}`
+          );
+        });
     }
   };
 }
@@ -1795,6 +1812,9 @@ async function applyReloadHolding(
     // next apply would plan dropping a column the running site still keeps.
     const previousWithheld = currentWithheldScopeFields();
     reloadUndo.push(() => publishWithheldScopeFields(previousWithheld));
+    // Likewise which configured types each plugin's fields were added to.
+    const previousExtended = currentConfiguredExtensions();
+    reloadUndo.push(() => publishConfiguredExtensions(previousExtended));
     clearConfigCache();
     const result = await loadConfig();
     // Watch exactly what this read: the config and every file it imported. Set
@@ -2113,6 +2133,18 @@ async function applyReloadHolding(
         warn: m => logger?.warn(m),
       },
     });
+    // A plugin whose prefix moved since its tables were recorded is refused
+    // here, as at boot, before the push would create its tables again under
+    // the new names; the catch below keeps the previous config.
+    const { assertPluginPrefixesKeptIn } = await import(
+      "../domains/schema/ownership/plugin-prefix-check"
+    );
+    await assertPluginPrefixesKeptIn({
+      prefixes: reloadedExtensionSchema?.pluginPrefixes,
+      db,
+      dialect,
+      adapter,
+    });
     // Compared on the fingerprint of what was compiled, the key the pipeline
     // itself caches on, so "changed" here and "changed" there are one answer.
     extensionSchemaChanged =
@@ -2121,7 +2153,7 @@ async function applyReloadHolding(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger?.error(
-      `[Nextly HMR] Could not compile the extension schema: ${msg}. ` +
+      `[Nextly HMR] Could not apply the extension schema: ${msg}. ` +
         `Keeping the previously-loaded config.`
     );
     undoOptimisticReloadWork();

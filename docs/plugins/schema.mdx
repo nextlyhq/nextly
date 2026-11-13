@@ -101,7 +101,9 @@ A scope reaches:
   Schema Builder, including ones made after the plugin was installed (they get the
   field on the next start);
 - never a plugin's own collections or Singles (yours included), Nextly's system
-  types such as `users` and `media`, or field groups;
+  types such as `users` and `media`, or field groups, apart from a plugin's
+  collection marked `siteContent: true` (`@experimental`), one that holds the
+  site's own content, such as Page Builder's `pages`;
 - never a type listed in `except`.
 
 A type that already has a field of the same name is left as it is and named in a
@@ -138,6 +140,33 @@ else it would drop, and asks first; `--accept-data-loss` (or naming each
 
 `typesReachedBy(scope, types)` gives the same answer to anything else that needs to
 know which types a scope covers.
+
+### Which types got your field (`@experimental`)
+
+A scope decides at start which types it reaches: the Schema Builder's are read then, and
+a type that kept a field of its own by that name is left alone. `typesExtendedBy(plugin,
+field)` answers what the start actually did, from what it recorded, with no database read:
+
+```ts
+import { typesExtendedBy } from "@nextlyhq/plugin-sdk";
+
+// [{ kind: "collection", slug: "posts" }, { kind: "single", slug: "homepage" }, …]
+const types = typesExtendedBy("@acme/nextly-plugin-seo", "seo");
+```
+
+A type made in the Schema Builder since the start is listed once the site starts again,
+when it gets the field. An admin tab or panel section that edits the field takes
+`extendedWith: ["seo"]`, so the admin offers it on exactly those types (see the
+[API reference](/docs/plugins/api-reference)).
+
+A plugin whose collection holds the site's own pages marks it so scopes reach it:
+
+```ts
+defineCollection({ slug: "pages", siteContent: true, fields: [/* … */] });
+```
+
+The plugin's other collections, such as form submissions or internal records, stay out of
+every scope.
 
 ## Change entities you don't own
 
@@ -294,10 +323,10 @@ Tables a plugin declares with `defineTable` and ships migration modules for are
 installed and removed with two commands, run while the plugin is in your config:
 
 ```bash
-nextly plugins install <name>                # apply its pending modules, then onInstall
-nextly plugins install --all                 # the same for every enabled plugin, dependencies first
-nextly plugins uninstall <name>              # onUninstall, then every module's DOWN
-nextly plugins uninstall <name> --keep-data  # onUninstall only; the tables stay, orphaned
+nextly plugins install <name>                       # apply its pending modules, then onInstall
+nextly plugins install --all                        # the same for every enabled plugin, dependencies first
+nextly plugins uninstall <name> --accept-data-loss  # onUninstall, then every module's DOWN
+nextly plugins uninstall <name> --keep-data         # onUninstall only; the tables stay, orphaned
 ```
 
 A production boot refuses an enabled plugin until the install command has run on
@@ -305,8 +334,9 @@ that database (`PLUGIN_NOT_INSTALLED`); a disabled one boots without it. `nextly
 migrate` applies a plugin's modules but does not install it. Install refuses while a plugin it depends on is not installed
 (`PLUGIN_DEPENDENCY_NOT_INSTALLED`). Uninstall refuses while another enabled plugin
 depends on it (`PLUGIN_HAS_DEPENDENTS`) or when a module has no DOWN
-(`PLUGIN_UNINSTALL_IRREVERSIBLE`), and asks for `--yes` before dropping anything
-(`PLUGIN_UNINSTALL_UNCONFIRMED`). A full uninstall also refuses (`PLUGIN_UNINSTALL_WOULD_DROP_OTHERS`) while
+(`PLUGIN_UNINSTALL_IRREVERSIBLE`), and asks before dropping anything: at a terminal it
+asks once, and without one it needs `--accept-data-loss`, alone or naming each table it
+drops (`PLUGIN_UNINSTALL_UNCONFIRMED`; `--yes` does not consent to deleting data). A full uninstall also refuses (`PLUGIN_UNINSTALL_WOULD_DROP_OTHERS`) while
 another owner has built on the plugin's schema: a column, index, foreign key or check the
 app or another plugin added to one of its tables, a key or a relationship field elsewhere
 pointing into them, or an index or key using or referencing a column the plugin added to
@@ -372,6 +402,13 @@ definePlugin({
 That table is created as `auth__identities`. The prefix is yours; declare it,
 or let it default to your plugin's admin slug.
 
+For a whole plugin built this way, see the
+[reading-lists fixture](https://github.com/nextlyhq/nextly/tree/dev/apps/playground/src/plugins/reading-lists-fixture)
+in the Nextly repository: two tables with a foreign key and a relation, their
+generated migration module, a hidden column on a collection, an idempotent
+`onInstall`, and a test that installs, uses and uninstalls it with the real
+commands on PostgreSQL, MySQL and SQLite.
+
 ### The column kinds
 
 - Text: `text`, `shortText`, `longText`, `varchar(n)`, `char(n)`, `uuid`, and
@@ -420,6 +457,8 @@ contributes: {
   schema: {
     extend: [
       ({ schema }) => {
+        // Absent when your own migration modules are generated: see below.
+        if (!schema.getTable("dc_posts")) return;
         schema.extendTable("dc_posts", {
           indexes: [{ columns: ["authorId", "publishedAt"] }],
         });
@@ -431,6 +470,14 @@ contributes: {
 
 The declarative `tables` form is sugar for a hook calling `addTable`. They
 produce identical output.
+
+`nextly migrate:create --plugin` compiles your migration modules from your plugin
+and its `dependsOn` alone, never from a site's collections, Singles and field
+groups, which differ per installation. A hook that extends one of those tables
+must skip it there, by checking `schema.getTable(name)` first as above, or
+generation stops with `PLUGIN_EXTENDS_OUTSIDE_ITS_SCHEMA`. The site's own
+`nextly migrate:create` compiles it with every table present, and writes your
+addition into the site's migration.
 
 ## What you may change
 
@@ -487,6 +534,10 @@ back and the index would be planned again on every push. `col.ref()` alone recor
 for documentation and validation; a constraint comes from the `foreignKeys`
 option. A foreign key may not use `onDelete` or `onUpdate: "set default"`,
 which MySQL cannot create.
+
+Your tables hold exactly what you declare: a check or foreign key added to one
+any other way is dropped by the next development push. See
+[What is not supported](/docs/database/extending-the-schema#what-is-not-supported).
 
 ## Production
 

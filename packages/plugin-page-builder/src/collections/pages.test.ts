@@ -210,3 +210,17 @@ describe("pages keeps its Layout choice to the one picker", () => {
     }
   });
 });
+
+/**
+ * Pages are the site's own content, so a plugin extending every content type
+ * (an SEO plugin adding its fields) reaches them; the plugin's other
+ * collections, such as its layouts, are not marked and are left alone.
+ */
+describe("pages are marked as the site's content", () => {
+  it("marks pages, and only pages, among the collections the plugin adds", () => {
+    const marked = (pageBuilder().contributes?.collections ?? [])
+      .filter(collection => collection.siteContent === true)
+      .map(collection => collection.slug);
+    expect(marked).toEqual(["pages"]);
+  });
+});

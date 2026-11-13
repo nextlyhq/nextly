@@ -390,6 +390,7 @@ import {
   registerEntryDesignCascade,
 } from "./templates/entry-design-cascade";
 import { judgeTemplateInTransaction } from "./templates/entry-design-write";
+import { ENTRY_DESIGN_STARTUP_PATH } from "./templates/entry-designs-contract";
 import { entryDesignsRoute } from "./templates/entry-designs-route";
 import {
   templateActionsRoute,
@@ -1477,13 +1478,23 @@ function siteStyleReads(
   return {
     documentOn,
     styleNow: async () => siteStyleOfDocument(await documentNow(), defaults),
-    definitions: async transaction =>
-      siteDefinitionsOfDocument(
-        transaction === undefined
-          ? await documentNow()
-          : await documentOn(transaction),
-        defaults
-      ),
+    definitions: async transaction => {
+      if (transaction !== undefined) {
+        return siteDefinitionsOfDocument(
+          await documentOn(transaction),
+          defaults
+        );
+      }
+      // Inside a field rewrite's transaction, the definitions it read before
+      // opening it: read through the pool there, they would wait on the
+      // connection the rewrite holds. Imported at call time: server-only.
+      const { siteDefinitionsInScope } = await import(
+        "./host-rewrite/rewrite-scope"
+      );
+      return siteDefinitionsInScope(async () =>
+        siteDefinitionsOfDocument(await documentNow(), defaults)
+      );
+    },
   };
 }
 
@@ -1535,7 +1546,9 @@ function removalDocumentsOn(
 function rewriteInstallFor(
   ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
   opts: PageBuilderOptions,
-  composition: CompositionSetup
+  composition: CompositionSetup,
+  /** The usage indexes' reconciler, read per call: `init` registers it. */
+  reconcile: () => CommittedWriteReconciler | undefined
 ): RewriteInstall {
   // The booted instance through the SDK, the plugin's stable surface, imported
   // at call time for the reason `defaultLayoutDeps` gives.
@@ -1577,6 +1590,34 @@ function rewriteInstallFor(
     },
     store: composition.store,
     limits: () => opts.limits ?? DEFAULT_LIMITS,
+    // The plugin's own service, so a converted document's history names the
+    // Page Builder beside the person who deleted the component.
+    rewriteField: (request, as) =>
+      ctx.services.collections.rewriteField(request, as),
+    // The site's definitions read before the rewrite opens its transaction,
+    // and each copy as it is decided, for the validation core runs inside it
+    // (`host-rewrite/rewrite-scope`).
+    rewriteScope: async (field, run) => {
+      const { withRewriteScope } = await import("./host-rewrite/rewrite-scope");
+      const scope = {
+        siteDefinitions: await composition.siteDefinitions?.(),
+        current: null as { field: string; stored: unknown } | null,
+      };
+      return withRewriteScope(scope, () =>
+        run(stored => {
+          scope.current = { field, stored };
+        })
+      );
+    },
+    // A field rewrite runs no save hooks, the usage indexes' among them, so
+    // each rewritten document is brought in line once the rewrite commits.
+    afterRewrite: async document => {
+      await reconcile()?.({
+        slug: document.slug,
+        documentId: document.id,
+        nextly: await nextly(),
+      });
+    },
   };
 }
 
@@ -3665,7 +3706,12 @@ export const pageBuilder = (
           lifecycle,
         });
       }
-      rewriteInstall = rewriteInstallFor(ctx, opts, composition);
+      rewriteInstall = rewriteInstallFor(
+        ctx,
+        opts,
+        composition,
+        () => usage.reconcile
+      );
       // The "Bindings to fix" report: each committed write's document judged
       // again, and every document by the sweep once the schema changes.
       bindingReportCtx = ctx;
@@ -4513,6 +4559,10 @@ export const pageBuilder = (
             // the section sits above the form there, where an author meets
             // which design the entry is shown with before its fields.
             narrow: "above-form",
+            // The section's read, started as the edit page opens rather than
+            // once the section mounts, so the section is drawn above Status
+            // with the editor instead of pushing it down after.
+            startupReads: [{ path: ENTRY_DESIGN_STARTUP_PATH }],
           },
         ],
         // Delete component on the component store, wherever it is: the

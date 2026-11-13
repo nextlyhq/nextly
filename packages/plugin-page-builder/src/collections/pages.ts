@@ -130,6 +130,10 @@ export function pagesCollection(
   return defineCollection({
     slug: PAGES_SLUG,
     labels: { singular: "Page", plural: "Pages" },
+    // The site's own pages, though this plugin declares them: a plugin that
+    // extends every content type, such as one adding SEO fields, reaches
+    // them as it reaches the site's own collections.
+    siteContent: true,
     // A page's address may sit beneath another (`docs/getting-started`),
     // each part normalised as a one-part address is. A rule about the stored
     // value only, outside the schema, so an existing site migrates nothing

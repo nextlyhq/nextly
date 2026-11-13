@@ -31,6 +31,7 @@ import {
   type DeclaredAdminPlace,
 } from "./admin-places-registry";
 import { orderContributions, type OrderedEntry } from "./contribution-order";
+import { placeStartupReadsProblem } from "./place-startup-reads";
 import type { PluginDefinition } from "./plugin-context";
 import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
 import { resolutionError } from "./resolution-error";
@@ -62,6 +63,8 @@ const BASE_KEYS = [
   "visibleWhen",
   "collections",
   "singles",
+  "startupReads",
+  "extendedWith",
 ];
 
 /** The keys of each kind's own. */
@@ -307,6 +310,46 @@ function placementProblem(
   return audienceProblem(declared, kind);
 }
 
+/** The places about one content type, where `extendedWith` can narrow it. */
+const TYPE_PLACES = new Set([...COLLECTION_PLACES, "single.edit"]);
+
+/**
+ * What makes `extendedWith` unusable, or `undefined`: a non-empty list of
+ * top-level field names, each one the plugin's own `extend` adds, at a place
+ * about one content type.
+ */
+function extendedWithProblem(
+  extendedWith: unknown,
+  place: string,
+  plugin: PluginDefinition
+): string | undefined {
+  if (extendedWith === undefined) return undefined;
+  if (!TYPE_PLACES.has(place)) {
+    return `it names \`extendedWith\` at "${place}", which is not about one content type`;
+  }
+  if (
+    !Array.isArray(extendedWith) ||
+    extendedWith.length === 0 ||
+    !extendedWith.every(
+      name => typeof name === "string" && FIELD_NAME.test(name)
+    )
+  ) {
+    return "its `extendedWith` is not a list of top-level field names";
+  }
+  const added = new Set(
+    (plugin.contributes?.extend ?? []).flatMap(clause =>
+      clause.fields.flatMap(field => {
+        const name = (field as { name?: unknown }).name;
+        return typeof name === "string" ? [name] : [];
+      })
+    )
+  );
+  const stray = (extendedWith as string[]).find(name => !added.has(name));
+  return stray === undefined
+    ? undefined
+    : `its \`extendedWith\` names "${stray}", which the plugin's \`extend\` does not add`;
+}
+
 /** What makes `visibleWhen` or `collections` unusable here, or `undefined`. */
 function audienceProblem(
   declared: Record<string, unknown>,
@@ -358,9 +401,15 @@ function contributionProblem(
   if (typeof declared.place !== "string") return "it names no place";
   return (
     kindProblem(kind as AdminContributionKind, declared, plugin) ??
+    placeStartupReadsProblem(
+      plugin.name,
+      declared.place,
+      declared.startupReads
+    ) ??
     (declared.fields === undefined
       ? undefined
       : tabFieldsProblem(declared.fields, declared.place)) ??
+    extendedWithProblem(declared.extendedWith, declared.place, plugin) ??
     placementProblem(declared, kind as AdminContributionKind)
   );
 }

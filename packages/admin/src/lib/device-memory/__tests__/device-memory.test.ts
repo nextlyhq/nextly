@@ -29,11 +29,13 @@ import {
   hasSignedInHere,
   isRememberedSchemaPath,
   recallBranding,
+  recallLayout,
   recallMenu,
   recallPreference,
   recallSchema,
   remember,
   rememberBranding,
+  rememberLayout,
   rememberMenu,
   rememberPreference,
   rememberSchema,
@@ -188,6 +190,59 @@ describe("what the device memory keeps", () => {
       window.localStorage.getItem(`${DEVICE_MEMORY_PREFIX}menu`) ?? "null"
     ) as { labels: Record<string, string> };
     expect(stored.labels).toEqual({ build: buildLabel(), ...LABELS });
+  });
+});
+
+describe("how the admin's parts were drawn", () => {
+  it("keeps a whole number per part, beside every other part kept", () => {
+    confirmLabels(LABELS);
+    expect(rememberLayout("list-rows:posts", 10)).toBe(true);
+    expect(rememberLayout("list-rows:users", 3)).toBe(true);
+
+    expect(recallLayout("list-rows:posts")).toBe(10);
+    expect(recallLayout("list-rows:users")).toBe(3);
+    expect(recallLayout("list-rows:tags")).toBeUndefined();
+    expect(storedKeys()).toEqual([`${DEVICE_MEMORY_PREFIX}layout`]);
+  });
+
+  it.each([
+    ["a fraction", 2.5],
+    ["a negative", -1],
+    ["not a number", Number.NaN],
+  ])("refuses %s, which is no size", (_case, size) => {
+    confirmLabels(LABELS);
+    expect(rememberLayout("list-rows:posts", size)).toBe(false);
+    expect(recallLayout("list-rows:posts")).toBeUndefined();
+  });
+
+  it("refuses anything but numbers carried in the entry itself", () => {
+    confirmLabels(LABELS);
+    expect(remember("layout", "", { "list-rows:posts": "Hello" })).toBe(false);
+    expect(remember("layout", "posts", { "list-rows:posts": 3 })).toBe(false);
+    expect(storedKeys()).toEqual([]);
+  });
+
+  it("is forgotten with the person, and by the site's off switch", () => {
+    confirmLabels(LABELS);
+    rememberSignedInHere();
+    rememberLayout("list-rows:posts", 10);
+    forgetPerson();
+    expect(recallLayout("list-rows:posts")).toBeUndefined();
+
+    resetDeviceMemoryForTests();
+    confirmLabels(LABELS);
+    rememberLayout("list-rows:posts", 10);
+    applyRememberingSwitch(false);
+    expect(storedKeys()).toEqual([]);
+    expect(rememberLayout("list-rows:posts", 10)).toBe(false);
+  });
+
+  it("is not read for another person", () => {
+    confirmLabels(LABELS);
+    rememberLayout("list-rows:posts", 10);
+    resetDeviceMemoryForTests();
+    confirmLabels({ ...LABELS, user: "user-2" });
+    expect(recallLayout("list-rows:posts")).toBeUndefined();
   });
 });
 

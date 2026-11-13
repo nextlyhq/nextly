@@ -72,7 +72,7 @@ interface PluginContributions {
     menu?: PluginMenuItem[]; // { label, to, icon?, order?, requiredPermission?, children? }
     pages?: PluginAdminPage[]; // { path, component, requiredPermission?, startupReads? }
     settings?: { component: ComponentPath };
-    views?: Record<string, PluginCollectionView>; // list/edit/before*/after*, and @experimental documentViews, documentActions and panelSections, by collection slug
+    views?: Record<string, PluginCollectionView>; // list/edit/before*/after*, and @experimental documentViews, documentActions, panelSections and foldedPanel, by collection slug
     documentViews?: PluginFieldTypeDocumentView[]; // @experimental: views on every collection or Single with a field of one of this plugin's field types, at the top level, inside named groups, or in a repeater's rows
     places?: PluginAdminPlaceDeclaration[]; // @experimental: { name, description? }, places on your own pages; your slug and a dot, or boot fails
     filters?: PluginListFilterDeclaration[]; // @experimental: { name, label, collections?, options: [{ value, label, where }] }, in the entry list's toolbar
@@ -1024,6 +1024,9 @@ contributes: {
         label: "SLA",
         component: "@acme/support/admin#Sla",
         after: "status", // after the built-in Status section, as close as it can
+        // @experimental: the reads the section makes as it opens, started with the page
+        // (collection.edit, single.edit and entry.form only; refused elsewhere)
+        startupReads: [{ path: "/sla?collection={collection}&entry={entryId}" }],
       },
       {
         id: "acme-support.escalate",
@@ -1107,6 +1110,12 @@ only what they may see:
   read, and a rule needing it does not match, `exists` and `not` included. A
   contribution whose rule names such a field is not sent to that reader at
   all.
+- `extendedWith` (`@experimental`) names fields the plugin's own `extend`
+  adds. The contribution is then offered only on the collections, or on a
+  Single's page the Singles, where the start added every one of them: a tab
+  that edits a field a scope adds follows it to Schema Builder types, and
+  skips a type that kept a field of its own by that name. With `collections`
+  or `singles` too, it is offered where both agree.
 
 The admin draws blocks and tabs at settings, a user's detail page, the account
 page, the entry form, the login page, both edit pages and the dashboard, in the order sent,

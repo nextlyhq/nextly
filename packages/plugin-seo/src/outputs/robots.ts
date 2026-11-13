@@ -12,6 +12,17 @@
 import { FRAMEWORK_CRAWL_EXCLUSIONS } from "@nextlyhq/plugin-sdk";
 
 import type { AiCrawlerChoice } from "../settings/contract";
+import { readOwnRules } from "../settings/robots-rules";
+
+import { AI_SEARCH_CRAWLERS, AI_TRAINING_CRAWLERS } from "./ai-crawlers";
+
+// The list itself lives where the settings screen can read it too.
+export {
+  AI_CRAWLERS,
+  AI_CRAWLERS_CHECKED,
+  AI_SEARCH_CRAWLERS,
+  AI_TRAINING_CRAWLERS,
+} from "./ai-crawlers";
 
 /**
  * What AI crawlers are asked: `all` lets every one read the site, `search`
@@ -19,39 +30,6 @@ import type { AiCrawlerChoice } from "../settings/contract";
  * `block` asks every known one to. The SEO settings offer the same choices.
  */
 export type { AiCrawlerChoice } from "../settings/contract";
-
-/**
- * The crawlers that collect pages to train AI models. `Google-Extended` is how
- * Google is asked not to train on a site, which also limits what Gemini can
- * use from it; Google Search reads as `Googlebot` and is not affected.
- */
-export const AI_TRAINING_CRAWLERS: readonly string[] = [
-  "GPTBot",
-  "ClaudeBot",
-  "Google-Extended",
-  "Applebot-Extended",
-  "CCBot",
-  "meta-externalagent",
-  "Bytespider",
-  "Amazonbot",
-  "cohere-training-data-crawler",
-];
-
-/**
- * The crawlers AI tools read pages with to answer a question and cite them,
- * and to fetch a page a person asked about.
- */
-export const AI_SEARCH_CRAWLERS: readonly string[] = [
-  "OAI-SearchBot",
-  "ChatGPT-User",
-  "Claude-SearchBot",
-  "Claude-User",
-  "PerplexityBot",
-  "Perplexity-User",
-  "DuckAssistBot",
-  "MistralAI-User",
-  "meta-externalfetcher",
-];
 
 /** The crawlers a choice asks to stay away, in the order the file names them. */
 function shutOut(choice: AiCrawlerChoice): readonly string[] {
@@ -63,12 +41,27 @@ function shutOut(choice: AiCrawlerChoice): readonly string[] {
 }
 
 /**
+ * The site's own lines as served: each trimmed, without the blank lines at
+ * either end, and none at all for an empty box or one its own check refuses,
+ * so a line that would keep crawlers from the whole site is never served.
+ */
+function ownLinesOf(ownRules: string | undefined): string[] {
+  if (ownRules === undefined || readOwnRules(ownRules).refused) return [];
+  const lines = ownRules.split(/\r\n|\r|\n/).map(line => line.trim());
+  while (lines.length > 0 && lines[0] === "") lines.shift();
+  while (lines.length > 0 && lines.at(-1) === "") lines.pop();
+  return lines;
+}
+
+/**
  * The robots.txt for a site: `sitemap` is the sitemap's absolute address,
- * absent where the site serves none.
+ * absent where the site serves none; `ownRules` are the lines the site adds
+ * in the SEO settings, served after every line of the plugin's own.
  */
 export function robotsTxt(options: {
   sitemap?: string;
   aiCrawlers: AiCrawlerChoice;
+  ownRules?: string;
 }): string {
   const groups = [
     [
@@ -85,6 +78,12 @@ export function robotsTxt(options: {
   ];
   if (options.sitemap !== undefined) {
     groups.push([`Sitemap: ${options.sitemap}`]);
+  }
+  // Last, so they add to the plugin's lines and never stand in for them: a
+  // crawler joins every group naming it, wherever in the file it is.
+  const own = ownLinesOf(options.ownRules);
+  if (own.length > 0) {
+    groups.push(["# Your own rules, from the SEO settings", ...own]);
   }
   return `${groups.map(lines => lines.join("\n")).join("\n\n")}\n`;
 }

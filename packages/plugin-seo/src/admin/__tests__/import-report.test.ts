@@ -8,8 +8,10 @@ import { describe, expect, it } from "vitest";
 
 import type { DryRunBody, ImportReportEntry } from "../../import/contract";
 import {
+  RESULT_WORDS,
   cellResultOf,
   firstOfPage,
+  neverServedWords,
   otherChanges,
   reportCsv,
   reportedPages,
@@ -73,7 +75,7 @@ const RUN = runOf([
     outcome: "skipped",
     neverServed: ["title", "description"],
     values: { title: "Old title", description: "Old, never shown" },
-    reason: "Never served: the page's own code sets these values.",
+    reason: "The page's code sets its own value now.",
   }),
   // A record that matched no page: reported, but on no page.
   {
@@ -147,7 +149,7 @@ describe("the downloaded report", () => {
       "About,published,kept,About us,Kept (already typed),Who we are,Same as automatic (left empty),"
     );
     expect(lines[3]).toContain(
-      'Old title,Skipped (never served),"Old, never shown",Skipped (never served)'
+      "Old title,Skipped (the page's code sets its own),\"Old, never shown\",Skipped (the page's code sets its own)"
     );
     expect(lines[4]).toBe("/gone,,skipped,,,,,Not on this site.");
     expect(lines).toHaveLength(5);
@@ -279,6 +281,31 @@ describe("a version the source holds no value for", () => {
       .split("\r\n");
     expect(lines[1]).toBe(
       "Preise,Deutsch · published,set,Preise,Will set,,Nothing to import (not in the source),"
+    );
+  });
+});
+
+describe("the words for values a page's code overrides", () => {
+  // The plugin knows only that the page's code sets its own value now, not
+  // what the page showed before it was installed.
+  const said = [
+    ...Object.values(RESULT_WORDS).flatMap(each => [each.label, each.why]),
+    ...Object.values(neverServedWords(RUN, false, "SEO (old)") ?? {}),
+    ...Object.values(neverServedWords(RUN, true, "SEO (old)") ?? {}),
+  ].filter((each): each is string => each !== undefined);
+
+  it("never claim a value was never served", () => {
+    expect(said.length).toBeGreaterThan(0);
+    for (const words of said) expect(words).not.toMatch(/never served/i);
+  });
+
+  it("say the page's code sets its own value, and when to include it", () => {
+    expect(neverServedWords(RUN, false, "SEO (old)")).toEqual({
+      title: "1 page sets its own values in code, so they'll be skipped",
+      text: "Changelog sets its own title and description in its code now, so importing the values stored in SEO (old) would change what the page shows. Include them if the page showed them before and should again.",
+    });
+    expect(neverServedWords(RUN, true, "SEO (old)")?.title).toBe(
+      "Values the page's code overrides are included"
     );
   });
 });

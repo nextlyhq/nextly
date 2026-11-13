@@ -508,6 +508,7 @@ exports[`plugin-sdk public export surface > \`./testing\` surface is unchanged 1
   "getConfiguredTestDialects (value)",
   "runWidgetLoad (value)",
   "takeAbortedTransactionSightings (value)",
+  "undeclaredPluginRoutes (value)",
 ]
 `;
 
@@ -580,6 +581,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "DeliveryClaimResult (type)",
   "DocumentEventName (type)",
   "DocumentEvents (value)",
+  "DocumentFieldRewriteRequest (type)",
   "DraftSplitDisabledReason (type)",
   "DraftSplitEligibility (type)",
   "DurableEvent (type)",
@@ -597,6 +599,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "EventEnvelope (type)",
   "EventHandler (type)",
   "EventName (type)",
+  "ExtendedType (type)",
   "FRAMEWORK_CRAWL_EXCLUSIONS (value)",
   "FieldAdminOptions (type)",
   "FieldConfig (type)",
@@ -845,6 +848,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "SerializedFieldConfig (type)",
   "ServiceOpts (type)",
   "SettingEditorProps (type)",
+  "SingleFieldRewriteRequest (type)",
   "TIMESERIES_INTERVALS (value)",
   "TimeseriesInterval (type)",
   "TrustedHtml (value)",
@@ -953,6 +957,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "text (value)",
   "textarea (value)",
   "trustedClientIp (value)",
+  "typesExtendedBy (value)",
   "typesReachedBy (value)",
   "typesWithoutAddress (value)",
   "updateIfUnchanged (value)",

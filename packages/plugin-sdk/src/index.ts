@@ -557,8 +557,9 @@ export type {
  * "Every content type the site defines, except these": the target a
  * `contributes.extend` clause takes to reach types it cannot name, and the one
  * function that says which types a scope covers. The site's own collections
- * and Singles, Schema Builder ones made later included; never a plugin's own
- * types, Nextly's system types or field groups. Anything else that needs to
+ * and Singles, Schema Builder ones made later included, and a plugin's
+ * collection marked `siteContent`; never a plugin's other types, Nextly's
+ * system types or field groups. Anything else that needs to
  * know what a scope covers asks `typesReachedBy` rather than deciding again.
  *
  * @experimental
@@ -569,6 +570,18 @@ export type {
   ContentTypeKind,
   ContentTypeScope,
 } from "nextly";
+
+/**
+ * Which content types a plugin's `extend` added a field to, as the latest
+ * start resolved them: `typesExtendedBy(plugin, field)`. A plugin that
+ * extends every content type reads here which types got its field, the
+ * Schema Builder's included, without the ones a scope left alone. Pairs with
+ * a contribution's `extendedWith`, which offers it only on those types.
+ *
+ * @experimental
+ */
+export { typesExtendedBy } from "nextly";
+export type { ExtendedType } from "nextly";
 
 /**
  * Where an entry is served, as the site declares it. `publicAddressOf` answers
@@ -962,18 +975,21 @@ export type {
 
 /**
  * @experimental A field rewrite, made with `ctx.services.collections.rewriteField`:
- *   one field of an entry changed on its live copy and on every pending draft
- *   that holds it, in one transaction, without publishing, applied only from
- *   the version the plugin read (`STALE_VERSION` otherwise, with nothing
- *   changed). The new value is given (`{ value }`) or computed from each
- *   copy's own (`{ from(current, copy) }`); the reason is kept in the entry's
- *   history, which names the plugin. Runs no save hooks.
+ *   one field of an entry (`{ collection, id }`) or a Single (`{ single }`)
+ *   changed on its live copy and on every pending draft that holds it, in one
+ *   transaction, without publishing, applied only from the version the plugin
+ *   read (`STALE_VERSION` otherwise, with nothing changed). The new value is
+ *   given (`{ value }`) or computed from each copy's own
+ *   (`{ from(current, copy) }`); the reason is kept in the document's history,
+ *   which names the plugin. Runs no save hooks.
  */
 export type {
+  DocumentFieldRewriteRequest,
   FieldRewriteCopy,
   FieldRewriteRequest,
   FieldRewriteResult,
   FieldRewriteValue,
+  SingleFieldRewriteRequest,
 } from "nextly";
 
 /**

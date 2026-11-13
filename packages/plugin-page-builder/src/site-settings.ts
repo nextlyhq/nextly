@@ -1471,12 +1471,14 @@ export function siteSettingsRoute(
   removal?: BreakpointRemoval
 ): {
   method: "GET";
+  checksAccess: true;
   path: string;
   handler: (req: Request, ctx: SiteSettingsRouteContext) => Promise<Response>;
 } {
   return {
     method: "GET",
     path: SITE_SETTINGS_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     handler: async (_req, ctx) =>
       Response.json(
         await readSiteSettings(ctx, await getCachedNextly(), defaults, removal)

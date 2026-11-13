@@ -168,6 +168,7 @@ export function templateCollectionChoicesRoute(setup: {
   readonly guard: () => TemplateGuardSetup;
 }): {
   method: "GET";
+  checksAccess: true;
   path: string;
   noStore: true;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
@@ -175,6 +176,7 @@ export function templateCollectionChoicesRoute(setup: {
   return {
     method: "GET",
     path: TEMPLATE_COLLECTION_CHOICES_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     noStore: true,
     handler: async (_req, ctx) => {
       const items = await readTemplateCollectionChoices(

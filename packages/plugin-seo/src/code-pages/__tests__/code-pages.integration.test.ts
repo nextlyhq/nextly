@@ -162,6 +162,17 @@ async function listed(): Promise<string[]> {
   );
 }
 
+/** The `<url>` entry of one page, as the sitemap writes it. */
+async function entryOf(loc: string): Promise<string | undefined> {
+  const response = await createDynamicHandlers().GET(
+    new Request(`${SITE}/admin/api/sitemap.xml`),
+    { params: Promise.resolve({ params: ["sitemap.xml"] }) }
+  );
+  return (await response.text())
+    .split("\n")
+    .find(line => line.includes(`<url><loc>${loc}</loc>`));
+}
+
 /** Saves `body` for a page with no entry, as `cookie`. */
 async function save(cookie: string, body: Record<string, unknown>) {
   const segments = ["plugins", ...PLUGIN.split("/"), "pages", "seo"];
@@ -344,8 +355,10 @@ describe.each(getConfiguredTestDialects())(
         node => (node as { "@type"?: unknown })["@type"]
       );
       expect(types).toContain("AboutPage");
-      expect(types).toContain("FAQPage");
-      expect(text).toContain("Who are we?");
+      // Questions the route gives are described only on a page whose kind is
+      // Questions and answers, never beside a page of another kind.
+      expect(types).not.toContain("FAQPage");
+      expect(text).not.toContain("Who are we?");
     });
 
     it("says where each page's title and description come from, grouped as the Overview counts them", async () => {
@@ -653,6 +666,48 @@ describe.each(getConfiguredTestDialects())(
       expect(locs).toContain(`${SITE}/contact`);
       expect(locs).not.toContain(`${SITE}/thank-you`);
       expect(locs).not.toContain(`${SITE}/pricing`);
+    });
+
+    it("dates a page built in code only where its route states a date, never the time it was built", async () => {
+      await boot();
+      const stated = {
+        metadata: {
+          title: "Pricing",
+          openGraph: {
+            type: "article" as const,
+            modifiedTime: "2026-10-01T00:00:00.000Z",
+          },
+        },
+      };
+      // The first build renders each page, recording its call.
+      await seoMetadata("/contact");
+      await seoMetadata("/pricing", stated);
+      const contact = await entryOf(`${SITE}/contact`);
+      const pricing = await entryOf(`${SITE}/pricing`);
+      expect(contact).toBeDefined();
+      expect(contact).not.toContain("<lastmod>");
+      expect(pricing).toContain("<lastmod>2026-10-01T00:00:00.000Z</lastmod>");
+
+      // A second build, a second later, renders them again: nothing moves.
+      await new Promise(resolve => setTimeout(resolve, 1_100));
+      await seoMetadata("/contact");
+      await seoMetadata("/pricing", stated);
+      expect(await entryOf(`${SITE}/contact`)).toBe(contact);
+      expect(await entryOf(`${SITE}/pricing`)).toBe(pricing);
+
+      // A route that states a new date moves it.
+      await seoMetadata("/pricing", {
+        metadata: {
+          ...stated.metadata,
+          openGraph: {
+            type: "article" as const,
+            modifiedTime: "2026-11-01T00:00:00.000Z",
+          },
+        },
+      });
+      expect(await entryOf(`${SITE}/pricing`)).toContain(
+        "<lastmod>2026-11-01T00:00:00.000Z</lastmod>"
+      );
     });
 
     it("lists in llms.txt exactly the pages built in code the sitemap lists, with the SEO set for them", async () => {

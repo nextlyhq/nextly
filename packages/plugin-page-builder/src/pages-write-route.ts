@@ -522,6 +522,7 @@ function directPagesWrites(
 /** One of the routes, as the plugin declares it. */
 interface PagesWriteRoute {
   method: "POST" | "PATCH" | "DELETE";
+  checksAccess?: true;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 }
@@ -542,6 +543,7 @@ export function pagesWriteRoutes(
     {
       method: "POST",
       path: PAGES_ROUTE_PATH,
+      checksAccess: true, // The handler judges each caller.
       handler: async (req, ctx) =>
         respondMutation<PageItem>(
           "The page was created.",
@@ -551,6 +553,7 @@ export function pagesWriteRoutes(
     {
       method: "POST",
       path: PAGE_DUPLICATE_ROUTE_PATH,
+      checksAccess: true, // The handler judges each caller.
       handler: async (_req, ctx) =>
         respondMutation<PageItem>(
           "The page was duplicated.",
@@ -560,6 +563,7 @@ export function pagesWriteRoutes(
     {
       method: "PATCH",
       path: PAGE_ROUTE_PATH,
+      checksAccess: true, // The handler judges each caller.
       handler: async (req, ctx) => {
         // The path first, then the body, so a bad address is refused before
         // anything else is read.
@@ -574,6 +578,7 @@ export function pagesWriteRoutes(
     {
       method: "DELETE",
       path: PAGE_ROUTE_PATH,
+      checksAccess: true, // The handler judges each caller.
       handler: async (_req, ctx) =>
         respondMutation<PageReference>(
           "The page was deleted.",

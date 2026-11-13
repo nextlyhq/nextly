@@ -21,6 +21,7 @@ import { resolveLocaleChain } from "../i18n/resolve-locale";
 
 import { addressLanguages, heldIn, readEveryLanguage } from "./held-addresses";
 import type { HeldAddressUpdate } from "./participants";
+import { participationCount } from "./participation";
 import {
   declaredFor,
   siteTypes,
@@ -188,6 +189,9 @@ export async function addressFingerprint(): Promise<string> {
   // so its chain counts as much as the templates do: the fallback switch,
   // each language's own fallbacks and the default all show in the chains.
   const parts: string[] = [
+    // Goes up after a start that ran with another set of participating
+    // plugins, so a participant that was not running then catches up.
+    `participation:${participationCount()}`,
     `languages:${languages.join(",")}`,
     `default:${localization?.defaultLocale ?? ""}`,
     ...languages.map(
@@ -210,7 +214,10 @@ export async function addressFingerprint(): Promise<string> {
     for (const language of languages) {
       const declared = await declaredFor(type, language, row);
       parts.push(
-        `${type.kind}:${type.slug}|${language}|${declared?.template ?? ""}|${declared?.pathFields.join(",") ?? ""}`
+        // The field holding entries' own addresses changes every address
+        // too, so it is part of the fingerprint; added only where named, so
+        // a declaration without one keeps the fingerprint it had.
+        `${type.kind}:${type.slug}|${language}|${declared?.template ?? ""}|${declared?.pathFields.join(",") ?? ""}${declared?.entryField === undefined ? "" : `|own:${declared.entryField}`}`
       );
     }
   }

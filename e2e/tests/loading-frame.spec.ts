@@ -21,7 +21,13 @@ import { expect, type Page } from "@playwright/test";
 
 import { ADMIN } from "./support/admin";
 import { mainColumnBox } from "./support/shell-geometry";
-import { freeDocumentAt, includingHidden, test } from "./support/test";
+import {
+  fileAccount,
+  freeDocumentAt,
+  includingHidden,
+  ownSeat,
+  test,
+} from "./support/test";
 
 /** The admin's record that this browser has signed in here before. */
 const SIGNED_IN_HERE_KEY = "nextly:admin:signed-in-here";
@@ -50,15 +56,20 @@ type Marks = Record<Part, number | null>;
  * and writes the signed-in record, with no remembered menu, before the
  * admin's code reads it.
  */
-async function recordParts(page: Page): Promise<void> {
+async function recordParts(
+  page: Page,
+  { revisit = false }: { revisit?: boolean } = {}
+): Promise<void> {
   await page.addInitScript(
-    ([key, memory, selectors]) => {
+    ([key, memory, selectors, keep]) => {
       window.localStorage.setItem(key, "1");
       // Nothing remembered of the menu, so the frame is the one a browser
       // draws before it has one: the rail drawn from memory is
-      // device-memory.spec's.
+      // device-memory.spec's. A revisit keeps what an earlier visit left.
       for (const stored of Object.keys(window.localStorage)) {
-        if (stored.startsWith(memory)) window.localStorage.removeItem(stored);
+        if (!keep && stored.startsWith(memory)) {
+          window.localStorage.removeItem(stored);
+        }
       }
       const marks: Record<string, number | null> = {};
       for (const part of Object.keys(selectors)) marks[part] = null;
@@ -76,7 +87,7 @@ async function recordParts(page: Page): Promise<void> {
         attributes: true,
       });
     },
-    [SIGNED_IN_HERE_KEY, REMEMBERED_PREFIX, SELECTORS] as const
+    [SIGNED_IN_HERE_KEY, REMEMBERED_PREFIX, SELECTORS, revisit] as const
   );
 }
 
@@ -322,13 +333,23 @@ async function recordShifts(page: Page): Promise<void> {
           value: entry.value,
           at: entry.startTime,
           sources: entry.sources.map(source => {
-            const node = source.node;
-            if (!(node instanceof Element)) return "removed";
+            // A run of text shifts as a text node, named by its words and
+            // the element that holds it; a node already gone has no name.
+            const text =
+              source.node instanceof Text
+                ? `"${(source.node.textContent ?? "").trim().slice(0, 40)}" in `
+                : "";
+            const node =
+              source.node instanceof Text
+                ? source.node.parentElement
+                : source.node;
+            if (!(node instanceof Element))
+              return `removed ${text}${box(source.previousRect)} -> ${box(source.currentRect)}`;
             const where = node.closest("main") ? "main" : "shell";
             const name =
               node.getAttribute("data-testid") ??
               node.className.toString().split(" ").slice(0, 3).join(".");
-            return `${where}:${node.tagName.toLowerCase()}(${name}) ${box(source.previousRect)} -> ${box(source.currentRect)}`;
+            return `${text}${where}:${node.tagName.toLowerCase()}(${name}) ${box(source.previousRect)} -> ${box(source.currentRect)}`;
           }),
         });
       }
@@ -400,10 +421,6 @@ async function screenSettled(page: Page): Promise<void> {
     .toBe("settled");
 }
 
-/** Whether `url` is the admin's address for claiming a document. */
-const isDocumentLock = (url: string): boolean =>
-  new URL(url).pathname === "/admin/api/document-lock";
-
 /** The shell's own boxes: the rail, the bar and the main column. */
 async function shellBoxes(page: Page) {
   const box = async (selector: string) => {
@@ -418,66 +435,15 @@ async function shellBoxes(page: Page) {
   };
 }
 
-/** Where the playground's posts are written. */
-const POSTS = "/admin/api/collections/posts/entries";
-/** The posts the edit test made, deleted after it, so no list counts them. */
-const ownPosts: string[] = [];
-
 test.describe("the screen replacing its outline", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
 
-  test.afterEach(async ({ page }) => {
-    for (const id of ownPosts.splice(0)) {
-      const removed = await page.request.delete(`${POSTS}/${id}`);
-      expect(removed.ok(), await removed.text()).toBe(true);
-    }
-  });
-
-  for (const screenName of ["dashboard", "list", "edit"] as const) {
+  for (const screenName of ["dashboard"] as const) {
     test(`moves no part of the ${screenName} as its data arrives`, async ({
       page,
     }) => {
       test.setTimeout(90_000);
-      let path = "";
-      if (screenName === "list") path = "/collections/posts";
-      if (screenName === "edit") {
-        // A post of the test's own, which no other test opens: an editor
-        // open on a post elsewhere (another spec, a repeat on another worker)
-        // holds it, and the banner saying so would land above the fields.
-        const stamp = `${Date.now()}-${test.info().repeatEachIndex}`;
-        const created = await page.request.post(POSTS, {
-          data: {
-            title: `Loading frame ${stamp}`,
-            slug: `loading-frame-${stamp}`,
-            excerpt: "Opened while every request is held.",
-          },
-        });
-        expect(created.ok(), await created.text()).toBe(true);
-        const { item } = (await created.json()) as { item: { id: string } };
-        ownPosts.push(item.id);
-        path = `/collections/posts/${item.id}`;
-        // The edit route's code, compiled before the measured visit. The
-        // editor claims the document it opens, and the claim outlives a page
-        // left while every request is held, so the measured visit would open
-        // a document its own warm-up still holds, with the banner saying so.
-        // Freed here, as a reader's closed tab frees it.
-        const claimed = page.waitForResponse(
-          response =>
-            isDocumentLock(response.url()) &&
-            response.request().method() === "POST"
-        );
-        await page.goto(`${ADMIN}${path}`);
-        await claimed;
-        await page.goto("about:blank");
-        await freeDocumentAt(
-          page.request,
-          { scopeKind: "collection", slug: "posts", entryId: item.id },
-          "post"
-        );
-      } else if (screenName === "list") {
-        await page.goto(`${ADMIN}${path}`);
-        await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
-      }
+      const path = "";
 
       await recordShifts(page);
       await recordParts(page);
@@ -529,4 +495,546 @@ test.describe("the screen replacing its outline", () => {
       expect(total, JSON.stringify(shifts)).toBeLessThanOrEqual(0.05);
     });
   }
+});
+
+/** The widths a screen is held to: a laptop's, with the menu panel open, up. */
+const WIDTHS = [1024, 1280, 1440] as const;
+
+/**
+ * How a screen is loaded: every admin request held until the outline shows
+ * and then let through at once, or nothing held, as a reader meets it.
+ */
+type LoadMode = "held" | "unheld";
+
+/** A box in CSS pixels, rounded so sub-pixel rendering never reads as a move. */
+type PartBox = { x: number; y: number; width: number; height: number };
+
+/**
+ * Each named part of the screen (`data-frame-part`) the page draws, by name:
+ * the outline's own, or the loaded screen's, outside any outline.
+ */
+async function frameParts(
+  page: Page,
+  drawnBy: "outline" | "screen"
+): Promise<Record<string, PartBox>> {
+  return page.evaluate(by => {
+    const parts: Record<string, PartBox> = {};
+    for (const element of Array.from(
+      document.querySelectorAll("[data-frame-part]")
+    )) {
+      const inOutline =
+        element.closest('[data-testid="screen-outline"]') !== null;
+      if (inOutline !== (by === "outline")) continue;
+      const rect = element.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) continue;
+      parts[element.getAttribute("data-frame-part") as string] = {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      };
+    }
+    return parts;
+  }, drawnBy);
+}
+
+/** Every layout shift recorded from `since` on the page's clock. */
+async function shiftsSince(page: Page, since: number) {
+  return (
+    await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __shifts: { value: number; at: number; sources: string[] }[];
+          }
+        ).__shifts
+    )
+  ).filter(shift => shift.at >= since);
+}
+
+/**
+ * Opens `path` as `mode` says and waits until it has settled; then holds the
+ * promise: nothing moved, not the frame, not a part of the screen, and every
+ * named part the outline drew stands where the screen drew it (the check a
+ * layout-shift score cannot make, since an outline replaced by different
+ * elements scores nothing however far off it was).
+ */
+async function expectStillLoad(
+  page: Page,
+  path: string,
+  mode: LoadMode,
+  {
+    revisit = false,
+    parts = true,
+  }: {
+    revisit?: boolean;
+    /**
+     * Whether the outline's named parts are held to the screen's. Not where a
+     * plugin draws a block above them, which the outline cannot know of
+     * before the server has answered.
+     */
+    parts?: boolean;
+  } = {}
+): Promise<void> {
+  await recordShifts(page);
+  await recordParts(page, { revisit });
+  await countFetches(page);
+  let releasedAt = 0;
+  let before: Awaited<ReturnType<typeof shellBoxes>> | null = null;
+  let outlined: Record<string, PartBox> = {};
+  if (mode === "held") {
+    const held = await holdAdminRequests(page);
+    await openHeld(page, path);
+    await expect(page.locator(SELECTORS.outline).first()).toBeVisible();
+    before = await shellBoxes(page);
+    outlined = await frameParts(page, "outline");
+    releasedAt = await page.evaluate(() => performance.now());
+    held.release();
+  } else {
+    await openHeld(page, path);
+  }
+  await screenArrived(page);
+  await expect(page.locator('[data-shell-answers="pending"]')).toHaveCount(0, {
+    timeout: 60_000,
+  });
+  await screenSettled(page);
+
+  if (before !== null) {
+    const after = await shellBoxes(page);
+    expect(after.rail).toEqual(before.rail);
+    expect(after.bar).toEqual(before.bar);
+    expect(after.main).toEqual(before.main);
+  }
+  const shifts = await shiftsSince(page, releasedAt);
+  const total = shifts.reduce((sum, shift) => sum + shift.value, 0);
+  test.info().annotations.push({
+    type: "layout-shift",
+    description: `${mode} ${path}: ${total.toFixed(4)}`,
+  });
+  // Nothing moves: not a part of the screen, not the frame around it.
+  expect(shifts, JSON.stringify(shifts)).toEqual([]);
+
+  if (!parts) return;
+  const loaded = await frameParts(page, "screen");
+  for (const [name, box] of Object.entries(outlined)) {
+    expect(loaded[name], `the screen draws no ${name}`).toBeDefined();
+    expect(loaded[name], `the outline's ${name} against the screen's`).toEqual(
+      box
+    );
+  }
+}
+
+/** The playground's entries API for a collection. */
+const entriesOf = (slug: string) => `/admin/api/collections/${slug}/entries`;
+
+/**
+ * Makes `count` posts of the test's own, all carrying one stamp in their
+ * excerpt, and returns the posts list's address filtered to them: a list
+ * whose length the test decides, whatever other tests write meanwhile.
+ */
+/**
+ * The text field each list's entries are stamped in, so its address can be
+ * filtered to the test's own: the posts' excerpt, the tags' description.
+ */
+const STAMPED = { posts: "excerpt", tags: "description" } as const;
+
+/**
+ * Makes `count` entries of the test's own in `slug`, all carrying one stamp,
+ * and returns the list's address filtered to them: a list whose length the
+ * test decides, whatever other tests write meanwhile.
+ */
+async function ownList(
+  page: Page,
+  slug: keyof typeof STAMPED,
+  count: number,
+  made: string[]
+): Promise<string> {
+  const stamp = `frame-${Date.now()}-${test.info().repeatEachIndex}-${test.info().workerIndex}`;
+  for (let index = 0; index < count; index += 1) {
+    const created = await page.request.post(entriesOf(slug), {
+      data: {
+        title: `Frame ${index} ${stamp}`,
+        slug: `${stamp}-${index}`,
+        [STAMPED[slug]]: stamp,
+      },
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    const { item } = (await created.json()) as { item: { id: string } };
+    made.push(`${entriesOf(slug)}/${item.id}`);
+  }
+  const where = encodeURIComponent(
+    JSON.stringify({ [STAMPED[slug]]: { equals: stamp } })
+  );
+  return `/collections/${slug}?where=${where}`;
+}
+
+/** A form of the test's own, which no other test holds open. */
+async function ownForm(page: Page, made: string[]): Promise<string> {
+  const stamp = `${Date.now().toString(36)}-${test.info().repeatEachIndex}-${test.info().workerIndex}`;
+  const created = await page.request.post(entriesOf("forms"), {
+    data: {
+      name: `Frame form ${stamp}`,
+      slug: `frame-form-${stamp}`,
+      status: "published",
+      fields: [
+        { type: "text", name: "name", label: "Name" },
+        { type: "email", name: "email", label: "Email" },
+      ],
+    },
+  });
+  expect(created.ok(), await created.text()).toBe(true);
+  const { item } = (await created.json()) as { item: { id: string } };
+  made.push(`${entriesOf("forms")}/${item.id}`);
+  return `/collections/forms/${item.id}`;
+}
+
+/** Visits `path` once, as a reader did before, so the device remembers it. */
+async function visitOnce(page: Page, path: string): Promise<void> {
+  await page.addInitScript(key => {
+    window.localStorage.setItem(key, "1");
+  }, SIGNED_IN_HERE_KEY);
+  // What `screenSettled` reads: the page's last change and its open reads.
+  await recordShifts(page);
+  await countFetches(page);
+  await page.goto(`${ADMIN}${path}`);
+  await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('[data-testid="screen-outline"]')).toHaveCount(0, {
+    timeout: 60_000,
+  });
+  await screenSettled(page);
+  await page.goto("about:blank");
+}
+
+test.describe("each screen's outline, held to the screen it stands for", () => {
+  /** Entries the tests made, deleted after each, so no list counts them. */
+  const made: string[] = [];
+
+  test.afterEach(async ({ page }) => {
+    for (const address of made.splice(0)) {
+      const removed = await page.request.delete(address);
+      expect(removed.ok(), await removed.text()).toBe(true);
+    }
+  });
+
+  WIDTHS.forEach((width, index) => {
+    test.describe(`at ${width} px`, () => {
+      // An account of its own per width, so the loads below stay inside the
+      // per-person request budget.
+      ownSeat(index + 1);
+      test.use({ viewport: { width, height: 900 } });
+
+      for (const mode of ["held", "unheld"] as const) {
+        // The posts list has a plugin's showcase under its table, which a
+        // table that grows as its rows land would push down, and a plugin's
+        // block above it; the tags list has neither, so its outline's rows
+        // are held to the list's own.
+        for (const slug of ["posts", "tags"] as const) {
+          test(`moves no part of a list of five ${slug}, ${mode}`, async ({
+            page,
+          }) => {
+            test.setTimeout(90_000);
+            const path = await ownList(page, slug, 5, made);
+            await expectStillLoad(page, path, mode, {
+              parts: slug === "tags",
+            });
+          });
+
+          test(`moves no part of a list of eleven ${slug} on a revisit, ${mode}`, async ({
+            page,
+          }) => {
+            test.setTimeout(90_000);
+            // More than the outline's first guess: the first visit learns how
+            // many rows the list draws, and the next draws its outline so.
+            const path = await ownList(page, slug, 11, made);
+            await visitOnce(page, path);
+            await expectStillLoad(page, path, mode, {
+              revisit: true,
+              parts: slug === "tags",
+            });
+          });
+        }
+
+        test(`moves no part of the form editor, ${mode}`, async ({ page }) => {
+          test.setTimeout(90_000);
+          const path = await ownForm(page, made);
+          await expectStillLoad(page, path, mode);
+        });
+
+        test(`moves no part of the releases, ${mode}`, async ({ page }) => {
+          test.setTimeout(90_000);
+          await expectStillLoad(page, "/releases", mode);
+        });
+
+        test(`moves no part of the users on a revisit, ${mode}`, async ({
+          page,
+        }) => {
+          test.setTimeout(90_000);
+          // How many accounts there are is the suite's, not this test's: the
+          // first visit learns how many rows the list draws.
+          await visitOnce(page, "/users");
+          await expectStillLoad(page, "/users", mode, { revisit: true });
+        });
+      }
+
+      test.describe("a list's own outline", () => {
+        // A further account per width, as the history's above.
+        ownSeat(2 * WIDTHS.length + index + 1);
+
+        for (const slug of ["posts", "tags"] as const) {
+          test(`stands as tall as the ${slug} table and its pager`, async ({
+            page,
+          }) => {
+            test.setTimeout(90_000);
+            const path = await ownList(page, slug, 5, made);
+            // Only the list's rows are held: the list draws its own outline,
+            // with its columns' heads, and the parts it draws are held to the
+            // table's. Sizes, not places: a plugin's block above the posts
+            // list lands when it will.
+            let release = () => {};
+            const released = new Promise<void>(resolve => {
+              release = resolve;
+            });
+            await page.route(
+              url =>
+                url.pathname === entriesOf(slug) && url.searchParams.size > 0,
+              async route => {
+                try {
+                  await released;
+                  await route.continue();
+                } catch {
+                  // The page went away while the read was held.
+                }
+              }
+            );
+            await openHeld(page, path);
+            const sizes = (drawnBy: "outline" | "screen") =>
+              frameParts(page, drawnBy).then(parts =>
+                Object.fromEntries(
+                  Object.entries(parts).map(([name, box]) => [
+                    name,
+                    { width: box.width, height: box.height },
+                  ])
+                )
+              );
+            // The list's own outline: shown, and naming its columns.
+            await expect
+              .poll(
+                () =>
+                  page.evaluate(
+                    () =>
+                      document.querySelector(
+                        '[data-testid="screen-outline"][data-outline-shown] thead'
+                      )?.textContent ?? ""
+                  ),
+                { timeout: 60_000 }
+              )
+              .toMatch(/title/i);
+            const outlined = await sizes("outline");
+            expect(Object.keys(outlined).sort()).toEqual([
+              "list-pager",
+              "list-rows",
+            ]);
+            release();
+            await screenArrived(page);
+            const loaded = await sizes("screen");
+            for (const [name, size] of Object.entries(outlined)) {
+              expect(loaded[name], `the outline's ${name}`).toEqual(size);
+            }
+          });
+        }
+      });
+
+      test.describe("a form's history", () => {
+        // A further account per width: the screens above spend their own
+        // account's request budget, and these loads would meet its limit.
+        ownSeat(WIDTHS.length + index + 1);
+
+        for (const mode of ["held", "unheld"] as const) {
+          test(`moves no part of a form's history, ${mode}`, async ({
+            page,
+          }) => {
+            test.setTimeout(90_000);
+            // The forms collection folds its editor's panel; its history is
+            // a page of its own, which keeps the panel, and so must its
+            // outline.
+            const path = `${await ownForm(page, made)}/versions`;
+            await expectStillLoad(page, path, mode);
+          });
+        }
+      });
+    });
+  });
+});
+
+/**
+ * The widths an editor is held to: 1366, where the editor docks its side panel
+ * with the menu panel open, and either side of it. At 1024 the bar's own
+ * controls still fold a frame after they are drawn, which the bar's change
+ * holds to this promise.
+ */
+const EDITOR_WIDTHS = [1280, 1366, 1440] as const;
+
+/** A post of the test's own, which no other test opens or holds. */
+async function ownPost(page: Page, made: string[]): Promise<string> {
+  const stamp = `${Date.now()}-${test.info().repeatEachIndex}-${test.info().workerIndex}`;
+  const created = await page.request.post(entriesOf("posts"), {
+    data: {
+      title: `Editor frame ${stamp}`,
+      slug: `editor-frame-${stamp}`,
+      excerpt: "Opened by the editor's frame test.",
+    },
+  });
+  expect(created.ok(), await created.text()).toBe(true);
+  const { item } = (await created.json()) as { item: { id: string } };
+  made.push(`${entriesOf("posts")}/${item.id}`);
+  return item.id;
+}
+
+/** Where the Page Builder answers a post's own design. */
+const designReadOf = (id: string) =>
+  `/admin/api/plugins/@nextlyhq/plugin-page-builder/templates/entry-designs?collection=posts&entry=${encodeURIComponent(id)}`;
+
+/** When the page asked for each read, and when it answered, by its address. */
+async function recordReads(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const reads: { path: string; started: number; ended: number | null }[] = [];
+    (window as unknown as { __reads: typeof reads }).__reads = reads;
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const url = new URL(
+        input instanceof Request ? input.url : String(input),
+        window.location.href
+      );
+      const read = {
+        path: url.pathname + url.search,
+        started: performance.now(),
+        ended: null as number | null,
+      };
+      reads.push(read);
+      return original(input, init).finally(() => {
+        read.ended = performance.now();
+      });
+    };
+  });
+}
+
+test.describe("an editor, held to the screen it stands for", () => {
+  /** Entries the tests made, deleted after each. */
+  const made: string[] = [];
+
+  test.afterEach(async ({ page }) => {
+    for (const address of made.splice(0)) {
+      const removed = await page.request.delete(address);
+      expect(removed.ok(), await removed.text()).toBe(true);
+    }
+  });
+
+  EDITOR_WIDTHS.forEach((width, index) => {
+    test.describe(`at ${width} px`, () => {
+      // An account of its own per width, apart from the other block's.
+      ownSeat(index + 11);
+      test.use({ viewport: { width, height: 900 } });
+
+      for (const mode of ["held", "unheld"] as const) {
+        test(`moves no part of a post's editor, ${mode}`, async ({ page }) => {
+          test.setTimeout(90_000);
+          const id = await ownPost(page, made);
+          await expectStillLoad(page, `/collections/posts/${id}`, mode);
+        });
+
+        test(`draws a colleague's claim with the editor, ${mode}`, async ({
+          page,
+          playwright,
+          baseURL,
+        }, testInfo) => {
+          test.setTimeout(90_000);
+          const id = await ownPost(page, made);
+          const ref = {
+            scopeKind: "collection" as const,
+            slug: "posts",
+            entryId: id,
+          };
+          // A colleague, another account, holds the post.
+          const colleague = await playwright.request.newContext({
+            baseURL,
+            storageState: await fileAccount(
+              baseURL ?? "",
+              testInfo,
+              index + 21
+            ),
+          });
+          try {
+            const claimed = await colleague.post("/admin/api/document-lock", {
+              data: ref,
+            });
+            expect(claimed.ok(), await claimed.text()).toBe(true);
+            await expectStillLoad(page, `/collections/posts/${id}`, mode);
+            // The banner is on screen, drawn with the fields it sits above.
+            await expect(
+              page.getByRole("button", { name: "Take over" })
+            ).toBeVisible();
+          } finally {
+            await colleague.dispose();
+            await freeDocumentAt(page.request, ref, "post");
+          }
+        });
+      }
+    });
+  });
+
+  test("asks for a part's declared read before the entry has answered", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const id = await ownPost(page, made);
+    await recordReads(page);
+    await page.addInitScript(key => {
+      window.localStorage.setItem(key, "1");
+    }, SIGNED_IN_HERE_KEY);
+    await page.goto(`${ADMIN}/collections/posts/${id}`);
+    type Read = { path: string; started: number; ended: number | null };
+    const readsSoFar = () =>
+      page.evaluate(() => (window as unknown as { __reads: Read[] }).__reads);
+    // Until the entry and the section's read have both answered: before the
+    // page's code has run, no outline is on screen either, so its absence
+    // alone says nothing.
+    await expect
+      .poll(
+        async () => {
+          const sofar = await readsSoFar();
+          return (
+            sofar.some(
+              read =>
+                read.path.startsWith(
+                  `/admin/api/collections/posts/entries/${id}`
+                ) && read.ended !== null
+            ) &&
+            sofar.some(
+              read => read.path === designReadOf(id) && read.ended !== null
+            )
+          );
+        },
+        { timeout: 60_000 }
+      )
+      .toBe(true);
+    await expect(page.locator('[data-testid="screen-outline"]')).toHaveCount(
+      0,
+      {
+        timeout: 60_000,
+      }
+    );
+    const reads = await readsSoFar();
+    const entry = reads.find(read =>
+      read.path.startsWith(`/admin/api/collections/posts/entries/${id}`)
+    );
+    const designs = reads.filter(read => read.path === designReadOf(id));
+    expect(entry, JSON.stringify(reads)).toBeDefined();
+    // Started with the page's own reads, not after the entry it waits on.
+    expect(designs[0]?.started, JSON.stringify(reads)).toBeLessThan(
+      entry?.ended ?? 0
+    );
+    // And asked once: the section's own read took the started one.
+    expect(designs, JSON.stringify(reads)).toHaveLength(1);
+  });
 });

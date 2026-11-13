@@ -347,6 +347,16 @@ describe("the tabs", () => {
     );
   });
 
+  it("says beside the AI choices that OpenAI's ads checker is never asked to stay away", () => {
+    serving({ _rev: "1", setupStep: 3 });
+    window.history.replaceState(null, "", `${SETTINGS}?tab=crawlers`);
+    render(<SeoSettingsPage />);
+    expect(isOpen("Search engines and AI")).toBe(true);
+    expect(screen.getByText(/OAI-AdsBot/).textContent).toContain(
+      "No choice asks OpenAI's ads checker, OAI-AdsBot, to stay away: it visits only pages you submitted as ads in ChatGPT."
+    );
+  });
+
   it("opens the tab the address names, and moves the address with each tab", () => {
     serving({ _rev: "1", setupStep: 3 });
     window.history.replaceState(null, "", `${SETTINGS}?tab=brand`);
@@ -980,6 +990,34 @@ describe("the content types tab", () => {
     } finally {
       vi.mocked(usePluginClientConfig).mockReturnValue(undefined);
     }
+  });
+
+  it("says beside Questions and answers that Google no longer shows it, and names only the type once chosen", async () => {
+    serving(SET_UP);
+    render(<SeoSettingsPage />);
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("combobox", { name: "Structured data for Blog posts" })
+    );
+    const options = (await screen.findAllByRole("option")).map(
+      option => option.textContent
+    );
+    expect(options).toContain(
+      "Questions and answers · no longer shown by Google"
+    );
+    // Only that kind carries the note.
+    expect(options.filter(text => text?.includes("·"))).toHaveLength(1);
+    await user.click(
+      screen.getByRole("option", {
+        name: "Questions and answers · no longer shown by Google",
+      })
+    );
+    // Once chosen, the choice is named alone, so it fits its box.
+    expect(chosen("Structured data for Blog posts")).toBe(
+      "Questions and answers"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Map details" }));
+    expect(chosen("Details for")).toBe("Questions and answers");
   });
 
   it("offers the details a type may use as well as those it needs, counting only the needed as missing", async () => {

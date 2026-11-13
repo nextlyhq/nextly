@@ -2,17 +2,15 @@
   "racy": {},
   "sqlite": {
     "start": {
-      "statements": 107
+      "statements": 109
     },
     "screens": {
       "login": {
-        "requests": 4,
+        "requests": 2,
         "rounds": 2,
         "statements": 4,
         "kinds": {
           "GET /admin/api/startup": 1,
-          "GET /admin/api/general-settings": 1,
-          "GET /admin/api/admin-meta/workspace": 1,
           "GET /admin/api/auth/ui": 1
         },
         "occasional": [],
@@ -69,7 +67,7 @@
       "edit": {
         "requests": 16,
         "rounds": 6,
-        "statements": 44,
+        "statements": 42,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -93,17 +91,15 @@
   },
   "postgresql": {
     "start": {
-      "statements": 110
+      "statements": 113
     },
     "screens": {
       "login": {
-        "requests": 4,
+        "requests": 2,
         "rounds": 2,
         "statements": 4,
         "kinds": {
           "GET /admin/api/startup": 1,
-          "GET /admin/api/general-settings": 1,
-          "GET /admin/api/admin-meta/workspace": 1,
           "GET /admin/api/auth/ui": 1
         },
         "occasional": [],
@@ -184,17 +180,15 @@
   },
   "mysql": {
     "start": {
-      "statements": 120
+      "statements": 122
     },
     "screens": {
       "login": {
-        "requests": 4,
+        "requests": 2,
         "rounds": 2,
         "statements": 4,
         "kinds": {
           "GET /admin/api/startup": 1,
-          "GET /admin/api/general-settings": 1,
-          "GET /admin/api/admin-meta/workspace": 1,
           "GET /admin/api/auth/ui": 1
         },
         "occasional": [],

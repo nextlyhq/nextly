@@ -83,6 +83,15 @@ describe("the form's values, from the stored settings", () => {
       indexNow: false,
       llmsTxt: false,
       plainTextCopies: true,
+      robotsRules: { text: "" },
+      verificationCodes: {
+        google: "",
+        bing: "",
+        pinterest: "",
+        yandex: "",
+        baidu: "",
+        others: [],
+      },
     });
   });
 
@@ -107,6 +116,15 @@ describe("the form's values, from the stored settings", () => {
       indexNow: false,
       llmsTxt: false,
       plainTextCopies: false,
+      robotsRules: { text: "" },
+      verificationCodes: {
+        google: "",
+        bing: "",
+        pinterest: "",
+        yandex: "",
+        baidu: "",
+        others: [],
+      },
     });
   });
 });
@@ -647,5 +665,40 @@ describe("a draft moved onto newer settings", () => {
     const rebased = rebasedDraft(draft, before, before);
     expect(rebased.patterns).toEqual({ posts: { title: "{Title}" } });
     expect(rebased.hiddenTypes).toEqual([]);
+  });
+});
+
+describe("rebasedDraft and the verification codes", () => {
+  it("keeps a code another person saved for one service while this draft edits another's", () => {
+    const before = draftOf({
+      id: "s1",
+      verificationCodes: {
+        google: "g-old",
+        others: [{ name: "x-verify", code: "x1" }],
+      },
+    });
+    const draft = {
+      ...before,
+      verificationCodes: { ...before.verificationCodes, google: "g-new" },
+    };
+    const after = draftOf({
+      id: "s1",
+      verificationCodes: {
+        google: "g-old",
+        bing: "b-theirs",
+        others: [
+          { name: "x-verify", code: "x1" },
+          { name: "y-verify", code: "y1" },
+        ],
+      },
+    });
+
+    const rebased = rebasedDraft(draft, before, after);
+    expect(rebased.verificationCodes.google).toBe("g-new");
+    expect(rebased.verificationCodes.bing).toBe("b-theirs");
+    expect(rebased.verificationCodes.others).toEqual([
+      { name: "x-verify", code: "x1" },
+      { name: "y-verify", code: "y1" },
+    ]);
   });
 });

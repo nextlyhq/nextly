@@ -41,9 +41,10 @@ export interface FormEditorBarProps {
   onUndo: () => void;
   /**
    * The form's submissions, and where its Submissions tab is; absent until
-   * the form is saved and its count is known.
+   * the form is saved, and where its count could not be read. A count of
+   * `undefined` is one on its way, whose place the link holds.
    */
-  submissions?: { count: number; href: string };
+  submissions?: { count: number | undefined; href: string };
   /** The form's ID (its slug), for Copy form ID. */
   formId: string;
   onCopyFormId: () => void;
@@ -101,7 +102,8 @@ function SubmissionsLink({
   count,
   href,
 }: {
-  count: number;
+  /** The count, or `undefined` while it is on its way. */
+  count: number | undefined;
   href: string;
 }): JSX.Element {
   return (
@@ -114,11 +116,17 @@ function SubmissionsLink({
       <a
         href={href}
         onClick={event => followWithinAdmin(event, href)}
-        aria-label={`${count} submission${count === 1 ? "" : "s"}`}
+        aria-label={
+          count === undefined
+            ? "Submissions"
+            : `${count} submission${count === 1 ? "" : "s"}`
+        }
         title="Open this form's submissions"
       >
         <Inbox aria-hidden="true" className="size-4" />
-        <span className="tabular-nums">{count}</span>
+        {/* While the count is on its way a figure space, a digit's width
+            in these figures, holds its place. */}
+        <span className="tabular-nums">{count ?? "\u2007"}</span>
       </a>
     </Button>
   );

@@ -26,8 +26,9 @@ const CONTENT_TYPE_KINDS: ReadonlySet<string> = new Set<ContentTypeKind>([
  *
  * "The site defines" means the types in its configuration and the ones made
  * in the Schema Builder, including types made after the scope was written.
- * A plugin's own types and Nextly's system types (users, media, …) are never
- * included.
+ * Nextly's system types (users, media, …) are never included, and neither are
+ * a plugin's own types, apart from a collection the plugin marks as holding
+ * the site's content (`siteContent`), such as its pages.
  */
 export interface ContentTypeScope {
   every: readonly ContentTypeKind[];
@@ -40,6 +41,12 @@ export interface ContentTypeCandidate {
   kind: ContentTypeKind | "fieldGroup";
   /** The plugin that contributed the type; absent for the site's own. */
   plugin?: string;
+  /**
+   * Whether the plugin that contributed the type marks it as holding the
+   * site's content (`siteContent`), so scopes reach it as a type of the
+   * site's own.
+   */
+  siteContent?: boolean;
 }
 
 /** @experimental Whether `value` is a {@link ContentTypeScope}. */
@@ -70,7 +77,7 @@ export function typesReachedBy<T extends ContentTypeCandidate>(
   return types.filter(
     type =>
       kinds.has(type.kind) &&
-      type.plugin === undefined &&
+      (type.plugin === undefined || type.siteContent === true) &&
       !isSystemResource(type.slug) &&
       !except.has(type.slug)
   );

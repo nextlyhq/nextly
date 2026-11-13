@@ -153,9 +153,10 @@ Register components and reference admin contribution types through
 
 > **Never import from `@nextlyhq/admin`.** It is an application, not a published API —
 > reaching into it (e.g. `@nextlyhq/admin/lib/*`) is unsupported and will break. That
-> includes `@nextlyhq/admin/kit`, the internal path `@nextlyhq/plugin-sdk/admin` re-exports
-> its parts from: its exports change in any release, while the SDK's names keep the
-> stability their tags state. If a primitive you need isn't yet exported from
+> includes `@nextlyhq/admin/kit` and its areas (`@nextlyhq/admin/kit/<area>`), the internal
+> paths `@nextlyhq/plugin-sdk/admin` re-exports its parts from: their exports change in any
+> release, while the SDK's names keep the stability their tags state. Importing through
+> the SDK also keeps your admin module light: it brings only the parts you name. If a primitive you need isn't yet exported from
 > `@nextlyhq/ui`, open an issue so it can be promoted to the kit rather than copied.
 
 ## Styling your admin UI
@@ -299,6 +300,59 @@ session, the menu and the settings, before its own code has loaded. Your page's
   `adminStartupScreensJson(config.plugins)`.
 - The app refuses to start if a page names more than four, or a path that isn't a
   route path starting with `/`.
+
+### The data a place's part reads first
+
+> **Experimental.** `startupReads` on a place contribution may change before it is
+> marked stable.
+
+A part you add to an editor's places (whatever kind the place takes: a block, a tab, a
+side panel section) can name the reads of your plugin's own routes it makes as it opens, with the same
+`startupReads` a page takes. The places whose page starts them are `collection.edit`,
+`single.edit` and `entry.form` (the form inside both); the app refuses to start if a
+part names `startupReads` anywhere else, where nothing would start them. Its paths may
+name the place's ids in braces, which the page fills in from its address:
+
+```ts
+{
+  id: "acme-designs.design",
+  kind: "sidebarSection",
+  place: "collection.edit",
+  label: "Design",
+  component: "@acme/designs/admin#Design",
+  before: "status",
+  startupReads: [{ path: "/designs?collection={collection}&entry={entryId}" }],
+}
+```
+
+The page starts these reads as it first renders, beside its own reads, rather than once
+your component has mounted, so their answers arrive a round sooner. Your component's
+`usePluginRoute` read of the same path takes the started read instead of asking again.
+An editor (`collection.edit`, `single.edit`) waits for them before it is drawn, for
+250 ms at most after its document, so your part is drawn in its place with the editor
+rather than pushing the parts below it down when it lands. (It also waits for its claim
+on the document, for up to a second, since that decides whether the fields may be
+written.)
+
+- The ids a path may name are the place's context ids other than `userId`:
+  `{collection}` and `{entryId}` at `collection.edit`, `{single}` at `single.edit`, and
+  `{kind}`, `{slug}` and `{entryId}` at `entry.form`. On a Single's page the form's
+  `{entryId}` is not known until the Single has loaded, so a read naming it is not
+  started there.
+- Each id is filled in URI-component encoded. Build the path your component asks for
+  the same way, with `encodeURIComponent`, and with its parameters in the same order,
+  or the started read and your component's read are two different reads.
+- A read naming an id the page does not have (a new entry has no `entryId`) is not
+  started, and your component reads as it always would. A part with `visibleWhen` is
+  started anyway, since its entry has not arrived yet: keep such reads cheap.
+- Name only quick reads, at most four. A read that can be slow belongs outside
+  `startupReads`: the editor would wait its 250 ms for it.
+- The app refuses to start if a part names more than four reads, a path that isn't a
+  route path starting with `/`, an id its place doesn't give, or `startupReads` at a
+  place other than these three.
+- A part that can't declare its reads, and draws nothing until they answer, can sit
+  last in its place instead (`after: "details"` in the side panel), where it moves
+  nothing when it lands.
 
 ### Where your own item goes
 
@@ -999,6 +1053,23 @@ Startup is refused, naming the plugins involved, when an override names an
 action other than `delete` or `unpublish`, when a replacement or a section has
 no component (or a section no title), or when two plugins override the same
 action on the same collection.
+
+### A document screen that needs the width
+
+> **Experimental.** `foldedPanel` may change before it is marked stable.
+
+An editor that lays out several columns of its own (a field list, a preview and
+a settings panel) can ask for the rail's panel to start folded away on a
+collection's document screens: `views: { forms: { foldedPanel: true } }`. It
+applies to an entry's editor, a new entry's, and the pages of the collection's
+own edit view. The rail stays, the bar shows a toggle that brings the panel
+back, and each reader's choice is remembered for that collection.
+
+Declare it here rather than calling `useFoldedPanel` from the editor: the
+admin then draws the screen's outline folded from its first frame, before any
+request has answered, so nothing moves when the editor arrives. A value other
+than `true` or `false` is refused at startup. `useFoldedPanel` remains for a
+plugin page outside a collection's documents.
 
 ### Who is signed in
 

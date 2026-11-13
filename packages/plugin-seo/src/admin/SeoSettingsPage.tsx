@@ -14,6 +14,7 @@ import {
   Alert,
   AlertDescription,
   apiErrorMessage,
+  isApiError,
   Badge,
   Button,
   FormActions,
@@ -57,11 +58,14 @@ import { useAddressParam } from "./address";
 import { ConnectionsTab } from "./connections";
 import { ContentTypesTab } from "./content-types";
 import { useLeaveWarning } from "./leave-warning";
+import { ownRulesSaveProblem, useRobotsRulesCheck } from "./robots-rules";
 import { AdminLink, SeoTrail } from "./section";
 import {
   changesOf,
+  verificationDraftOf,
   draftOf,
   rebasedDraft,
+  robotsRulesDraftOf,
   structuredDataOf,
   type SettingsDefaults,
   type SettingsDraft,
@@ -181,7 +185,7 @@ export function SeoSettingsPage(): JSX.Element {
           <Alert variant="warning" className="mb-4">
             <AlertDescription>
               The SEO settings could not be read again. What is on screen is
-              kept. {apiErrorMessage(failed)}
+              kept. {readFailure(failed)}
             </AlertDescription>
           </Alert>
         ) : null}
@@ -205,7 +209,7 @@ export function SeoSettingsPage(): JSX.Element {
     body = (
       <Alert variant="destructive">
         <AlertDescription>
-          The SEO settings could not be read. {apiErrorMessage(failed)}
+          The SEO settings could not be read. {readFailure(failed)}
         </AlertDescription>
       </Alert>
     );
@@ -461,6 +465,18 @@ function SetupBanner({
   );
 }
 
+/**
+ * Why the settings could not be read, for a person: a database not migrated
+ * for a field the settings gained says what to run, in plain words, rather
+ * than core's message naming the field and the Single.
+ */
+function readFailure(failed: Error): string {
+  if (isApiError(failed) && failed.code === "ENTITY_NOT_MIGRATED") {
+    return "The database needs `nextly migrate` for the new SEO settings. A developer runs `nextly migrate:create` and then `nextly migrate`; the site keeps serving its pages meanwhile.";
+  }
+  return apiErrorMessage(failed);
+}
+
 /** The open tab's rows. */
 function SettingsPanel({
   tab,
@@ -469,9 +485,15 @@ function SettingsPanel({
   switchedOff,
   typesFailed,
   serverAddresses,
+  rulesCheck,
+  stored,
 }: {
   tab: TabId;
   tabProps: TabProps;
+  /** Which sitemap pages the own robots.txt rules being typed block. */
+  rulesCheck: ReturnType<typeof useRobotsRulesCheck>;
+  /** The settings as stored, which what was saved is read from. */
+  stored: StoredSettings;
   types: readonly SeoContentType[];
   switchedOff: readonly SwitchedOffType[];
   typesFailed: boolean;
@@ -485,9 +507,22 @@ function SettingsPanel({
     case "brand":
       return <BrandTab {...tabProps} />;
     case "crawlers":
-      return <CrawlersTab {...tabProps} serverAddresses={serverAddresses} />;
+      return (
+        <CrawlersTab
+          {...tabProps}
+          serverAddresses={serverAddresses}
+          rulesCheck={rulesCheck.check}
+          retryRulesCheck={rulesCheck.retry}
+        />
+      );
     case "connections":
-      return <ConnectionsTab {...tabProps} />;
+      return (
+        <ConnectionsTab
+          {...tabProps}
+          saved={verificationDraftOf(stored.verificationCodes)}
+          serverAddresses={serverAddresses}
+        />
+      );
     case "types":
       return typesFailed ? (
         <Alert variant="destructive">
@@ -627,7 +662,17 @@ function SettingsScreen({
     () => !finished && !draft.setupDismissed
   );
   const changes = changesOf(stored, draft, defaults);
-  const problem = draftProblem(draft, types, serverAddresses);
+  const rulesCheck = useRobotsRulesCheck(
+    draft.robotsRules.text,
+    draft.hiddenTypes
+  );
+  const problem =
+    draftProblem(draft, types, serverAddresses) ??
+    ownRulesSaveProblem(
+      draft.robotsRules,
+      robotsRulesDraftOf(stored.robotsRules).text,
+      rulesCheck.check
+    );
   useLeaveWarning(changes !== null);
   useHeldDraft(slug, stored, draft, changes !== null);
 
@@ -658,6 +703,8 @@ function SettingsScreen({
         switchedOff={switchedOff}
         typesFailed={typesFailed}
         serverAddresses={serverAddresses}
+        rulesCheck={rulesCheck}
+        stored={stored}
       />
       <SaveBar
         changed={changes !== null}

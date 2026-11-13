@@ -628,6 +628,13 @@ exports[`each code, as a command ends with it > CORE_TABLES_NOT_RECONCILED 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/core-tables-not-reconciled  (CORE_TABLES_NOT_RECONCILED)"
 `;
 
+exports[`each code, as a command ends with it > CREATE_BLOCKED_BY_LEFTOVER_TABLE 1`] = `
+"✗ Creating the Single "home" was refused.
+  Why:  "comp_hero" (2 rows) already exists and holds rows, but nothing registered describes them.
+  Next: Drop or rename those tables, then retry the create.
+  Docs: https://nextlyhq.com/docs/cli/errors/create-blocked-by-leftover-table  (CREATE_BLOCKED_BY_LEFTOVER_TABLE)"
+`;
+
 exports[`each code, as a command ends with it > DATA_LOSS_CONSENT_MALFORMED 1`] = `
 "✗ --accept-data-loss=dc_posts summary is not a list of tables and table.column pairs: "dc_posts summary" is not one.
   Why:  Each target is a table or a \`table.column\` pair, separated by commas. Nothing was changed.
@@ -1127,8 +1134,8 @@ exports[`each code, as a command ends with it > PACKAGE_INSTALL_FAILED 1`] = `
 
 exports[`each code, as a command ends with it > PASSWORD_CLEAR_UNCONFIRMED 1`] = `
 "✗ Nothing was changed: --apply also needs --confirm-default-hasher.
-  Why:  --confirm-default-hasher is your statement that no stored password was written by a custom passwordHasher, now or earlier. A custom hasher's hashes can look like plain text here, and clearing them locks those people out.
-  Next: If no custom passwordHasher ever wrote a password, run \`nextly users:clear-plaintext-passwords --apply --confirm-default-hasher\`.
+  Why:  --confirm-default-hasher is your statement that every stored password was written by core's bcrypt or by the passwordHasher in nextly.config.ts, now and earlier. Another hasher's hashes can look like plain text here, and clearing them locks those people out.
+  Next: If no other passwordHasher ever wrote a password, run \`nextly users:clear-plaintext-passwords --apply --confirm-default-hasher\`.
   Docs: https://nextlyhq.com/docs/cli/errors/password-clear-unconfirmed  (PASSWORD_CLEAR_UNCONFIRMED)"
 `;
 
@@ -1504,6 +1511,13 @@ exports[`each code, as a command ends with it > PLUGIN_SCHEMA_BEHIND 1`] = `
   Why:  The applied version is the newest \`schemaVersion\` among the plugin's migrations recorded as applied, and production does not start a plugin ahead of its tables.
   Next: Run "nextly migrate" or "nextly plugins install @acme/seo".
   Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-behind  (PLUGIN_SCHEMA_BEHIND)"
+`;
+
+exports[`each code, as a command ends with it > PLUGIN_SCHEMA_PREFIX_CHANGED 1`] = `
+"✗ The plugin "@acme/seo" now has the schema prefix "acme_seo", but its tables were created under "seo" (seo__redirects).
+  Why:  A plugin's prefix is fixed once its tables exist, since the rows cannot move to new names.
+  Next: Declare contributes.schema.prefix: "seo" to keep its tables.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-prefix-changed  (PLUGIN_SCHEMA_PREFIX_CHANGED)"
 `;
 
 exports[`each code, as a command ends with it > PLUGIN_SCHEMA_UNINSTALLED 1`] = `
