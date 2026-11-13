@@ -10,6 +10,7 @@ import type {
   CreateCollectionPayload,
   FieldDefinition,
 } from "@admin/types/collection";
+import type { CreateComponentPayload } from "@admin/services/fieldGroupApi";
 import type { UpdateSinglePayload } from "@admin/types/entities";
 
 export function collectionCreatePayload(
@@ -78,6 +79,30 @@ export function singleCreatePayload(
     ...(settings.webhooks === false ? { webhooks: false } : {}),
     // The server adds the system columns; these are the fields the person
     // added, the starting field among them.
+    fields,
+  };
+}
+
+export function fieldGroupCreatePayload(
+  address: string,
+  settings: BuilderSettingsValues,
+  fields: FieldDefinition[]
+): CreateComponentPayload {
+  return {
+    slug: address,
+    label: settings.singularName.trim(),
+    // Already normalised by the dialog, the one boundary both this request
+    // and the manifest projection read from.
+    description: settings.description,
+    admin: {
+      category: settings.category?.trim() || undefined,
+      icon: settings.icon,
+    },
+    // The Internationalization flag at create; the companion table is
+    // provisioned once a translatable field is added.
+    ...(settings.i18n === true ? { localized: true } : {}),
+    // The server adds the system columns; these are the fields the person
+    // added.
     fields,
   };
 }
