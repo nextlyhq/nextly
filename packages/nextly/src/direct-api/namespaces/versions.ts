@@ -329,20 +329,23 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
       const ref = await refOf(args);
       const item: VersionRow = checked
         ? await scoped(args, async () => {
-            await h.setVersionLabelForDocument({
-              ...restArgs(ref, checked.user, args),
-              versionNo: args.versionNo,
-              body: { label: args.label },
-              params: {},
-            });
             // The version as the caller may read it, through the same read
-            // `get` makes: a checked call's snapshot is redacted for it.
+            // `get` makes, so a checked call's snapshot is redacted for it.
+            // Read first: a field rule that cannot run refuses the call
+            // before the name or its event is written.
             const { withheld: _withheld, ...read } =
               await h.getVersionForDocument({
                 ...restArgs(ref, checked.user, args),
                 versionNo: args.versionNo,
               });
-            return read;
+            const meta = await h.setVersionLabelForDocument({
+              ...restArgs(ref, checked.user, args),
+              versionNo: args.versionNo,
+              body: { label: args.label },
+              params: {},
+            });
+            // The name as written, on the snapshot as read.
+            return { ...read, ...meta };
           })
         : await trustedName(ref, args, h.normalizeLabel(args.label, "label"));
       return {

@@ -42,12 +42,33 @@ import {
 } from "../../__tests__/checked-access-fixtures";
 
 const ORIGIN = "http://localhost";
+// The snapshot redaction a checked read of a version makes, made to fail by the
+// one test that needs it to: every other test runs the real one.
+const redactionFails = vi.hoisted(() => ({ on: false }));
+vi.mock("../../../api/versions-access", async importOriginal => {
+  const real =
+    await importOriginal<typeof import("../../../api/versions-access")>();
+  return {
+    ...real,
+    redactSnapshotForUser: (
+      ...args: Parameters<typeof real.redactSnapshotForUser>
+    ) => {
+      if (redactionFails.on) {
+        return Promise.reject(new Error("the read rule could not run"));
+      }
+      return real.redactSnapshotForUser(...args);
+    },
+  };
+});
+
 const POSTS = "dav_posts";
 const ADMIN = "dav-admin";
 /** A collection everyone may read, whose documents only the admin may. */
 const PRIVATE = "dav_private";
 /** A Single nothing has written yet, so no row backs it. */
 const NOTICE = "dav_notice";
+/** A collection with a field only the admin may read. */
+const RULED = "dav_ruled";
 
 /** The namespace as these tests call it. */
 interface VersionsNamespace {
@@ -190,6 +211,18 @@ describe.each(getConfiguredTestDialects())(
             },
             fields: [text({ name: "title" })],
           }),
+          defineCollection({
+            slug: RULED,
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              text({ name: "title" }),
+              text({
+                name: "secret",
+                access: { read: ({ req }) => req.user?.id === ADMIN },
+              }),
+            ],
+          }),
         ],
         singles: [
           defineSingle({
@@ -218,7 +251,12 @@ describe.each(getConfiguredTestDialects())(
       );
       cookie = { cookie: `nextly_session=${token}` };
       editorId = await account(t, "dav-editor@example.com", [
-        await role(t, "dav-editors", [`read-${POSTS}`, `update-${POSTS}`]),
+        await role(t, "dav-editors", [
+          `read-${POSTS}`,
+          `update-${POSTS}`,
+          `read-${RULED}`,
+          `update-${RULED}`,
+        ]),
       ]);
       blindId = await account(t, "dav-blind@example.com", [
         await role(t, "dav-blind-updaters", [`update-${POSTS}`]),
@@ -479,28 +517,71 @@ describe.each(getConfiguredTestDialects())(
       ).toContain(ADMIN);
     }, 120_000);
 
-    it("answers a checked name with the version as the caller reads it", async () => {
-      const id = await publishedTwice();
+    /** A document of `slug` saved twice: versions 1 and 2, each holding `extra`. */
+    async function savedTwice(
+      slug: string,
+      extra: Record<string, unknown>
+    ): Promise<string> {
+      const created = await handler().createEntry(
+        { collectionName: slug, overrideAccess: true },
+        { title: "one", status: "published", ...extra }
+      );
+      const id = created.data!.id;
+      await handler().updateEntry(
+        { collectionName: slug, entryId: id, overrideAccess: true },
+        { title: "two", status: "published", ...extra, _overwrite: true }
+      );
+      return id;
+    }
+
+    it("answers a checked name with the version as the caller reads it, a field they may not read withheld", async () => {
+      const id = await savedTwice(RULED, { secret: "kept from editors" });
 
       const named = await versions().name({
-        collection: POSTS,
+        collection: RULED,
         id,
         versionNo: 1,
         label: "Checked",
-        overrideAccess: false,
-        user: { id: ADMIN as AuthUserId, email: `${ADMIN}@example.test` },
+        ...asUser(editorId),
       });
 
       expect(named.item.label).toBe("Checked");
-      // The read a checked `get` makes, not the stored row.
-      const read = await versions().get({
+      const snapshot = named.item.snapshot as Record<string, unknown>;
+      expect(snapshot.title).toBe("one");
+      expect(snapshot).not.toHaveProperty("secret");
+    }, 120_000);
+
+    it("writes no name when the version cannot be read for a checked caller", async () => {
+      const id = await publishedTwice();
+
+      // The read of the version for the caller fails, as a rule that could
+      // not run fails it.
+      redactionFails.on = true;
+      try {
+        await expect(
+          versions().name({
+            collection: POSTS,
+            id,
+            versionNo: 1,
+            label: "Never written",
+            ...asUser(editorId),
+          })
+        ).rejects.toBeDefined();
+      } finally {
+        redactionFails.on = false;
+      }
+
+      // Nothing written: the version keeps no name, and no event names it.
+      const stored = await versions().get({
         collection: POSTS,
         id,
         versionNo: 1,
-        overrideAccess: false,
-        user: { id: ADMIN as AuthUserId, email: `${ADMIN}@example.test` },
       });
-      expect(named.item.snapshot).toEqual(read.snapshot);
+      expect((stored as { label?: string | null }).label ?? null).toBeNull();
+      const events = await t.nextly.contentEvents.list({
+        subject: { kind: "collection", slug: POSTS, id },
+      });
+      expect(events.items.some(e => e.kind === "named")).toBe(false);
     }, 120_000);
 
     it("hands a restore's hook context to the update it makes, checked or trusted", async () => {
