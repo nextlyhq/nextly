@@ -551,9 +551,12 @@ function keptOn(kept: readonly KeptElement[], table: string): KeptElement[] {
  */
 export function refuseRebuildsLosingKeptElements(
   rebuilt: Iterable<string>,
-  kept: readonly KeptElement[]
+  kept: readonly KeptElement[],
+  /** Tables whose statements the apply discards, lower-cased: never refused. */
+  discarded: ReadonlySet<string> = new Set()
 ): void {
   for (const table of rebuilt) {
+    if (discarded.has(table.toLowerCase())) continue;
     const lost = keptOn(kept, table).find(e => e.kind !== "index");
     if (lost === undefined) continue;
     throw keptElementRefusal(

@@ -1584,9 +1584,17 @@ export class PushSchemaPipeline {
             kept.filter(element => element.kind === "column")
           );
           if (dialect === "sqlite") {
+            // Not a locked table's: a UI save discards every statement
+            // on one below, its rebuild included, so that rebuild loses
+            // nothing.
             refuseRebuildsLosingKeptElements(
               rebuiltTableNames(keptColumns.kept),
-              kept
+              kept,
+              new Set(
+                (source === "ui" ? [...lockedTableNames(desired)] : []).map(
+                  table => table.toLowerCase()
+                )
+              )
             );
           }
           if (keptColumns.strippedCount > 0) {

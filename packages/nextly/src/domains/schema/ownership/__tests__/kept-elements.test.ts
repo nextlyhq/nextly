@@ -414,6 +414,11 @@ describe("refuseRebuildsLosingKeptElements", () => {
     expect(() =>
       refuseRebuildsLosingKeptElements(["dc_other"], [column])
     ).not.toThrow();
+    // A rebuild the apply discards (a locked table's, on a UI save) loses
+    // nothing, so it refuses nothing.
+    expect(() =>
+      refuseRebuildsLosingKeptElements([POSTS], [column], new Set([POSTS]))
+    ).not.toThrow();
   });
 });
 
@@ -443,5 +448,139 @@ describe("assertNoContributedOwnerChange", () => {
         [row("a", "index", "idx_dc_posts_stamp")]
       )
     ).toThrow(/recorded as belonging to "a"/);
+  });
+});
+
+describe("refuseChangesToKeptElements, by operation", () => {
+  const rows = [
+    row("gone", "column", "stamp"),
+    row("gone", "index", "idx_dc_posts_stamp"),
+    row("gone", "check", "ck_dc_posts_stamp"),
+    row("gone", "fk", "fk_dc_posts_stamp"),
+  ];
+  const fk = {
+    name: "fk_dc_posts_stamp",
+    columns: ["stamp"],
+    referencesTable: "dc_other",
+    referencesColumns: ["id"],
+    onDelete: "set null" as const,
+    onUpdate: "no action" as const,
+  };
+  const t = { tableName: POSTS };
+
+  it.each<[string, Operation]>([
+    [
+      "drop",
+      { type: "drop_column", ...t, columnName: "stamp", columnType: "text" },
+    ],
+    [
+      "rename",
+      {
+        type: "rename_column",
+        ...t,
+        fromColumn: "stamp",
+        toColumn: "s",
+        fromType: "text",
+        toType: "text",
+      },
+    ],
+    [
+      "change",
+      {
+        type: "change_column_nullable",
+        ...t,
+        columnName: "stamp",
+        fromNullable: true,
+        toNullable: false,
+      },
+    ],
+    [
+      "change",
+      {
+        type: "change_column_default",
+        ...t,
+        columnName: "stamp",
+        fromDefault: undefined,
+        toDefault: "'x'",
+      },
+    ],
+    [
+      "drop",
+      {
+        type: "drop_index",
+        ...t,
+        index: {
+          name: "idx_dc_posts_stamp",
+          columns: ["stamp"],
+          unique: false,
+        },
+      },
+    ],
+    [
+      "drop",
+      {
+        type: "drop_check",
+        ...t,
+        check: { name: "ck_dc_posts_stamp", sql: "stamp <> ''" },
+      },
+    ],
+    ["drop", { type: "drop_foreign_key", ...t, foreignKey: fk }],
+    [
+      "change",
+      {
+        type: "change_foreign_key_action",
+        ...t,
+        constraintName: "fk_dc_posts_stamp",
+        columnName: "stamp",
+        referencesTable: "dc_other",
+        referencesColumn: "id",
+        fromOnDelete: "SET NULL",
+        fromOnUpdate: "NO ACTION",
+        toOnDelete: "CASCADE",
+        toOnUpdate: "NO ACTION",
+      },
+    ],
+  ])("refuses to %s a removed plugin's element (%#)", (act, op) => {
+    expect(() =>
+      refuseChangesToKeptElements({
+        operations: [op],
+        rows,
+        declaring: new Set(["app"]),
+        kept: [],
+        live,
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              message: expect.stringMatching(
+                new RegExp(`would ${act} the .* that the plugin "gone" added`)
+              ),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
+  it("passes an operation that names no element of a removed plugin", () => {
+    expect(() =>
+      refuseChangesToKeptElements({
+        operations: [
+          { type: "add_column", tableName: POSTS, column: headline },
+          {
+            type: "drop_column",
+            tableName: POSTS,
+            columnName: "other",
+            columnType: "text",
+          },
+        ],
+        rows,
+        declaring: new Set(["app"]),
+        kept: [],
+        live,
+      })
+    ).not.toThrow();
   });
 });
