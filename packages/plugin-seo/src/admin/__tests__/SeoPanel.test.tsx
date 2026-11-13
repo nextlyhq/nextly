@@ -493,6 +493,27 @@ describe("Advanced", () => {
     ).toBeNull();
   });
 
+  it("offers no share image to make where the group declares no share image field", () => {
+    const { structuredData: _none, ...rest } = CONTEXT;
+    render(
+      <Harness
+        context={{
+          ...rest,
+          fields: ["metaTitle", "metaDescription"],
+          shareImage: {
+            problems: [
+              { message: "800 × 600, LinkedIn will crop it", fix: "make" },
+            ],
+          },
+        }}
+        onMakeShareImage={() => Promise.resolve("copy")}
+      />
+    );
+    expect(
+      screen.queryByRole("button", { name: "Make a share image" })
+    ).toBeNull();
+  });
+
   it("lets go of an unfinished address when another document or language is shown", async () => {
     const user = userEvent.setup();
     const { rerender } = render(<Harness documentKey="posts:1:en" />);
