@@ -123,6 +123,7 @@ import type { Logger } from "../../../shared/types";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { recordWriteEvent } from "../../content-events/write-event";
 import { entityRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
+import { statedDefaultFits } from "../../dynamic-collections/services/stated-default";
 import {
   liveFieldGroupReadPass,
   withFieldGroupEvidence,
@@ -2922,12 +2923,25 @@ export class SingleQueryService extends BaseService {
  * `default`, as a field saved through the REST API may. A Single's table carries neither as a
  * column default, so its first document is given the value here or not at all.
  *
- * A `default` of `null` states nothing, as the table's own fill reads it: a REST payload may pass
- * it through, and taken as a value it would put NULL in a required field's NOT NULL column, so
- * the first read could never write the document.
+ * The field payload checks `defaultValue` but keeps `default` as it was sent, so `default` is taken
+ * only where it fits the field as it is (`statedDefaultFits`, the answer the table's own fill
+ * gives): `null`, text for a number, or a value of a type whose default needs checking states
+ * nothing here. Taken as it was sent, it could put NULL in a required field's NOT NULL column, or
+ * text in a number column, and the first read could never write the document.
  */
 function declaredDefaultOf(field: object): unknown {
-  const stated = field as { defaultValue?: unknown; default?: unknown };
+  const stated = field as {
+    type?: unknown;
+    hasMany?: unknown;
+    defaultValue?: unknown;
+    default?: unknown;
+  };
   if (stated.defaultValue !== undefined) return stated.defaultValue;
-  return stated.default === null ? undefined : stated.default;
+  return typeof stated.type === "string" &&
+    statedDefaultFits(
+      { type: stated.type, hasMany: stated.hasMany },
+      stated.default
+    )
+    ? stated.default
+    : undefined;
 }

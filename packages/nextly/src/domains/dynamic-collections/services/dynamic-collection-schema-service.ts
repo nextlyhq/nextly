@@ -88,6 +88,11 @@ import type { CollectionTables } from "./collection-tables";
 // checks a file against them too.
 import { dropFileHeader, dropFileLabel } from "./drop-file-name";
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
+import {
+  STATED_TEXT_TYPES,
+  statedDefaultFits,
+  statedMoment,
+} from "./stated-default";
 
 /** A field-group field renamed with no column of its own: its instances move with it. */
 type AssociationRename = { from: FieldDefinition; to: FieldDefinition };
@@ -1171,28 +1176,27 @@ export class DynamicCollectionSchemaService {
     return literal === null ? null : { value: stated, literal };
   }
 
-  /** `stated` as the SQL literal `statedFill` takes, or null where it is not taken. */
+  /**
+   * `stated` as the SQL literal `statedFill` takes, or null where it is not taken: whether it is
+   * taken is `statedDefaultFits`, the one answer the first document's default is held to as well.
+   */
   private statedFillLiteral(
     field: FieldDefinition,
     stated: unknown
   ): string | null {
-    if (STATED_TEXT_FILL_TYPES.has(field.type)) {
-      const holdsList = (field as { hasMany?: unknown }).hasMany === true;
-      return typeof stated === "string" && !holdsList
-        ? quoteExpressionSqlDefault(stated, this.dialect)
-        : null;
+    if (!statedDefaultFits(field, stated)) return null;
+    if (STATED_TEXT_TYPES.has(field.type)) {
+      return quoteExpressionSqlDefault(String(stated), this.dialect);
     }
     switch (field.type) {
       case "number":
-        return typeof stated === "number" && Number.isFinite(stated)
-          ? String(stated)
-          : null;
+        return String(stated);
       case "checkbox":
-        return typeof stated === "boolean"
-          ? this.formatDefaultValue(stated, "checkbox")
-          : null;
+        return this.formatDefaultValue(stated, "checkbox");
       case "json":
-        return this.statedJsonLiteral(stated);
+        // Serialized whatever it is, as the first document's write does, so the string "hello"
+        // is stored as `"hello"` and not as the bare text `hello`, which is no JSON.
+        return this.formatDefaultValue(JSON.stringify(stated), "json");
       case "date":
         return this.statedDateLiteral(stated);
       default:
@@ -1201,33 +1205,12 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
-   * A JSON field's stated value as the JSON text it is stored as: serialized whatever it is, as
-   * the first document's write does, so the string "hello" is stored as `"hello"` and not as the
-   * bare text `hello`, which is no JSON. Null for a value JSON cannot hold.
-   */
-  private statedJsonLiteral(stated: unknown): string | null {
-    let text: string | undefined;
-    try {
-      text = JSON.stringify(stated);
-    } catch {
-      return null;
-    }
-    return text === undefined ? null : this.formatDefaultValue(text, "json");
-  }
-
-  /**
    * A stated date as the moment it names, in the form the dialect stores it (`storedDateValue`):
-   * epoch seconds on SQLite, an ISO moment elsewhere, which holds no quote. Null for anything that
-   * names no moment.
+   * epoch seconds on SQLite, an ISO moment elsewhere, which holds no quote.
    */
   private statedDateLiteral(stated: unknown): string | null {
-    const at =
-      stated instanceof Date
-        ? stated
-        : typeof stated === "string"
-          ? new Date(stated)
-          : null;
-    if (at === null || Number.isNaN(at.getTime())) return null;
+    const at = statedMoment(stated);
+    if (at === null) return null;
     const stored = storedDateValue(at, this.dialect);
     return typeof stored === "number"
       ? String(stored)
@@ -4170,16 +4153,6 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
     return actionMap[action.toLowerCase()] || "NO ACTION";
   }
 }
-
-/** The text kinds whose stated default a Single's existing row is filled with (`singleRowFill`). */
-const STATED_TEXT_FILL_TYPES: ReadonlySet<string> = new Set([
-  "text",
-  "textarea",
-  "email",
-  "code",
-  "select",
-  "radio",
-]);
 
 /**
  * A value as an SQL string literal: in single quotes, each quote inside doubled, which every
