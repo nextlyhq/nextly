@@ -1153,9 +1153,11 @@ async function registerServicesOnce(
       // Recorded only for a load that registered every definition, at the
       // version read before the start read any of them, so the first follow
       // does not load them all again; otherwise it does, as before.
-      if (registry !== undefined && completeness.complete) {
-        definitionsLoaded(adapter, definitionsVersion);
-      }
+      definitionsLoaded(
+        adapter,
+        definitionsVersion,
+        registry !== undefined && completeness.complete
+      );
 
       // Publish the webhook recording policy from the config INDEPENDENTLY of the
       // schema registry. `registerConfigTablesInResolver` (below) only runs when the
