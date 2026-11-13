@@ -83,6 +83,24 @@ describeEachDialect("a field added to a Single that holds its row", dialect => {
     expect((await column("title"))?.name).toBe("title");
   });
 
+  it("fills the row with the default a required field states as the Builder spells it", async () => {
+    await heroWithItsRow();
+
+    await save([
+      TITLE,
+      { name: "motto", type: "text", required: true, defaultValue: "hello" },
+    ]);
+
+    const motto = await column("motto");
+    expect(motto?.name).toBe("motto");
+    expect(motto?.nullable).toBe(false);
+    expect(motto?.default ?? null).toBeNull();
+    const [row] = await exec<{ filled: unknown }>(
+      `SELECT ${dialect === "mysql" ? "`motto`" : '"motto"'} AS filled FROM ${dialect === "mysql" ? "`single_hero`" : '"single_hero"'}`
+    );
+    expect(row?.filled).toBe("hello");
+  });
+
   it("gives a field's own default to no column", async () => {
     await heroWithItsRow();
 

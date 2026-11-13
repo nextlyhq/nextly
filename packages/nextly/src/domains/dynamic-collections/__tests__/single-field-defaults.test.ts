@@ -104,7 +104,12 @@ describe.each(DIALECTS)("field defaults on %s", dialect => {
       expect(toNotNull).toEqual([["rank", true]]);
       return;
     }
-    expect(statements[0]).toMatch(/ADD COLUMN rank .*NOT NULL DEFAULT 0/i);
+    // MySQL takes the fill as an expression, which any column accepts (`fillThenDropDefault`).
+    expect(statements[0]).toMatch(
+      dialect === "mysql"
+        ? /ADD COLUMN rank .*NOT NULL DEFAULT \(0\)/i
+        : /ADD COLUMN rank .*NOT NULL DEFAULT 0/i
+    );
     expect(statements.at(-1)).toMatch(/ALTER COLUMN rank DROP DEFAULT/i);
   });
 

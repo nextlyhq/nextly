@@ -1115,10 +1115,27 @@ export class DynamicCollectionSchemaService {
         `UPDATE ${table} SET ${column} = ${fill};`,
       ];
     }
+    // MySQL takes no literal default on a TEXT or BLOB column, which a Single's text field is
+    // there, but takes an expression in parentheses on any column, and the default is dropped
+    // straight after.
+    const given = this.dialect === "mysql" ? `(${fill})` : fill;
     return [
-      `ALTER TABLE ${table} ADD COLUMN ${column} ${type} NOT NULL DEFAULT ${fill};`,
+      `ALTER TABLE ${table} ADD COLUMN ${column} ${type} NOT NULL DEFAULT ${given};`,
       `ALTER TABLE ${table} ALTER COLUMN ${column} DROP DEFAULT;`,
     ];
+  }
+
+  /**
+   * `field` with the default it states as `default`, read from `defaultValue` (as code and the
+   * Schema Builder spell it) where `default` is absent. Only a plain value is taken: a function
+   * default is the application's to work out per document, and no SQL literal can hold it.
+   */
+  private withStatedDefault(field: FieldDefinition): FieldDefinition {
+    if (field.default !== undefined) return field;
+    const stated = (field as { defaultValue?: unknown }).defaultValue;
+    return ["string", "number", "boolean"].includes(typeof stated)
+      ? { ...field, default: stated }
+      : field;
   }
 
   private requiredColumnBackfill(field: FieldDefinition): string | null {
@@ -1814,7 +1831,11 @@ ${allColumnDefs.join(",\n")}
         // (`fillThenDropDefault`); a field's own default is never kept on its column.
         let fillThenDrop: string | null = null;
         if (field.required || (columnDefaults && field.default !== undefined)) {
-          const backfill = this.requiredColumnBackfill(field);
+          // A Single's existing row takes the default the field states, however it is spelled
+          // (`withStatedDefault`); a collection's reads `default` alone, as it always has.
+          const backfill = this.requiredColumnBackfill(
+            columnDefaults ? field : this.withStatedDefault(field)
+          );
           if (backfill !== null && !columnDefaults && field.required) {
             fillThenDrop = backfill;
           } else if (backfill !== null) {
