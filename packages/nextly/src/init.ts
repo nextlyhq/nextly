@@ -40,7 +40,11 @@ import {
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { checkConsumerDrizzleVersion } from "./database/drizzle-version";
 import { recordRegisteredLocalization } from "./di/registered-localization";
-import { getService, isServicesRegistered } from "./di/service-access";
+import {
+  getService,
+  isServicesRegistered,
+  registrationInFlight,
+} from "./di/service-access";
 import { installLegacyFieldGroupsNamespaceGuard } from "./direct-api/legacy-field-groups-namespace";
 import { requireNextly as getDirectAPI } from "./direct-api/nextly";
 import { recordBuildSchemaVersion } from "./domains/schema/build-schema-version";
@@ -195,6 +199,7 @@ function buildNextlyInstance(
     findByID: directAPI.findByID.bind(directAPI),
     create: directAPI.create.bind(directAPI),
     update: directAPI.update.bind(directAPI),
+    rewriteField: directAPI.rewriteField.bind(directAPI),
     publish: directAPI.publish.bind(directAPI),
     unpublish: directAPI.unpublish.bind(directAPI),
     delete: directAPI.delete.bind(directAPI),
@@ -762,6 +767,19 @@ export async function getCachedNextly(): Promise<Nextly> {
   const inFlight = startInFlight();
   if (inFlight) {
     return inFlight;
+  }
+
+  // A registration begun without `getNextly` (a route's request-path boot, or
+  // `createTestNextly`) is still running: work a plugin started during it
+  // without awaiting it, such as a seed begun in `onReady`, waits for it here
+  // as it would for `getNextly`'s start, and reads the instance once it is
+  // done. A registration that fails rejects, with its own error.
+  const registering = registrationInFlight();
+  if (registering !== undefined && !isServicesRegistered()) {
+    await registering;
+    if (globalForInit.__nextly_cachedInstance) {
+      return globalForInit.__nextly_cachedInstance;
+    }
   }
 
   // Fallback path: services may have been registered via
