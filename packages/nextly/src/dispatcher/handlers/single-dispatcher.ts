@@ -53,7 +53,7 @@ import { translationLayoutChange } from "../../domains/i18n/per-language-storage
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
 import type { SchemaChangeAnswers } from "../../domains/schema/builder-save/schema-change-save";
-import { singleRelations } from "../../domains/schema/builder-save/single-relations";
+import { entityRelations } from "../../domains/schema/builder-save/single-relations";
 import { singleEntity } from "../../domains/schema/builder-save/stored-entity";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -1269,7 +1269,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         },
         ...(reviewDeps === undefined
           ? {}
-          : await singleRelations(
+          : await entityRelations(
               reviewDeps.adapter,
               getLoggerFromDI() ?? consoleLogger,
               tableName,
@@ -1582,7 +1582,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               // Its junction tables and relationship keys, which the writer does not derive itself.
               ...(builderSave === undefined
                 ? {}
-                : await singleRelations(
+                : await entityRelations(
                     builderSave.adapter,
                     getLoggerFromDI() ?? consoleLogger,
                     tableName,

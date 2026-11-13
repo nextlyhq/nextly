@@ -94,7 +94,7 @@ import {
   writeEntityDelete,
   writeEntitySave,
 } from "../../schema/builder-save/entity-save";
-import { singleRelations } from "../../schema/builder-save/single-relations";
+import { entityRelations } from "../../schema/builder-save/single-relations";
 import { singleEntity } from "../../schema/builder-save/stored-entity";
 import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
 import { writeRegistryRowsWith } from "../../schema/schema-version";
@@ -718,7 +718,7 @@ export class SingleMetadataService {
         kind: "single",
         slug,
         stored: singleEntity(current),
-        ...(await singleRelations(
+        ...(await entityRelations(
           deps.adapter,
           this.logger,
           current.tableName,
@@ -924,19 +924,35 @@ export class SingleMetadataService {
     // 1. PLAN. May reject; nothing is persisted and no statement has run.
     const plan = await this.planUpdate(input);
 
-    // The status the response reports. A save with no schema work at all keeps whatever the last
-    // migration reached, because this request neither confirmed nor changed it.
+    // 2. APPLY, then 3. RECORD. The apply returns a status rather than throwing, except for a
+    // refusal (see below). Where a writer is set up, the update is written first as the Single's
+    // migration, and its row is written inside the step the writer runs (`writeUpdate`).
+    if (deps === undefined) {
+      return this.recordUpdate(
+        input,
+        plan ? await this.applyUpdateDdl(input, plan) : undefined
+      );
+    }
+    return this.writeUpdate(deps, input, plan);
+  }
+
+  /**
+   * Write the registry row an update's outcome describes, and answer it as the response reports
+   * it. A save with no schema work at all keeps whatever status the last migration reached.
+   *
+   * @param notYetApplied Leaving settings applied as a step of their own after this row is written
+   *   (`applyLeavingStep`): recorded without them until they have applied, and not reported refused.
+   */
+  private async recordUpdate(
+    input: UpdateSingleSchemaInput,
+    outcome:
+      | Awaited<ReturnType<SingleMetadataService["applyUpdateDdl"]>>
+      | undefined,
+    notYetApplied: readonly LeavingSettingStep[] = []
+  ): Promise<UpdateSingleSchemaResult> {
     let migrationStatus = input.existing.migrationStatus;
     const updateData = { ...input.updateData };
     let refusedSettings: UpdateSingleSchemaResult["refusedSettings"] = [];
-
-    // 2. APPLY. Returns a status rather than throwing, except for a refusal (see below). Where a
-    // writer is set up, written first as the Single's migration (`writeUpdate`).
-    const outcome =
-      deps === undefined
-        ? plan && (await this.applyUpdateDdl(input, plan))
-        : await this.writeUpdate(deps, input, plan, updateData);
-
     if (outcome) {
       const { status: applied, refused } = outcome;
       if (applied !== undefined) {
@@ -946,23 +962,23 @@ export class SingleMetadataService {
       // Leaving settings the database refused: the fields are recorded as the table holds them,
       // without the settings, and hashed as recorded, so the version moves on and the next save
       // sees the settings as a change and applies them.
-      if (refused.length > 0 && Array.isArray(updateData.fields)) {
+      const without = [...refused, ...notYetApplied];
+      if (without.length > 0 && Array.isArray(updateData.fields)) {
         const recorded = withoutRefusedSettings(
           updateData.fields as FieldDefinition[],
-          refused
+          without
         );
         updateData.fields = recorded;
         updateData.schemaHash = calculateSchemaHash(
           recorded as unknown as FieldConfig[]
         );
-        refusedSettings = refused.map(({ field, setting }) => ({
-          field,
-          setting,
-        }));
       }
+      refusedSettings = refused.map(({ field, setting }) => ({
+        field,
+        setting,
+      }));
     }
 
-    // 3. RECORD, with the outcome already known.
     // The row and the stored schema version in one transaction
     // (`writeRegistryRows`).
     const record = await writeRegistryRowsWith(this.adapter, () =>
@@ -999,12 +1015,10 @@ export class SingleMetadataService {
   private async writeUpdate(
     deps: CollectionSaveDeps,
     input: UpdateSingleSchemaInput,
-    plan: UpdateDdlPlan | null,
-    updateData: Record<string, unknown>
-  ): Promise<
-    Awaited<ReturnType<SingleMetadataService["applyUpdateDdl"]>> | undefined
-  > {
+    plan: UpdateDdlPlan | null
+  ): Promise<UpdateSingleSchemaResult> {
     const existing = input.existing;
+    const updateData = input.updateData;
     const before = (existing.fields ?? []) as unknown as FieldDefinition[];
     const after =
       plan?.fields ??
@@ -1021,10 +1035,33 @@ export class SingleMetadataService {
       leaving.length > 0 ? withoutRefusedSettings(after, leaving) : after;
     const entityWith = (fields: FieldDefinition[]) =>
       singleEntity({ ...existing, ...updateData, fields });
-    // Held in an object, as the apply below sets it from inside the writer.
+    // Held in an object, as the step below sets it from inside the writer.
     const ran: {
       outcome?: Awaited<ReturnType<SingleMetadataService["applyUpdateDdl"]>>;
+      result?: UpdateSingleSchemaResult;
+      rowError?: unknown;
     } = {};
+    // The apply and the row it records, as one step: the writer records the files applied only once
+    // the row is written. A row that fails once the table has changed keeps the files, recorded
+    // applied nowhere, and the failure is thrown.
+    const applyAndRecord = async (): Promise<"partly-applied" | undefined> => {
+      if (plan) {
+        ran.outcome = await this.applyUpdateDdl(
+          input,
+          plan,
+          leaving.length > 0
+        );
+      }
+      try {
+        ran.result = await this.recordUpdate(input, ran.outcome, leaving);
+      } catch (error) {
+        ran.rowError = error;
+        return "partly-applied";
+      }
+      // A companion that failed to follow leaves the main table changed: the files are kept and
+      // recorded applied nowhere, never taken as applied.
+      return ran.outcome?.status === "failed" ? "partly-applied" : undefined;
+    };
     try {
       await writeEntitySave(
         deps,
@@ -1035,7 +1072,7 @@ export class SingleMetadataService {
           entity: entityWith(planned),
           change: "update",
           ...(rename ? { renamedFields: [rename] } : {}),
-          ...(await singleRelations(
+          ...(await entityRelations(
             deps.adapter,
             this.logger,
             existing.tableName,
@@ -1043,35 +1080,39 @@ export class SingleMetadataService {
             after
           )),
         },
-        async () => {
-          if (!plan) return undefined;
-          ran.outcome = await this.applyUpdateDdl(
-            input,
-            plan,
-            leaving.length > 0
-          );
-          // A companion that failed to follow leaves the main table changed: the files are kept
-          // and recorded applied nowhere, never taken as applied.
-          return ran.outcome.status === "failed" ? "partly-applied" : undefined;
-        }
+        applyAndRecord
       );
-      if (plan && leaving.length > 0 && ran.outcome?.status !== "failed") {
-        const refused = await this.applyLeavingStep(deps, input, plan, {
-          previous: entityWith(planned),
-          entity: entityWith(after),
-        });
-        if (refused.length > 0) ran.outcome = { status: "failed", refused };
-      }
     } catch (error) {
-      if (ran.outcome === undefined) throw error;
+      if (ran.result === undefined) throw error;
       this.logger.error(
         `[Singles] The update of "${input.slug}" ran, but its migration could not be recorded applied: ${
           error instanceof Error ? error.message : String(error)
         }`
       );
-      return { ...ran.outcome, status: "failed" };
+      return this.recordUpdate(
+        input,
+        { refused: [], ...ran.outcome, status: "failed" },
+        leaving
+      );
     }
-    return ran.outcome;
+    if ("rowError" in ran) throw ran.rowError;
+    if (plan && leaving.length > 0 && ran.outcome?.status !== "failed") {
+      const outcome = ran.outcome;
+      const refused = await this.applyLeavingStep(
+        deps,
+        input,
+        plan,
+        { previous: entityWith(planned), entity: entityWith(after) },
+        // Their row, with the settings, inside the step that records their file.
+        async () => {
+          ran.result = await this.recordUpdate(input, outcome);
+        }
+      );
+      if (refused.length > 0) {
+        return this.recordUpdate(input, { status: "failed", refused });
+      }
+    }
+    return ran.result as UpdateSingleSchemaResult;
   }
 
   /**
@@ -1087,7 +1128,9 @@ export class SingleMetadataService {
     deps: CollectionSaveDeps,
     input: UpdateSingleSchemaInput,
     plan: UpdateDdlPlan,
-    entities: { previous: UiSchemaEntity; entity: UiSchemaEntity }
+    entities: { previous: UiSchemaEntity; entity: UiSchemaEntity },
+    /** Writes the row with the settings, once they have applied. */
+    recordApplied: () => Promise<void>
   ): Promise<LeavingSettingStep[]> {
     const adapter = deps.adapter;
     const tableName = input.existing.tableName;
@@ -1107,6 +1150,7 @@ export class SingleMetadataService {
         adapter,
         input.isLocalized
       );
+      if (refused.length === 0) await recordApplied();
       return refused;
     };
     if (!deps.applies) {
@@ -2618,7 +2662,7 @@ export class SingleMetadataService {
       change: "create",
       // Its junction tables and relationship keys, which the writer does not
       // derive itself, so the file makes what the Builder made.
-      ...(await singleRelations(
+      ...(await entityRelations(
         deps.adapter,
         this.logger,
         input.tableName,

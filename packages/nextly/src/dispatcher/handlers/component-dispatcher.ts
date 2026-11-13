@@ -45,6 +45,7 @@ import {
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
 import type { SchemaChangeAnswers } from "../../domains/schema/builder-save/schema-change-save";
+import { entityRelations } from "../../domains/schema/builder-save/single-relations";
 import { fieldGroupEntity } from "../../domains/schema/builder-save/stored-entity";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -944,6 +945,17 @@ export const COMPONENTS_METHODS: Record<
                   ? {}
                   : { acknowledgedConversions }),
               },
+              // What the push moves beside the table, as a collection's save writes it: a renamed
+              // nested field group's rows moved to its new name, and any junction tables.
+              ...(builderSave === undefined
+                ? {}
+                : await entityRelations(
+                    builderSave.adapter,
+                    getLoggerFromDI() ?? DISCARDED_LOG,
+                    tableName,
+                    (component.fields ?? []) as unknown as FieldDefinition[],
+                    fields as unknown as FieldDefinition[]
+                  )),
             },
             landing.landed
           );

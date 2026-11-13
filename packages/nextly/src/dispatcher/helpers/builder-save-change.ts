@@ -89,7 +89,7 @@ export async function writeBuilderSchemaChange(
     fields: readonly FieldDefinition[];
     localized: boolean;
     answers: SchemaChangeAnswers;
-    /** A Single's junction statements and relationship keys (`singleRelations`). */
+    /** A Single's junction statements and relationship keys (`entityRelations`). */
     junctions?: NonNullable<CollectionSave["junctions"]>;
     keys?: NonNullable<CollectionSave["keys"]>;
   },

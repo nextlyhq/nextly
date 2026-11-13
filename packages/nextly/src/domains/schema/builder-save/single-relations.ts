@@ -1,10 +1,11 @@
 /**
- * A Single's many-to-many junction tables and relationship keys, before a
- * save and after it, for the Builder save writer, which writes no junction
- * table itself (`CollectionSave.junctions`, `CollectionSave.keys`). A Single's
- * table holds relationship fields as a collection's does, so its save's
- * migration carries the same statements, read by the same reading, and a
- * migration replayed on a fresh database makes the junctions the Builder made.
+ * A Single's or a field group's junction tables, relationship keys and moved
+ * nested field-group rows, before a save and after it, for the Builder save
+ * writer, which writes none of them itself (`CollectionSave.junctions`,
+ * `CollectionSave.keys`). Their tables hold these fields as a collection's
+ * does, so their saves' migrations carry the same statements, read by the same
+ * reading (`writerRelations`), and a migration replayed on a fresh database
+ * ends as the Builder left it.
  *
  * @module domains/schema/builder-save/single-relations
  */
@@ -15,8 +16,8 @@ import type { Logger } from "../../../shared/types";
 
 import type { CollectionSave } from "./collection-save";
 
-/** The junction statements and relationship keys a Single's save changes. */
-export async function singleRelations(
+/** The junction and association statements and relationship keys a save changes. */
+export async function entityRelations(
   adapter: DrizzleAdapter,
   logger: Logger,
   tableName: string,

@@ -133,6 +133,12 @@ export async function writeEntityDelete(
     await apply();
     return;
   }
+  // A delete tears down in steps that cannot be rolled back (MySQL commits
+  // each drop, and the teardowns before the drop are not reversible), so a
+  // failure may come after some of them ran: its files are kept, recorded
+  // applied nowhere, and the failure is still thrown. The next `nextly migrate`
+  // finishes the delete from them, as a retried delete would.
+  const failed: { error?: unknown } = {};
   await writeEntitySave(
     deps,
     {
@@ -151,6 +157,15 @@ export async function writeEntityDelete(
         : { junctions: removed.junctions }),
       ...(removed.keys === undefined ? {} : { keys: removed.keys }),
     },
-    apply
+    async () => {
+      try {
+        await apply();
+        return undefined;
+      } catch (error) {
+        failed.error = error;
+        return "partly-applied";
+      }
+    }
   );
+  if ("error" in failed) throw failed.error;
 }

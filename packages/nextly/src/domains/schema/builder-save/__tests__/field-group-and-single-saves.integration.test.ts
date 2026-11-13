@@ -34,7 +34,32 @@ import { SchemaEventsRepository } from "../../events/schema-events-repository";
 
 // A companion reconcile made to fail, by the one test that needs it to: every
 // other test runs the real one.
-const companionFails = vi.hoisted(() => ({ single: false, component: false }));
+const companionFails = vi.hoisted(() => ({
+  single: false,
+  component: false,
+  // A delete's translations teardown, the step after its first one.
+  teardown: false,
+}));
+vi.mock(
+  "../../../i18n/migration/teardown-entity-i18n",
+  async importOriginal => {
+    const real =
+      await importOriginal<
+        typeof import("../../../i18n/migration/teardown-entity-i18n")
+      >();
+    return {
+      ...real,
+      teardownEntityI18n: (
+        ...args: Parameters<typeof real.teardownEntityI18n>
+      ) => {
+        if (companionFails.teardown) {
+          return Promise.reject(new Error("the teardown stopped part way"));
+        }
+        return real.teardownEntityI18n(...args);
+      },
+    };
+  }
+);
 vi.mock(
   "../../../singles/services/reconcile-single-companion",
   async importOriginal => {
@@ -80,6 +105,7 @@ let instance: TestNextly | undefined;
 afterEach(async () => {
   companionFails.single = false;
   companionFails.component = false;
+  companionFails.teardown = false;
   vi.unstubAllEnvs();
   resetSessionStandingForTests();
   await instance?.destroy();
@@ -691,6 +717,114 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(deleted).toBeDefined();
       expect(await appliedFiles(t)).toContain(deleted);
+    });
+
+    it("records a Single update's files applied only once its row is written", async () => {
+      const t = await boot();
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          fields: [{ name: "heading", type: "text" }],
+        }
+      );
+      const registry = t.getService("singleRegistryService");
+      const rowWrite = vi
+        .spyOn(registry, "updateSingle")
+        .mockRejectedValueOnce(new Error("the row could not be written"));
+
+      await expect(
+        dispatchSingles(
+          "updateSingleSchema",
+          { slug: "notice" },
+          {
+            fields: [
+              { name: "heading", type: "text" },
+              { name: "body", type: "text" },
+            ],
+          }
+        )
+      ).rejects.toBeDefined();
+      rowWrite.mockRestore();
+
+      // The table changed and the row did not: the file stays, recorded
+      // applied nowhere.
+      const update = migrationFiles(t).find(f =>
+        /_notice_update\.sql$/.test(f)
+      );
+      expect(update).toBeDefined();
+      expect(await appliedFiles(t)).not.toContain(update);
+    });
+
+    it("keeps a field group delete's files, recorded nowhere, when it stops after its first teardown", async () => {
+      const t = await boot();
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "meta",
+          label: "Meta",
+          fields: [{ name: "note", type: "text" }],
+        }
+      );
+
+      companionFails.teardown = true;
+      await expect(
+        dispatchComponents("deleteComponent", { slug: "meta" }, undefined)
+      ).rejects.toBeDefined();
+
+      const deleted = migrationFiles(t).find(f => /_meta_delete\.sql$/.test(f));
+      expect(deleted).toBeDefined();
+      expect(await appliedFiles(t)).not.toContain(deleted);
+    });
+
+    it("writes a renamed nested field group's moved rows into the field group's migration", async () => {
+      const t = await boot();
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "panel",
+          label: "Panel",
+          fields: [{ name: "note", type: "text" }],
+        }
+      );
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "card",
+          label: "Card",
+          fields: [
+            { name: "title", type: "text" },
+            { name: "meta", type: "component", component: "panel" },
+          ],
+        }
+      );
+      const card = await t
+        .getService("fieldGroupRegistryService")
+        .getComponent("card");
+
+      await dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: "card" },
+        {
+          fields: [
+            { name: "title", type: "text" },
+            { name: "details", type: "component", component: "panel" },
+          ],
+          confirmed: true,
+          schemaVersion: card.schemaVersion,
+        }
+      );
+
+      const update = migrationFiles(t).find(f => /_card_update\.sql$/.test(f));
+      expect(update).toBeDefined();
+      expect(
+        readFileSync(join(t.basePath, "database", "history", update!), "utf-8")
+      ).toContain("_parent_field");
     });
 
     it("records a field group made before its saves wrote migrations, once it is saved", async () => {
