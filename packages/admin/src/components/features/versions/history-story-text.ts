@@ -129,6 +129,7 @@ const REPLACED_KIND_WORDS: Readonly<Record<string, string>> = {
   apiKey: "an API key",
   release: "a scheduled release",
   system: "the system",
+  plugin: "a plugin",
   agent: "an agent",
 };
 
@@ -166,6 +167,35 @@ function replacedBy(payload: Record<string, unknown>): string | null {
   return typeof name === "string" && name !== "" ? name : null;
 }
 
+/**
+ * A field rewrite, from what it changed: "Rewrote layout on the live copy and
+ * its draft". A rewrite a plugin made for a person names the plugin after
+ * them ("via page-builder"); one it made on its own behalf is already the
+ * plugin's row. The reason is shown as the row's note.
+ */
+function rewriteSentence(event: DocumentEvent): string {
+  const payload = event.payload ?? {};
+  const field =
+    typeof payload.field === "string" && payload.field !== ""
+      ? payload.field
+      : "a field";
+  const copies = Array.isArray(payload.copies)
+    ? payload.copies.filter((copy): copy is string => typeof copy === "string")
+    : [];
+  const drafts = copies.filter(copy => copy.startsWith("draft")).length;
+  const where =
+    drafts === 0
+      ? "on the live copy"
+      : drafts === 1
+        ? "on the live copy and its draft"
+        : `on the live copy and ${drafts} drafts`;
+  const via =
+    typeof payload.plugin === "string" && payload.plugin !== ""
+      ? ` via ${payload.plugin}`
+      : "";
+  return `Rewrote ${field} ${where}${via}`;
+}
+
 /** What an event that is a row of its own says happened. */
 export function eventSentence(
   event: DocumentEvent,
@@ -184,6 +214,8 @@ export function eventSentence(
       return takeoverSentence(event);
     case "overwritten":
       return overwriteSentence(event);
+    case "field-rewritten":
+      return rewriteSentence(event);
     default: {
       // A kind a plugin registered: its name, read as words, then what it
       // applied to, set apart since the name is not a verb we can phrase.

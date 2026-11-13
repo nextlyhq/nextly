@@ -60,6 +60,7 @@ import type { RBACAccessControlService } from "../domains/auth/services/rbac-acc
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
 import { RoleService } from "../domains/auth/services/role-service";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
+import type { FieldRewriteResult } from "../domains/versions/field-rewrite";
 import { NextlyError } from "../errors/nextly-error";
 import { assertBootMigrationsSettled } from "../init/boot-migrations-gate";
 import { startInFlight } from "../init/start-in-flight";
@@ -169,6 +170,7 @@ import type {
   SingleListResult,
   SingleSlug,
   UpdateArgs,
+  RewriteFieldArgs,
   PublishArgs,
   PublishResult,
   UpdateSingleArgs,
@@ -594,6 +596,19 @@ export class Nextly implements NextlyContext {
   }
 
   /**
+   * @experimental Rewrite one field of an entry on its live copy and on every
+   * pending draft that holds it, without publishing, from the version the
+   * caller read. See `RewriteFieldArgs`.
+   */
+  rewriteField(
+    args: RewriteFieldArgs
+  ): Promise<MutationResult<FieldRewriteResult>> {
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.rewriteField(this, callArgs)
+    );
+  }
+
+  /**
    * Publish the parts of one entry `args` chooses: some of its languages, or every one, and its
    * shared part. With `describe`, say what publishing them would do, and change nothing.
    *
@@ -991,6 +1006,9 @@ export const nextly = {
     (await requireNextlyOnceStarted()).create(args),
   update: async <TSlug extends CollectionSlug>(args: UpdateArgs<TSlug>) =>
     (await requireNextlyOnceStarted()).update(args),
+  /** Rewrite one field on an entry's live copy and drafts. @experimental */
+  rewriteField: async (args: RewriteFieldArgs) =>
+    (await requireNextlyOnceStarted()).rewriteField(args),
   /** Publish the chosen parts of one entry. @experimental */
   publish: async (args: PublishArgs) =>
     (await requireNextlyOnceStarted()).publish(args),
