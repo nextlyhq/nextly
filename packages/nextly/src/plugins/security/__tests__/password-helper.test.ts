@@ -101,7 +101,7 @@ describe("hashing and verifying", () => {
     // OWASP's Password Storage Cheat Sheet: N = 2^15, r = 8, p = 3.
     expect({ ln, r, p }).toEqual({ ln: 15, r: 8, p: 3 });
     expect(128 * 2 ** ln * r).toBeLessThanOrEqual(64 * 1024 * 1024);
-    expect(key.length).toBeGreaterThanOrEqual(32);
+    expect(key.length).toBe(32);
     expect(hash.length).toBeLessThanOrEqual(255);
     expect(hash).toMatch(/^[\x21-\x7e]+$/);
   });
@@ -179,6 +179,15 @@ describe("hashes from other settings and formats", () => {
       expect(logged).not.toContain(stored);
     }
     expect(logged).not.toContain("R9h/cIPz0gi");
+  });
+
+  it("does not verify a weak setting it never writes, though it would run within the memory bound", async () => {
+    const warn = vi.fn();
+    const password = "correct horse battery staple";
+    // N = 2^10: cheap to run, and so cheap to guess against.
+    const weak = hashAtSetting(password, { ln: 10, r: 8, p: 1 });
+    await expect(helper(warn).verify(password, weak)).resolves.toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it("spends a real verification's time when there is no stored hash, and answers false", async () => {
@@ -315,7 +324,7 @@ describe("rules for a new password", () => {
   });
 
   it("ships at least 3,000 common passwords, each of 8 or more code points and lower-cased", () => {
-    expect(COMMON_PASSWORDS.length).toBeGreaterThanOrEqual(3000);
+    expect(COMMON_PASSWORDS.length).toBe(3000);
     expect(new Set(COMMON_PASSWORDS).size).toBe(COMMON_PASSWORDS.length);
     for (const entry of COMMON_PASSWORDS) {
       expect([...entry].length).toBeGreaterThanOrEqual(8);
@@ -328,6 +337,9 @@ describe("rules for a new password", () => {
     [{ minLength: 65 }, /minLength must be a whole number from 8 to 64/],
     [{ maxLength: 63 }, /maxLength must be a whole number from 64 to 256/],
     [{ maxLength: 257 }, /maxLength must be a whole number from 64 to 256/],
+    // Inside the bounds, but not a whole number.
+    [{ minLength: 8.5 }, /minLength must be a whole number from 8 to 64/],
+    [{ maxLength: 100.5 }, /maxLength must be a whole number from 64 to 256/],
   ])("refuses rules outside their bounds: %j", async (rules, message) => {
     const error = await helper()
       .check("a long enough password", rules)
