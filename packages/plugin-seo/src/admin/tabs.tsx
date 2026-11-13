@@ -131,6 +131,8 @@ function ServerAddresses({
 
 /** The site's production addresses: one field each, and room for another. */
 function ProductionAddresses({ draft, change }: TabProps): JSX.Element {
+  // Each field's problem, by id, is its description for a screen reader.
+  const problemsId = useId();
   const addresses =
     draft.productionAddresses.length === 0 ? [""] : draft.productionAddresses;
   const set = (index: number, value: string) =>
@@ -161,6 +163,9 @@ function ProductionAddresses({ draft, change }: TabProps): JSX.Element {
                   placeholder="https://"
                   aria-label={name}
                   aria-invalid={problem !== null}
+                  aria-describedby={
+                    problem === null ? undefined : `${problemsId}-${index}`
+                  }
                   onChange={event => set(index, event.target.value)}
                 />
                 {index > 0 ? (
@@ -178,7 +183,9 @@ function ProductionAddresses({ draft, change }: TabProps): JSX.Element {
                 ) : null}
               </div>
               {problem === null ? null : (
-                <ControlNote tone="danger">{problem}</ControlNote>
+                <ControlNote id={`${problemsId}-${index}`} tone="danger">
+                  {problem}
+                </ControlNote>
               )}
             </div>
           );

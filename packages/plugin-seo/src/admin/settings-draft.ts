@@ -489,8 +489,9 @@ function rebasedEntries<T>(
 }
 
 /**
- * A list moved item by item, items told apart by value: the list as edited
- * here, in its order (the first production address is the main one), less
+ * A list moved item by item, items told apart by value. Unedited here, it
+ * is the newer list as it is, in its order (the first production address is
+ * the main one). Edited here, it is the list as edited, in its order, less
  * what was taken out elsewhere, then what was added elsewhere.
  */
 function rebasedSet<T>(
@@ -498,6 +499,7 @@ function rebasedSet<T>(
   before: readonly T[],
   after: readonly T[]
 ): T[] {
+  if (same(draft, before)) return [...after];
   const has = (list: readonly T[], item: T) =>
     list.some(each => same(each, item));
   const removedElsewhere = (item: T) => has(before, item) && !has(after, item);

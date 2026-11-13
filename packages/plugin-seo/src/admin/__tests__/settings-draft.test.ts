@@ -582,6 +582,23 @@ describe("a draft moved onto newer settings", () => {
     ]);
   });
 
+  it("takes the newer list as it is, in its order, where it wasn't edited here", () => {
+    const listed = draftOf({
+      id: "s1",
+      productionAddresses: ["https://old.example", "https://fr.example"],
+    });
+    const draft = { ...listed, description: "Edited here" };
+    // Elsewhere, the main address changed.
+    const after = {
+      ...listed,
+      productionAddresses: ["https://new.example", "https://fr.example"],
+    };
+    expect(rebasedDraft(draft, listed, after).productionAddresses).toEqual([
+      "https://new.example",
+      "https://fr.example",
+    ]);
+  });
+
   it("takes out a type's entry taken out here, and a hidden type shown again", () => {
     const { pages: _pages, ...rest } = before.patterns;
     const draft = { ...before, patterns: rest, hiddenTypes: [] };
