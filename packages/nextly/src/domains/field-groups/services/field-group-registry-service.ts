@@ -27,6 +27,7 @@ import {
 } from "../../collections/services/collection-registry-service";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { teardownEntityI18n } from "../../i18n/migration/teardown-entity-i18n";
+import type { BuilderSaveSetup } from "../../schema/builder-save/collection-save";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
@@ -281,6 +282,18 @@ export class FieldGroupRegistryService extends BaseRegistryService<
   protected readonly registryTableName = STORAGE_FORMAT.registryTable;
   protected readonly resourceType = "Component";
   protected readonly tableNamePrefix = STORAGE_FORMAT.tablePrefix;
+
+  /**
+   * Where a Builder save writes a field group's delete as its migration
+   * (`writeEntityDelete`). Set by the service registration; absent, a delete
+   * drops the table alone, as before the writer.
+   */
+  private builderSave?: BuilderSaveSetup;
+
+  /** The Builder save writer's setup, set by the service registration. */
+  setBuilderSave(setup: BuilderSaveSetup): void {
+    this.builderSave = setup;
+  }
 
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
@@ -825,54 +838,79 @@ export class FieldGroupRegistryService extends BaseRegistryService<
     // by name, and so does any of those that cannot be read.
     await this.assertNothingDependsOn(slug, existing.tableName);
 
+    // Where a Builder save writer is set up, the delete is written as the field group's migration,
+    // inside this same exclusion, so every entry point that deletes one (the Builder, the REST
+    // route, the Direct API) leaves no snapshot still recording its tables. Loaded on demand: the
+    // writer reaches much of the schema machinery, and this registry is imported early.
+    const { checkEntitySaveHistory, entitySaveDeps, writeEntityDelete } =
+      await import("../../schema/builder-save/entity-save");
+    const { fieldGroupEntity } = await import(
+      "../../schema/builder-save/stored-entity"
+    );
+    const deps = entitySaveDeps(this.builderSave, this.adapter, this.logger);
+    // The history checks a save makes, before anything is torn down.
+    await checkEntitySaveHistory(deps);
+
     try {
-      // Tear down the localization artifacts BEFORE the main table: the companion
-      // `_locales` table holds an FK to this table's `id`, so dropping the main table
-      // first would orphan it (Postgres CASCADE) or fail outright (MySQL). This also
-      // purges the component's rows from the shared `nextly_i18n_archive`.
-      // A component can host other components. Those nested instances point at THIS
-      // table via `_parent_table`, so dropping it below would strand them. Deletion is
-      // blocked while anything references this component, but nothing blocks the reverse
-      // direction, so the nested rows are this delete's responsibility.
-      await teardownEntityComponentData({
-        adapter: this.adapter,
-        parentTable: existing.tableName,
-      });
-
-      await teardownEntityI18n({
-        kind: "fieldGroup",
-        adapter: this.adapter,
-        slug,
-        tableName: existing.tableName,
-      });
-
-      // Drop the data table after its dependents, since both hold references into it.
-      // A failure here leaves the component present but its nested instances, companion
-      // table and archived translations already removed — the teardowns above are not
-      // reversible. A transaction would not close that window portably: MySQL commits
-      // implicitly on DDL, so the drop could not roll back there. Retrying the delete is
-      // safe (every step is existence-guarded) and is the intended recovery.
-      await this.dropComponentTable(existing.tableName);
-
-      // PG RETURNING-less DELETE always returns 0 rows, so no post-delete count check.
-      const table = await this.resolveRegistryTableName();
-      // With the stored schema version's count (`writeRegistry`).
-      await this.writeRegistry(() =>
-        this.adapter.delete(table, this.whereEq("slug", slug))
+      await writeEntityDelete(
+        deps,
+        { kind: "fieldGroup", slug, stored: fieldGroupEntity(existing) },
+        () => this.removeComponent(slug, existing.tableName)
       );
-      // The cached registry row is now out of date.
-      clearRegistryRowCache();
 
       this.logger.info("Component deleted", { slug });
     } catch (error) {
       // Preserve mapped NextlyErrors thrown from the locked / has-references
-      // checks above; raw DB errors map via fromDatabaseError. Normalise raw
+      // checks above and the writer; raw DB errors map via fromDatabaseError. Normalise raw
       // driver errors via toDbError(dialect) first so the kind is preserved.
       if (NextlyError.is(error)) {
         throw error;
       }
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+  }
+
+  /** The field group's data, translations, table and registry row, removed in that order. */
+  private async removeComponent(
+    slug: string,
+    tableName: string
+  ): Promise<void> {
+    // Tear down the localization artifacts BEFORE the main table: the companion
+    // `_locales` table holds an FK to this table's `id`, so dropping the main table
+    // first would orphan it (Postgres CASCADE) or fail outright (MySQL). This also
+    // purges the component's rows from the shared `nextly_i18n_archive`.
+    // A component can host other components. Those nested instances point at THIS
+    // table via `_parent_table`, so dropping it below would strand them. Deletion is
+    // blocked while anything references this component, but nothing blocks the reverse
+    // direction, so the nested rows are this delete's responsibility.
+    await teardownEntityComponentData({
+      adapter: this.adapter,
+      parentTable: tableName,
+    });
+
+    await teardownEntityI18n({
+      kind: "fieldGroup",
+      adapter: this.adapter,
+      slug,
+      tableName,
+    });
+
+    // Drop the data table after its dependents, since both hold references into it.
+    // A failure here leaves the component present but its nested instances, companion
+    // table and archived translations already removed — the teardowns above are not
+    // reversible. A transaction would not close that window portably: MySQL commits
+    // implicitly on DDL, so the drop could not roll back there. Retrying the delete is
+    // safe (every step is existence-guarded) and is the intended recovery.
+    await this.dropComponentTable(tableName);
+
+    // PG RETURNING-less DELETE always returns 0 rows, so no post-delete count check.
+    const table = await this.resolveRegistryTableName();
+    // With the stored schema version's count (`writeRegistry`).
+    await this.writeRegistry(() =>
+      this.adapter.delete(table, this.whereEq("slug", slug))
+    );
+    // The cached registry row is now out of date.
+    clearRegistryRowCache();
   }
 
   // Uses IF EXISTS so the operation is safe even if the table was never created.

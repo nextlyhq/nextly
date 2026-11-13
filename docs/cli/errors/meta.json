@@ -172,6 +172,7 @@
     "plugin-widget-source-reserved",
     "postgres-schema-invalid",
     "postgres-schema-mismatch",
+    "postgres-schema-moved",
     "postgres-schema-unsupported",
     "production-rollback-unconfirmed",
     "project-already-initialized",

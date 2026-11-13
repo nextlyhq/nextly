@@ -1019,6 +1019,16 @@ export type {
   PluginWriteExpectation,
 } from "./plugins/stored-fields";
 export { storedValueHash } from "./domains/collections/services/stored-field-read";
+// A field rewrite: one field of an entry changed on its live copy and on every
+// pending draft that holds it, without publishing, from the version the caller
+// read (`ctx.services.collections.rewriteField`, `nextly.rewriteField`). Its
+// types, here for `@nextlyhq/plugin-sdk` to publish.
+export type {
+  FieldRewriteCopy,
+  FieldRewriteRequest,
+  FieldRewriteResult,
+  FieldRewriteValue,
+} from "./domains/versions/field-rewrite";
 // A plugin's question "may this person delete this entry", asked of the
 // delete's own gate (its grant and a rule's row filter for the entry) with no
 // hook run and nothing written. Here for `@nextlyhq/plugin-sdk` to publish.
