@@ -7108,8 +7108,11 @@ export class CollectionMutationService extends BaseService {
     }
   > {
     const { params, fields, tableName, field } = args;
+    // On the transaction: a table not built yet is built from the registry
+    // row, read on the rewrite's own connection rather than the pool.
     const schema = await this.fileManager.loadDynamicSchema(
-      params.collectionName
+      params.collectionName,
+      tx.getDrizzle()
     );
     const [row] = await tx
       .getDrizzle<typeof this.db>()
