@@ -25,12 +25,11 @@ import {
   sessionIdOfRows,
 } from "../busy-table/ended-waiting";
 import { isPluginLedgerRow } from "../events/ledger-scope";
+import { querySqlRows } from "../pipeline/classifier/count-helpers";
 import {
   assertSchemaLockHeld,
   markedForSchemaLock,
 } from "../pipeline/schema-lock";
-
-import { querySqlRows } from "../pipeline/classifier/count-helpers";
 
 import { commitsOnMysql } from "./mysql-implicit-commit";
 import { requiredColumnCheckpoint } from "./required-column-guard";
@@ -379,7 +378,12 @@ export async function runMigrationStatements(
 export async function writeLedgerBounded(
   adapter: DrizzleAdapter,
   tryMs: number,
-  write: (db: unknown) => Promise<void>
+  write: (db: unknown) => Promise<void>,
+  /**
+   * A watch over the record's transaction on the servers, which ends it once its waits together
+   * use up the try (`boundedStopRecord`): each wait's own timeout bounds that wait alone.
+   */
+  watch?: () => AfterWatch
 ): Promise<void> {
   const dialect = adapter.getCapabilities().dialect;
   if (dialect === "sqlite") {
@@ -391,17 +395,27 @@ export async function writeLedgerBounded(
     }
     return;
   }
-  await executeTransaction(adapter, tx =>
-    withMysqlTryBackstop(tx, dialect, { tryMs }, async () => {
-      if (dialect === "postgresql") {
-        // Fixed text with a whole number of milliseconds, never caller input.
-        await tx.execute(
-          `SET LOCAL lock_timeout = '${String(Math.max(1, Math.round(tryMs)))}ms'`
-        );
-      }
-      await write(tx.db);
-    })
-  );
+  // Made before the transaction opens, so its asks on another connection never run in its flow.
+  const watching = watch?.();
+  try {
+    await executeTransaction(adapter, tx =>
+      withMysqlTryBackstop(tx, dialect, { tryMs }, async () => {
+        if (dialect === "postgresql") {
+          // Fixed text with a whole number of milliseconds, never caller input.
+          await tx.execute(
+            `SET LOCAL lock_timeout = '${String(Math.max(1, Math.round(tryMs)))}ms'`
+          );
+        }
+        const session = await tx.session();
+        if (session !== undefined) watching?.watch(session);
+        await write(tx.db);
+        // Stopped before the commit hands the connection back to the pool.
+        await watching?.settle();
+      })
+    );
+  } finally {
+    await watching?.settle();
+  }
 }
 
 /**
@@ -700,8 +714,12 @@ async function runUnitStatements(
             bound
           );
           // MySQL committed the transaction at this statement and left the session in autocommit:
-          // the transaction opens again, so the statements after it roll back together.
+          // the transaction opens again, so the statements after it roll back together. The watch
+          // moves past the statement first, and a cancel decided while it waited lands before the
+          // transaction opens, never on it (MySQL's kill ends whatever runs when it arrives).
           if (dialect === "mysql" && commitsOnMysql(statement)) {
+            bound?.onStatement?.(index + 1);
+            await bound?.beforeStatement?.();
             await tx.execute("START TRANSACTION");
           }
         }

@@ -7,6 +7,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { describe, expect, it } from "vitest";
 
 import type { BusyTableBounds } from "../bounds";
+import { runMigrationStatements } from "../../migrate/migration-transaction";
 import { runUnitInTries } from "../run-unit";
 
 const BOUNDS: BusyTableBounds = { tryMs: 100, totalMs: 1_500 };
@@ -84,6 +85,33 @@ const run = {
 };
 
 const unit = { source: "0001_test.sql", transaction: true };
+
+describe("runMigrationStatements on MySQL after a schema statement's implicit commit", () => {
+  it("moves the watch past the statement and settles a cancel under way before the transaction opens again", async () => {
+    const events: string[] = [];
+    const create = "CREATE TABLE helper (id int)";
+    const count = "UPDATE counters SET n = n + 1";
+    const { adapter } = mysqlAdapter({
+      failStatement: statement => {
+        events.push(statement);
+        return undefined;
+      },
+    });
+
+    await runMigrationStatements(adapter, [create, count], unit, undefined, {
+      tryMs: 1_000,
+      onStatement: index => events.push(`at ${String(index)}`),
+      beforeStatement: () => {
+        events.push("settled");
+        return Promise.resolve();
+      },
+    });
+
+    // A kill decided while the CREATE waited lands before START TRANSACTION, never on it.
+    const after = events.slice(events.indexOf(create) + 1);
+    expect(after.slice(0, 3)).toEqual(["at 1", "settled", "START TRANSACTION"]);
+  });
+});
 
 describe("runUnitInTries on MySQL in one transaction", () => {
   it("sends the open transaction again where the wait was in a schema statement's checkpoint, before it was sent", async () => {

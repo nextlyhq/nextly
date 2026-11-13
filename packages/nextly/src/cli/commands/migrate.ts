@@ -56,6 +56,7 @@ import {
   runUnitInTries,
   type BusyTableRun,
 } from "../../domains/schema/busy-table/run-unit";
+import { boundedStopRecord } from "../../domains/schema/busy-table/stopped-record";
 import { isPluginLedgerRow } from "../../domains/schema/events/ledger-scope";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import {
@@ -115,7 +116,6 @@ import {
 import {
   outsideTransactionNotice,
   runMigrationStatements,
-  writeLedgerBounded,
   type MigrationUnit,
 } from "../../domains/schema/migrate/migration-transaction";
 import {
@@ -1984,8 +1984,7 @@ export async function runPluginPhase(
     ...(moduleTryMs === undefined
       ? {}
       : {
-          recordStopped: (write: (db: unknown) => Promise<void>) =>
-            writeLedgerBounded(dz, moduleTryMs, write),
+          recordStopped: boundedStopRecord(dz, moduleTryMs),
         }),
     repo: eventsRepo,
     recordOwner: async ({
@@ -4145,8 +4144,7 @@ export async function runFileMigrations(args: {
     busyTableTryMs === undefined
       ? {}
       : {
-          recordStopped: (write: (db: unknown) => Promise<void>) =>
-            writeLedgerBounded(dz, busyTableTryMs, write),
+          recordStopped: boundedStopRecord(dz, busyTableTryMs),
         };
 
   // Owner rows for the drop guard: an app file dropping a plugin-migrated

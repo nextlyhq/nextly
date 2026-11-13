@@ -57,6 +57,7 @@ import { joinRetries } from "../../i18n/migration/archive-preflight";
 import { mainTableFields } from "../../i18n/per-language-storage";
 import { busyTableBounds, type BusyTableBounds } from "../busy-table/bounds";
 import { runUnitInTries } from "../busy-table/run-unit";
+import { boundedStopRecord } from "../busy-table/stopped-record";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { checksumOf } from "../migrate/applied-checksums";
@@ -66,7 +67,6 @@ import {
   runRecordedAttempt,
   snapshotsEquivalent,
 } from "../migrate/drift-reconcile";
-import { writeLedgerBounded } from "../migrate/migration-transaction";
 import { refuseRequiredColumnsOverNulls } from "../migrate/required-column-guard";
 import { resolveMigration } from "../migrate/resolve";
 import { marksNoTransaction, splitSqlStatements } from "../migrate/split-sql";
@@ -1435,8 +1435,7 @@ async function runWritten(
   const repo = new SchemaEventsRepository(db, dialect);
   const bounds = boundsRead ?? busyTableBounds({ env: process.env });
   // The record of a file a busy table stopped waits for the ledger table one try at most.
-  const recordStopped = (write: (db: unknown) => Promise<void>) =>
-    writeLedgerBounded(deps.adapter, bounds.tryMs, write);
+  const recordStopped = boundedStopRecord(deps.adapter, bounds.tryMs);
   const applied: string[] = [];
   const executeSql = (
     sql: string,

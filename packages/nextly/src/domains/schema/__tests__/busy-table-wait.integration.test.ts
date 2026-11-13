@@ -27,6 +27,7 @@ import { runFileMigrations } from "../../../cli/commands/migrate";
 import { createLogger } from "../../../cli/utils/logger";
 import type { BusyTableBounds } from "../busy-table/bounds";
 import { triggerTables } from "../busy-table/run-unit";
+import { boundedStopRecord } from "../busy-table/stopped-record";
 import { runMigrationStatements } from "../migrate/migration-transaction";
 import { getSchemaEventsDdl } from "../events/schema-events-ddl";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
@@ -711,6 +712,66 @@ describe.each(DIALECTS)(
 
         expect(failed).toMatchObject({ code: "SQLITE_BUSY" });
         // Written again whole by the next try, never half of it kept from the first.
+        expect(await idsOf(OTHER)).toEqual([]);
+      }
+    );
+
+    it.runIf(dialect !== "sqlite")(
+      "ends a stopped change's record once its waits together use up one try",
+      async () => {
+        await adapter.executeQuery(`CREATE TABLE ${OTHER} (id integer)`);
+        await adapter.executeQuery(`CREATE TABLE ${FIRST} (id integer)`);
+        /** A second session holds `table` for `ms` once held, then lets it go. */
+        const holdFor = async (table: string, ms: number) => {
+          let held: () => void = () => {};
+          const isHeld = new Promise<void>(resolve => {
+            held = resolve;
+          });
+          const holding =
+            dialect === "postgresql"
+              ? holderAdapter.transaction(async ctx => {
+                  await ctx.queryStatement(
+                    sql.raw(`LOCK TABLE ${table} IN ACCESS EXCLUSIVE MODE`)
+                  );
+                  held();
+                  await sleep(ms);
+                })
+              : holderAdapter.withSession(async session => {
+                  await session.execute(`LOCK TABLES ${table} WRITE`);
+                  held();
+                  await sleep(ms);
+                  await session.execute("UNLOCK TABLES");
+                });
+          await isHeld;
+          // In an object: an async function returning the promise itself would wait it out.
+          return { holding };
+        };
+        // Each wait alone ends within the record's one try; the two together do not.
+        const holdings = await Promise.all([
+          holdFor(OTHER, 800),
+          holdFor(FIRST, 1_600),
+        ]);
+
+        const started = Date.now();
+        const written = await boundedStopRecord(
+          adapter,
+          1_000
+        )(async db => {
+          const run = (statement: string) =>
+            (db as { execute: (query: unknown) => Promise<unknown> }).execute(
+              sql.raw(statement)
+            );
+          await run(`INSERT INTO ${OTHER} (id) VALUES (1)`);
+          await run(`INSERT INTO ${FIRST} (id) VALUES (1)`);
+        }).then(
+          () => "written",
+          (error: unknown) => error
+        );
+        const elapsed = Date.now() - started;
+        await Promise.all(holdings.map(hold => hold.holding));
+
+        expect(written).not.toBe("written");
+        expect(elapsed).toBeLessThan(1_500);
         expect(await idsOf(OTHER)).toEqual([]);
       }
     );

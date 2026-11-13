@@ -31,6 +31,7 @@ import {
   runUnitInTries,
   type BusyTableRun,
 } from "../../domains/schema/busy-table/run-unit";
+import { boundedStopRecord } from "../../domains/schema/busy-table/stopped-record";
 import {
   isPluginLedgerRow,
   ledgerFilename,
@@ -69,7 +70,6 @@ import {
 import {
   outsideTransactionNotice,
   runMigrationStatements,
-  writeLedgerBounded,
   type MigrationUnit,
 } from "../../domains/schema/migrate/migration-transaction";
 import { readOldBuilderLedger } from "../../domains/schema/migrate/old-builder-ledger";
@@ -1471,7 +1471,10 @@ export async function downDatabaseDeps(args: {
             failed,
             attempt,
           }) =>
-            writeLedgerBounded(adapter, stoppedTryMs, async handle => {
+            boundedStopRecord(
+              adapter,
+              stoppedTryMs
+            )(async handle => {
               const bound = repo.boundTo(handle);
               if (failed) {
                 await recordRollbackFailed({
