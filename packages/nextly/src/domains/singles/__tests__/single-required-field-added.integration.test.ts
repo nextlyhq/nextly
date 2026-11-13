@@ -101,6 +101,25 @@ describeEachDialect("a field added to a Single that holds its row", dialect => {
     expect(row?.filled).toBe("hello");
   });
 
+  it("fills the row with a stated default holding an apostrophe", async () => {
+    await heroWithItsRow();
+
+    await save([
+      TITLE,
+      {
+        name: "motto",
+        type: "text",
+        required: true,
+        defaultValue: "Editor's pick",
+      },
+    ]);
+
+    const [row] = await exec<{ filled: unknown }>(
+      `SELECT ${dialect === "mysql" ? "`motto`" : '"motto"'} AS filled FROM ${dialect === "mysql" ? "`single_hero`" : '"single_hero"'}`
+    );
+    expect(row?.filled).toBe("Editor's pick");
+  });
+
   it("gives a field's own default to no column", async () => {
     await heroWithItsRow();
 

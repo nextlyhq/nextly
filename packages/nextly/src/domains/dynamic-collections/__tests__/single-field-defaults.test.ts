@@ -127,6 +127,58 @@ describe.each(DIALECTS)("field defaults on %s", dialect => {
   });
 });
 
+describe.each(DIALECTS)(
+  "a Single's row filled for a required field on %s",
+  dialect => {
+    const added = (extra: FieldDefinition) =>
+      service(dialect).generateAlterTableMigration(
+        "single_hero",
+        [TITLE],
+        [TITLE, extra],
+        { isSingle: true, tableHasRows: true, onSqliteNullability: () => {} }
+      );
+
+    it("takes a structured default as the field states it", () => {
+      const sql = added(
+        field({
+          name: "settings",
+          type: "json",
+          required: true,
+          defaultValue: { theme: "dark" },
+        })
+      );
+
+      expect(sql).toContain('{"theme":"dark"}');
+    });
+
+    it("never writes a password field's stated default into the column", () => {
+      const sql = added(
+        field({
+          name: "secret",
+          type: "password",
+          required: true,
+          defaultValue: "hunter2",
+        })
+      );
+
+      expect(sql).not.toContain("hunter2");
+    });
+
+    it("quotes a default holding an apostrophe", () => {
+      const sql = added(
+        field({
+          name: "motto",
+          type: "text",
+          required: true,
+          defaultValue: "Editor's pick",
+        })
+      );
+
+      expect(sql).toContain("'Editor''s pick'");
+    });
+  }
+);
+
 describe("a MySQL column restated by a Single's change", () => {
   it("carries no default for a Single, and keeps it for a collection", () => {
     const before = field({ ...STATUS });
