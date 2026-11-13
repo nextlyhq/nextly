@@ -1276,9 +1276,12 @@ export class FieldGroupMetadataService {
     if (twin) throw addressRefusalError(twin, slug);
     // A field group already under this address, whatever table it was recorded with: an older one
     // may keep a table name of its own, which the table check below cannot see. Refused here,
-    // before any DDL, rather than by the registry after the new table is built.
+    // before any DDL, rather than by the registry after the new table is built. Worded as the
+    // table check below words it, naming the address the caller sent: the bare "Resource already
+    // exists." left a person creating a field group under a taken name not knowing which name.
     if (held.some(existing => existing.slug === slug)) {
       throw NextlyError.duplicate({
+        message: `The field group "${slug}" could not be created: its name is already taken.`,
         logContext: { reason: "field-group-address-taken", slug },
       });
     }
