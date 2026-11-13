@@ -12,8 +12,10 @@
  *
  * - a field made required over rows that all hold a value: on MySQL the
  *   `MODIFY ... NOT NULL` a server not in strict mode answers by blanking
- *   NULLs, so it needs the consent that names the column; PostgreSQL's
- *   `SET NOT NULL` and SQLite's rebuild delete nothing and need none;
+ *   NULLs, so it needs the consent that names the column, from
+ *   `migrate:create`, which judges the file it writes the same way, as from
+ *   `nextly migrate`; PostgreSQL's `SET NOT NULL` and SQLite's rebuild delete
+ *   nothing and need none;
  * - a field made required over a row holding no value: refused before any
  *   statement runs, on every dialect, and the column stays optional;
  * - a field renamed: deletes nothing, needs no consent, and keeps its values.
@@ -150,30 +152,68 @@ async function exiting(fn: () => Promise<void>): Promise<number | undefined> {
   }
 }
 
+/** What `migrate:create` is run with beyond the name. */
+interface CreateOptions {
+  /** `--accept-renames`. */
+  acceptRenames?: boolean;
+  /** `--accept-data-loss=<consent>`. */
+  acceptDataLoss?: string;
+}
+
 /**
- * `nextly migrate:create --name=<name> --non-interactive`, with
- * `--accept-renames` when `acceptRenames`, over `config`.
+ * `nextly migrate:create --name=<name> --non-interactive` over `config`,
+ * with `options`: its exit code, if it exited, and what it said.
  */
-async function migrateCreate(
+async function tryMigrateCreate(
   config: unknown,
   name: string,
-  acceptRenames = false
-): Promise<string> {
+  options: CreateOptions = {}
+): Promise<{ code: number | undefined; said: string }> {
   loaded.config = config;
   clock += 1;
   vi.setSystemTime(new Date(Date.UTC(2026, 10, 11, 12, 0, 0, clock)));
   const { context, said } = command();
+  // A refusal is printed in the CLI's error shape on standard error, past
+  // the logger.
+  const printed = vi.spyOn(console, "error").mockImplementation(message => {
+    said.push(String(message));
+  });
   setNonInteractive(true);
   const code = await exiting(() =>
-    runMigrateCreate(name, { cwd: dir, acceptRenames }, context)
-  ).finally(() => setNonInteractive(false));
-  expect(code, said.join("\n")).toBeUndefined();
-  const file = readdirSync(join(dir, "migrations")).find(f =>
-    f.endsWith(`_${name}.sql`)
-  );
-  expect(file, `no migration named ${name}\n${said.join("\n")}`).toBeDefined();
+    runMigrateCreate(name, { cwd: dir, ...options }, context)
+  ).finally(() => {
+    setNonInteractive(false);
+    printed.mockRestore();
+  });
+  return { code, said: said.join("\n") };
+}
+
+/** The migration files `migrate:create` has written so far. */
+const migrationFiles = (): string[] =>
+  readdirSync(join(dir, "migrations")).filter(f => f.endsWith(".sql"));
+
+/**
+ * {@link tryMigrateCreate}, which must write the migration: the file's name.
+ */
+async function migrateCreate(
+  config: unknown,
+  name: string,
+  options: CreateOptions = {}
+): Promise<string> {
+  const { code, said } = await tryMigrateCreate(config, name, options);
+  expect(code, said).toBeUndefined();
+  const file = migrationFiles().find(f => f.endsWith(`_${name}.sql`));
+  expect(file, `no migration named ${name}\n${said}`).toBeDefined();
   return file!;
 }
+
+/**
+ * The consent a MySQL file making `subtitle` required needs where nobody can
+ * be asked, from `migrate:create` as from `nextly migrate`: its
+ * `MODIFY ... NOT NULL` is judged as able to blank values. None elsewhere.
+ */
+const requiredConsent = (dialect: TestDialect): CreateOptions =>
+  dialect === "mysql" ? { acceptDataLoss: `${TABLE}.subtitle` } : {};
 
 /**
  * `nextly migrate --non-interactive`, with `--accept-data-loss=<consent>` when
@@ -286,7 +326,25 @@ describe.each(getConfiguredTestDialects())(
         { id: "r2", value: "two" },
       ]);
       const config = posts({ name: "subtitle", required: true });
-      const file = await migrateCreate(config, "require_subtitle");
+
+      // migrate:create judges the file it would write as `nextly migrate`
+      // judges it: on MySQL, with nobody to ask, it writes nothing until the
+      // column's consent is given.
+      if (dialect === "mysql") {
+        const before = migrationFiles();
+        const unconsented = await tryMigrateCreate(config, "require_subtitle");
+        expect(unconsented.code, unconsented.said).toBe(1);
+        expect(unconsented.said).toContain(`- column ${TABLE}.subtitle`);
+        expect(unconsented.said).toContain(
+          `--accept-data-loss=${TABLE}.subtitle`
+        );
+        expect(migrationFiles()).toEqual(before);
+      }
+      const file = await migrateCreate(
+        config,
+        "require_subtitle",
+        requiredConsent(dialect)
+      );
 
       if (dialect === "mysql") {
         const refused = await migrate(config);
@@ -327,7 +385,11 @@ describe.each(getConfiguredTestDialects())(
         { id: "r2", value: null },
       ]);
       const config = posts({ name: "subtitle", required: true });
-      const file = await migrateCreate(config, "require_subtitle");
+      const file = await migrateCreate(
+        config,
+        "require_subtitle",
+        requiredConsent(dialect)
+      );
 
       // With the column's consent given, so that what stops the run is the
       // NULL row and not the consent.
@@ -357,7 +419,9 @@ describe.each(getConfiguredTestDialects())(
         { id: "r2", value: null },
       ]);
       const config = posts({ name: "strapline" });
-      const file = await migrateCreate(config, "rename_subtitle", true);
+      const file = await migrateCreate(config, "rename_subtitle", {
+        acceptRenames: true,
+      });
 
       const run = await migrate(config);
       expect(run.refused, run.said).toBe(false);

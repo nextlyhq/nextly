@@ -428,9 +428,10 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
     const existing = await this.findRecordForWrite(data.slug);
     if (existing) {
-      // Generic public message; the conflicting slug stays out of the
-      // wire and lives in logContext for operator visibility.
+      // Names only the slug the caller asked for, which tells it nothing it did not send; what else
+      // the conflict involves stays in logContext for operator visibility.
       throw NextlyError.duplicate({
+        message: `The field group "${data.slug}" could not be created: its name is already taken.`,
         logContext: { reason: "component-slug-conflict", slug: data.slug },
       });
     }

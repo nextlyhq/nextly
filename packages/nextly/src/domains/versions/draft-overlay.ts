@@ -36,7 +36,10 @@
 
 import type { FieldConfig } from "../../collections/fields/types";
 
-import { isDraftSplitEligible } from "./draft-split-eligibility";
+import {
+  evaluateDraftSplitEligibility,
+  heldBeforeTheRule,
+} from "./draft-split-eligibility";
 import type { ComponentSchemas } from "./restore-snapshot";
 import { workingDraftLocale } from "./working-draft-locale";
 
@@ -133,7 +136,7 @@ export function resolveDraftOverlay(
     defaultLocale: input.defaultLocale ?? null,
   });
 
-  const eligible = isDraftSplitEligible({
+  const verdict = evaluateDraftSplitEligibility({
     collectionHasStatus: input.collectionHasStatus,
     draftsVersioningEnabled: input.draftsVersioningEnabled,
     fields: input.fields,
@@ -143,7 +146,12 @@ export function resolveDraftOverlay(
   });
 
   const overlay =
-    eligible &&
+    // A collection's draft held before the `localized-component` rule is
+    // still shown, read-only: its writes refuse while it is there. A Single's
+    // writes hold no such refusal, so a Single's earlier draft is not shown,
+    // as before the rule covered collections.
+    (verdict.eligible ||
+      (heldBeforeTheRule(verdict) && input.entityKind !== "single")) &&
     input.includeWorkingDraft &&
     input.callerMayEdit &&
     input.requestedStatus !== "published" &&

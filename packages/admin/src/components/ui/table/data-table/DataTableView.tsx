@@ -65,6 +65,7 @@ import {
   subscribeToDataTablePlugins,
   type DataTablePluginRegistrations,
 } from "./plugin-registry";
+import { ROW_ACTIONS_COLUMN, ROW_ACTIONS_TRIGGER } from "./row-actions";
 import {
   isListEmpty,
   rowCountLabel,
@@ -653,7 +654,7 @@ export function DataTableView<Row extends object>({
     return (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button size="icon" variant="ghost" aria-label="Row actions">
+          <Button {...ROW_ACTIONS_TRIGGER} aria-label="Row actions">
             <MoreHorizontal className="h-4 w-4" />
           </Button>
         </DropdownMenuTrigger>
@@ -802,7 +803,7 @@ export function DataTableView<Row extends object>({
           ))}
           {hasRowActions && (
             <TableCell
-              className="w-12 text-right"
+              className={ROW_ACTIONS_COLUMN}
               onClick={e => e.stopPropagation()}
             >
               {renderRowActions(row)}
@@ -1200,7 +1201,9 @@ export function DataTableView<Row extends object>({
                       </TableHead>
                     );
                   })}
-                  {hasRowActions && <TableHead className="w-12 text-right" />}
+                  {hasRowActions && (
+                    <TableHead className={ROW_ACTIONS_COLUMN} />
+                  )}
                 </TableRow>
               </TableHeader>
               {loading && rows.length === 0 ? (

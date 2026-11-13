@@ -43,6 +43,10 @@ export function resolvedCollectionView(
     ...(isVersions(record.versions) ? { versions: record.versions } : {}),
     fields: fieldsOf(record),
     ...(typeof record.slug === "string" ? { slug: record.slug } : {}),
+    // Whether the collection itself is translated, which the drafts rule for
+    // an untranslated collection reaching a translated component reads. The
+    // record is authoritative, so no `localized` there is an explicit `false`.
+    localized: record.localized === true,
   };
 }
 

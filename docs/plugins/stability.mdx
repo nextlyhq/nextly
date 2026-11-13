@@ -121,6 +121,46 @@ These ship today but carry no guarantee yet — use them, but expect change:
 
 Each graduates once a first-party plugin exercises it.
 
+## Seeing experimental use when you lint
+
+`@nextlyhq/eslint-plugin`'s `no-experimental-sdk` rule names each experimental
+surface your plugin uses, where you use it, so adopting one is a choice you make
+knowingly rather than something an upgrade tells you about. A scaffolded plugin
+has it already: `nextly.configs.recommended` turns it on as a warning.
+
+```text
+src/plugin.ts
+  3:10  warning  `getCachedNextly` from `@nextlyhq/plugin-sdk` is experimental: it may
+                 change or be removed in any release, with no deprecation period.
+                 Pin your Nextly version, or see https://nextlyhq.com/docs/plugins/stability
+```
+
+What counts as experimental comes from the SDK's own stability ledger, read when
+the rule is published, so a surface that graduates stops being flagged in the
+next release with nothing for you to change.
+
+By default the rule checks what you import from the SDK. To also check members
+of the plugin context, such as `ctx.db`, turn on `context`. It follows the
+context from a lifecycle's first parameter (`init(ctx)`) and from anything you
+annotate `PluginContext`, but not through other names you pass it on as. List
+the surfaces you have adopted on purpose in `allow`, by export name or by
+context path:
+
+```js
+// eslint.config.mjs
+export default [
+  ...nextly.configs.recommended,
+  {
+    rules: {
+      "@nextlyhq/no-experimental-sdk": [
+        "warn",
+        { context: true, allow: ["db", "getCachedNextly"] },
+      ],
+    },
+  },
+];
+```
+
 ## Deprecation policy (D41)
 
 When a `@public` export must change incompatibly:
