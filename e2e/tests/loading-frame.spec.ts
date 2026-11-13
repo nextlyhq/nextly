@@ -973,11 +973,11 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
 
 /**
  * The widths an editor is held to: 1366, where the editor docks its side panel
- * with the menu panel open, and either side of it. At 1024 the bar's own
- * controls still fold a frame after they are drawn, which the bar's change
- * holds to this promise.
+ * with the menu panel open, either side of it, 1024, where the bar folds its
+ * controls into More, and 1048, whose bar is 720 px wide with the menu open:
+ * just past the fold by its outer box, inside it by its content.
  */
-const EDITOR_WIDTHS = [1280, 1366, 1440] as const;
+const EDITOR_WIDTHS = [1024, 1048, 1280, 1366, 1440] as const;
 
 /** A post of the test's own, which no other test opens or holds. */
 async function ownPost(page: Page, made: string[]): Promise<string> {
@@ -1045,6 +1045,13 @@ test.describe("an editor, held to the screen it stands for", () => {
           test.setTimeout(90_000);
           const id = await ownPost(page, made);
           await expectStillLoad(page, `/collections/posts/${id}`, mode);
+          // And the bar's controls stand within it, folded where there is
+          // no room for them, never run past its right edge.
+          const overflow = await page.evaluate(() => {
+            const bar = document.querySelector("header");
+            return bar === null ? null : bar.scrollWidth - bar.clientWidth;
+          });
+          expect(overflow).toBe(0);
         });
 
         test(`draws a colleague's claim with the editor, ${mode}`, async ({

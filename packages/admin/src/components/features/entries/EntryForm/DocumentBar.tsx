@@ -36,10 +36,11 @@ import {
   PanelRight,
   PanelRightClose,
 } from "@admin/components/icons";
+import { barFolds } from "@admin/components/layout/header/bar-fold";
 import {
   TopBarPlace,
   useInTopBar,
-  useTopBarPlaceWidth,
+  useTopBarWidth,
 } from "@admin/components/layout/header/TopBarPlaces";
 import { useCan } from "@admin/hooks/useCan";
 import { useCanRequest } from "@admin/hooks/useCanRequest";
@@ -84,14 +85,6 @@ import type { EntryData, EntryFormMode } from "./useEntryForm";
  * (`useDocumentBarHeight`) for the document panel, which sticks under it.
  */
 const DOCUMENT_BAR_MIN_HEIGHT = "min-h-13";
-
-/**
- * Below this width of the admin bar's right part (32rem at 16px), History, the
- * preview and the panel toggle fold into the document's menu: the document's
- * state, its own verbs and More still fit on the bar's one row, and the rest
- * would push them over each other.
- */
-const FOLD_BELOW_BAR_WIDTH = 512;
 
 export interface DocumentBarProps {
   /** Form mode — create mode offers no history, menu or panel toggle. */
@@ -398,14 +391,14 @@ export function DocumentBar(props: DocumentBarProps): JSX.Element | null {
 
 /**
  * Whether History, the preview and the panel toggle are menu rows rather than
- * buttons: on a phone (the panel's sheet mode), and in the admin's bar where its
- * right part, what remains after the trail, is too narrow for every control on
- * one row.
+ * buttons: on a phone (the panel's sheet mode), and in an admin bar too narrow
+ * for every control on one row beside a trail (`bar-fold`), decided by the
+ * bar's own width, as the editor's outline decides it, before the first paint.
  */
 function useFoldedIntoMenu(panelMode: DocumentPanelMode | undefined): boolean {
-  const barWidth = useTopBarPlaceWidth("end");
+  const barWidth = useTopBarWidth();
   if (panelMode === "sheet") return true;
-  return barWidth !== null && barWidth < FOLD_BELOW_BAR_WIDTH;
+  return barFolds(barWidth);
 }
 
 /**
