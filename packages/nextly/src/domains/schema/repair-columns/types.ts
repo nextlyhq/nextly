@@ -9,6 +9,7 @@
 // @module domains/schema/repair-columns/types
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import type { ColumnOverride } from "../extension/draft";
 import type { ColumnOrigin } from "../services/field-column-descriptor";
 import type { ConversionJudgement } from "../value-conversion/types";
 
@@ -45,6 +46,18 @@ export interface EntityDefinition {
   localized: boolean;
   /** Which builder makes the tables from this definition, which decides the column each field names. */
   origin: RepairColumnOrigin;
+  /**
+   * The app's overrides of the entity's own field columns' storage under this definition: the
+   * storage those columns are judged against in place of the field's. Absent, there are none.
+   */
+  columnOverrides?: readonly ColumnOverride[];
+  /**
+   * The type the applied migration snapshot recorded for each column of the entity's table, where a
+   * snapshot says what was applied. A field column it recorded with other storage than its field's
+   * own, within the field's value family, was overridden when that migration was written, whatever
+   * the configuration says now.
+   */
+  recordedTypes?: Readonly<Record<string, string>>;
 }
 
 /**

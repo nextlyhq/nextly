@@ -39,11 +39,15 @@ import { defineTable, resolveTableConstraints } from "./dsl";
 import {
   assertAddableToExistingRows,
   assertMayAddColumns,
+  assertMayOverride,
   EXTENDABLE_CORE_TABLES,
   type ExtensionTarget,
+  type OverrideStorage,
+  resolveColumnOverride,
 } from "./extension-columns";
 import {
   assertIndexBuildable,
+  assertMysqlRowFits,
   assertUsableAppTableName,
   pluginTableName,
   PREFIX_SEPARATOR,
@@ -101,6 +105,18 @@ interface DraftTable {
    * over the kind they were given, because that kind is a stand-in.
    */
   opaqueColumns?: ReadonlySet<string>;
+  /** An entity's columns its own fields generate (`SeedEntityTable` `field`). */
+  fieldColumns?: ReadonlySet<string>;
+  /** An entity's own indexes (`SeedEntityTable` `ownIndexes`). */
+  ownIndexes?: readonly ExtensionIndex[];
+}
+
+/** The app's override of one column's storage, as the store records it. */
+export interface ColumnOverride extends OverrideStorage {
+  /** The column's SQL name. */
+  column: string;
+  /** Always the app: only the app may override, and the element is its. */
+  owner: SchemaOwner;
 }
 
 export interface SchemaDraft {
@@ -129,6 +145,14 @@ export interface SchemaDraft {
       relations?: TableRelationInput[];
     }
   ): void;
+  /**
+   * Changes the storage of a column a collection's, Single's or component's
+   * own fields generate, within its value family: a string's width or kind,
+   * a whole number to `bigint`, a decimal's precision and scale. App only.
+   * The column keeps its name, nullability, default and keys; the override
+   * is recorded as the app's, and every push and migration keeps it.
+   */
+  overrideColumn(table: string, column: string, storage: ColumnBuilder): void;
   getTable(name: string): DraftTableView | undefined;
   tables(): readonly DraftTableView[];
 }
@@ -159,7 +183,18 @@ export interface SeedEntityTable {
     precision?: number;
     scale?: number;
     nullable: boolean;
+    /**
+     * Whether one of the entity's own fields generates the column, rather
+     * than the entity kind (its id, timestamps, status, title or slug).
+     * Only such a column may be overridden.
+     */
+    field?: boolean;
   }[];
+  /**
+   * The indexes the entity's own fields and config give its table, by column
+   * (`entitySeed`), so an override is judged against them.
+   */
+  ownIndexes?: { columns: string[]; unique: boolean }[];
 }
 
 /**
@@ -305,6 +340,14 @@ export class SchemaDraftStore {
             .filter(column => column.kind === undefined)
             .map(column => column.name)
         ),
+        fieldColumns: new Set(
+          entity.columns
+            .filter(column => column.field === true)
+            .map(column => column.name)
+        ),
+        ...(entity.ownIndexes !== undefined
+          ? { ownIndexes: entity.ownIndexes }
+          : {}),
       });
     }
   }
@@ -337,6 +380,11 @@ export class SchemaDraftStore {
         // access and relations, so one that moves between builds moves what
         // the runtime serves.
         adopted: [...this.adopted.values()].sort(byName),
+        // Overrides too: they change what the entity's table stores, so one
+        // that moves between builds moves what a push applies.
+        overrides: [...this.overrides.entries()].sort(([a], [b]) =>
+          a.localeCompare(b)
+        ),
       },
       (_key, value: unknown) => {
         if (value instanceof Set) {
@@ -397,6 +445,24 @@ export class SchemaDraftStore {
 
   adoptedTables(): DraftTable[] {
     return [...this.adopted.values()];
+  }
+
+  /** The app's overrides, by table, in the order they were declared. */
+  private readonly overrides = new Map<string, ColumnOverride[]>();
+
+  recordOverride(table: string, override: ColumnOverride): void {
+    this.overrides.set(table, [...(this.overrides.get(table) ?? []), override]);
+  }
+
+  overridesOf(table: string): readonly ColumnOverride[] {
+    return this.overrides.get(table) ?? [];
+  }
+
+  /** Every override, by table: what the compiled schema carries. */
+  columnOverrides(): Map<string, ColumnOverride[]> {
+    return new Map(
+      [...this.overrides.entries()].map(([table, list]) => [table, [...list]])
+    );
   }
 
   all(): DraftTable[] {
@@ -480,6 +546,25 @@ export class SchemaDraftStore {
           `${lead}, which belongs to ${describeOwner(target.owner)}${target.owner.kind === "entity" ? `, declared by plugin "${targetPlugin}"` : ""}. Name "${targetPlugin}" in dependsOn (or optionalDependsOn), so it is installed first and cannot be uninstalled while the ${entry.element} needs it.`
         );
       }
+    }
+  }
+
+  /**
+   * Refuse an entity table whose row MySQL cannot hold, judged once every
+   * hook has run, so the order a hook overrides a column and adds another in
+   * does not decide it. Weighed over the columns the seed types, the app's
+   * overrides and the hidden columns hooks added included: a column known by
+   * name only (a component's own) is left out, so the sum is the least the
+   * row can be, and a refusal here is one MySQL would make too.
+   */
+  assertEntityRowsFit(): void {
+    for (const table of this.tables.values()) {
+      if (table.owner.kind !== "entity") continue;
+      const opaque = table.opaqueColumns ?? new Set<string>();
+      assertMysqlRowFits({
+        name: table.name,
+        columns: table.columns.filter(column => !opaque.has(column.name)),
+      });
     }
   }
 
@@ -1049,12 +1134,145 @@ function assertSeededIndexBuildable(
     }
   }
   const opaque = table.opaqueColumns ?? new Set<string>();
+  // Weighed whole where the seed types every column the index names, so its
+  // key width is summed, an override's width included whichever was declared
+  // first. A column known by name only leaves the width unknown.
   assertIndexBuildable(
     index,
     table.columns.filter(column => !opaque.has(column.name)),
     table.name,
-    false
+    table.columns.length > 0 &&
+      index.columns.every(
+        name => !opaque.has(name) && table.columns.some(c => c.name === name)
+      )
   );
+}
+
+/**
+ * The app's override of an entity column's storage: judged, recorded as the
+ * app's, and applied to the draft's copy of the table.
+ *
+ * Judged before anything changes, so a refused override leaves the table as
+ * it was. The column is replaced in the draft too, so a hook running after
+ * the override, and the index and key rules judging it, see the storage the
+ * table will have.
+ */
+function overrideColumn(
+  store: SchemaDraftStore,
+  owner: SchemaOwner,
+  name: string,
+  column: string,
+  storage: ColumnBuilder
+): void {
+  const ownerPath =
+    owner.kind === "plugin" ? `plugin.${owner.id}.schema` : "app.db.schema";
+  const path = `${ownerPath}.overrideColumn.${name}`;
+  assertMayOverride(owner, name, column);
+  const table = store.get(name);
+  if (table?.owner.kind !== "entity") {
+    refuse(
+      path,
+      `"${name}" is not a collection's, a Single's or a component's table${table === undefined ? "" : `; it belongs to ${describeOwner(table.owner)}`}. Only a column an entity's own fields generate can be overridden.`
+    );
+  }
+  const sqlName = toSnakeCase(column);
+  const at = table.columns.findIndex(existing => existing.name === sqlName);
+  const seeded = table.columns[at];
+  if (seeded === undefined) {
+    refuse(
+      path,
+      `"${name}" has no column "${sqlName}". A field kept per language stores its values on the language table, which an override does not reach.`
+    );
+  }
+  assertOverridable(store, table, seeded, path);
+  const target = resolveColumnOverride(seeded, storage, name, sqlName);
+  const replaced: ExtensionColumn = {
+    key: seeded.key,
+    name: seeded.name,
+    nullable: seeded.nullable,
+    ...kindAndSizes({ ...target, kind: target.kind }),
+  };
+  assertOverriddenIndexesBuildable(table, replaced);
+  store.recordOverride(name, { column: sqlName, ...target, owner });
+  table.columns[at] = replaced;
+}
+
+/**
+ * Refuse an override of a column that is not the entity's own field column,
+ * or that something else depends on the storage of.
+ */
+function assertOverridable(
+  store: SchemaDraftStore,
+  table: DraftTable,
+  column: ExtensionColumn,
+  path: string
+): void {
+  if (column.contributedBy !== undefined) {
+    refuse(
+      path,
+      `Column "${column.name}" was added to "${table.name}" by ${describeOwner(column.contributedBy)}, and only its contributor changes it.`
+    );
+  }
+  if (table.fieldColumns?.has(column.name) !== true) {
+    refuse(
+      path,
+      `Column "${column.name}" is one "${table.name}" keeps for itself, not one its fields generate, so its storage cannot be overridden.`
+    );
+  }
+  // A single relationship's or upload's key holds the id of the row it
+  // points at, and its storage is that id's.
+  if ((column.kind as string) === "fkSingle") {
+    refuse(
+      path,
+      `Column "${column.name}" holds the id a relationship or upload points at, so its storage is the target's id, and cannot be overridden.`
+    );
+  }
+  if (store.overridesOf(table.name).some(o => o.column === column.name)) {
+    refuse(path, `Column "${column.name}" is already overridden.`);
+  }
+  const referencedBy = store
+    .extensionTables()
+    .find(other =>
+      (other.foreignKeys ?? []).some(
+        key =>
+          key.referencesTable === table.name &&
+          key.referencesColumns.includes(column.name)
+      )
+    );
+  if (referencedBy !== undefined) {
+    refuse(
+      path,
+      `Column "${column.name}" is referenced by a foreign key on "${referencedBy.name}", whose column must keep the storage it points at.`
+    );
+  }
+}
+
+/**
+ * Refuse an override that leaves an index over the column unbuildable on
+ * some dialect: an unbounded string, or a width past MySQL's key limit. Both
+ * the indexes hooks added and the entity's own (a unique or indexed field, a
+ * compound index its config declares) are judged.
+ */
+function assertOverriddenIndexesBuildable(
+  table: DraftTable,
+  replaced: ExtensionColumn
+): void {
+  const columns = table.columns.map(existing =>
+    existing.name === replaced.name ? replaced : existing
+  );
+  const opaque = table.opaqueColumns ?? new Set<string>();
+  for (const index of [...table.indexes, ...(table.ownIndexes ?? [])]) {
+    if (!index.columns.includes(replaced.name)) continue;
+    // Weighed whole where every column it names is typed, so the key width
+    // the override gives it is summed: a hook's index over a field widened
+    // past MySQL's key limit is refused here rather than by the server.
+    assertIndexBuildable(
+      index,
+      columns.filter(existing => !opaque.has(existing.name)),
+      table.name,
+      index.columns.every(name => !opaque.has(name))
+    );
+  }
 }
 
 /**
@@ -1192,6 +1410,10 @@ export function createOwnerDraft(
       addConstraints(table, ext, scope, target =>
         store.recordContributedTarget(target)
       );
+    },
+
+    overrideColumn(name, column, storage): void {
+      overrideColumn(store, owner, name, column, storage);
     },
 
     getTable(name): DraftTableView | undefined {
