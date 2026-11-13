@@ -439,6 +439,23 @@ export class FieldGroupMetadataService {
         wasLocalized,
         localized,
       });
+    } else if (localized !== wasLocalized && this.adapter) {
+      // A `localized` toggle with no field edit still moves every translated field's values, so
+      // their columns are asked what the move would lose, before the companion changes.
+      const { refuseTranslationMovesLosingDefinition } = await import(
+        "../../i18n/migration/archive-preflight"
+      );
+      await refuseTranslationMovesLosingDefinition({
+        adapter: this.adapter,
+        // A field group's own table, which decides the column bounds compared.
+        builtBy: "fieldGroup",
+        tableName: existing.tableName,
+        oldFields: fields,
+        newFields: fields,
+        wasLocalized,
+        isLocalized: localized,
+        surface: "builder",
+      });
     }
 
     // 2. MOVE the physical schema, when this edit implies one. A `localized` toggle alone does:

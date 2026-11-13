@@ -68,6 +68,7 @@ import {
 import {
   archiveFieldsLeavingTranslation,
   fieldsLeavingTranslationUnder,
+  refuseTranslationMovesLosingDefinition,
 } from "../../i18n/migration/archive-preflight";
 import {
   leavingFieldConstraints,
@@ -918,12 +919,7 @@ export class SingleMetadataService {
   private async assertFieldsMayLeaveTranslation(
     input: UpdateSingleSchemaInput
   ): Promise<void> {
-    if (
-      input.fields === undefined ||
-      (!input.wasLocalized && !input.isLocalized)
-    ) {
-      return;
-    }
+    if (!input.wasLocalized && !input.isLocalized) return;
     if (!this.adapter) {
       throw NextlyError.internal({
         logContext: {
@@ -931,6 +927,25 @@ export class SingleMetadataService {
           slug: input.slug,
         },
       });
+    }
+    if (input.fields === undefined) {
+      // A save that sends no fields still moves every translated field's values as it turns
+      // translation on or off, through the companion transition after it, so their columns are
+      // asked here what the move would lose.
+      const fields = (input.existing.fields ??
+        []) as unknown as FieldDefinition[];
+      await refuseTranslationMovesLosingDefinition({
+        adapter: this.adapter,
+        // Singles are built by the collection schema service.
+        builtBy: "collection",
+        tableName: input.existing.tableName,
+        oldFields: fields,
+        newFields: fields,
+        wasLocalized: input.wasLocalized,
+        isLocalized: input.isLocalized,
+        surface: "builder",
+      });
+      return;
     }
     // The site's default language as it is now, the same one the Single's companion reconcile reads.
     const defaultLocale = appLocalization()?.defaultLocale ?? "en";

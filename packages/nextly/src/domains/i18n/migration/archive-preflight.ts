@@ -47,11 +47,16 @@ import {
   refusalsForTranslatedFieldsRemovedBesideAdded,
   moveKeepsEveryValue,
   storageDiffers,
+  type TranslationSurface,
   withoutLeavingConstraints,
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import { copyLiveness } from "./generate-down";
 import { refusalsForConstrainedFieldsLeaving } from "./leaving-constraint-preconditions";
+import {
+  lossesOnMove,
+  refusalsForMovesLosingDefinition,
+} from "./move-keeps-definition";
 import {
   buildLeavingFieldsArchiveStatements,
   type FieldRename,
@@ -180,6 +185,9 @@ export async function archiveFieldsLeavingTranslation(args: {
     args.wasLocalized && args.isLocalized
       ? await renameInChange(args)
       : undefined;
+  // Turning translation on or off moves each translated field's values into a new column, which
+  // must not lose part of the definition the column they leave has.
+  await refuseTranslationMovesLosingDefinition({ ...args, surface: "builder" });
   // First, because the checks after it query a translated field's companion column as the field
   // defines it, and over a column that cannot hold that the database refuses the query outright.
   await refuseCompanionColumnsThatCannotHold(args, rename, companionColumns);
@@ -958,6 +966,59 @@ export function joiningFieldsLosingValues(
         )
       )
     );
+  });
+}
+
+/**
+ * Refuses, before anything changes, turning translation on or off where a translated field's values
+ * would move out of a column with part of a definition the column receiving them would not have
+ * (`lostOnMove`): a comment, or a character set or collation other than the receiving table's.
+ * Turning it on moves them from the main table to the companion; off, back again. The receiving
+ * column is created naming none of these, and the column the values leave is dropped with it. A
+ * change that keeps translation as it was moves no field this way, and asks nothing.
+ */
+export async function refuseTranslationMovesLosingDefinition(args: {
+  adapter: DrizzleAdapter;
+  /** The entity's main table; the companion is `<tableName>_locales`. */
+  tableName: string;
+  builtBy: ColumnOrigin;
+  oldFields: readonly LeavingFieldLike[];
+  newFields: readonly LeavingFieldLike[];
+  wasLocalized: boolean;
+  isLocalized: boolean;
+  surface: TranslationSurface;
+}): Promise<void> {
+  if (args.wasLocalized === args.isLocalized) return;
+  const dialect = args.adapter.getCapabilities().dialect;
+  const turningOn = args.isLocalized;
+  // The translated fields on the side where translation holds: their columns are the ones moved.
+  const moved = (turningOn ? args.newFields : args.oldFields).flatMap(f => {
+    if (!isFieldLocalized(f, true)) return [];
+    const column = fieldToLocalizedColumnSpec(f, dialect, args.builtBy);
+    return column ? [{ field: f.name, column: column.name }] : [];
+  });
+  const companion = `${args.tableName}_locales`;
+  const [from, to] = turningOn
+    ? [args.tableName, companion]
+    : [companion, args.tableName];
+  const losses = await lossesOnMove(args.adapter.getDrizzle(), dialect, {
+    moved,
+    from,
+    to,
+  });
+  if (losses.length === 0) return;
+  const refusals = refusalsForMovesLosingDefinition({
+    losses,
+    table: from,
+    translation: turningOn ? "on" : "off",
+    surface: args.surface,
+  });
+  throw NextlyError.validation({
+    errors: refusals,
+    logContext: {
+      tableName: args.tableName,
+      fields: refusals.map(r => r.path),
+    },
   });
 }
 

@@ -348,6 +348,7 @@ export async function planJoiningMovesForApply(args: {
     });
     if (joining.length === 0) continue;
     await refuseReshapedJoins(e, builtBy, "rowColumns" in entry, joining, args);
+    await refuseMovesLosingDefinition(e, builtBy, joining, args);
     const plan = await planEntityMove(e, builtBy, joining, args);
     if (plan.statements.length === 0) continue;
     result.statements.push(...plan.statements);
@@ -471,6 +472,41 @@ export async function joinsReshapedAgainst(
       );
     })
     .map(j => j.field);
+}
+
+/**
+ * Refuses, before anything runs, a field whose main column has part of a definition the companion
+ * column receiving its values would not (`lostOnMove`): a comment, or a character set or collation
+ * other than the companion's. The push drops the main column after the move, so the move is the
+ * last moment the column's definition can be kept.
+ */
+async function refuseMovesLosingDefinition(
+  e: ApplyEntity,
+  builtBy: ColumnOrigin,
+  joining: readonly { field: string; column: string }[],
+  args: { db: unknown; dialect: SupportedDialect }
+): Promise<void> {
+  const [{ lossesOnMove, refusalsForMovesLosingDefinition }, { NextlyError }] =
+    await Promise.all([
+      import("./move-keeps-definition"),
+      import("../../../errors/nextly-error"),
+    ]);
+  const losses = await lossesOnMove(args.db, args.dialect, {
+    moved: joining,
+    from: e.tableName,
+    to: `${e.tableName}_locales`,
+  });
+  if (losses.length === 0) return;
+  const refusals = refusalsForMovesLosingDefinition({
+    losses,
+    table: e.tableName,
+    translation: "on",
+    surface: builtBy === "codeFirst" ? "code" : "builder",
+  });
+  throw NextlyError.validation({
+    errors: refusals,
+    logContext: { entity: e.slug, fields: refusals.map(r => r.path) },
+  });
 }
 
 /** One entity's move, planned against its companion as it is now. */

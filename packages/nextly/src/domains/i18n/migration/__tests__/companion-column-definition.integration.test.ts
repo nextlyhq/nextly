@@ -475,5 +475,43 @@ describeEachDialect(
       ).toMatchObject({ localized: true });
       expect(await columnOf("dc_cdef_posts_locales", "summary")).toEqual(moved);
     });
+
+    it("refuses turning translation off where the move would lose the companion column's comment or collation", async () => {
+      await create("cdef_posts", true, [translated(HEADING)]);
+      // The companion column as a database may have it: with a comment, or on SQLite, where a
+      // collation lives only in the table's statement, beside a column that names one.
+      if (dialect === "sqlite") {
+        await query(
+          `ALTER TABLE ${q("dc_cdef_posts_locales")} ADD COLUMN ${q("note")} TEXT COLLATE NOCASE`
+        );
+      } else if (dialect === "mysql") {
+        await query(
+          `ALTER TABLE ${q("dc_cdef_posts_locales")} MODIFY COLUMN ${q("heading")} TEXT NULL COMMENT 'kept'`
+        );
+      } else {
+        await query(
+          `COMMENT ON COLUMN ${q("dc_cdef_posts_locales")}.${q("heading")} IS 'kept'`
+        );
+      }
+
+      const refusal = await saveInDialog("cdef_posts", [HEADING], false);
+
+      expect(errorsOf(refusal)).toEqual([
+        expect.objectContaining({
+          path: "fields.heading",
+          code: "TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION",
+          message: expect.stringMatching(
+            dialect === "sqlite" ? /own collation/ : /own comment/
+          ),
+        }),
+      ]);
+      // Nothing changed: the companion keeps the column, and the main table has none.
+      expect(
+        (await columnsOf("dc_cdef_posts_locales")).map(c => c.name)
+      ).toContain("heading");
+      expect((await columnsOf("dc_cdef_posts")).map(c => c.name)).not.toContain(
+        "heading"
+      );
+    });
   }
 );

@@ -137,6 +137,12 @@ function adapterDouble(
 ) {
   return withMigrationLockSurface({
     getCapabilities: () => ({ dialect }),
+    // The catalog reads a translation toggle asks of each column (`readColumnExtras`) find no
+    // definition of its own: no comment, character set or collation for a move to lose.
+    getDrizzle: () => ({
+      execute: async () => ({ rows: [] }),
+      all: () => [],
+    }),
     // The parameter is declared even though nothing here reads it: `entityStatements` reads the
     // recorded calls, and a mock with no declared parameters records them as an empty tuple.
     executeQuery: vi.fn(async (_sql: string) => []),

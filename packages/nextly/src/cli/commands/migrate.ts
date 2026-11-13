@@ -45,6 +45,7 @@ import {
   parseLocalizationIntent,
   type LocalizationMigrationIntent,
 } from "../../domains/i18n/migration/migration-intent";
+import { refuseMigrationFilesLosingDefinition } from "../../domains/i18n/migration/move-keeps-definition";
 import { sharedFileRecoveryAdvice } from "../../domains/i18n/migration/plan-field-leaves-migration";
 import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 import {
@@ -2899,6 +2900,13 @@ async function judgeFileDeletions(
         deps.dialect
       ),
     ],
+    deps.db,
+    deps.dialect
+  );
+  // A file turning translation on or off whose move would lose a column's comment, character set
+  // or collation is refused here too, before any statement (`refuseMigrationFilesLosingDefinition`).
+  await refuseMigrationFilesLosingDefinition(
+    listed.flatMap(({ file }) => (plan.runs.has(file) ? [file] : [])),
     deps.db,
     deps.dialect
   );

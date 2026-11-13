@@ -1,0 +1,167 @@
+/**
+ * Whether turning translation on or off would lose part of a column's definition: the comment,
+ * character set or collation the column holding a field's values has, which the column created to
+ * receive them would not have. The receiving column is created naming none of them, so it takes
+ * its table's (or its type's) default; a source column that has its own is refused before any
+ * statement runs, rather than moved without it.
+ *
+ * One judge for every path that moves the values (a schema push, a Builder save, a field group's
+ * update, `nextly migrate`), each reading the source column and the receiving table's defaults
+ * from its database (`readColumnExtras`, `readReceivingDefaults`).
+ *
+ * @module domains/i18n/migration/move-keeps-definition
+ */
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
+import { NextlyError } from "../../../errors/nextly-error";
+import {
+  type ColumnExtras,
+  readColumnExtras,
+  readReceivingDefaults,
+  type ReceivingDefaults,
+} from "../../schema/pipeline/live-table-facts";
+
+import {
+  type LeavingTranslationRefusal,
+  refusal,
+  type TranslationSurface,
+} from "./field-leaves-translation-rules";
+import type { LocalizationMigrationIntent } from "./migration-intent";
+
+/** A part of a column's definition a move into a new column can lose. */
+export type CarriedProperty = "comment" | "character set" | "collation";
+
+/** A moved field whose column has parts of its definition the receiving column would not. */
+export interface ColumnMoveLoss {
+  field: string;
+  column: string;
+  lost: CarriedProperty[];
+}
+
+/**
+ * The moved fields whose source column (`extras`, by column) has a comment, or a character set or
+ * collation other than the one a column created in the receiving table takes (`receiving`). A
+ * column `extras` does not describe is not there to lose anything.
+ */
+export function lostOnMove(
+  moved: readonly { field: string; column: string }[],
+  extras: ReadonlyMap<string, ColumnExtras>,
+  receiving: ReceivingDefaults
+): ColumnMoveLoss[] {
+  return moved.flatMap(({ field, column }) => {
+    const source = extras.get(column);
+    if (source === undefined) return [];
+    const lost: CarriedProperty[] = [
+      ...(source.comment !== null ? (["comment"] as const) : []),
+      ...(source.charset !== null && source.charset !== receiving.charset
+        ? (["character set"] as const)
+        : []),
+      ...(source.collation !== null && source.collation !== receiving.collation
+        ? (["collation"] as const)
+        : []),
+    ];
+    return lost.length > 0 ? [{ field, column, lost }] : [];
+  });
+}
+
+/**
+ * What moving `moved` from the table `from` into new columns of the table `to` would lose, read
+ * from the database as it stands: the source columns' own definition (`readColumnExtras`) against
+ * what a column created in `to` takes (`readReceivingDefaults`).
+ */
+export async function lossesOnMove(
+  db: unknown,
+  dialect: SupportedDialect,
+  move: {
+    moved: readonly { field: string; column: string }[];
+    from: string;
+    to: string;
+  }
+): Promise<ColumnMoveLoss[]> {
+  if (move.moved.length === 0) return [];
+  return lostOnMove(
+    move.moved,
+    await readColumnExtras(
+      db,
+      dialect,
+      move.from,
+      move.moved.map(m => m.column)
+    ),
+    await readReceivingDefaults(db, dialect, move.to)
+  );
+}
+
+/** One refusal per field whose move would lose part of its column's definition. */
+export function refusalsForMovesLosingDefinition(args: {
+  losses: readonly ColumnMoveLoss[];
+  /** The table the values sit in now. */
+  table: string;
+  /** Whether translation is turned on (values move to the translations table) or off. */
+  translation: "on" | "off";
+  surface: TranslationSurface;
+}): LeavingTranslationRefusal[] {
+  return args.losses.map(({ field, column, lost }) => {
+    const parts = lost.join(" and ");
+    return refusal(
+      `fields.${field}`,
+      "TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION",
+      `"${field}" is stored in ${args.table}.${column}, which has its own ${parts}; turning ` +
+        `translation ${args.translation} moves its values into a new column, which would not have it.`,
+      [
+        `Remove the ${parts} from ${args.table}.${column} in the database, or leave translation ` +
+          `${args.translation === "on" ? "off" : "on"} for this entity.`,
+        args.surface === "builder" ? "Then save again." : "Then run it again.",
+      ]
+    );
+  });
+}
+
+/**
+ * Refuses a `nextly migrate` run, before any file applies, where a pending file turning
+ * translation on or off would move a column's values into a new column without part of its
+ * definition (`lostOnMove`). Each file says what it moves in its header
+ * (`LocalizationMigrationIntent`): turning translation on moves the spec's columns still on the
+ * main table into the companion; off, the companion's back. Read from the database as it stands
+ * before the run, so a column an earlier file of the same run creates is not there to judge; no
+ * column Nextly creates carries any of these.
+ */
+export async function refuseMigrationFilesLosingDefinition(
+  files: readonly {
+    name: string;
+    localization?: LocalizationMigrationIntent;
+  }[],
+  db: unknown,
+  dialect: SupportedDialect
+): Promise<void> {
+  const refusals: LeavingTranslationRefusal[] = [];
+  const refused: string[] = [];
+  for (const file of files) {
+    const intent = file.localization;
+    if (intent?.kind !== "enable" && intent?.kind !== "disable") continue;
+    const { spec } = intent;
+    const turningOn = intent.kind === "enable";
+    const onMain = spec.columnsOnMain && new Set(spec.columnsOnMain);
+    const moved = spec.columns
+      .filter(c => !turningOn || onMain === undefined || onMain.has(c.name))
+      .map(c => ({ field: c.name, column: c.name }));
+    const [from, to] = turningOn
+      ? [spec.mainTable, spec.companionTable]
+      : [spec.companionTable, spec.mainTable];
+    const losses = await lossesOnMove(db, dialect, { moved, from, to });
+    if (losses.length === 0) continue;
+    refused.push(file.name);
+    refusals.push(
+      ...refusalsForMovesLosingDefinition({
+        losses,
+        table: from,
+        translation: turningOn ? "on" : "off",
+        surface: "code",
+      })
+    );
+  }
+  if (refusals.length === 0) return;
+  throw NextlyError.validation({
+    errors: refusals,
+    logContext: { files: refused, fields: refusals.map(r => r.path) },
+  });
+}

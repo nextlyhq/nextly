@@ -38,7 +38,8 @@ export interface LeavingTranslationRefusal {
     | "RESHAPED_TRANSLATED_FIELD_RENAMED"
     | "TRANSLATED_FIELD_RENAMED_AS_TRANSLATION_ENDS"
     | "TRANSLATED_FIELD_RENAME_UNANSWERED"
-    | "TRANSLATED_FIELD_REMOVED_BESIDE_ADDED";
+    | "TRANSLATED_FIELD_REMOVED_BESIDE_ADDED"
+    | "TRANSLATION_MOVE_LOSES_COLUMN_DEFINITION";
   /** Why the field cannot leave or join translation in this change, as one sentence. */
   reason: string;
   /** The changes that get there instead, in order, each one sentence. */
