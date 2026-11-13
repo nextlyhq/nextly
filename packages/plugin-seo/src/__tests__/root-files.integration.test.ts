@@ -803,7 +803,7 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
-    it("keeps answering robots.txt and the sitemap with their defaults until the settings are migrated", async () => {
+    it("keeps answering robots.txt, the sitemap and each head until the own rules' column is migrated", async () => {
       const { t } = await boot(dialect, { aiCrawlers: "search" });
       await create(t, "posts", {
         title: "Hello",
@@ -811,15 +811,12 @@ describe.each(getConfiguredTestDialects())(
         status: "published",
       });
       const before = await rootFile("robots.txt");
+      const headBefore = await headOf(t, "posts", "hello");
       // A database the upgrade has not been migrated for: the settings'
       // newest column is missing, so core refuses every read of them.
       await t.adapter.executeQuery(
         "ALTER TABLE single_seo_settings DROP COLUMN robots_rules"
       );
-      await expect(
-        t.nextly.findSingle({ slug: SEO_SETTINGS_SLUG, overrideAccess: true })
-      ).rejects.toMatchObject({ code: "ENTITY_NOT_MIGRATED" });
-
       const robots = await rootFile("robots.txt");
       expect(robots.status).toBe(200);
       expect(robots.body).toBe(before.body);
@@ -828,6 +825,11 @@ describe.each(getConfiguredTestDialects())(
       expect(sitemap.body).toContain(`<loc>${SITE}/blog/hello</loc>`);
       // Off until switched on, as for a site with nothing set.
       expect((await rootFile("llms.txt")).status).toBe(404);
+      // The page's head is still the plugin's answer, read from the rest of
+      // the settings.
+      expect((await headOf(t, "posts", "hello")).title).toEqual(
+        headBefore.title
+      );
     });
   }
 );

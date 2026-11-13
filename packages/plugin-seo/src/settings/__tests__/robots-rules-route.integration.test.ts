@@ -122,6 +122,8 @@ describe.each(getConfiguredTestDialects())(
             publicAddress: "/blog/{slug}",
           }),
         ],
+        // Seeds the plugin's own permissions, such as `manage-seo`.
+        seedPublic: true,
       });
       for (const slug of ["harbour", "boats", "tides"]) {
         await current.nextly.create({
@@ -173,7 +175,7 @@ describe.each(getConfiguredTestDialects())(
 
     it("is only for someone who may manage site-wide SEO", async () => {
       const t = await boot();
-      // The first person is the site's owner; the reader comes after.
+      // The first person is the site's owner; the others come after.
       await personWith(t, "owner", "all");
       const reader = await personWith(t, "reader", [`read-${POSTS}`]);
       const manager = await personWith(t, "manager", ["manage-seo"]);
