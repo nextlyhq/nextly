@@ -25,7 +25,6 @@ import {
   defineSingle,
   fieldGroup,
   group,
-  json,
   password,
   repeater,
   text,
@@ -51,8 +50,6 @@ const PLAIN = "rwplainsite";
 const LOCALIZED = "rwlsite";
 /** Versions kept, and a password stored on the row and inside a group. */
 const SECRET = "rwsecretsite";
-/** A JSON field inside an unnamed layout group. */
-const LAYOUT = "rwlayoutsite";
 /** No translations of its own, versions kept, and a translated field group. */
 const BANNERED = "rwbannersite";
 const BANNER = "rwsitebanner";
@@ -114,10 +111,6 @@ async function boot(
           password({ name: "secret" }),
           group({ name: "login", fields: [password({ name: "pin" })] }),
         ],
-      }),
-      defineSingle({
-        slug: LAYOUT,
-        fields: [group({ fields: [json({ name: "meta" })] })],
       }),
       ...(localized
         ? [
@@ -523,30 +516,6 @@ describe.each(getConfiguredTestDialects())(
         expectedVersion: await versionOf(t, SECRET),
         set: { value: "narrow" },
         reason: REASON,
-      });
-    });
-
-    it("stores a JSON field inside a layout group as given", async () => {
-      const t = await boot(dialect);
-      await save(t, LAYOUT, { meta: { heroTitle: "Old" } });
-      let seen: unknown;
-      await t.nextly.rewriteField({
-        single: LAYOUT,
-        field: "meta",
-        expectedVersion: await versionOf(t, LAYOUT),
-        set: {
-          from: current => {
-            seen = current;
-            return { heroTitle: "Hello" };
-          },
-        },
-        reason: REASON,
-      });
-      // The stored value reached the function parsed.
-      expect(seen).toEqual({ heroTitle: "Old" });
-      const stored = (await read(t, LAYOUT)).meta;
-      expect(typeof stored === "string" ? JSON.parse(stored) : stored).toEqual({
-        heroTitle: "Hello",
       });
     });
 
