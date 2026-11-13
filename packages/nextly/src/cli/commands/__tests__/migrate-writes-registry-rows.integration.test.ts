@@ -492,6 +492,64 @@ describe.each(getConfiguredTestDialects())(
       ).toBe("Things that happen");
     });
 
+    // The run that applies the edit judges the one-to-ones' uniqueness on the definition it
+    // records, so it never makes the column unique again after the file dropped its index.
+    it("lets a Builder one-to-one edited into a many-to-one take a repeat after the run that applies the edit", async () => {
+      const builderOnly = defineConfig({
+        collections: [],
+        db: { migrationsDir: "./migrations" },
+      });
+      const withPerson = (relationType: "oneToOne" | "manyToOne") =>
+        writeManifest(
+          uiSchemaManifest.parse({
+            collections: [
+              {
+                slug: "rr_people",
+                fields: [{ name: "name", type: "text" }],
+              },
+              {
+                slug: "rr_profiles",
+                fields: [
+                  { name: "title", type: "text" },
+                  {
+                    name: "person",
+                    type: "relationship",
+                    options: { target: "rr_people", relationType },
+                  },
+                ],
+              },
+            ],
+          })
+        );
+      const run = (statement: string) =>
+        (
+          instance!.adapter as unknown as {
+            executeQuery(sql: string): Promise<unknown>;
+          }
+        ).executeQuery(statement);
+      const profile = (id: string) =>
+        run(
+          `INSERT INTO ${q}dc_rr_profiles${q} (${q}id${q}, ${q}title${q}, ${q}slug${q}, ${q}person${q}) VALUES ('${id}', '${id}', '${id}', 'ada')`
+        );
+      await withPerson("oneToOne");
+      await migrateCreate(builderOnly, "create_profiles");
+      await migrated(builderOnly);
+      await run(
+        `INSERT INTO ${q}dc_rr_people${q} (${q}id${q}, ${q}title${q}, ${q}name${q}, ${q}slug${q}) VALUES ('ada', 'Ada', 'Ada', 'ada')`
+      );
+      await profile("p1");
+      // Positive control: while it is one-to-one, a second profile of Ada is refused.
+      await expect(profile("p2")).rejects.toThrow();
+
+      await withPerson("manyToOne");
+      const edit = await migrateCreate(builderOnly, "person_many_to_one");
+      await migrated(builderOnly);
+
+      await expect(profile("p2")).resolves.toBeDefined();
+      // Kept for the reader: what the edit's file carries.
+      void edit;
+    });
+
     it("writes a field added in code to a Single's and a field group's rows", async () => {
       const declared = (...extra: ReturnType<typeof text>[]) =>
         defineConfig({

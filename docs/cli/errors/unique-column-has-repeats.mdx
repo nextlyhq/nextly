@@ -7,7 +7,7 @@ description: "A migration, or `nextly migrate`'s own step, would make a column u
 
 A migration, or `nextly migrate`'s own step, would make a column unique while its entries repeat a value.
 
-Before a migration runs, `nextly migrate` reads the values each statement that makes a column unique would meet. A column is made unique when a field is marked Unique, or when a relationship becomes one-to-one; `nextly migrate` also makes a one-to-one unique that an earlier release left without its uniqueness. Entries that hold no value never count as repeats. The Why line names each collection, Single or table, the field or column, and how many values repeat: for a relationship, the first repeated values with how many entries hold each, and for any other field only how many entries hold the most repeated one, since its values may be private.
+Before a migration runs, `nextly migrate` reads the values each statement that makes a column unique would meet. A column is made unique when a field is marked Unique, or when a relationship becomes one-to-one; `nextly migrate` also makes a one-to-one unique that an earlier release left without its uniqueness. Entries that hold no value never count as repeats. The Why line names each collection, Single or table, the field or column, and how many values repeat: for a relationship, the first repeated values with how many entries hold each, and for any other field only how many entries hold the most repeated one, since its values may be private. Where an earlier statement of the same migration writes that table, the values are read at the index's own statement, and only how many repeat is shown, since those statements may have written anything into the column.
 
 Nothing of the migration, or of the step, was applied.
 

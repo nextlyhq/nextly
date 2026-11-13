@@ -512,6 +512,26 @@ describe.each(LOCK_DIALECTS)(
       120_000
     );
 
+    it("refuses, changing nothing, a one-to-one whose index name an index of another kind on its table holds", async () => {
+      await recordOneToOnes("person");
+      await run([
+        `CREATE INDEX ${q(UNIQUE)} ON ${q(PROFILES)} (${q("person")})`,
+        profile("p1", "ada"),
+      ]);
+
+      const error = await refusal();
+
+      expect(error.publicMessage).toContain(
+        `profiles.person (its index ${UNIQUE} is the name of`
+      );
+      expect(
+        (
+          await readIndexUniqueness(adapter.getDrizzle(), dialect, PROFILES)
+        ).get(UNIQUE)
+      ).toEqual({ unique: false });
+      expect(await refusedAsRepeat(profile("p2", "ada"))).toBe(false);
+    }, 120_000);
+
     it.runIf(dialect === "postgresql")(
       "makes a translated one-to-one unique within each language past an index a failed concurrent build left under its name",
       async () => {
@@ -861,7 +881,7 @@ describe.each(LOCK_DIALECTS)(
       const error = await refusal();
 
       expect(error.publicMessage).toContain(
-        `field 'person' cannot become unique while 1 value repeats: "ada" (2 entries)`
+        `field 'person' cannot become unique while 1 value repeats, the most repeated one in 2 entries.`
       );
       expect(await personIsUnique()).toBe(false);
       // The check runs before the index's statement, inside the file's transaction, so the
@@ -932,10 +952,43 @@ describe.each(LOCK_DIALECTS)(
 
       const error = await refusal();
 
+      // At its statement the values are what the statements before it left, which need not be a
+      // relationship's ids any more, so only how many repeat is told, in the refusal and the log.
       expect(error.publicMessage).toContain(
-        `field 'person' cannot become unique while 1 value repeats: "ada" (2 entries)`
+        `field 'person' cannot become unique while 1 value repeats, the most repeated one in 2 entries.`
       );
+      expect(error.publicMessage).not.toContain('"ada"');
+      expect(JSON.stringify(error.logContext)).not.toContain('"ada"');
       expect(await personIsUnique()).toBe(false);
+    }, 120_000);
+
+    it("adopts no unique index after an earlier statement drops its table under a qualified name", async () => {
+      await run([
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ]);
+      const statements = [
+        `DROP TABLE ${q(await ownSchema())}.${q(PROFILES)}`,
+        `CREATE TABLE ${q(PROFILES)} (${q("id")} varchar(36) PRIMARY KEY, ${q("person")} varchar(36))`,
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ];
+
+      const adoption = await adoptUniqueIndexesAlreadyThere(
+        adapter.getDrizzle(),
+        dialect,
+        statements
+      );
+
+      expect(adoption).toEqual({ statements, adopted: [] });
     }, 120_000);
 
     it.runIf(dialect === "mysql")(
@@ -1432,7 +1485,7 @@ describe.each(LOCK_DIALECTS)(
 
       expect(error.publicMessage).toContain(`${FILE} at statement 1`);
       expect(error.publicMessage).toContain(
-        `field 'person' cannot become unique while 1 value repeats: "ada" (2 entries)`
+        `field 'person' cannot become unique while 1 value repeats, the most repeated one in 2 entries.`
       );
       expect(await personIsUnique()).toBe(false);
     }, 120_000);
