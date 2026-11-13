@@ -33,7 +33,7 @@ import { productionAddressesOf } from "../canonical";
 import { originOf } from "../origin";
 import { CHECK_SEO_PERMISSION } from "../permissions";
 import { isRecord, textOf } from "../plain-values";
-import { SEO_TAB_ID } from "../problems/contract";
+import { seoTabIdOf } from "../problems/contract";
 import { designLevelOf } from "../resolver/design-level";
 import type { SeoLevel, Sourced } from "../resolver/order";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
@@ -357,7 +357,9 @@ function editHrefOf(
     source.kind === "single"
       ? `/admin/singles/${encodeURIComponent(source.slug)}`
       : `/admin/collections/${encodeURIComponent(source.collection)}/${encodeURIComponent(String(source.entry.id))}`;
-  const query = new URLSearchParams({ tab: SEO_TAB_ID });
+  const query = new URLSearchParams({
+    tab: seoTabIdOf(source.kind === "single" ? "single" : "collection"),
+  });
   if (locale !== defaultLanguage) query.set("locale", locale);
   return `${page}?${query.toString()}`;
 }

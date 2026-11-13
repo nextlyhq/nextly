@@ -14,7 +14,7 @@ import type {
 } from "../code-pages/contract";
 import {
   KIND_SEVERITY,
-  SEO_TAB_ID,
+  seoTabIdOf,
   SEVERITY_ORDER,
   type CheckedPage,
   type Problem,
@@ -268,7 +268,7 @@ export function entryHref(
       ? `/admin/singles/${encodeURIComponent(entry.slug)}`
       : `/admin/collections/${encodeURIComponent(entry.slug)}/${encodeURIComponent(entry.id)}`;
   const query = new URLSearchParams();
-  if (tab === "seo") query.set("tab", SEO_TAB_ID);
+  if (tab === "seo") query.set("tab", seoTabIdOf(entry.kind));
   if (entry.locale !== undefined) query.set("locale", entry.locale);
   const search = query.toString();
   return search === "" ? page : `${page}?${search}`;
