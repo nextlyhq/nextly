@@ -100,6 +100,7 @@ export type MoveRefusalReason =
   | "excluded-type"
   | "name-clash"
   | "reserved-name"
+  | "ambiguous-place"
   | "not-available-yet";
 
 /** A move's answer: the fields after it, or why it is refused. */
@@ -262,26 +263,34 @@ function fieldGroupRefusal(
   );
 }
 
-/** The refusal of any change of container while a save would lose its values. */
 /**
  * The refusal of a saved field's change of level while a save would lose its values. Called only
  * for a move that changes the field's naming level (`arrivalRefusal`), so a move into or out of a
- * layout container, which keeps the field on the level holding it, is never refused here. A field
- * never saved (`savedContainerIdsOf` answers null) has no values to lose and moves freely.
+ * layout container, which keeps the field on the level holding it, is never refused here. A move
+ * carrying nothing ever saved (`savedContainerIdsOf` answers null for the field and for every field
+ * inside it) has no values to lose and goes ahead: an unsaved group may still hold a saved field.
  */
 function containerChangeRefusal(
   field: BuilderField,
   ctx: MoveContext
 ): MoveVerdict | null {
   const allowed = ctx.containerChanges ?? CONTAINER_CHANGES_KEEP_VALUES;
-  const neverSaved =
-    ctx.savedContainerIdsOf !== undefined &&
-    ctx.savedContainerIdsOf(field.id) === null;
-  if (allowed || neverSaved) return null;
+  const savedContainerIdsOf = ctx.savedContainerIdsOf;
+  const carriesNothingSaved =
+    savedContainerIdsOf !== undefined &&
+    withEverythingInside(field).every(
+      each => savedContainerIdsOf(each.id) === null
+    );
+  if (allowed || carriesNothingSaved) return null;
   return refuse(
     "not-available-yet",
     "Moving a field into or out of a group or repeating rows is not available yet."
   );
+}
+
+/** A field and every field inside it, at any depth. */
+function withEverythingInside(field: BuilderField): BuilderField[] {
+  return [field, ...(field.fields ?? []).flatMap(withEverythingInside)];
 }
 
 /** The repeating rows on a chain of containers, by id. */
@@ -297,9 +306,16 @@ function crossingRefusal(
   ctx: MoveContext
 ): MoveVerdict | null {
   const intoIds = new Set(into.map(each => each.id));
-  // Only rows the field is saved in hold values of its own (`savedContainerIdsOf`).
-  const savedIn = ctx.savedContainerIdsOf
-    ? new Set(ctx.savedContainerIdsOf(field.id) ?? [])
+  // Only rows a field is saved in hold values of its own (`savedContainerIdsOf`). Every field the
+  // move carries counts, not only the one moved: an unsaved group may hold a field saved in the
+  // rows it would leave.
+  const savedContainerIdsOf = ctx.savedContainerIdsOf;
+  const savedIn = savedContainerIdsOf
+    ? new Set(
+        withEverythingInside(field).flatMap(
+          each => savedContainerIdsOf(each.id) ?? []
+        )
+      )
     : null;
   const leaving = repeatersOn(from).filter(
     repeater =>
@@ -313,7 +329,11 @@ function crossingRefusal(
     );
   }
   const fromIds = new Set(from.map(each => each.id));
-  const entersContainer = into.some(each => !fromIds.has(each.id));
+  // A layout container keeps its fields on the level holding it, so entering one puts the value
+  // in no JSON value of its own.
+  const entersContainer = into.some(
+    each => !fromIds.has(each.id) && !isLayoutContainer(each)
+  );
   if (
     entersContainer &&
     builderColumnIsUnique(convertToFieldDefinition(field))
@@ -344,7 +364,8 @@ function siblingClashRefusal(
   siblings: readonly BuilderField[]
 ): MoveVerdict | null {
   for (const other of siblings) {
-    if (other.id === field.id) continue;
+    // That one object: a copy sharing its id is another field, whose name counts.
+    if (other === field) continue;
     const kind = siblingNameClash(sentName(field), sentName(other));
     if (kind) {
       return refuse(
@@ -414,10 +435,16 @@ function arrivalRefusal(
   const into = arrivalLevel(fields, chain, container);
   if (into === undefined) return null;
   const field = chain[chain.length - 1];
+  const siblings = namedFieldsIn(siblingsIn(fields, into));
+  // A layout container carries its fields' names onto the level it arrives on, not its own.
+  const carried = isLayoutContainer(field) ? namedFieldsIn([field]) : [field];
   return (
     containerChangeRefusal(field, ctx) ??
     lockedInsideRefusal(field, chain, ctx) ??
-    nameRefusal(field, into, namedFieldsIn(siblingsIn(fields, into)), ctx)
+    carried.reduce<MoveVerdict | null>(
+      (refusal, each) => refusal ?? nameRefusal(each, into, siblings, ctx),
+      null
+    )
   );
 }
 
@@ -498,6 +525,7 @@ export function judgeMove(
   }
   const container = into ? into[into.length - 1] : null;
   const refusal =
+    ambiguousPlaceRefusal(fields, container) ??
     sourceRefusal(chain, ctx) ??
     containerRefusal(field, into, ctx) ??
     crossingRefusal(field, from, into ?? [], ctx) ??
@@ -522,6 +550,34 @@ export function judgeMove(
       .filter(repeater => !from.some(each => each.id === repeater.id))
       .map(called),
   };
+}
+
+/**
+ * Why the field may not go into `container`, if another container shares its id: the move places
+ * the field by its container's id, and a copy of a duplicated container keeps the ids inside it,
+ * so the move could not tell the two apart.
+ */
+function ambiguousPlaceRefusal(
+  fields: readonly BuilderField[],
+  container: BuilderField | null
+): MoveVerdict | null {
+  return container && containersWithId(fields, container.id) > 1
+    ? refuse(
+        "ambiguous-place",
+        `${called(container)} shares its id with a copy of it, so a move there could not tell the two apart. Add a new field there instead.`
+      )
+    : null;
+}
+
+/** How many containers in `fields`, at any depth, have this id. */
+function containersWithId(fields: readonly BuilderField[], id: string): number {
+  return fields.reduce(
+    (count, each) =>
+      count +
+      (each.id === id && Array.isArray(each.fields) ? 1 : 0) +
+      containersWithId(each.fields ?? [], id),
+    0
+  );
 }
 
 /**
