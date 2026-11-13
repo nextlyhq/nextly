@@ -29,6 +29,12 @@ export interface CodeRoute {
   source: "built" | "dynamic";
   /** The route's file in the app, such as `app/pricing/page.tsx`. */
   route: string;
+  /**
+   * Declared through `seoStaticParams` while `next build` runs, before the
+   * page has rendered: its route calls `seoMetadata`, which it may not have
+   * recorded yet.
+   */
+  declared?: true;
 }
 
 /** An address the build prerendered, and the route that rendered it. */
@@ -42,6 +48,8 @@ export interface Prerendered {
    * does: no page is served there, so it is no page of the site.
    */
   notFound?: boolean;
+  /** Declared through `seoStaticParams` while the build runs (`CodeRoute`). */
+  declared?: true;
 }
 
 /** Where the app's routes are, and where `next build` wrote. */
@@ -116,11 +124,16 @@ export function codeRoutesOf(
       found.set(path, { path, source: "built", route: fileOf(appPath) });
     }
   }
-  for (const { path, srcRoute } of prerendered) {
+  for (const { path, srcRoute, declared } of prerendered) {
     const appPath = srcRoute === null ? undefined : dynamic.get(srcRoute);
     if (appPath === undefined || isDynamic(path) || found.has(path)) continue;
     if (frameworkAddress(path)) continue;
-    found.set(path, { path, source: "dynamic", route: fileOf(appPath) });
+    found.set(path, {
+      path,
+      source: "dynamic",
+      route: fileOf(appPath),
+      ...(declared === true ? { declared } : {}),
+    });
   }
   // No page is served where the build's render answered not found.
   const notFound = new Set(

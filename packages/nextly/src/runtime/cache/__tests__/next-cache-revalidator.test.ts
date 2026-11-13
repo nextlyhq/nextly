@@ -739,27 +739,45 @@ describe("a hand-off to the ledger", () => {
     warn.mockRestore();
   });
 
-  it("logs no error for writes outside a request it takes, only the one waiting line", async () => {
+  it("logs no error for writes outside a request it takes, and the waiting line exactly once", async () => {
     // A server's start expires what it changed before any request exists:
     // handing those tags to the ledger is what it is for, not a failure.
-    const recorded = installLedger();
+    // Fresh modules, so the once-per-process line has not been said yet.
+    vi.resetModules();
+    const fresh = {
+      ...(await import("../next-cache-revalidator")),
+      ...(await import("../ledger-wiring")),
+      ...(await import("../tag-expiry-view")),
+      ...(await import("../../../revalidation/expiry-handoff")),
+    };
+    const recorded: string[][] = [];
+    fresh.publishTagExpiryLedger({
+      record: async tags => {
+        recorded.push([...tags]);
+        return new Map(tags.map(tag => [tag, Date.now()] as const));
+      },
+      expiriesOf: async () => ({ expired: new Map() }),
+      prune: async () => 0,
+    });
+    fresh.setExpiryHandoff(new fresh.LedgerExpiryHandoff());
     const next = fakeNextCache();
     next.revalidateTag.mockImplementation(() => {
       throw new Error(NO_REQUEST);
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const revalidator = new NextCacheRevalidator(() => next);
+    const revalidator = new fresh.NextCacheRevalidator(() => next);
     for (const part of ["address-record", "code-pages", "settings"]) {
       await revalidator.flush([{ tags: [`nextly:plugin:seo:${part}`] }]);
     }
 
     expect(recorded.flat()).toHaveLength(3);
     expect(error).not.toHaveBeenCalled();
-    expect(warn.mock.calls.length).toBeLessThanOrEqual(1);
-    for (const [line] of warn.mock.calls) {
-      expect(String(line)).toContain("cache expiry waits for a request");
-    }
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain(
+      "cache expiry waits for a request"
+    );
+    fresh.setExpiryHandoff(null);
     warn.mockRestore();
     error.mockRestore();
   });

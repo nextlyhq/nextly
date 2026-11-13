@@ -145,7 +145,7 @@ export function declaredAddresses(dir: string): Prerendered[] {
     if (!Array.isArray(read.paths)) continue;
     for (const path of read.paths) {
       if (typeof path !== "string" || found.has(path)) continue;
-      found.set(path, { path, srcRoute: read.route });
+      found.set(path, { path, srcRoute: read.route, declared: true });
     }
   }
   return [...found.values()];
@@ -159,8 +159,10 @@ export function declaredAddresses(dir: string): Prerendered[] {
  * variable parts as Next.js names them, route groups left out:
  * `"/blog/[topic]"`, `"/docs/[...slug]"`.
  *
- * It returns exactly what `generate` returns, the same array, and records
- * nothing outside the build. A write that fails warns once and changes
+ * Wrap the `generateStaticParams` of a route that calls `seoMetadata`: a
+ * page it declares is listed during the build as one whose route does,
+ * before it has rendered and recorded itself. It returns exactly what
+ * `generate` returns, the same array, and records nothing outside the build. A write that fails warns once and changes
  * nothing the route gets.
  *
  * @example

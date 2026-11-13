@@ -295,12 +295,14 @@ async function listCodePages(
   const held = await heldByDocuments(
     ctx,
     connected.flatMap(({ route, row }) =>
-      row?.connected === true ? [route.path] : []
+      row?.connected === true || route.declared === true ? [route.path] : []
     ),
     options.origin
   );
   for (const { route, row, answer } of connected) {
-    if (row?.connected !== true) continue;
+    // A page declared for the build counts as connected before it renders:
+    // its route calls `seoMetadata`, and the build may list it first.
+    if (row?.connected !== true && route.declared !== true) continue;
     // An entry holds it in its language, hidden from search or not: the
     // address is the entry's.
     if (held.has(route.path)) continue;
@@ -310,7 +312,8 @@ async function listCodePages(
       loc: at.loc,
       path: route.path,
       language: options.language,
-      holder: { collection: codePagesSlug(ctx), id: row.id },
+      // A declared page not recorded yet is known by its address alone.
+      holder: { collection: codePagesSlug(ctx), id: row?.id ?? route.path },
       images: ownImages(
         answer,
         options.origin,

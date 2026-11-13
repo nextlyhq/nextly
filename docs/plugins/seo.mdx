@@ -1711,7 +1711,9 @@ export const generateStaticParams = seoStaticParams(
 );
 ```
 
-It returns the route's own params unchanged. During `next build` only, it also records the
+Use it on a route that calls `seoMetadata`: a page it declares is listed during the build as
+one whose route does, even before the page has rendered. It returns the route's own params
+unchanged. During `next build` only, it also records the
 addresses they make in the build directory, where the listing reads them until Next.js writes
 its prerender manifest, which wins from then on. A catch-all (`/docs/[...slug]`) and a nested
 route, which Next.js hands its parent's params, are filled the same way. A record that can't be
