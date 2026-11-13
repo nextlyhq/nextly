@@ -23,7 +23,7 @@ import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
 import type { CodeRoute } from "../code-pages/routes";
 import { readConnections } from "../connections/store";
-import { refreshContentDates } from "../content-dates/hooks";
+import { refreshContentDates } from "../content-dates/record";
 import { pruneContentDates } from "../content-dates/store";
 import { pageLanguageLinks } from "../languages/head";
 import {

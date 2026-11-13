@@ -465,6 +465,15 @@ function rulesReader(options: { hiddenTypes?: readonly string[] }): ReadRules {
   };
 }
 
+/** What the sitemap lists, for the problem checks; nothing where it is off. */
+function sitemapScopeOf(
+  options: SeoPluginOptions,
+  collections: readonly string[] | undefined
+): { sitemap?: { collections?: readonly string[] } } {
+  if (options.sitemap === false) return {};
+  return { sitemap: collections === undefined ? {} : { collections } };
+}
+
 /** What the sitemap is served with, or nothing where it is turned off. */
 function sitemapConfig(
   options: SeoPluginOptions,
@@ -682,12 +691,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // The pages built in code the sitemap lists, and what it lists, for the
     // check of its dates.
     codeRoutes,
-    ...(options.sitemap === false
-      ? {}
-      : {
-          sitemap:
-            sitemapSubset === undefined ? {} : { collections: sitemapSubset },
-        }),
+    ...sitemapScopeOf(options, sitemapSubset),
     readers: {
       readRules,
       readStructuredDataRules: structuredDataFromSettings(

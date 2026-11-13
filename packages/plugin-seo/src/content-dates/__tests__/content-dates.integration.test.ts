@@ -27,11 +27,8 @@ import { lastCatchUp } from "../../address-record/catch-up";
 import { seoContext } from "../../address-record/__tests__/record-tables";
 import { seoPlugin } from "../../plugin";
 import { contentDates } from "../../schema/tables";
-import {
-  contentDatesSettled,
-  recordSaved,
-  refreshContentDates,
-} from "../hooks";
+import { contentDatesSettled } from "../hooks";
+import { recordSaved, refreshContentDates } from "../record";
 import { pageDateKey, pruneContentDates } from "../store";
 
 const SITE = "https://acme.example";
