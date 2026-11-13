@@ -1095,9 +1095,9 @@ ahead of some of the code reading and writing it**. Everything below follows fro
 - **It removes the old place only behind a recorded marker, never by date.** Once a move has
   taken in everything, the release records a "drained" marker in the database. A later
   release, at least two releases after the one that moved the data, may stop using the old
-  place, and only on a database where that marker is recorded. A database that skipped
-  the release that wrote the marker is refused at start with a message naming the release
-  to install first, rather than losing what the old place held.
+  place, and only on a database where that marker is recorded. That release will refuse
+  to start on a database that skipped the release that wrote the marker, with a message
+  naming the release to install first, rather than lose what the old place held.
 - **It never drops your data by itself.** An old place a release no longer uses stays in
   the database. You remove it when you choose: `nextly prune` lists what it would drop, and
   `nextly prune --accept-data-loss` drops it.
