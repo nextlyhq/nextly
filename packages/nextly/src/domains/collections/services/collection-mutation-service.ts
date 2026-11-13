@@ -137,6 +137,7 @@ import {
 } from "../../../shared/lib/case-conversion";
 import {
   declaredFieldNames,
+  keepPendingWhereDenied,
   refusalIssues,
   resolvePromotedDocument,
 } from "../../../shared/lib/denied-change";
@@ -1673,6 +1674,16 @@ interface CreateEntryWriteOptions {
 
 interface WorkingDraftWriteContext {
   collection: unknown;
+  /**
+   * What the field rules kept at the live row's value because the writer may not write it: each
+   * path, its live value, and the save as sent before the rules ran. A save held over another
+   * writer's pending change keeps that change's value there instead (`keepPendingWhereDenied`).
+   */
+  keptAtStored?: {
+    paths: ReadonlySet<string>;
+    values: ReadonlyMap<string, unknown>;
+    sent: Record<string, unknown>;
+  };
   collectionHasStatus: boolean;
   /** The entry's own table, whose version counter a held edit moves. */
   tableName: string;
@@ -13231,6 +13242,25 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Over another writer's pending change, each value the field rules kept at the live row's
+   * because this writer may not write it is the pending change's, and a new value sent there is
+   * refused (`keepPendingWhereDenied`). Nothing to do on a first held save, or one no rule denied.
+   */
+  private keepPendingOverDenied(
+    ctx: WorkingDraftWriteContext,
+    existingDraft: { snapshot: unknown } | undefined,
+    draftDocument: Record<string, unknown>
+  ): void {
+    if (!existingDraft || !ctx.keptAtStored) return;
+    keepPendingWhereDenied({
+      slug: ctx.params.collectionName,
+      document: draftDocument,
+      pending: existingDraft.snapshot as Record<string, unknown>,
+      kept: ctx.keptAtStored,
+    });
+  }
+
+  /**
    * Store the pending edit as this document's working draft, on the caller's
    * transaction.
    *
@@ -13289,6 +13319,7 @@ export class CollectionMutationService extends BaseService {
       ctx,
       existingDraft
     );
+    this.keepPendingOverDenied(ctx, existingDraft, draftDocument);
     // A held edit may not change a field an update filter that judged it
     // names, or the entry could leave the filter once the edit is put live.
     const refusedBy = await this.heldEditRefusedBy(
@@ -14301,6 +14332,9 @@ export class CollectionMutationService extends BaseService {
         locale: params.locale,
         overrideAccess: params.overrideAccess,
       });
+      // The save as sent, before the rules keep a denied value at the row's: a save held over
+      // another writer's pending change is judged against what it sent.
+      const sentBeforeRules = detachData(finalData);
       const { storedPaths, storedValues } = await fieldAccessPass(
         params.context,
         {
@@ -16036,6 +16070,11 @@ export class CollectionMutationService extends BaseService {
               stripServerOnlyColumns(liveParentRow, tableName);
               const draftWrite = await this.storeWorkingDraftInTx(tx, {
                 collection,
+                keptAtStored: {
+                  paths: storedPaths,
+                  values: storedValues,
+                  sent: sentBeforeRules,
+                },
                 collectionHasStatus,
                 tableName,
                 componentFieldData,
@@ -19955,6 +19994,8 @@ export class CollectionMutationService extends BaseService {
       // explicit override bypasses.
       // With the field groups this entry stores inline, by their own rules,
       // and every denied value inside a container kept as the row holds it.
+      // The save as sent, before the rules keep a denied value at the row's.
+      const sentBeforeRules = detachData(finalData);
       const { storedPaths, storedValues } = await this.keepDeniedFieldsAtStored(
         {
           data: finalData,
@@ -20693,6 +20734,11 @@ export class CollectionMutationService extends BaseService {
       if (storeAsWorkingDraft) {
         const draftWrite = await this.storeWorkingDraftInTx(tx, {
           collection,
+          keptAtStored: {
+            paths: storedPaths,
+            values: storedValues,
+            sent: sentBeforeRules,
+          },
           tableName,
           collectionHasStatus:
             (collection as { status?: boolean }).status === true,

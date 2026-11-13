@@ -75,7 +75,7 @@ it, that is a new request, unless the screen lists it as `racy`. A request the a
 fails by its name and one more of a kind fails by its number. Statements and rounds
 are likewise the fewest any load took, since an extra copy of a request sends
 its own statements and one slow answer can add a round. A start's statements
-may move by 5%, a screen's by 15% (`SCREEN_STATEMENT_SLACK`), and rounds by one.
+and a screen's may move by 5% (`STATEMENT_SLACK`), and rounds by one.
 
 It serves on port 3103, or `ADMIN_SPEED_PORT`, and refuses to start when that
 port is already taken.
