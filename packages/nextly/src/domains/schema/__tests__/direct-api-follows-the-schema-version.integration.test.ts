@@ -26,7 +26,15 @@ import {
   type DashboardTables,
 } from "../../versions/entity-teardown";
 import { reloadDynamicTables } from "../../../init/reload-dynamic-tables";
-import { loadingDefinitions } from "../../../route-handler/schema-version";
+import {
+  createSchemaRegistry,
+  initializeSchemaRegistry,
+} from "../../../di/register";
+import {
+  definitionsLoaded,
+  loadingDefinitions,
+  versionBeforeLoading,
+} from "../../../route-handler/schema-version";
 import { readSchemaVersion, storeSchemaVersion } from "../schema-version";
 import { SCHEMA_VERSION_READ_INTERVAL_MS } from "../stored-schema-seq";
 
@@ -187,6 +195,124 @@ describe.each(getConfiguredTestDialects())(
       } finally {
         holder.__nextly_servedSchema = servedBefore;
       }
+    });
+
+    /** This process made one that has followed nothing yet, for `run`, then put back. */
+    async function asIfJustStarted(run: () => Promise<void>): Promise<void> {
+      const holder = globalThis as unknown as Record<string, unknown>;
+      const servedBefore = holder.__nextly_servedSchema;
+      delete holder.__nextly_servedSchema;
+      try {
+        await run();
+      } finally {
+        holder.__nextly_servedSchema = servedBefore;
+      }
+    }
+
+    /** The definition loads one Direct API call of `t`'s sends. */
+    async function loadsOnNextCall(t: TestNextly): Promise<string[]> {
+      const recorder = await recordStatements(t.adapter, dialect);
+      try {
+        await t.nextly.find({ collection: "first" });
+      } finally {
+        recorder.uninstall();
+      }
+      return definitionLoads(recorder.statements);
+    }
+
+    it("labels a start's load with the version read before its rows, so a change landing between them is still followed", async () => {
+      const t = (current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "first",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      }));
+      await t.nextly.find({ collection: "first" });
+      await asIfJustStarted(async () => {
+        // The order the start keeps: the version first, then the rows.
+        const before = await versionBeforeLoading(t.adapter);
+        const loaded = await reloadDynamicTables("[test]");
+        // Another copy changes the schema after the rows were read, and
+        // before anything else could be read.
+        await t.adapter.transaction(async tx => {
+          await storeSchemaVersion(tx.getDrizzle(), dialect, { wrote: true });
+        });
+        if (loaded) definitionsLoaded(t.adapter, before);
+        await pause(SCHEMA_VERSION_READ_INTERVAL_MS + 100);
+
+        // Labelled with the earlier version, the load is not taken for the
+        // change: the first follow loads the definitions again.
+        expect((await loadsOnNextCall(t)).length).toBeGreaterThan(0);
+      });
+    });
+
+    it("records no start load that left a definition unregistered, so the first follow loads it again", async () => {
+      const t = (current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "first",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      }));
+      await t.nextly.find({ collection: "first" });
+      const where = {
+        and: [{ column: "slug", op: "=" as const, value: "first" }],
+      };
+      const [row] = await t.adapter.select<{ fields: unknown }>(
+        "dynamic_collections",
+        { where }
+      );
+      const good =
+        typeof row.fields === "string"
+          ? row.fields
+          : JSON.stringify(row.fields);
+      // One definition that cannot be loaded: its fields are not a list.
+      await t.adapter.update(
+        "dynamic_collections",
+        { fields: JSON.stringify({ not: "a list" }) },
+        where
+      );
+
+      await asIfJustStarted(async () => {
+        const before = await versionBeforeLoading(t.adapter);
+        const completeness = { complete: true };
+        const registry = await initializeSchemaRegistry(
+          t.adapter,
+          await createSchemaRegistry(t.adapter),
+          undefined,
+          { collections: [], singles: [] },
+          { createMissingCompanions: false, completeness }
+        );
+        // The start's own rule: recorded only for a complete load.
+        expect(registry).toBeDefined();
+        expect(completeness.complete).toBe(false);
+        if (registry !== undefined && completeness.complete) {
+          definitionsLoaded(t.adapter, before);
+        }
+
+        // The definition is put right; the first follow loads every
+        // definition again, and the collection reads.
+        await t.adapter.update("dynamic_collections", { fields: good }, where);
+        await pause(SCHEMA_VERSION_READ_INTERVAL_MS + 100);
+        expect((await loadsOnNextCall(t)).length).toBeGreaterThan(0);
+      });
+
+      // POPULATION CONTROL: with every definition loadable, the same start
+      // reports a complete load.
+      const completeness = { complete: true };
+      await initializeSchemaRegistry(
+        t.adapter,
+        await createSchemaRegistry(t.adapter),
+        undefined,
+        { collections: [], singles: [] },
+        { createMissingCompanions: false, completeness }
+      );
+      expect(completeness.complete).toBe(true);
     });
 
     it("moves the stored version when a registry row is deleted, and only then", async () => {

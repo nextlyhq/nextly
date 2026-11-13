@@ -168,7 +168,15 @@ export async function loadingDefinitions<T>(
   } = {}
 ): Promise<T> {
   const adapter = options.adapter ?? registeredAdapter();
-  if (adapter === undefined) return load();
+  // Nothing is recorded while a production start's shared registry reads are
+  // open (`di/start-reads`): the load may be answered from rows read before
+  // the version below, and a label read after the rows it labels could name a
+  // change they do not hold. The start labels its own load itself, with the
+  // version it read before those reads began.
+  const startReadsOpen =
+    (globalThis as { __nextly_startReads?: unknown }).__nextly_startReads !==
+    undefined;
+  if (adapter === undefined || startReadsOpen) return load();
   const before = await versionBeforeLoading(adapter);
   const result = await load();
   if ((options.loaded ?? (() => true))(result)) {
