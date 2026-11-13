@@ -91,7 +91,7 @@ export async function savedCount(
  * Set a post's hidden `savedCount` to the number of lists holding it. A post
  * that no longer exists changes nothing, since `set` matches no row.
  */
-export async function recountPost(
+async function recountPost(
   db: PluginTransaction,
   postId: string
 ): Promise<void> {
