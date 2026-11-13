@@ -20,6 +20,7 @@ import {
   CORE_ADMIN_PLACES,
   type AdminContributionsMeta,
   type AdminPlaceId,
+  type CoreAdminPlaceId,
   type DeliveredAdminEntry,
 } from "nextly/config";
 
@@ -32,12 +33,21 @@ import {
 /** One kind of contribution, as a place's lists are keyed. */
 export type PlaceKind = keyof AdminContributionsMeta[string];
 
+/**
+ * Whether `place` is one of core's. A place id also names the places plugins
+ * declare by augmenting `AdminPlaces`, so where any plugin does, the id type is
+ * wider than the catalogue's keys and is narrowed here before it indexes it.
+ */
+function isCorePlace(place: AdminPlaceId): place is CoreAdminPlaceId {
+  return Object.hasOwn(CORE_ADMIN_PLACES, place);
+}
+
 /** A core place's built-in parts of one kind, in the order its page draws them. */
 function catalogueBuiltIns(
   place: AdminPlaceId,
   kind: PlaceKind
 ): readonly DeliveredAdminEntry[] {
-  if (!Object.hasOwn(CORE_ADMIN_PLACES, place)) return [];
+  if (!isCorePlace(place)) return [];
   const builtIns: Partial<Record<PlaceKind, readonly string[]>> =
     CORE_ADMIN_PLACES[place].builtIns;
   return (builtIns[kind] ?? []).map(name => ({ builtIn: name }));

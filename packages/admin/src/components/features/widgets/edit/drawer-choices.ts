@@ -8,7 +8,7 @@
 
 import type { AnyWidgetSetting, WidgetSetting } from "nextly/config";
 
-import type { SegmentedOption } from "./SegmentedChoice";
+import type { SegmentedOption } from "@admin/components/ui/segmented-choice";
 
 /** A list card's "Number of entries": a number setting keyed `limit`. */
 export type EntriesSetting = Extract<WidgetSetting, { type: "number" }>;
@@ -52,7 +52,7 @@ export function entriesChoices(
 /** A choice of a select setting short enough to draw as one row of choices. */
 const MAX_SEGMENTED_OPTIONS = 4;
 /** The characters a row of choices may hold, all its labels together, to fit the drawer. */
-const MAX_SEGMENTED_CHARACTERS = 36;
+const MAX_SEGMENTED_CHARACTERS = 45;
 
 /**
  * A select setting's options as a row of choices, where they fit one row of the drawer: two to

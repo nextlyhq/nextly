@@ -183,6 +183,7 @@ describe("the context's service names and the resolver that answers them", () =>
       "jobRegistry",
       "jobsDatabase",
       "webhookFastDrainScheduler",
+      "metaService",
     ]);
   });
 

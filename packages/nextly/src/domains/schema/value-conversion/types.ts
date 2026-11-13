@@ -45,6 +45,12 @@ export interface ColumnConversion {
    * Such a conversion reads each stored value as a list rather than as JSON text.
    */
   referenceList?: boolean;
+  /**
+   * The conversion reads each value through its text, so the new column holds each value as the
+   * old one printed it. Only a conversion that casts that way may say so: it is what lets a
+   * PostgreSQL real become a double with 0.1 still reading 0.1.
+   */
+  throughText?: boolean;
 }
 
 /**
@@ -102,7 +108,12 @@ export type ConversionReasonKind =
    * can hold a value it would accept and store as a different one: a value written while the
    * conversion runs could be changed with no error.
    */
-  | "late-write";
+  | "late-write"
+  /**
+   * A value that would be cleared, where the new column does not allow a null: clearing it would
+   * leave a null the column refuses, so a value would have to be invented.
+   */
+  | "cleared-under-not-null";
 
 /** The rows one reason applies to: the first keys, up to a bound, and how many there are. */
 export interface AffectedRows {

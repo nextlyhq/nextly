@@ -40,14 +40,12 @@
 //      their diff produced them.
 
 import { isNextlyOwnedDocumentColumn } from "../../../../lib/system-columns";
+import { isMysqlTextOrBlobType } from "../sql-templates/create-index";
 import { renderedType } from "../sql-templates/create-table-body";
 
 import { typesDiffer } from "./declared-size";
-import { indexKey, isManagedIndexName, textColumnsOf } from "./index-util";
-import {
-  type ColumnCastContext,
-  normalizeCheckExpression,
-} from "./normalize-check";
+import { isManagedIndexName, keyedIndexes } from "./index-util";
+import { normalizeCheckExpression } from "./normalize-check";
 import { normalizeDefault } from "./normalize-default";
 import type {
   AddColumnOp,
@@ -60,7 +58,6 @@ import type {
   ColumnSpec,
   DropColumnOp,
   DropTableOp,
-  IndexSpec,
   NextlySchemaSnapshot,
   Operation,
   TableSpec,
@@ -129,13 +126,7 @@ export function diffSnapshots(
       // with IF NOT EXISTS, so it no-ops against the old index still carrying
       // the name, and the drop after it then removes the index outright. The
       // pair routes through one bucket with the drop ahead of its add.
-      const indexOps = diffIndexes(
-        name,
-        prevT.indexes,
-        curT.indexes,
-        textColumnsOf(prevT.columns),
-        textColumnsOf(curT.columns)
-      );
+      const indexOps = diffIndexes(name, prevT, curT);
       const rekeyedNames = new Set(
         indexOps
           .filter(
@@ -203,6 +194,14 @@ export function diffSnapshots(
   const retypedForSwitches = retypedForReferenceSwitches(columnOps);
   for (const op of retypedForSwitches) {
     columnsAnIndexBlocks.add(`${op.tableName}\u0000${op.columnName}`);
+  }
+  // So does any column retyped to TEXT or BLOB, a field's Unique turned off among them: MySQL
+  // refuses the retype while an index keys the whole column, so an index this run drops goes
+  // first. Dropping it ahead of the change is as good on the other dialects.
+  for (const op of columnOps) {
+    if (op.type === "change_column_type" && isMysqlTextOrBlobType(op.toType)) {
+      columnsAnIndexBlocks.add(`${op.tableName}\u0000${op.columnName}`);
+    }
   }
   const dropIndexBeforeColumns: Operation[] = [];
   const dropIndexAfterAdds: Operation[] = [];
@@ -399,17 +398,15 @@ function byForeignKeyDependency(tables: readonly TableSpec[]): TableSpec[] {
  */
 function diffIndexes(
   tableName: string,
-  prev: IndexSpec[] | undefined,
-  cur: IndexSpec[] | undefined,
-  prevColumns: ColumnCastContext,
-  curColumns: ColumnCastContext
+  prevT: TableSpec,
+  curT: TableSpec
 ): Operation[] {
-  if (prev === undefined || cur === undefined) return [];
+  if (prevT.indexes === undefined || curT.indexes === undefined) return [];
   const ops: Operation[] = [];
   // Each side is read against its OWN column types: a column changing from
   // text to integer keeps its authored `::text` on the new side.
-  const prevByKey = new Map(prev.map(i => [indexKey(i, prevColumns), i]));
-  const curByKey = new Map(cur.map(i => [indexKey(i, curColumns), i]));
+  const prevByKey = keyedIndexes(prevT.indexes, prevT.columns);
+  const curByKey = keyedIndexes(curT.indexes, curT.columns);
   for (const [key, idx] of curByKey) {
     if (!prevByKey.has(key)) {
       ops.push({ type: "add_index", tableName, index: idx });

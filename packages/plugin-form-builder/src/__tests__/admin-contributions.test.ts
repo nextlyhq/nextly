@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { submissionsCollection } from "../collections/submissions";
+import { group, select, text } from "nextly";
+
+import {
+  submissionExtensionFields,
+  submissionsCollection,
+} from "../collections/submissions";
 import { formBuilder } from "../plugin";
+
+/**
+ * The editor as the admin registers it, spelled out rather than imported, so
+ * a declaration naming any other component fails here.
+ */
+const FORM_EDITOR_VIEW = "@nextlyhq/plugin-form-builder/admin#FormBuilderView";
 
 describe("form-builder contributes.admin (P5 dogfood)", () => {
   it("declares standalone main-rail placement with a single Forms identity", () => {
@@ -19,11 +30,30 @@ describe("form-builder contributes.admin (P5 dogfood)", () => {
   it("registers no settings component, custom pages, or beforeList injections", () => {
     // The collection Edit-view override is the single FormBuilderView mount;
     // the old settings-component (a second full builder at /admin/plugins/…),
-    // the filter-widget-as-page, and the beforeList injection stay gone.
+    // the filter-widget-as-page, and the beforeList injection stay gone. The
+    // forms collection's only view entry gives the editor's own pages their
+    // addresses, each drawing that same editor.
     const admin = formBuilder().plugin.contributes?.admin;
     expect(admin?.settings).toBeUndefined();
     expect(admin?.pages ?? []).toHaveLength(0);
-    expect(admin?.views ?? {}).toEqual({});
+    expect(admin?.views ?? {}).toEqual({
+      forms: {
+        documentViews: [
+          { path: "preview", label: "Preview", component: FORM_EDITOR_VIEW },
+          { path: "settings", label: "Settings", component: FORM_EDITOR_VIEW },
+          {
+            path: "notifications",
+            label: "Notifications",
+            component: FORM_EDITOR_VIEW,
+          },
+          {
+            path: "submissions",
+            label: "Submissions",
+            component: FORM_EDITOR_VIEW,
+          },
+        ],
+      },
+    });
   });
 
   it("overrides the submissions List view and disables admin creation", () => {
@@ -48,5 +78,45 @@ describe("form-builder contributes.admin (P5 dogfood)", () => {
         fields: ["form", "submittedAt", "status"],
       },
     });
+  });
+});
+
+describe("the fields a host adds to submissions", () => {
+  it("are the collection's fields that are not the plugin's own", () => {
+    const { config } = formBuilder({
+      formSubmissionOverrides: {
+        fields: [
+          select({
+            name: "priority",
+            label: "Priority",
+            options: [
+              { label: "Low", value: "low" },
+              { label: "High", value: "high" },
+            ],
+          }),
+          text({ name: "source" }),
+          // Kept out of the admin by the host: not shown.
+          text({ name: "crmId", admin: { hidden: true } }),
+          // Shown only when a condition holds, which the page does not judge.
+          text({
+            name: "followUp",
+            admin: { condition: { field: "priority", equals: "high" } },
+          }),
+          // Holds fields of its own, one hidden: not shown whole.
+          group({
+            name: "routing",
+            fields: [text({ name: "secret", admin: { hidden: true } })],
+          }),
+        ],
+      },
+    });
+    expect(submissionExtensionFields(config)).toEqual([
+      { name: "priority", label: "Priority", type: "select" },
+      { name: "source", label: "source", type: "text" },
+    ]);
+  });
+
+  it("are none on a plain install", () => {
+    expect(submissionExtensionFields(formBuilder().config)).toEqual([]);
   });
 });

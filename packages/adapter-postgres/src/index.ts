@@ -70,9 +70,11 @@ import * as net from "node:net";
 
 import { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 // F17: connect-time DB version check shared across all adapters.
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import { assertSchemaName } from "@nextlyhq/adapter-drizzle/schema-name";
 import type {
   PostgresAdapterConfig,
+  ConnectionInspection,
   DatabaseCapabilities,
   PoolStats,
   TransactionContext,
@@ -91,7 +93,12 @@ import {
 import { checkDialectVersion } from "@nextlyhq/adapter-drizzle/version-check";
 import type { AnyRelations, SQL } from "drizzle-orm";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
-import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
+import {
+  getTableConfig,
+  pgTable,
+  timestamp,
+  type PgTable,
+} from "drizzle-orm/pg-core";
 import type { PoolClient, PoolConfig } from "pg";
 import { Pool } from "pg";
 
@@ -129,6 +136,15 @@ export type {
   DatabaseError,
   DatabaseErrorKind,
 } from "@nextlyhq/adapter-drizzle/types";
+
+/**
+ * A date field's column as the schema generator declares it on PostgreSQL:
+ * `timestamp`, without a time zone. Its encoder writes the UTC wall clock,
+ * which is what a `Date` bound to an undeclared key is spelled as.
+ */
+const DATE_FIELD_COLUMN = pgTable("nextly_date_field", {
+  at: timestamp("at"),
+}).at;
 
 /**
  * Package version.
@@ -251,13 +267,18 @@ const INVALID_SCHEMA_NAME = "3F000";
  */
 async function assertSchemaExists(
   client: PoolClient,
-  schema: string
+  schema: string,
+  /** What to do about it, where the caller knows: said after the fact. */
+  remedy?: string
 ): Promise<void> {
   const name = assertSchemaName(schema);
   if (await schemaExists(client, name)) return;
   throw createDatabaseError({
     kind: "connection",
-    message: `schema "${name}" does not exist`,
+    message:
+      remedy === undefined
+        ? `schema "${name}" does not exist`
+        : `schema "${name}" does not exist. ${remedy}`,
     code: INVALID_SCHEMA_NAME,
   });
 }
@@ -347,6 +368,19 @@ function applyHappyEyeballsTimeoutOnce(): void {
  * shift.
  */
 const PG_WALL_CLOCK_FORMAT = 'YYYY-MM-DD"T"HH24:MI:SS.MS';
+
+/**
+ * The host a pooled client connected to, as node-postgres resolved it from its
+ * options, the connection string, `PGHOST` and its default; `undefined` when
+ * the client does not hold one.
+ */
+function resolvedHost(client: object): string | undefined {
+  return "host" in client &&
+    typeof client.host === "string" &&
+    client.host !== ""
+    ? client.host
+    : undefined;
+}
 
 /**
  * PostgreSQL database adapter for Nextly.
@@ -522,8 +556,18 @@ export class PostgresAdapter extends DrizzleAdapter {
           // Before anything writes. `search_path` naming a schema that is not
           // there does not fail — it falls through to whatever else is on the
           // path — so the first migration would create its tables in `public`
-          // and the setting would appear to do nothing.
-          if (this.config.schema && this.config.readOnly) {
+          // and the setting would appear to do nothing. A read-only
+          // connection and `next build`, which writes nothing to the
+          // database, only check that it is there.
+          if (this.config.schema && isNextBuildPhase()) {
+            // A schema the build does not find is a database the deploy has
+            // not migrated, which the message says how to fix.
+            await assertSchemaExists(
+              client,
+              this.config.schema,
+              "Run `nextly migrate` before `next build`."
+            );
+          } else if (this.config.schema && this.config.readOnly) {
             await assertSchemaExists(client, this.config.schema);
           } else if (this.config.schema) {
             await ensureSchemaExists(client, this.config.schema);
@@ -921,6 +965,70 @@ export class PostgresAdapter extends DrizzleAdapter {
   }
 
   /**
+   * The connection as a health check reads it, on one pooled client: the
+   * server's version, and that client's own row in `pg_stat_ssl`, which says
+   * whether the session's connection is encrypted. The query is timed for the
+   * round trip.
+   *
+   * @remarks
+   * The row and the client's own socket are weighed by `encryptionOf`: behind
+   * a connection pooler such as PgBouncer the row describes the pooler's own
+   * connection to the server, which can be plain inside the provider's
+   * network while this client's socket is TLS. The socket is read as it is,
+   * never inferred from the `ssl` setting.
+   *
+   * Whether the database is on this machine is judged from the host the
+   * client connected to, as node-postgres resolved it (its options, the
+   * connection string, `PGHOST`, its default); before a client is had, from
+   * the configured address alone. The address never leaves this method. Any
+   * failure answers `"unknown"`.
+   */
+  override async inspectConnection(): Promise<ConnectionInspection> {
+    let local = this.isLocalHost(this.configuredHost());
+    let client: PoolClient | undefined;
+    try {
+      client = await this.ensurePool().connect();
+      local = this.isLocalHost(resolvedHost(client) ?? this.configuredHost());
+      const started = performance.now();
+      const result = await client.query<{
+        version: string | null;
+        ssl: boolean | null;
+      }>(
+        "SELECT current_setting('server_version') AS version, " +
+          "(SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()) AS ssl"
+      );
+      const roundTripMs = Math.max(0, Math.round(performance.now() - started));
+      const row = result.rows[0];
+      const version = row?.version?.split(" ")[0];
+      return {
+        encryption: this.encryptionOf({
+          session: typeof row?.ssl === "boolean" ? row.ssl : undefined,
+          ownSocketTls: this.ownSocketIsTls(client),
+        }),
+        local,
+        roundTripMs,
+        ...(version ? { serverVersion: version } : {}),
+      };
+    } catch {
+      return { encryption: "unknown", local };
+    } finally {
+      client?.release();
+    }
+  }
+
+  /**
+   * The host this adapter is configured with: the connection string's when one
+   * is set, else the `host` option. `undefined` when it names none, which is
+   * judged remote, or when the connection string cannot be read.
+   */
+  private configuredHost(): string | undefined {
+    const configured = this.config.url
+      ? this.hostOfUrl(this.config.url)
+      : (this.config.host ?? "");
+    return configured === "" ? undefined : configured;
+  }
+
+  /**
    * Override insertMany for bulk insert optimization.
    *
    * @remarks
@@ -1225,6 +1333,13 @@ export class PostgresAdapter extends DrizzleAdapter {
       .join(", ");
   }
 
+  /** A `Date` on an undeclared key is spelled as a date field's column spells it. */
+  protected override undeclaredDateColumn(): {
+    mapToDriverValue(value: unknown): unknown;
+  } {
+    return DATE_FIELD_COLUMN;
+  }
+
   /** A table-level `primaryKey({ columns })`, read through the PostgreSQL table config. */
   protected override compositePrimaryKey(
     tableObj: Record<string, unknown>
@@ -1368,8 +1483,10 @@ export class PostgresAdapter extends DrizzleAdapter {
       },
 
       // Adapter-built, as `insert` above is; `transactionUpdate` says why.
-      // A column the model does not declare binds natively, as every value
-      // on this path's insert does.
+      // A column the model does not declare binds natively, except a `Date`,
+      // spelled as a date field's column spells it (as this path's insert
+      // spells one), and a structured value, sent as JSON
+      // (`bindUnmodeledStructuredAsJson`).
       update: this.transactionUpdate(
         txDb,
         async statement => (await txDb().execute(statement)).rows,

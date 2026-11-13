@@ -137,6 +137,7 @@ import {
 } from "../../../shared/lib/case-conversion";
 import {
   declaredFieldNames,
+  keepPendingWhereDenied,
   refusalIssues,
   resolvePromotedDocument,
 } from "../../../shared/lib/denied-change";
@@ -314,6 +315,18 @@ import {
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
 import { recordOverwriteIfAsked } from "../../versions/overwrite-record";
 import {
+  combinedDraft,
+  draftsKeptByPart,
+  findPartDrafts,
+  holdsPendingChange,
+  partKeysOf,
+  partsPromoted,
+  SHARED_DRAFT_SLOT,
+  sharedFieldsJudged,
+  storePartDrafts,
+  translatedWhenSharedChanged,
+} from "../../versions/part-drafts";
+import {
   judgeSharedValues,
   type LanguageOutcome,
   languagesGoingLiveAsStored,
@@ -338,6 +351,10 @@ import {
   type RestoreSchemaContext,
 } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
+import {
+  restoredFromOf,
+  type FieldSources,
+} from "../../versions/restored-from";
 import {
   asIdSet,
   type FieldNameReader,
@@ -410,6 +427,10 @@ import {
   releaseWorkflowPinsOnPublish,
   withdrawApprovalsOnSave,
 } from "../../workflows/approval-follows-content";
+import {
+  closeReviewOnDiscard,
+  removeDeletedDocumentReviewStates,
+} from "../../workflows/review-state-cleanup";
 import {
   localizedFilterContext,
   type FilterConditionSources,
@@ -1647,6 +1668,16 @@ interface CreateEntryWriteOptions {
 
 interface WorkingDraftWriteContext {
   collection: unknown;
+  /**
+   * What the field rules kept at the live row's value because the writer may not write it: each
+   * path, its live value, and the save as sent before the rules ran. A save held over another
+   * writer's pending change keeps that change's value there instead (`keepPendingWhereDenied`).
+   */
+  keptAtStored?: {
+    paths: ReadonlySet<string>;
+    values: ReadonlyMap<string, unknown>;
+    sent: Record<string, unknown>;
+  };
   collectionHasStatus: boolean;
   /** The entry's own table, whose version counter a held edit moves. */
   tableName: string;
@@ -1671,6 +1702,8 @@ interface WorkingDraftWriteContext {
     actor?: RequestActor;
     /** The version a restore write restored; recorded on the save's version. */
     sourceVersionNo?: number | null;
+    /** The fields this write restored, and their versions; see `restored-from`. */
+    restoredFrom?: FieldSources;
     /** The write's trust and key scope, for the held field groups' own rules. */
     overrideAccess?: boolean;
     authenticatedScope?: AuthenticatedScope;
@@ -1692,6 +1725,28 @@ interface WorkingDraftWriteContext {
    * live later, could leave the entry outside the filter.
    */
   updateFilters?: readonly FilteredWriteCheck[];
+  /**
+   * The translatable fields this save wrote, which the locale split moved
+   * out of `updatePayload`. Kept by part (`part-drafts`), they are what makes
+   * a save touch its language's draft.
+   */
+  translatedKeys?: readonly string[];
+}
+
+/**
+ * The top-level keys a held save sets: what it laid over the working draft.
+ * A translatable value is among them however drafts are kept: the locale
+ * split moves it out of `updatePayload` into the translations row, and a
+ * save to a draft that already exists builds on that draft, so a key left
+ * out here is dropped from the draft while the save reports success.
+ */
+function keysHeldSaveSets(ctx: WorkingDraftWriteContext): Set<string> {
+  return new Set<string>([
+    ...Object.keys(ctx.updatePayload),
+    ...Object.keys(ctx.componentFieldData),
+    ...Object.keys(ctx.manyToManyData),
+    ...(ctx.translatedKeys ?? []),
+  ]);
 }
 
 /** What the caller needs back: the draft as a read would shape it, and its predecessor. */
@@ -5257,18 +5312,19 @@ export class CollectionMutationService extends BaseService {
     }
     const locale = this.wildcardDraftLocale(collection);
     if (locale === null) return [];
-    const draft = await new VersionsRepository(
-      args.tx ?? this.adapter
-    ).findWorkingDraft(
-      {
-        scopeKind: "collection",
-        scopeSlug: args.collectionName,
-        entryId: args.entryId,
-      },
-      locale
-    );
+    const repo = new VersionsRepository(args.tx ?? this.adapter);
+    const ref = {
+      scopeKind: "collection" as const,
+      scopeSlug: args.collectionName,
+      entryId: args.entryId,
+    };
+    // Under per-language storage the promote takes the shared draft with this
+    // slot's own, so a document whose only change is shared holds one too.
+    const holds = draftsKeptByPart()
+      ? holdsPendingChange(await findPartDrafts(repo, ref, locale))
+      : (await repo.findWorkingDraft(ref, locale)) !== undefined;
     return languagesPromotedChangeReaches(
-      draft === undefined ? undefined : locale,
+      holds ? locale : undefined,
       configured
     );
   }
@@ -5942,6 +5998,18 @@ export class CollectionMutationService extends BaseService {
               actor: actorForWrite(params.actor, params.user),
               personName: params.user?.name ?? null,
               ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
+            }
+          );
+          // The discarded part has nothing unpublished left to review: its
+          // review closes with the draft, in this transaction.
+          await closeReviewOnDiscard(
+            tx,
+            { adapter: this.adapter },
+            {
+              document: discardedRef,
+              part: draftLocale,
+              actor: actorForWrite(params.actor, params.user),
+              personName: params.user?.name ?? null,
             }
           );
         }
@@ -12233,10 +12301,18 @@ export class CollectionMutationService extends BaseService {
   private async consumeWorkingDraft(
     tx: TransactionContext,
     ref: VersionRef,
-    locale: string | null
+    locale: string | null,
+    /** Whether the shared draft went with it: false for a promote that left it pending. */
+    withShared = true
   ): Promise<void> {
-    await new VersionsRepository(tx).deleteWorkingDraft(ref, locale);
+    const repo = new VersionsRepository(tx);
+    await repo.deleteWorkingDraft(ref, locale);
     await releaseSharedBase(tx, ref, locale);
+    // Kept by part, a language's publish carries the shared draft with it
+    // (`part-drafts`), so the shared draft goes too.
+    if (withShared && draftsKeptByPart() && locale !== SHARED_DRAFT_SLOT) {
+      await repo.deleteWorkingDraft(ref, SHARED_DRAFT_SLOT);
+    }
   }
 
   /**
@@ -12889,7 +12965,6 @@ export class CollectionMutationService extends BaseService {
       snapshotComponents,
       snapshotM2M,
       splitComponentSchemas,
-      updatePayload,
     } = ctx;
     const draftParts = await this.snapshotPartsFor(
       {
@@ -12915,11 +12990,7 @@ export class CollectionMutationService extends BaseService {
     // since the live row the re-fetch returns is the unchanged
     // published content.
     // base below rather than replacing it.
-    const touched = new Set<string>([
-      ...Object.keys(updatePayload),
-      ...Object.keys(componentFieldData),
-      ...Object.keys(manyToManyData),
-    ]);
+    const touched = keysHeldSaveSets(ctx);
     const patchFields = Object.fromEntries(
       Object.entries(patchedDocument).filter(([key]) => touched.has(key))
     );
@@ -13134,6 +13205,25 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Over another writer's pending change, each value the field rules kept at the live row's
+   * because this writer may not write it is the pending change's, and a new value sent there is
+   * refused (`keepPendingWhereDenied`). Nothing to do on a first held save, or one no rule denied.
+   */
+  private keepPendingOverDenied(
+    ctx: WorkingDraftWriteContext,
+    existingDraft: { snapshot: unknown } | undefined,
+    draftDocument: Record<string, unknown>
+  ): void {
+    if (!existingDraft || !ctx.keptAtStored) return;
+    keepPendingWhereDenied({
+      slug: ctx.params.collectionName,
+      document: draftDocument,
+      pending: existingDraft.snapshot as Record<string, unknown>,
+      kept: ctx.keptAtStored,
+    });
+  }
+
+  /**
    * Store the pending edit as this document's working draft, on the caller's
    * transaction.
    *
@@ -13168,10 +13258,21 @@ export class CollectionMutationService extends BaseService {
       scopeSlug: params.collectionName,
       entryId: params.entryId,
     };
-    const existingDraft = await draftRepo.findWorkingDraft(
-      draftRef,
-      draftLocale
-    );
+    // Under per-language storage the pending change is kept by part: the
+    // shared draft and this language's, read here as the one document they
+    // describe over the live one, so the save accumulates onto both as it
+    // would onto a single draft, and is split back into them when stored.
+    const byPart = draftsKeptByPart() && draftLocale !== SHARED_DRAFT_SLOT;
+    const parts = byPart
+      ? await findPartDrafts(draftRepo, draftRef, draftLocale)
+      : undefined;
+    const existingDraft = parts
+      ? holdsPendingChange(parts)
+        ? {
+            snapshot: combinedDraft(await this.liveDocumentOf(tx, ctx), parts),
+          }
+        : undefined
+      : await draftRepo.findWorkingDraft(draftRef, draftLocale);
     // The fields this save actually touched, at the assembled read
     // shape. `patchedDocument` overlaid the current patch onto the live
     // relations and REPLACED a single component whole, so a partial
@@ -13181,6 +13282,7 @@ export class CollectionMutationService extends BaseService {
       ctx,
       existingDraft
     );
+    this.keepPendingOverDenied(ctx, existingDraft, draftDocument);
     // A held edit may not change a field an update filter that judged it
     // names, or the entry could leave the filter once the edit is put live.
     const refusedBy = await this.heldEditRefusedBy(
@@ -13225,7 +13327,10 @@ export class CollectionMutationService extends BaseService {
     // Recorded before the save's own capture, whose retention pass then keeps
     // it.
     await this.recordBaseOfNewChange(tx, {
-      begins: !existingDraft,
+      // Kept by part, the change begins when its language's draft does: that
+      // draft keeps a copy of a translated component's shared parts, judged
+      // against this base when it is published.
+      begins: parts ? parts.language === undefined : !existingDraft,
       collection,
       collectionName: params.collectionName,
       entryId: params.entryId,
@@ -13240,6 +13345,20 @@ export class CollectionMutationService extends BaseService {
       | ResolvedVersionsConfig
       | null
       | undefined;
+    // Kept by part: the keys this save set, and which part each belongs to,
+    // read once for the store that splits the document and the history that
+    // judges every language's review.
+    const byParts =
+      parts && draftLocale !== SHARED_DRAFT_SLOT
+        ? {
+            parts,
+            // The language whose draft this save writes beside the shared
+            // one: never the shared slot here, so the store is handed a code.
+            locale: draftLocale,
+            touched: keysHeldSaveSets(ctx),
+            keys: await partKeysOf(fields),
+          }
+        : undefined;
     const { versionNo } = await storeDraftSave(tx, this.versionCapture, {
       ref: draftRef,
       // The key the read overlay, the promote and the discard look under,
@@ -13260,7 +13379,23 @@ export class CollectionMutationService extends BaseService {
       replaces,
       createdBy: params.user?.id ?? null,
       sourceVersionNo: params.sourceVersionNo ?? null,
+      // Recorded per field on the save's version, where still true of it.
+      ...(params.restoredFrom ? { restoredFrom: params.restoredFrom } : {}),
       maxPerDoc: versionsConfig?.maxPerDoc,
+      ...(byParts
+        ? {
+            storeWorkingDraft: async (repo: VersionsRepository) =>
+              storePartDrafts(repo, {
+                ref: draftRef,
+                locale: byParts.locale,
+                document: draftDocument,
+                touched: byParts.touched,
+                keys: byParts.keys,
+                existing: byParts.parts,
+                createdBy: params.user?.id ?? null,
+              }),
+          }
+        : {}),
     });
     // A held edit is a change to the document another editor must not
     // overwrite unseen, though the live row's content is untouched: only its
@@ -13273,14 +13408,24 @@ export class CollectionMutationService extends BaseService {
     );
     // Both update paths hold a draft through here, so the save's history
     // event is recorded here once.
-    await this.recordSaveHistory(tx, params.collectionName, params.entryId, {
-      actor: actorForWrite(params.actor, params.user),
-      personName: params.user?.name ?? null,
-      locale: draftLocale,
-      toState: "draft",
-      versionNo,
-      sourceVersionNo: params.sourceVersionNo ?? null,
-    });
+    await this.recordSaveHistory(
+      tx,
+      params.collectionName,
+      params.entryId,
+      {
+        actor: actorForWrite(params.actor, params.user),
+        personName: params.user?.name ?? null,
+        locale: draftLocale,
+        toState: "draft",
+        versionNo,
+        sourceVersionNo: params.sourceVersionNo ?? null,
+      },
+      // A change to the shared draft goes live with any language's publish,
+      // so every language's review is judged on the shared values it holds.
+      byParts
+        ? translatedWhenSharedChanged(byParts.touched, byParts.keys)
+        : null
+    );
 
     return { workingDraftDocument, priorWorkingDraftDocument };
   }
@@ -13524,6 +13669,31 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The fields an update restored, and their versions: as server code stated
+   * them, or as the body's `_restoredFrom` names them. A malformed
+   * `_restoredFrom` is answered as the validation error it is.
+   */
+  private restoredFromOf(
+    params: { restoredFrom?: FieldSources },
+    body: Record<string, unknown>
+  ):
+    | { sources: FieldSources | undefined }
+    | { refused: CollectionServiceResult } {
+    if (params.restoredFrom) return { sources: params.restoredFrom };
+    try {
+      return { sources: restoredFromOf(body) };
+    } catch (error) {
+      return {
+        refused: errorToServiceResult(
+          error,
+          { defaultMessage: "Failed to update entry" },
+          this.dialect
+        ),
+      };
+    }
+  }
+
+  /**
    * The refusal of a save whose version is below the one the entry already
    * holds, before any hook runs: a counter only goes up, so such a version is
    * certainly out of date. Null otherwise, for the row lock to decide.
@@ -13697,6 +13867,14 @@ export class CollectionMutationService extends BaseService {
        */
       sourceVersionNo?: number;
       /**
+       * The fields this write restored, and the version each came from, as
+       * server code states it. A client states it as `_restoredFrom` in the
+       * body, read below when this is absent.
+       *
+       * @experimental
+       */
+      restoredFrom?: FieldSources;
+      /**
        * Set when this write restores a recorded save of a working draft: its
        * content was never live, so on a published document it must be held as
        * the working draft. Where the document can no longer hold one, the
@@ -13741,13 +13919,22 @@ export class CollectionMutationService extends BaseService {
     // exempt, and nothing a caller sends can make a write one.
     const versionCheck = this.versionCheckOf(rawParams, body);
     if ("success" in versionCheck) return versionCheck;
+    // The fields the save names as restored, read before the key is dropped
+    // with the version below; a value that is not a map of field to version
+    // is refused, as a malformed version is.
+    const restored = this.restoredFromOf(rawParams, body);
+    if ("refused" in restored) return restored.refused;
+    const restoredFrom = restored.sources;
     // The version a client sends back with what it read is the server's to
     // decide, so it is dropped before any hook or gate reads the body.
     body = withoutDocumentVersionKeys({ ...body });
     const sweepAllLocales = rawParams.locale === EVERY_LOCALE;
-    const params = sweepAllLocales
-      ? { ...rawParams, locale: undefined }
+    const withSources = restoredFrom
+      ? { ...rawParams, restoredFrom }
       : rawParams;
+    const params = sweepAllLocales
+      ? { ...withSources, locale: undefined }
+      : withSources;
 
     // The wildcard moves a LIFECYCLE and nothing else.
     //
@@ -14110,6 +14297,9 @@ export class CollectionMutationService extends BaseService {
         locale: params.locale,
         overrideAccess: params.overrideAccess,
       });
+      // The save as sent, before the rules keep a denied value at the row's: a save held over
+      // another writer's pending change is judged against what it sent.
+      const sentBeforeRules = detachData(finalData);
       const { storedPaths, storedValues } = await fieldAccessPass(
         params.context,
         {
@@ -15155,25 +15345,37 @@ export class CollectionMutationService extends BaseService {
         // draft is deleted in the same transaction below, so promote is atomic:
         // any failure rolls back the live write and leaves the draft intact.
         let promotedDraft = false;
+        // Kept by part, only a promote that publishes carries the shared
+        // draft: an unpublish puts nothing live, so the shared changes stay
+        // pending for every language still published.
+        const promotesShared = intendedStatus === "published";
         // Whether the request that promoted also carried content of its own,
         // which no earlier save recorded: the trail reads that publish as a
         // save too.
         let promotionCarriesContent = false;
         if (promotePossible && promoteRestoreCtx) {
-          const workingDraft = await new VersionsRepository(
-            tx
-            // The split is non-localized only, so the working draft is keyed
-            // under the unlocalized `locale IS NULL` slot — the same key the
-            // read overlay and the store use, so a publish under any request
-            // locale still finds the pending draft it would show the editor.
-          ).findWorkingDraft(
-            {
-              scopeKind: "collection",
-              scopeSlug: params.collectionName,
-              entryId: params.entryId,
-            },
-            draftLocaleKey
-          );
+          const promoteRef = {
+            scopeKind: "collection" as const,
+            scopeSlug: params.collectionName,
+            entryId: params.entryId,
+          };
+          const promoteRepo = new VersionsRepository(tx);
+          // Under the same key the read overlay and the store use. Kept by
+          // part, the change is this language's draft with the shared draft
+          // when it publishes: a language's publish carries the shared
+          // changes with it, and a fold writes no more than the keys they hold.
+          const promoteParts =
+            draftsKeptByPart() && draftLocaleKey !== SHARED_DRAFT_SLOT
+              ? partsPromoted(
+                  await findPartDrafts(promoteRepo, promoteRef, draftLocaleKey),
+                  promotesShared
+                )
+              : undefined;
+          const workingDraft = promoteParts
+            ? holdsPendingChange(promoteParts)
+              ? { snapshot: combinedDraft({}, promoteParts) }
+              : undefined
+            : await promoteRepo.findWorkingDraft(promoteRef, draftLocaleKey);
           if (workingDraft) {
             // Promoting a working draft publishes (or unpublishes) its pending
             // content, so it needs the same permission as a status transition
@@ -15193,13 +15395,14 @@ export class CollectionMutationService extends BaseService {
               // No per-row rule to enforce here; the permission above is the
               // only gate a promotion has to pass.
             }
-            // A language's pending change carries every shared value; one
-            // someone else published since the change began would be put
-            // back by this write, so the publish is refused, naming it.
+            // A shared value someone else published since the change began
+            // would be put back by this write, so the publish is refused,
+            // naming it. Judged on the shared fields the change carries
+            // (`sharedFieldsJudged`): every one, or kept by part, the
+            // language's copy of a translated component's shared parts.
             if (documentLocalized) {
-              const { live, shared, views } = await this.liveSharedDocument(
-                tx,
-                {
+              const { live, shared, views, byHand } =
+                await this.liveSharedDocument(tx, {
                   collectionName: params.collectionName,
                   entryId: params.entryId,
                   tableName,
@@ -15211,8 +15414,7 @@ export class CollectionMutationService extends BaseService {
                     fields
                   ),
                   locale: draftLocaleKey,
-                }
-              );
+                });
               const stale = await outOfDateSharedFields(tx, {
                 ref: {
                   scopeKind: "collection",
@@ -15220,7 +15422,7 @@ export class CollectionMutationService extends BaseService {
                   entryId: params.entryId,
                 },
                 locale: draftLocaleKey,
-                shared,
+                shared: sharedFieldsJudged(shared, byHand),
                 live,
                 // Judged as the publish writes it: the stored change with
                 // the caller's gated contribution merged over it. A request
@@ -15761,6 +15963,10 @@ export class CollectionMutationService extends BaseService {
                 // update unrestorable.
                 locale: versionLocale,
                 sourceVersionNo: params.sourceVersionNo ?? null,
+                // Recorded per field on the version, where still true of it.
+                ...(params.restoredFrom
+                  ? { restoredFrom: params.restoredFrom }
+                  : {}),
                 maxPerDoc: versionsConfig.maxPerDoc,
               });
               producedVersionNo = versionNo;
@@ -15804,6 +16010,11 @@ export class CollectionMutationService extends BaseService {
               stripServerOnlyColumns(liveParentRow, tableName);
               const draftWrite = await this.storeWorkingDraftInTx(tx, {
                 collection,
+                keptAtStored: {
+                  paths: storedPaths,
+                  values: storedValues,
+                  sent: sentBeforeRules,
+                },
                 collectionHasStatus,
                 tableName,
                 componentFieldData,
@@ -15818,6 +16029,9 @@ export class CollectionMutationService extends BaseService {
                 params,
                 parentRow,
                 liveParentRow,
+                translatedKeys: Object.keys(
+                  localizedUpdate?.localizedFieldValues ?? {}
+                ),
                 snapshotComponents,
                 snapshotM2M,
                 splitComponentSchemas,
@@ -15848,7 +16062,9 @@ export class CollectionMutationService extends BaseService {
                   entryId: params.entryId,
                 },
                 // Same key the fetch and store use.
-                draftLocaleKey
+                draftLocaleKey,
+                // The shared draft goes only where the promote carried it.
+                promotesShared
               );
             }
 
@@ -18439,6 +18655,13 @@ export class CollectionMutationService extends BaseService {
           },
           tables
         );
+        // And its review state, every part's: counts, lists and the inbox
+        // must never show a document that is gone.
+        await removeDeletedDocumentReviewStates(tx, {
+          scopeKind: "collection",
+          scopeSlug: params.collectionName,
+          entryId: params.entryId,
+        });
 
         // The document's last history event: the whole document, every
         // language, is gone. Its history is kept for the activity log's window
@@ -19711,6 +19934,8 @@ export class CollectionMutationService extends BaseService {
       // explicit override bypasses.
       // With the field groups this entry stores inline, by their own rules,
       // and every denied value inside a container kept as the row holds it.
+      // The save as sent, before the rules keep a denied value at the row's.
+      const sentBeforeRules = detachData(finalData);
       const { storedPaths, storedValues } = await this.keepDeniedFieldsAtStored(
         {
           data: finalData,
@@ -20449,11 +20674,19 @@ export class CollectionMutationService extends BaseService {
       if (storeAsWorkingDraft) {
         const draftWrite = await this.storeWorkingDraftInTx(tx, {
           collection,
+          keptAtStored: {
+            paths: storedPaths,
+            values: storedValues,
+            sent: sentBeforeRules,
+          },
           tableName,
           collectionHasStatus:
             (collection as { status?: boolean }).status === true,
           componentFieldData,
           draftLocale: draftLocale,
+          translatedKeys: Object.keys(
+            localizedUpdate?.localizedFieldValues ?? {}
+          ),
           fields,
           manyToManyData,
           params: {
@@ -21371,6 +21604,12 @@ export class CollectionMutationService extends BaseService {
           ),
         }
       );
+      // Its review state goes too; see the single-delete path.
+      await removeDeletedDocumentReviewStates(tx, {
+        scopeKind: "collection",
+        scopeSlug: params.collectionName,
+        entryId,
+      });
 
       // The document's last history event; see the single-delete path.
       await this.recordHistoryEvent(tx, params.collectionName, entryId, {

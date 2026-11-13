@@ -29,6 +29,8 @@ import { clearRegistryRowCache } from "../domains/dynamic-collections/services/c
 import { declaredSlugsOf } from "../domains/dynamic-collections/services/removed-from-code";
 import { consoleLogger } from "../shared/types";
 
+import { isProductionStart } from "./production-start";
+
 /**
  * The in-flight reload and the one queued behind it.
  *
@@ -45,36 +47,70 @@ import { consoleLogger } from "../shared/types";
  * would be several guards.
  */
 const globalForReload = globalThis as unknown as {
-  __nextly_registryReloadInFlight?: Promise<void>;
-  __nextly_registryReloadQueued?: Promise<void>;
+  __nextly_registryReloadInFlight?: Promise<boolean>;
+  __nextly_registryReloadQueued?: Promise<boolean>;
+  /** Whether the queued run creates missing translation tables: any of its callers asked. */
+  __nextly_registryReloadQueuedCreates?: boolean;
 };
 
-export function reloadDynamicTables(label: string): Promise<void> {
+/** How a reload treats what the registry rows describe and the database lacks. */
+export interface ReloadOptions {
+  /**
+   * Whether a translated entity's missing translation table is created.
+   * Defaults to whether this process may define structure: not in production
+   * (`isProductionStart`), where a reload serves the tables `nextly migrate`
+   * made, and an entity without its translation table answers that it is not
+   * ready. The migrations at start pass true: that step is `nextly migrate`'s,
+   * the one step of a production start that defines structure.
+   */
+  createMissingCompanions?: boolean;
+}
+
+/**
+ * Reload the registries, answering whether every entity registered: false
+ * where the reload was incomplete or could not run. It never throws, so a
+ * caller that must not act on a failed reload (the schema version a server
+ * copy serves, which is advanced only once its definitions loaded) asks this.
+ */
+export function reloadDynamicTables(
+  label: string,
+  options: ReloadOptions = {}
+): Promise<boolean> {
+  const creates = options.createMissingCompanions ?? !isProductionStart();
   // Checked before the running one: the queued run clears itself inside its own
   // continuation, a microtask later than the running one's cleanup, so a caller
   // landing between the two would otherwise start a second concurrent run
   // alongside the queued one.
   const queued = globalForReload.__nextly_registryReloadQueued;
-  if (queued) return queued;
+  if (queued) {
+    // The one run answers every caller that joined it, so it creates what any
+    // of them would have.
+    if (creates) globalForReload.__nextly_registryReloadQueuedCreates = true;
+    return queued;
+  }
 
   const running = globalForReload.__nextly_registryReloadInFlight;
   if (running) {
+    globalForReload.__nextly_registryReloadQueuedCreates = creates;
     globalForReload.__nextly_registryReloadQueued = running
       // A failed reload must not swallow the rows that landed during it: the
       // tables are read either way, and this caller sees its own outcome.
-      .catch(() => undefined)
+      .catch(() => false)
       .then(() => {
+        const queuedCreates =
+          globalForReload.__nextly_registryReloadQueuedCreates === true;
         delete globalForReload.__nextly_registryReloadQueued;
-        return startReload(label);
+        delete globalForReload.__nextly_registryReloadQueuedCreates;
+        return startReload(label, queuedCreates);
       });
     return globalForReload.__nextly_registryReloadQueued;
   }
 
-  return startReload(label);
+  return startReload(label, creates);
 }
 
-function startReload(label: string): Promise<void> {
-  const started = runReload(label).finally(() => {
+function startReload(label: string, creates: boolean): Promise<boolean> {
+  const started = runReload(label, creates).finally(() => {
     delete globalForReload.__nextly_registryReloadInFlight;
   });
   globalForReload.__nextly_registryReloadInFlight = started;
@@ -100,6 +136,8 @@ interface ReloadDeps {
    * configuration, in which case every row registers as before.
    */
   declared?: { collections: Set<string>; singles: Set<string> };
+  /** See `ReloadOptions.createMissingCompanions`. */
+  createMissingCompanions: boolean;
 }
 
 /**
@@ -117,13 +155,13 @@ interface ReloadDeps {
  * calls this before `allowBootMigrations()`, and an exception escaping here
  * would leave that gate closed — hanging every consumer waiting on it.
  */
-async function runReload(label: string): Promise<void> {
+async function runReload(label: string, creates: boolean): Promise<boolean> {
   // A reload follows a change to the registry made outside the registry
   // services (a migration, a schema apply), so the cached rows go first.
   clearRegistryRowCache();
   try {
-    const deps = await resolveDeps(label);
-    if (!deps) return;
+    const deps = await resolveDeps(label, creates);
+    if (!deps) return false;
 
     // Both entity registries, one pass each, through one loader. They differ
     // only in the table read; spelling the body twice is how the two drift.
@@ -167,25 +205,33 @@ async function runReload(label: string): Promise<void> {
      * how the two would come to disagree.
      */
     const components = await registerComponents(deps, label, failures);
+    // A field group's registration makes no table, so where this reload may
+    // define structure, its missing translation tables are made here, as a
+    // collection's and a Single's are by their registration above.
+    if (deps.createMissingCompanions) {
+      await provisionFieldGroupCompanions(deps, failures);
+    }
 
     if (failures.length > 0) {
       consoleLogger.warn(
         `${label} Schema registry reload INCOMPLETE (${failures.join("; ")}). ` +
           `Entities this boot registered may not be queryable until a restart.`
       );
-      return;
+      return false;
     }
 
     consoleLogger.info(
       `${label} Schema registry reloaded: ${registered} entities, ` +
         `${components} field groups.`
     );
+    return true;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     consoleLogger.warn(
       `${label} Schema registry reload failed: ${msg}. ` +
         `Entities this boot registered are not queryable until a restart.`
     );
+    return false;
   }
 }
 
@@ -227,8 +273,44 @@ async function registerComponents(
   }
 }
 
+/**
+ * Make every translated field group's missing translation table
+ * (`ensureFieldGroupCompanions`), or record why a row could not be.
+ */
+async function provisionFieldGroupCompanions(
+  deps: ReloadDeps,
+  failures: string[]
+): Promise<void> {
+  try {
+    const { ensureFieldGroupCompanions } = await import(
+      "./field-group-companions"
+    );
+    const outcome = await ensureFieldGroupCompanions(
+      deps.adapter,
+      deps.dialect
+    );
+    for (const failure of outcome.failures) {
+      const why =
+        failure.error instanceof Error
+          ? failure.error.message
+          : String(failure.error);
+      failures.push(
+        `field group translation tables${failure.tableName ? `.${failure.tableName}` : ""}: ${why}`
+      );
+    }
+  } catch (err) {
+    // Recorded rather than thrown: this function's caller must never throw.
+    failures.push(
+      `field group translation tables: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
 /** The container's adapter and registry, or `undefined` with a reason logged. */
-async function resolveDeps(label: string): Promise<ReloadDeps | undefined> {
+async function resolveDeps(
+  label: string,
+  createMissingCompanions: boolean
+): Promise<ReloadDeps | undefined> {
   const { container } = await import("../di/container");
   const adapter = container.get("adapter");
   const schemaRegistry = container.get("schemaRegistry");
@@ -263,6 +345,7 @@ async function resolveDeps(label: string): Promise<ReloadDeps | undefined> {
     adapter: adapter as ReloadDeps["adapter"],
     registry: schemaRegistry as SchemaRegistry,
     dialect: getCapabilities.call(adapter).dialect,
+    createMissingCompanions,
     ...(config
       ? {
           declared: {
@@ -319,6 +402,7 @@ async function loadInto(
         status: hasStatus === true,
         localized,
         builderOwned,
+        createMissingCompanion: deps.createMissingCompanions,
       });
     },
     deps.declared

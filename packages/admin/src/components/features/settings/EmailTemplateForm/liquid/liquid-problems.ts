@@ -17,7 +17,7 @@
  *
  * @module components/features/settings/EmailTemplateForm/liquid/liquid-problems
  */
-import { Liquid } from "liquidjs";
+import { Liquid, type Template } from "liquidjs";
 
 /** A problem in a template, where it is. */
 export interface LiquidProblem {
@@ -117,5 +117,20 @@ export function liquidProblems(source: string): LiquidProblem[] {
     return [];
   } catch (error) {
     return [problemOf(error, source)];
+  }
+}
+
+/**
+ * `source` parsed by the engine configured as the server's, with what it was
+ * parsed by, for reading what the template uses; nothing when it does not
+ * parse (its problem is `liquidProblems`'s to report).
+ */
+export function parsedTemplate(
+  source: string
+): { engine: Liquid; templates: Template[] } | null {
+  try {
+    return { engine: parser, templates: parser.parse(source) };
+  } catch {
+    return null;
   }
 }

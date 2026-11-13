@@ -48,6 +48,7 @@ import {
   dropServerDatabase,
   recreateServerDatabase,
 } from "../support/server-database.mjs";
+import { sharedCacheMayKeep } from "../support/shared-cache.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..", "..");
@@ -63,26 +64,31 @@ const BASE = `http://localhost:${PORT}`;
 const SECRET = "admin-speed-check-secret-not-for-production-0123456789";
 const USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 
-const STATEMENT_SLACK = 0.05;
 /**
- * A screen's statements move more than a start's from run to run, while a
- * few requests are still sometimes sent twice (`racy` in the pins); they are
- * held to this until those duplicates are gone, then to `STATEMENT_SLACK`.
+ * How far a start's or a screen's statements may move from their pin. What
+ * still moves between runs of one commit is reads on a timer (the stored
+ * schema version, the permissions epoch, the cache tags, a session check)
+ * landing inside a load or not, a few statements on any screen.
  */
-const SCREEN_STATEMENT_SLACK = 0.15;
+const STATEMENT_SLACK = 0.05;
 /** The least a growth pin allows either way, as two starts differ by a few. */
 const GROWTH_SLACK_MIN = 5;
 const ROUND_SLACK = 1;
 const DELAY_MS = 100;
 /**
- * How soon the admin page's first byte must arrive after the server listens,
- * on the delayed start: the page needs no database, so the start under way
- * must not hold it. A start that held it took about 104 s; one that does not
- * leaves the page's own first render, about 2 s on a cold server with or
- * without the delay, so this catches the start holding the page without
- * judging that render. Lowered to a second once the page is prebuilt.
+ * How soon, at most, the admin page's first byte may arrive after the server
+ * listens, on the delayed start: a start that holds the page takes about
+ * 104 s. The tighter judgement is against the server's own first answer,
+ * below, as that answer alone takes seconds on a busy machine.
  */
 const FIRST_BYTE_LIMIT_MS = 10_000;
+/**
+ * How much later than the server's first answer to any page the admin page's
+ * first byte may come. The page is prebuilt, so it adds no wait of its own;
+ * what remains is the server answering its first request at all, which on a
+ * busy machine takes seconds whatever the page.
+ */
+const FIRST_BYTE_OVER_SERVER_MS = 1000;
 const EXTRA_COLLECTIONS = 45;
 const QUIET_MS = 1500;
 /** How long an open request is waited for once nothing else happens. */
@@ -125,7 +131,7 @@ async function portOpen(port) {
 }
 
 /** The database a run of `dialect` uses, made empty, and the env that points at it. */
-async function freshDatabase(dialect, extra) {
+async function freshDatabase(dialect, extra, key = PORT) {
   if (dialect === "sqlite") {
     const file = path.join(PLAYGROUND, "data", "admin-speed.db");
     for (const suffix of ["", "-shm", "-wal"])
@@ -134,7 +140,9 @@ async function freshDatabase(dialect, extra) {
   }
   const serverUrl = process.env[`E2E_DB_SERVER_URL_${dialect.toUpperCase()}`];
   const database = e2eDatabase({
-    port: PORT,
+    // Names the database: the server's port, or a key of its own for a
+    // database kept beside another, as the start-only measurements' are.
+    port: key,
     env: {
       E2E_DB_DIALECT: dialect,
       ...(serverUrl ? { E2E_DB_SERVER_URL: serverUrl } : {}),
@@ -250,7 +258,17 @@ async function startOf(server, log) {
     await response.arrayBuffer();
     return at;
   });
+  // A file the server sends as it is, asked for at the same moment: what the
+  // server takes to answer anything at all once it listens, which the admin
+  // page's first byte is read against. A file, not a page, so nothing of the
+  // app's layouts is rendered for it.
+  const anyPage = fetch(`${BASE}/next.svg`).then(async response => {
+    const at = Date.now() - server.listening;
+    await response.arrayBuffer();
+    return at;
+  });
   const firstByteMs = await firstByte;
+  const anyPageFirstByteMs = await anyPage;
   const until = Date.now() + 900_000;
   let count = -1;
   let since = Date.now();
@@ -266,7 +284,33 @@ async function startOf(server, log) {
   return {
     statements: count,
     firstByteMs,
+    anyPageFirstByteMs,
     seconds: Number(((since - server.started) / 1000).toFixed(1)),
+  };
+}
+
+/**
+ * The admin page as a visitor with no session is sent it, twice, once the
+ * start has fallen quiet and the page has settled: whether both are the same bytes, whether its headers
+ * let a shared cache keep it, and how many statements were sent while it was
+ * served. A prebuilt page is the same for everyone and reads nothing.
+ */
+async function pageServed(log) {
+  // Once after the start, to let the page settle: the copy the build wrote
+  // describes the database the build saw, and is refreshed in the background
+  // the first time it is served after a write. Two visitors are compared after.
+  await (await fetch(`${BASE}/admin`)).arrayBuffer();
+  await sleep(1500);
+  const before = readLog(log).length;
+  const first = await fetch(`${BASE}/admin`);
+  const second = await fetch(`${BASE}/admin`);
+  const [a, b] = [await first.text(), await second.text()];
+  // Long enough for anything the page set off to reach the database.
+  await sleep(1000);
+  return {
+    sameBytes: a === b,
+    keepable: sharedCacheMayKeep(first.headers.get("cache-control")),
+    statements: readLog(log).length - before,
   };
 }
 
@@ -373,8 +417,15 @@ async function sample(context, log, load, before) {
   const kept = await load(page);
   const to = await watcher.quiet();
   await page.close();
+  // How long after the load began the startup request was sent: the admin
+  // sends it as early as it can, so a later start is a slower screen even
+  // when no count moves. Reported, never pinned, as it is a time.
+  const startup = watcher.requests.find(r =>
+    r.path.endsWith("/admin/api/startup")
+  );
   return {
     kept,
+    startupStartsMs: startup === undefined ? null : startup.start - from,
     requests: watcher.requests.length,
     rounds: roundsOf(watcher.requests),
     statements: readLog(log).filter(s => s.t >= from && s.t <= to).length,
@@ -438,6 +489,7 @@ async function steady(context, log, load, { fresh, before } = {}) {
   const fewestStatements = Math.min(...samples.map(x => x.statements));
   return {
     kept: samples[0].kept,
+    startupStartsMs: median(samples.map(x => x.startupStartsMs)),
     result: {
       requests: Object.values(kinds).reduce((a, b) => a + b, 0),
       rounds: Math.min(...samples.map(x => x.rounds)),
@@ -449,6 +501,16 @@ async function steady(context, log, load, { fresh, before } = {}) {
   };
 }
 
+/** The middle of the times measured, or null when none was. */
+function median(values) {
+  const known = values.filter(v => v !== null).sort((a, b) => a - b);
+  if (known.length === 0) return null;
+  const mid = Math.floor(known.length / 2);
+  return known.length % 2 === 1
+    ? known[mid]
+    : Math.round((known[mid - 1] + known[mid]) / 2);
+}
+
 /** A full measurement of one dialect: the start and every screen. */
 async function measureDialect(dialect, dir) {
   const { database, url } = await freshDatabase(dialect);
@@ -457,7 +519,13 @@ async function measureDialect(dialect, dir) {
   // Everything acquired is released in `finally`, whichever step failed.
   let browser;
   let server;
-  const out = { start: {}, screens: {} };
+  // `timings` sits beside `screens`, not in it, so `--update-pins` never
+  // writes a time into the pins.
+  const out = { start: {}, screens: {}, timings: {} };
+  const keep = (name, measured) => {
+    out.timings[name] = { startupStartsMs: measured.startupStartsMs };
+    return measured.result;
+  };
   try {
     prepare(serverEnv(dialect, url));
     browser = await chromium.launch();
@@ -473,7 +541,10 @@ async function measureDialect(dialect, dir) {
     // work it leaves running after Nextly says it has started included.
     const started = await startOf(server, log);
     out.firstByteMs = started.firstByteMs;
+    out.anyPageFirstByteMs = started.anyPageFirstByteMs;
     out.start.statements = started.statements;
+    // Once the start has fallen quiet: how the page itself is served.
+    out.page = await pageServed(log);
 
     const fresh = () =>
       browser.newContext({ viewport: { width: 1440, height: 900 } });
@@ -482,27 +553,37 @@ async function measureDialect(dialect, dir) {
       await page.goto(`${BASE}/admin`, { timeout: 120_000 });
       await emailBox(page).waitFor({ timeout: 120_000 });
     };
+    // Each screen's wait names something only that screen draws once its data
+    // is in. The sign-in form has a `main` and a textbox of its own, and the
+    // signed-in frame paints its outline before the server answers, so a bare
+    // `main` or the first textbox matches a screen that has not loaded, or
+    // the sign-in form drawn in its place.
+    //
+    // Signed in: the rail's column says the server has confirmed the session.
+    const signedIn = p => p.locator('aside[data-shell-answers="settled"]');
     const signIn = async page => {
       await emailBox(page).fill(USER.email);
       await page
         .getByRole("textbox", { name: /password/i })
         .fill(USER.password);
       await page.getByRole("button", { name: /sign in|log in/i }).click();
-      await page.locator("main").waitFor({ timeout: 300_000 });
+      await signedIn(page).waitFor({ timeout: 300_000 });
     };
 
     // The sign-in screen, signed out, on the started server.
-    out.screens.login = (
+    out.screens.login = keep(
+      "login",
       await steady(context, log, openForm, { fresh })
-    ).result;
+    );
 
     // Signing in through the real form, counted from the click.
-    out.screens.signin = (
+    out.screens.signin = keep(
+      "signin",
       await steady(context, log, signIn, {
         fresh,
         before: openForm,
       })
-    ).result;
+    );
 
     // The signed-in browser whose fresh tabs open the remaining screens.
     const first = await context.newPage();
@@ -510,19 +591,34 @@ async function measureDialect(dialect, dir) {
     await signIn(first);
     await first.close();
 
-    const entryLink =
-      'main a[href^="/admin/collections/posts/"]:not([href$="/create"]) >> visible=true';
-    out.screens.dashboard = (
+    // The dashboard: a widget's cell, which its outline does not draw.
+    const widgetCell = p =>
+      p
+        .getByTestId("dashboard-container")
+        .locator('[data-testid^="widget-cell-"]')
+        .first();
+    // The list: a row's way in, a link the entries table draws for each row
+    // and not over its outline rows.
+    const entryLink = p =>
+      p
+        .getByRole("table", { name: "Entries table" })
+        .locator("a[data-row-entry]")
+        .first();
+    // The edit page: the entry's own Title field.
+    const titleBox = p =>
+      p.getByRole("main").getByRole("textbox", { name: /^title/i });
+    out.screens.dashboard = keep(
+      "dashboard",
       await steady(
         context,
         log,
         async page => {
           await page.goto(`${BASE}/admin`, { timeout: 120_000 });
-          await page.locator("main").waitFor({ timeout: 120_000 });
+          await widgetCell(page).waitFor({ timeout: 120_000 });
         },
         {}
       )
-    ).result;
+    );
     const list = await steady(
       context,
       log,
@@ -530,24 +626,25 @@ async function measureDialect(dialect, dir) {
         await page.goto(`${BASE}/admin/collections/posts`, {
           timeout: 120_000,
         });
-        await page.locator(entryLink).first().waitFor({ timeout: 120_000 });
-        return page.locator(entryLink).first().getAttribute("href");
+        await entryLink(page).waitFor({ timeout: 120_000 });
+        return entryLink(page).getAttribute("href");
       },
       {}
     );
-    out.screens.list = list.result;
+    out.screens.list = keep("list", list);
     const href = list.kept;
-    out.screens.edit = (
+    out.screens.edit = keep(
+      "edit",
       await steady(
         context,
         log,
         async page => {
           await page.goto(new URL(href, BASE).toString(), { timeout: 120_000 });
-          await page.getByRole("textbox").first().waitFor({ timeout: 120_000 });
+          await titleBox(page).waitFor({ timeout: 120_000 });
         },
         {}
       )
-    ).result;
+    );
   } finally {
     await browser?.close();
     await server?.stop();
@@ -556,14 +653,41 @@ async function measureDialect(dialect, dir) {
   return out;
 }
 
-/** The start alone: its statements, with a delay or extra collections. */
-async function measureStart(dialect, dir, { delay = 0, extra = 0, label }) {
-  const { database, url } = await freshDatabase(dialect);
+/**
+ * A database for a start-only measurement, migrated, seeded and with the
+ * plugins installed, kept under its own `key` so it can be made before the
+ * build and stand beside the build's own.
+ */
+async function preparedDatabase(dialect, { key, extra = 0 }) {
+  const { database, url } = await freshDatabase(dialect, extra, key);
+  // Dropped at the end of the run too, so one made before the build is not
+  // left behind when a later step fails before its measurement drops it.
+  if (database) madeDatabases.push(database);
+  prepare(serverEnv(dialect, url, { extra }));
+  return { database, url };
+}
+
+/** Every database a start-only measurement made, dropped when the run ends. */
+const madeDatabases = [];
+
+/**
+ * The start alone: its statements, with a delay or extra collections. Served
+ * from `prepared` when given, a database made before the build, as a deploy
+ * migrates its database and then builds and starts: a database seeded after
+ * the build has changed every page that reads it, which the build's copies
+ * then no longer stand for.
+ */
+async function measureStart(
+  dialect,
+  dir,
+  { delay = 0, extra = 0, label, prepared }
+) {
+  const { database, url } =
+    prepared ?? (await preparedDatabase(dialect, { key: PORT, extra }));
   const log = path.join(dir, `${dialect}.${label}.statements.jsonl`);
   fs.rmSync(log, { force: true });
   let server;
   try {
-    prepare(serverEnv(dialect, url, { extra }));
     server = await startServer(
       serverEnv(dialect, url, { delay, extra, log, production: true })
     );
@@ -656,7 +780,7 @@ function screenProblems(label, values, pin, racy) {
       `${label} statements`,
       values.statements,
       pin.statements,
-      slackOf(pin.statements, SCREEN_STATEMENT_SLACK)
+      slackOf(pin.statements)
     ),
   ];
 }
@@ -709,18 +833,49 @@ function compare(measured, pins) {
   }
   return [
     ...problems,
+    ...DIALECTS.flatMap(dialect =>
+      pageProblems(dialect, measured[dialect].page)
+    ),
     ...growthProblems(measured.growth, pins),
     ...firstByteProblems(measured.delayed),
   ];
 }
 
-/** The admin page's first byte on the delayed start, against its limit. */
+/** What is wrong with how the admin page was served, when anything is. */
+function pageProblems(dialect, page) {
+  if (page === undefined) return [];
+  const problems = [];
+  if (!page.sameBytes)
+    problems.push(
+      `${dialect} admin page: two visitors were sent different pages`
+    );
+  if (!page.keepable)
+    problems.push(`${dialect} admin page: its headers forbid keeping it`);
+  // `statements` is reported, not judged: the server's own background work
+  // (the jobs poll, a timer) can land in the window, and a page served from
+  // the build's files sends none of its own.
+  return problems;
+}
+
+/**
+ * The admin page's first byte on the delayed start: within a second of the
+ * server's own first answer to a page that needs nothing (the admin page adds
+ * no wait of its own), and never past the absolute limit, which a start that
+ * holds the page would cross.
+ */
 function firstByteProblems(delayed) {
-  if (delayed === undefined || delayed.firstByteMs <= FIRST_BYTE_LIMIT_MS)
-    return [];
-  return [
-    `admin page first byte with ${DELAY_MS} ms per round trip: ${delayed.firstByteMs} ms, above its limit of ${FIRST_BYTE_LIMIT_MS} ms`,
-  ];
+  if (delayed === undefined) return [];
+  const problems = [];
+  const overServer = delayed.firstByteMs - delayed.anyPageFirstByteMs;
+  if (overServer > FIRST_BYTE_OVER_SERVER_MS)
+    problems.push(
+      `admin page first byte with ${DELAY_MS} ms per round trip: ${delayed.firstByteMs} ms, ${overServer} ms after the server's first answer to any page (limit ${FIRST_BYTE_OVER_SERVER_MS} ms)`
+    );
+  if (delayed.firstByteMs > FIRST_BYTE_LIMIT_MS)
+    problems.push(
+      `admin page first byte with ${DELAY_MS} ms per round trip: ${delayed.firstByteMs} ms, above its limit of ${FIRST_BYTE_LIMIT_MS} ms`
+    );
+  return problems;
 }
 
 async function main() {
@@ -731,6 +886,19 @@ async function main() {
   }
   const dir = path.join(ROOT, "e2e", ".playwright", "admin-speed");
   fs.mkdirSync(dir, { recursive: true });
+  // The start-only measurements' databases are made before the build when
+  // there is one, so the build's copies of the pages stand for them.
+  const growth = DIALECTS.includes("postgresql") && !flag("no-growth");
+  const prepared = {};
+  if (growth && flag("build")) {
+    prepared.delay = await preparedDatabase("postgresql", {
+      key: PORT * 100 + 1,
+    });
+    prepared.extra = await preparedDatabase("postgresql", {
+      key: PORT * 100 + 2,
+      extra: EXTRA_COLLECTIONS,
+    });
+  }
   if (flag("build")) {
     // The build prerenders pages that read the database, so it is given a
     // seeded one, as the production browser suite seeds before it builds.
@@ -753,15 +921,17 @@ async function main() {
     measured[dialect] = await measureDialect(dialect, dir);
     console.log(JSON.stringify(measured[dialect]));
   }
-  if (DIALECTS.includes("postgresql") && !flag("no-growth")) {
+  if (growth) {
     const plain = measured.postgresql.start.statements;
     const delayed = await measureStart("postgresql", dir, {
       delay: DELAY_MS,
       label: "delay",
+      prepared: prepared.delay,
     });
     const extra = await measureStart("postgresql", dir, {
       extra: EXTRA_COLLECTIONS,
       label: "extra",
+      prepared: prepared.extra,
     });
     measured.growth = {
       [`withDelay${DELAY_MS}ms`]: delayed.statements - plain,
@@ -807,4 +977,10 @@ async function main() {
   }
 }
 
-await main();
+try {
+  await main();
+} finally {
+  // A database already dropped by its measurement is dropped again harmlessly.
+  for (const database of madeDatabases)
+    await dropServerDatabase(database).catch(() => {});
+}

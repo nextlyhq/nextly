@@ -30,13 +30,17 @@ import type { PaginationProps } from "./types";
 function PaginationSummary({
   currentPage,
   itemLabel,
+  pageItemCount,
   pageSize,
+  totalCapped,
   totalItems,
   totalPages,
 }: {
   currentPage: number;
   itemLabel: string;
+  pageItemCount: number | undefined;
   pageSize: number;
+  totalCapped: boolean;
   totalItems: number | undefined;
   totalPages: number;
 }): React.JSX.Element {
@@ -77,12 +81,324 @@ function PaginationSummary({
       ) : (
         <>
           Showing {currentPage * pageSize + 1}-
-          {Math.min((currentPage + 1) * pageSize, totalItems)} of {totalItems}{" "}
-          {itemLabel}
+          {/* A capped total is a lower bound, so it does not end the range:
+              a page past it shows its own rows. */}
+          {totalCapped
+            ? currentPage * pageSize + (pageItemCount ?? pageSize)
+            : Math.min((currentPage + 1) * pageSize, totalItems)}{" "}
+          of {totalItems}
+          {totalCapped ? "+" : ""} {itemLabel}
         </>
       )}
     </div>
   );
+}
+
+/**
+ * The window of page numbers around the current page, `maxVisiblePages` wide,
+ * moved back from the end so it stays full near the last page.
+ */
+function pageWindow(
+  currentPage: number,
+  totalPages: number,
+  maxVisiblePages: number
+): { startPage: number; endPage: number } {
+  const start = Math.max(0, currentPage - Math.floor(maxVisiblePages / 2));
+  const endPage = Math.min(totalPages - 1, start + maxVisiblePages - 1);
+  const startPage =
+    endPage - start < maxVisiblePages - 1
+      ? Math.max(0, endPage - maxVisiblePages + 1)
+      : start;
+  return { startPage, endPage };
+}
+
+/** One place in the page-number strip: a page's button, or a gap. */
+type PageSlot =
+  | { kind: "page"; page: number; label: "page" | "first" | "last" }
+  | { kind: "gap"; key: "ellipsis-start" | "ellipsis-end" };
+
+/**
+ * What the page-number strip shows: every page when they fit, otherwise the
+ * window around the current page, with the first page and the last one at
+ * either end and a gap where pages are skipped. Past a capped count the last
+ * page is not known, so a gap alone says that more pages follow.
+ */
+function pageSlots(
+  currentPage: number,
+  totalPages: number,
+  maxVisiblePages: number,
+  totalCapped: boolean
+): PageSlot[] {
+  const page = (n: number): PageSlot => ({
+    kind: "page",
+    page: n,
+    label: "page",
+  });
+  if (totalPages <= maxVisiblePages) {
+    return Array.from({ length: totalPages }, (_, i) => page(i));
+  }
+  const { startPage, endPage } = pageWindow(
+    currentPage,
+    totalPages,
+    maxVisiblePages
+  );
+  const slots: PageSlot[] = [];
+  if (startPage > 0) {
+    slots.push({ kind: "page", page: 0, label: "first" });
+  }
+  if (startPage > 1) slots.push({ kind: "gap", key: "ellipsis-start" });
+  for (let i = startPage; i <= endPage; i++) slots.push(page(i));
+  const lastPageShown = !totalCapped && endPage < totalPages - 1;
+  if (endPage < totalPages - (lastPageShown ? 2 : 1)) {
+    slots.push({ kind: "gap", key: "ellipsis-end" });
+  }
+  if (lastPageShown) {
+    slots.push({ kind: "page", page: totalPages - 1, label: "last" });
+  }
+  return slots;
+}
+
+/**
+ * The strip of page-number buttons, with an ellipsis where pages are skipped.
+ * Its own component, drawn from {@link pageSlots}, so the pager around it
+ * stays readable.
+ */
+function PageNumbers({
+  currentPage,
+  totalPages,
+  maxVisiblePages,
+  isLoading,
+  totalCapped,
+  onPageChange,
+}: {
+  currentPage: number;
+  totalPages: number;
+  maxVisiblePages: number;
+  isLoading: boolean;
+  totalCapped: boolean;
+  onPageChange: (page: number) => void;
+}): React.JSX.Element {
+  const t = useT();
+  const slots = pageSlots(
+    currentPage,
+    totalPages,
+    maxVisiblePages,
+    totalCapped
+  );
+  return (
+    <>
+      {slots.map(slot =>
+        slot.kind === "gap" ? (
+          <span
+            key={slot.key}
+            // Square corners: the ellipsis sits inside the same
+            // overlapped-border strip as the page buttons.
+            className="flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background text-muted-foreground text-xs -ml-px"
+            aria-hidden="true"
+          >
+            ...
+          </span>
+        ) : (
+          <button
+            key={`page-${slot.page}`}
+            onClick={() => onPageChange(slot.page)}
+            disabled={isLoading}
+            className={cn(
+              // Square corners: page buttons overlap their borders (-ml-px)
+              // into one continuous strip, which a radius would break apart.
+              "flex h-10 w-10 items-center justify-center rounded-none text-xs z-10 -ml-px transition-colors focus:outline-none focus:border-primary cursor-pointer",
+              currentPage === slot.page
+                ? "bg-primary! text-primary-foreground border-primary! z-20"
+                : "bg-background  border border-border-strong hover-unified disabled:opacity-50 disabled:cursor-not-allowed"
+            )}
+            aria-label={
+              slot.label === "page"
+                ? t("nextly.pagination.page", { page: slot.page + 1 })
+                : t(`nextly.pagination.${slot.label}`)
+            }
+            aria-current={
+              slot.label === "page" && currentPage === slot.page
+                ? "page"
+                : undefined
+            }
+          >
+            {slot.page + 1}
+          </button>
+        )
+      )}
+    </>
+  );
+}
+
+/**
+ * The page an arrow, Home or End key moves to, or null when that move is not
+ * open (or the key is not one of them).
+ */
+function pageForKey(
+  key: string,
+  at: {
+    currentPage: number;
+    totalPages: number;
+    canGoPrevious: boolean;
+    canGoNext: boolean;
+    canGoLast: boolean;
+  }
+): number | null {
+  const moves: Record<string, [open: boolean, page: number]> = {
+    ArrowLeft: [at.canGoPrevious, at.currentPage - 1],
+    ArrowRight: [at.canGoNext, at.currentPage + 1],
+    Home: [at.canGoPrevious, 0],
+    End: [at.canGoLast, at.totalPages - 1],
+  };
+  const move = moves[key];
+  return move?.[0] ? move[1] : null;
+}
+
+/**
+ * The pager's keyboard: Arrow keys, Home and End move between pages while the
+ * control has focus, never while a form control inside it has.
+ */
+function usePagerKeys(at: {
+  isLoading: boolean;
+  currentPage: number;
+  totalPages: number;
+  canGoPrevious: boolean;
+  canGoNext: boolean;
+  canGoLast: boolean;
+  onPageChange: (page: number) => void;
+}): (e: React.KeyboardEvent) => void {
+  const {
+    isLoading,
+    currentPage,
+    totalPages,
+    canGoPrevious,
+    canGoNext,
+    canGoLast,
+    onPageChange,
+  } = at;
+  return React.useCallback(
+    (e: React.KeyboardEvent) => {
+      if (isLoading) return;
+
+      // These keys already mean something inside a form control — a select
+      // jumps between its options with them — and keydown reaches this nav
+      // by bubbling from its own children. Taking the key there would both
+      // block the control and move the page out from under whoever is using
+      // it.
+      if (
+        (e.target as HTMLElement | null)?.closest(
+          "select, input, textarea, [contenteditable='true']"
+        )
+      ) {
+        return;
+      }
+
+      const page = pageForKey(e.key, {
+        currentPage,
+        totalPages,
+        canGoPrevious,
+        canGoNext,
+        canGoLast,
+      });
+      if (page !== null) {
+        e.preventDefault();
+        onPageChange(page);
+      }
+    },
+    [
+      isLoading,
+      canGoPrevious,
+      canGoNext,
+      canGoLast,
+      currentPage,
+      totalPages,
+      onPageChange,
+    ]
+  );
+}
+
+/**
+ * The pager's buttons: first, previous, the page numbers between, next and
+ * last. Last is offered only when the last page is known.
+ */
+function PagerButtons({
+  currentPage,
+  totalPages,
+  canGoLast,
+  isLoading,
+  onPageChange,
+  children,
+}: {
+  currentPage: number;
+  totalPages: number;
+  canGoLast: boolean;
+  isLoading: boolean;
+  onPageChange: (page: number) => void;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  const t = useT();
+  const canGoPrevious = currentPage > 0;
+  const canGoNext = currentPage < totalPages - 1;
+  return (
+    <div className="flex items-center gap-1">
+      {/* First */}
+      <button
+        onClick={() => onPageChange(0)}
+        disabled={!canGoPrevious || isLoading}
+        className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        aria-label={t("nextly.pagination.first")}
+      >
+        <ChevronsLeft className="h-4 w-4" />
+      </button>
+
+      {/* Previous */}
+      <button
+        onClick={() => onPageChange(currentPage - 1)}
+        disabled={!canGoPrevious || isLoading}
+        className="flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        aria-label={t("nextly.pagination.previous")}
+      >
+        <ChevronLeft className="h-4 w-4" />
+      </button>
+
+      {/* Numbers */}
+      <div className="flex">{children}</div>
+
+      {/* Next */}
+      <button
+        onClick={() => onPageChange(currentPage + 1)}
+        disabled={!canGoNext || isLoading}
+        className="flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        aria-label={t("nextly.pagination.next")}
+      >
+        <ChevronRight className="h-4 w-4" />
+      </button>
+
+      {/* Last */}
+      <button
+        onClick={() => onPageChange(totalPages - 1)}
+        disabled={!canGoLast || isLoading}
+        className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        aria-label={t("nextly.pagination.last")}
+      >
+        <ChevronsRight className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * "Page 3 of 12", or "Page 3" alone when the total is capped and the number
+ * of pages is not known.
+ */
+function pageCountText(
+  currentPage: number,
+  totalPages: number,
+  totalCapped: boolean
+): string {
+  return totalCapped
+    ? `Page ${currentPage + 1}`
+    : `Page ${currentPage + 1} of ${totalPages}`;
 }
 
 /**
@@ -94,6 +410,69 @@ function landmarkName(
   t: (key: "nextly.pagination.label") => string
 ): string {
   return ariaLabel ?? t("nextly.pagination.label");
+}
+
+/**
+ * The rows-per-page selector. Its visible "Rows per page" text is also its
+ * programmatic name, through `aria-labelledby`: the text is hidden in a narrow
+ * container, and a name taken by reference still holds when the element
+ * naming it is not displayed, where a `<label>` would leave the select
+ * unnamed. The id is per instance, so two pagers on one page each keep their
+ * own name.
+ */
+function PageSizeSelect({
+  pageSize,
+  options,
+  disabled,
+  onChange,
+}: {
+  pageSize: number;
+  options: readonly number[];
+  disabled: boolean;
+  onChange: (pageSize: number) => void;
+}): React.JSX.Element {
+  const labelId = React.useId();
+  return (
+    <div className="flex items-center space-x-2">
+      <span
+        id={labelId}
+        className="whitespace-nowrap hidden @md/content:inline-block"
+      >
+        Rows per page
+      </span>
+      <div className="relative">
+        <select
+          id="page-size"
+          aria-labelledby={labelId}
+          value={pageSize}
+          onChange={e => onChange(Number(e.target.value))}
+          disabled={disabled}
+          className="h-9 w-[70px] appearance-none rounded-md  border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:border-primary disabled:opacity-50 disabled:cursor-not-allowed hover-unified cursor-pointer"
+        >
+          {options.map(size => (
+            <option key={size} value={size}>
+              {size}
+            </option>
+          ))}
+        </select>
+        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-muted-foreground">
+          <svg
+            className="h-3 w-3"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M19 9l-7 7-7-7"
+            />
+          </svg>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -223,6 +602,8 @@ export const Pagination: React.ForwardRefExoticComponent<
       onPageSizeChange,
       isLoading = false,
       totalItems,
+      totalCapped = false,
+      pageItemCount,
       itemLabel = "items",
       ariaLabel,
       className,
@@ -234,170 +615,20 @@ export const Pagination: React.ForwardRefExoticComponent<
     const t = useT();
     const canGoPrevious = currentPage > 0;
     const canGoNext = currentPage < totalPages - 1;
+    // The last page is only known when the total is: past a capped count the
+    // pager offers the next page, never a jump to an end it cannot see.
+    const canGoLast = canGoNext && !totalCapped;
 
     /** Arrow/Home/End move between pages while the control has focus. */
-    const handleKeyDown = React.useCallback(
-      (e: React.KeyboardEvent) => {
-        if (isLoading) return;
-
-        // These keys already mean something inside a form control — a select
-        // jumps between its options with them — and keydown reaches this nav
-        // by bubbling from its own children. Taking the key there would both
-        // block the control and move the page out from under whoever is using
-        // it.
-        if (
-          (e.target as HTMLElement | null)?.closest(
-            "select, input, textarea, [contenteditable='true']"
-          )
-        ) {
-          return;
-        }
-
-        switch (e.key) {
-          case "ArrowLeft":
-            if (canGoPrevious) {
-              e.preventDefault();
-              onPageChange(currentPage - 1);
-            }
-            break;
-          case "ArrowRight":
-            if (canGoNext) {
-              e.preventDefault();
-              onPageChange(currentPage + 1);
-            }
-            break;
-          case "Home":
-            if (canGoPrevious) {
-              e.preventDefault();
-              onPageChange(0);
-            }
-            break;
-          case "End":
-            if (canGoNext) {
-              e.preventDefault();
-              onPageChange(totalPages - 1);
-            }
-            break;
-        }
-      },
-      [
-        isLoading,
-        canGoPrevious,
-        canGoNext,
-        currentPage,
-        totalPages,
-        onPageChange,
-      ]
-    );
-    // Render smart page numbers with ellipsis
-    const renderPageNumbers = () => {
-      // Common button class
-      const getButtonClass = (isActive: boolean) =>
-        cn(
-          // Square corners: page buttons overlap their borders (-ml-px) into
-          // one continuous strip, which a radius would break apart.
-          "flex h-10 w-10 items-center justify-center rounded-none text-xs z-10 -ml-px transition-colors focus:outline-none focus:border-primary cursor-pointer",
-          isActive
-            ? "bg-primary! text-primary-foreground border-primary! z-20"
-            : "bg-background  border border-border-strong hover-unified disabled:opacity-50 disabled:cursor-not-allowed"
-        );
-
-      // Helper for ellipsis
-      const renderEllipsis = (key: string) => (
-        <span
-          key={key}
-          // Square corners: the ellipsis sits inside the same
-          // overlapped-border strip as the page buttons.
-          className="flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background text-muted-foreground text-xs -ml-px"
-          aria-hidden="true"
-        >
-          ...
-        </span>
-      );
-
-      if (totalPages <= maxVisiblePages) {
-        // Show all pages
-        return Array.from({ length: totalPages }).map((_, i) => (
-          <button
-            key={`page-${i}`}
-            onClick={() => onPageChange(i)}
-            disabled={isLoading}
-            className={getButtonClass(currentPage === i)}
-            aria-label={t("nextly.pagination.page", { page: i + 1 })}
-            aria-current={currentPage === i ? "page" : undefined}
-          >
-            {i + 1}
-          </button>
-        ));
-      }
-
-      // Smart pagination with ellipsis
-      const pages: React.ReactNode[] = [];
-      let startPage = Math.max(
-        0,
-        currentPage - Math.floor(maxVisiblePages / 2)
-      );
-      const endPage = Math.min(totalPages - 1, startPage + maxVisiblePages - 1);
-
-      // Adjust startPage if we're near the end
-      if (endPage - startPage < maxVisiblePages - 1) {
-        startPage = Math.max(0, endPage - maxVisiblePages + 1);
-      }
-
-      // First page + ellipsis
-      if (startPage > 0) {
-        pages.push(
-          <button
-            key="page-0"
-            onClick={() => onPageChange(0)}
-            disabled={isLoading}
-            className={getButtonClass(currentPage === 0)}
-            aria-label={t("nextly.pagination.first")}
-          >
-            1
-          </button>
-        );
-        if (startPage > 1) {
-          pages.push(renderEllipsis("ellipsis-start"));
-        }
-      }
-
-      // Visible pages
-      for (let i = startPage; i <= endPage; i++) {
-        pages.push(
-          <button
-            key={i}
-            onClick={() => onPageChange(i)}
-            disabled={isLoading}
-            className={getButtonClass(currentPage === i)}
-            aria-label={t("nextly.pagination.page", { page: i + 1 })}
-            aria-current={currentPage === i ? "page" : undefined}
-          >
-            {i + 1}
-          </button>
-        );
-      }
-
-      // Ellipsis + last page
-      if (endPage < totalPages - 1) {
-        if (endPage < totalPages - 2) {
-          pages.push(renderEllipsis("ellipsis-end"));
-        }
-        pages.push(
-          <button
-            key={totalPages - 1}
-            onClick={() => onPageChange(totalPages - 1)}
-            disabled={isLoading}
-            className={getButtonClass(currentPage === totalPages - 1)}
-            aria-label={t("nextly.pagination.last")}
-          >
-            {totalPages}
-          </button>
-        );
-      }
-
-      return pages;
-    };
+    const handleKeyDown = usePagerKeys({
+      isLoading,
+      currentPage,
+      totalPages,
+      canGoPrevious,
+      canGoNext,
+      canGoLast,
+      onPageChange,
+    });
 
     return (
       <nav
@@ -413,7 +644,9 @@ export const Pagination: React.ForwardRefExoticComponent<
         <PaginationSummary
           currentPage={currentPage}
           itemLabel={itemLabel}
+          pageItemCount={pageItemCount}
           pageSize={pageSize}
+          totalCapped={totalCapped}
           totalItems={totalItems}
           totalPages={totalPages}
         />
@@ -422,95 +655,35 @@ export const Pagination: React.ForwardRefExoticComponent<
         <div className="flex flex-wrap items-center justify-center gap-4 @md/content:gap-6 @4xl/content:gap-8 order-1 @2xl/content:order-2">
           {/* Page size selector */}
           {showPageSizeSelector && onPageSizeChange && (
-            <div className="flex items-center space-x-2">
-              <span className="whitespace-nowrap hidden @md/content:inline-block">
-                Rows per page
-              </span>
-              <div className="relative">
-                <select
-                  id="page-size"
-                  value={pageSize}
-                  onChange={e => {
-                    const newPageSize = Number(e.target.value);
-                    onPageSizeChange(newPageSize);
-                  }}
-                  disabled={isLoading}
-                  className="h-9 w-[70px] appearance-none rounded-md  border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:border-primary disabled:opacity-50 disabled:cursor-not-allowed hover-unified cursor-pointer"
-                >
-                  {pageSizeOptions.map(size => (
-                    <option key={size} value={size}>
-                      {size}
-                    </option>
-                  ))}
-                </select>
-                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-muted-foreground">
-                  <svg
-                    className="h-3 w-3"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M19 9l-7 7-7-7"
-                    />
-                  </svg>
-                </div>
-              </div>
-            </div>
+            <PageSizeSelect
+              pageSize={pageSize}
+              options={pageSizeOptions}
+              disabled={isLoading}
+              onChange={onPageSizeChange}
+            />
           )}
 
           {/* Navigation Buttons Group */}
-          <div className="flex items-center gap-1">
-            {/* First */}
-            <button
-              onClick={() => onPageChange(0)}
-              disabled={currentPage === 0 || isLoading}
-              className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
-              aria-label={t("nextly.pagination.first")}
-            >
-              <ChevronsLeft className="h-4 w-4" />
-            </button>
-
-            {/* Previous */}
-            <button
-              onClick={() => onPageChange(currentPage - 1)}
-              disabled={currentPage === 0 || isLoading}
-              className="flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
-              aria-label={t("nextly.pagination.previous")}
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-
-            {/* Numbers */}
-            <div className="flex">{renderPageNumbers()}</div>
-
-            {/* Next */}
-            <button
-              onClick={() => onPageChange(currentPage + 1)}
-              disabled={currentPage >= totalPages - 1 || isLoading}
-              className="flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
-              aria-label={t("nextly.pagination.next")}
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-
-            {/* Last */}
-            <button
-              onClick={() => onPageChange(totalPages - 1)}
-              disabled={currentPage >= totalPages - 1 || isLoading}
-              className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
-              aria-label={t("nextly.pagination.last")}
-            >
-              <ChevronsRight className="h-4 w-4" />
-            </button>
-          </div>
+          <PagerButtons
+            currentPage={currentPage}
+            totalPages={totalPages}
+            canGoLast={canGoLast}
+            isLoading={isLoading}
+            onPageChange={onPageChange}
+          >
+            <PageNumbers
+              currentPage={currentPage}
+              totalPages={totalPages}
+              maxVisiblePages={maxVisiblePages}
+              isLoading={isLoading}
+              totalCapped={totalCapped}
+              onPageChange={onPageChange}
+            />
+          </PagerButtons>
 
           {/* Page Count (Far Right) */}
           <div className="whitespace-nowrap hidden @md/content:block">
-            Page {currentPage + 1} of {totalPages}
+            {pageCountText(currentPage, totalPages, totalCapped)}
           </div>
         </div>
       </nav>

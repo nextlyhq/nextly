@@ -40,6 +40,7 @@ import {
   createDatabaseError,
   isDatabaseError,
   type MySqlAdapterConfig,
+  type ConnectionInspection,
   type DatabaseCapabilities,
   type PoolStats,
   type TransactionContext,
@@ -70,7 +71,12 @@ import {
 } from "@nextlyhq/adapter-drizzle/version-check";
 import { and, eq, getColumns } from "drizzle-orm";
 import type { AnyRelations, Column, SQL } from "drizzle-orm";
-import { getTableConfig, type MySqlTable } from "drizzle-orm/mysql-core";
+import {
+  getTableConfig,
+  mysqlTable,
+  timestamp,
+  type MySqlTable,
+} from "drizzle-orm/mysql-core";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import type {
   Pool as CallbackPool,
@@ -85,6 +91,15 @@ import type {
 } from "mysql2/promise";
 
 import { boundPoolWait, type QueueingPool } from "./pool-wait";
+
+/**
+ * A date field's column as the schema generator declares it on MySQL:
+ * `timestamp`. Its encoder writes the UTC wall clock, which is what a `Date`
+ * bound to an undeclared key is spelled as, whatever zone mysql2 is given.
+ */
+const DATE_FIELD_COLUMN = mysqlTable("nextly_date_field", {
+  at: timestamp("at"),
+}).at;
 
 // mysql2 type definitions use mixin patterns that TypeScript struggles with.
 // We define explicit interfaces for the methods we need.
@@ -598,6 +613,66 @@ export class MySqlAdapter extends DrizzleAdapter {
       waiting,
       active: total - idle,
     };
+  }
+
+  /**
+   * The connection as a health check reads it, on one pooled connection: the
+   * server's version, timed for the round trip, then that session's
+   * `Ssl_cipher` status, which names the cipher when the session's connection
+   * is encrypted and is empty when it is not.
+   *
+   * @remarks
+   * The status and the connection's own socket are weighed by
+   * `encryptionOf`: behind a proxy the status can describe the proxy's own
+   * connection to the server, while this connection's socket is TLS. The
+   * socket is read as it is, never inferred from the `ssl` setting.
+   *
+   * Whether the database is on this machine is judged from the configured
+   * address, which never leaves this method. Any failure answers `"unknown"`.
+   */
+  override async inspectConnection(): Promise<ConnectionInspection> {
+    const local = this.isLocalHost(this.connectionHost());
+    let connection: PoolConnection | undefined;
+    try {
+      connection = await this.ensurePool().getConnection();
+      const started = performance.now();
+      const [versionRows] = await connection.query<RowDataPacket[]>(
+        "SELECT VERSION() AS version"
+      );
+      const roundTripMs = Math.max(0, Math.round(performance.now() - started));
+      const [statusRows] = await connection.query<RowDataPacket[]>(
+        "SHOW SESSION STATUS LIKE 'Ssl_cipher'"
+      );
+      const cipher: unknown = statusRows[0]?.Value;
+      const version: unknown = versionRows[0]?.version;
+      return {
+        encryption: this.encryptionOf({
+          session: typeof cipher === "string" ? cipher !== "" : undefined,
+          ownSocketTls: this.ownSocketIsTls(connection),
+        }),
+        local,
+        roundTripMs,
+        ...(typeof version === "string" && version !== ""
+          ? { serverVersion: version.split("-")[0] }
+          : {}),
+      };
+    } catch {
+      return { encryption: "unknown", local };
+    } finally {
+      connection?.release();
+    }
+  }
+
+  /**
+   * The host this adapter connects to, as mysql2 resolves it: the connection
+   * string's when one is set, else the `host` option, else `localhost`.
+   * `undefined` when the connection string cannot be read.
+   */
+  private connectionHost(): string | undefined {
+    const configured = this.config.url
+      ? this.hostOfUrl(this.config.url)
+      : (this.config.host ?? "");
+    return configured === "" ? "localhost" : configured;
   }
 
   /**
@@ -1458,6 +1533,13 @@ export class MySqlAdapter extends DrizzleAdapter {
     );
   }
 
+  /** A `Date` on an undeclared key is spelled as a date field's column spells it. */
+  protected override undeclaredDateColumn(): {
+    mapToDriverValue(value: unknown): unknown;
+  } {
+    return DATE_FIELD_COLUMN;
+  }
+
   /** A table-level `primaryKey({ columns })`, read through the MySQL table config. */
   protected override compositePrimaryKey(
     tableObj: Record<string, unknown>
@@ -1664,8 +1746,10 @@ export class MySqlAdapter extends DrizzleAdapter {
       },
 
       // Adapter-built, as `insert` above is; `transactionUpdate` says why.
-      // A column the model does not declare binds natively, as every value
-      // on this path's insert does.
+      // A column the model does not declare binds natively, except a `Date`,
+      // spelled as a date field's column spells it (as this path's insert
+      // spells one), and a structured value, sent as JSON
+      // (`bindUnmodeledStructuredAsJson`).
       update: this.transactionUpdate(
         txDb,
         async statement => {

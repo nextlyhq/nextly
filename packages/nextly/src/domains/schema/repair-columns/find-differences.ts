@@ -434,6 +434,7 @@ async function appliedColumnFindings(
     const conversion = await planDifference(db, dialect, difference, judgement);
     findings.push({
       ...finding,
+      judged: difference,
       judgement,
       conversion,
       rowsRewritten: await rowsRewrittenBy(

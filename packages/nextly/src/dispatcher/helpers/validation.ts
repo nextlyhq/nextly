@@ -14,7 +14,10 @@ import {
   type FilterProblem,
 } from "../../domains/collections/query/filter-shape";
 import { NextlyError } from "../../errors";
-import type { RichTextOutputFormat } from "../../lib/rich-text-html";
+import type {
+  RichTextOutputFormat,
+  RichTextStyles,
+} from "../../lib/rich-text-html";
 import type { StatusOption } from "../../lib/status-filter";
 import { readSelectParam } from "../../query/select-param";
 import type { WhereFilter } from "../../services/collections/query-operators";
@@ -238,6 +241,22 @@ export const parseRichTextFormat = (
   return undefined;
 };
 
+const VALID_RICH_TEXT_STYLES: readonly RichTextStyles[] = ["default", "none"];
+
+/**
+ * Parse a `richTextStyles` query parameter: `none` for class-only rich text
+ * HTML, `default` for Nextly's inline look. Like `richTextFormat`, a value it
+ * does not know falls back to the default rather than failing the read: the
+ * option changes only how the HTML is styled, never what a read returns.
+ */
+export const parseRichTextStyles = (
+  stylesParam?: string | null
+): RichTextStyles | undefined => {
+  if (!stylesParam) return undefined;
+  const normalized = stylesParam.toLowerCase();
+  return VALID_RICH_TEXT_STYLES.find(styles => styles === normalized);
+};
+
 /**
  * Parse the `?status=` read filter. Absent (or empty) resolves to `undefined`,
  * so the query service applies its published-only default for untrusted callers
@@ -247,6 +266,41 @@ export const parseRichTextFormat = (
  * input is a draft-leak, and a typo must never quietly change what a read
  * returns.
  */
+/**
+ * How far a list asked for `?count=capped` counts its total. Above it the list
+ * shows the cap with a "+", as counting every row of a very large collection
+ * is slow and the exact number is rarely used.
+ */
+const LIST_TOTAL_CAP = 1000;
+
+/**
+ * Parse a list's `?count=` param into the number its total is counted up to:
+ * `capped` counts up to {@link LIST_TOTAL_CAP}; `exact` or no value counts
+ * every entry, as a list always has. Anything else is refused rather than
+ * read as either, so a misspelling cannot silently change what is counted.
+ */
+export const parseCountParam = (countParam?: unknown): number | undefined => {
+  if (
+    countParam === undefined ||
+    countParam === null ||
+    countParam === "" ||
+    countParam === "exact"
+  ) {
+    return undefined;
+  }
+  if (countParam === "capped") return LIST_TOTAL_CAP;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "count",
+        code: "INVALID_VALUE",
+        message: 'Invalid count. Use "exact" or "capped".',
+      },
+    ],
+    logContext: { param: "count", value: countParam },
+  });
+};
+
 export const parseStatusParam = (
   statusParam?: unknown
 ): StatusOption | undefined => {

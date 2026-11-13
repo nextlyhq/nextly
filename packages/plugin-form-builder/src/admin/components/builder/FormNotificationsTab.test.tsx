@@ -1,29 +1,41 @@
 // @vitest-environment jsdom
 
 /**
- * The notification editor is inline, and these pin the two properties that
- * choice rests on.
- *
- * It replaced a slide-out panel that carried its own save button beside the
- * page's, so the first property is that editing writes THROUGH to the form as
- * it happens — there is no second commit, and a rule the page saves is the rule
- * the author last typed. The second is that one row is open at a time, because
- * several open at once turns the list into a wall of fields and loses the
- * overview the summaries exist to give.
- *
- * jsdom is requested per file rather than in the shared vitest config: the
- * integration suites in this package boot a real Nextly instance and have no
- * use for a DOM.
+ * A form's notifications: the list (each one's name and when, who it goes to
+ * and by which message, Active), the two presets with "Confirm to the
+ * visitor" unavailable on a form with no Email field, and each notification's
+ * own page, at its own address, writing every edit to the form: several team
+ * addresses, the visitor's Email field and Reply-To from a second one, all/any
+ * conditions, the file fields it attaches, and the message's defaults in the
+ * Email hub's words.
  */
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render as renderBare,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
-import type { FormNotification } from "../../../types";
+import {
+  FORM_CONFIRMATION_TEMPLATE,
+  FORM_SUBMISSION_TEMPLATE,
+} from "../../../emails/starter-messages";
+import type { AnyFormField, FormNotification } from "../../../types";
 
-// Radix calls both when a Select opens and jsdom implements neither, so
-// without them a test dies on a missing method rather than failing an
-// assertion.
 beforeAll(() => {
   Element.prototype.hasPointerCapture = () => false;
   Element.prototype.setPointerCapture = () => undefined;
@@ -37,416 +49,527 @@ const deleteNotification = vi.fn();
 const duplicateNotification = vi.fn();
 
 let notifications: FormNotification[] = [];
+let fields: AnyFormField[] = [];
 
-vi.mock("../../context/FormBuilderContext", () => ({
-  useFormBuilder: () => ({
-    notifications,
-    fields: [{ name: "email", label: "Email", type: "email" }],
-    addNotification,
-    duplicateNotification,
-    updateNotification,
-    deleteNotification,
-  }),
-}));
+const EMAIL: AnyFormField = { type: "email", name: "email", label: "Email" };
+const WORK: AnyFormField = { type: "email", name: "work", label: "Work email" };
+const CV: AnyFormField = { type: "file", name: "cv", label: "CV" };
+const PHOTO: AnyFormField = { type: "file", name: "photo", label: "Photo" };
+const JOIN: AnyFormField = {
+  type: "select",
+  name: "join",
+  label: "Joining",
+  options: [{ label: "Online", value: "online" }],
+};
 
-// Imported after the mock, so the component resolves the mocked context.
+vi.mock("../../context/FormBuilderContext", async importOriginal => {
+  const actual =
+    await importOriginal<typeof import("../../context/FormBuilderContext")>();
+  return {
+    ...actual,
+    useFormBuilder: () => ({
+      notifications,
+      fields,
+      formData: {
+        id: "form-1",
+        name: "Sign-up",
+        slug: "sign-up",
+        status: "published",
+      },
+      addNotification,
+      duplicateNotification,
+      updateNotification,
+      deleteNotification,
+    }),
+    useFieldBookkeeping: () => ({ restored: 0 }),
+  };
+});
+
 const { FormNotificationsTab } = await import("./FormNotificationsTab");
+
+/** Render inside a fresh query client, as the admin provides one. */
+function render(ui: ReactElement) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return renderBare(
+    <QueryClientProvider client={client}>{ui}</QueryClientProvider>
+  );
+}
 
 function aNotification(over: Partial<FormNotification> = {}): FormNotification {
   return {
     id: "n1",
-    name: "Admin notification",
+    name: "Notify your team",
     enabled: true,
     recipientType: "static",
-    to: "admin@example.com",
+    to: "events@example.com",
     cc: [],
     bcc: [],
+    templateSlug: FORM_SUBMISSION_TEMPLATE,
     ...over,
-  } as FormNotification;
+  };
 }
+
+/** The admin's answers: one message, two providers, and the caller's grants. */
+function serve(permissions: string[] = ["update-email-templates"]) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      const at = String(url);
+      if (at.endsWith("/email-templates")) {
+        return new Response(
+          JSON.stringify({
+            templates: [
+              {
+                id: "tpl-1",
+                name: "Form submission",
+                slug: FORM_SUBMISSION_TEMPLATE,
+                isActive: true,
+                kind: "template",
+                subject: "New sign-up",
+                fromOverride: "hello@example.com",
+                providerId: "p2",
+              },
+            ],
+          })
+        );
+      }
+      if (at.includes("/email-providers")) {
+        return new Response(
+          JSON.stringify({
+            providers: [
+              { id: "p1", name: "Default", type: "smtp", isDefault: true },
+              { id: "p2", name: "Resend", type: "resend", isDefault: false },
+            ],
+          })
+        );
+      }
+      if (at.endsWith("/me/permissions")) {
+        return new Response(JSON.stringify({ permissions }));
+      }
+      return new Response("{}");
+    })
+  );
+}
+
+/** The last change written to the notification. */
+const lastChange = () =>
+  updateNotification.mock.calls.at(-1)?.[1] as Partial<FormNotification>;
+
+/** Show one notification, as its address names it. */
+function openPage(id: string | null) {
+  const url = id === null ? "/" : `/?section=${id}`;
+  window.history.pushState(null, "", url);
+}
+
+beforeEach(() => {
+  serve();
+  fields = [EMAIL, WORK, CV, PHOTO, JOIN];
+  openPage(null);
+});
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
   notifications = [];
 });
 
-describe("the notification list", () => {
-  it("shows a summary with the editor closed", () => {
-    notifications = [aNotification()];
-    render(<FormNotificationsTab defaults={null} />);
-
-    const toggle = screen.getByRole("button", {
-      name: /edit notification admin notification/i,
-    });
-    // The contract the row advertises to assistive tech, not just its looks.
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    // No editor field is reachable while the row is closed.
-    expect(screen.queryByLabelText("Name")).toBeNull();
-  });
-
-  it("opens the editor in place, under the row", async () => {
-    notifications = [aNotification()];
-    const user = userEvent.setup();
-    render(<FormNotificationsTab defaults={null} />);
-
-    const toggle = screen.getByRole("button", {
-      name: /edit notification admin notification/i,
-    });
-    await user.click(toggle);
-
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    // In place: the region the toggle names is the one that appeared.
-    const region = document.getElementById(
-      toggle.getAttribute("aria-controls") as string
-    );
-    expect(region).not.toBeNull();
-    expect(region).toContainElement(
-      screen.getByDisplayValue("Admin notification")
-    );
-    // And no dialog: an inline editor that still portals is the old panel
-    // wearing a different class.
-    expect(screen.queryByRole("dialog")).toBeNull();
-  });
-
-  it("writes an edit through as it is typed, with no save press", async () => {
-    notifications = [aNotification()];
-    const user = userEvent.setup();
-    render(<FormNotificationsTab defaults={null} />);
-
-    await user.click(
-      screen.getByRole("button", {
-        name: /edit notification admin notification/i,
-      })
-    );
-
-    await user.type(screen.getByDisplayValue("Admin notification"), "!");
-
-    // The page's action bar is the only commit, so an edit that waited for a
-    // button here would be lost by the save the author actually presses.
-    expect(updateNotification).toHaveBeenCalled();
-    const [id, patch] = updateNotification.mock.calls.at(-1) as [
-      string,
-      FormNotification,
-    ];
-    expect(id).toBe("n1");
-    expect(patch.name).toBe("Admin notification!");
-  });
-
-  it("offers no save or cancel of its own", async () => {
-    notifications = [aNotification()];
-    const user = userEvent.setup();
-    render(<FormNotificationsTab defaults={null} />);
-
-    await user.click(
-      screen.getByRole("button", {
-        name: /edit notification admin notification/i,
-      })
-    );
-
-    // The defect this replaced: two commit buttons on one page, with nothing
-    // saying which one persists.
-    expect(screen.queryByRole("button", { name: /save changes/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: /^cancel$/i })).toBeNull();
-  });
-
-  it("closes a row when its own toggle is pressed again", async () => {
-    // The separating case for a TOGGLE. Replacing the open row on every press
-    // also satisfies "opening another closes the first", so without this an
-    // implementation that can never be closed passes.
-    notifications = [aNotification()];
-    const user = userEvent.setup();
-    render(<FormNotificationsTab defaults={null} />);
-
-    const toggle = screen.getByRole("button", {
-      name: /notification admin notification/i,
-    });
-
-    await user.click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-
-    await user.click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByDisplayValue("Admin notification")).toBeNull();
-  });
-
-  it("keeps one row open at a time", async () => {
+describe("the list", () => {
+  it("shows each notification's name and when, who it goes to, its message and Active", async () => {
     notifications = [
-      aNotification(),
-      aNotification({ id: "n2", name: "Second" }),
+      aNotification({
+        recipients: ["events@example.com", "access@example.com"],
+        conditions: {
+          match: "all",
+          list: [{ field: "join", comparison: "equals", value: "online" }],
+        },
+      }),
+      aNotification({
+        id: "n2",
+        name: "Confirmation",
+        enabled: false,
+        recipientType: "field",
+        to: "{{work}}",
+        templateSlug: undefined,
+      }),
     ];
-    const user = userEvent.setup();
     render(<FormNotificationsTab defaults={null} />);
+    const list = screen.getByRole("list", { name: "Notifications" });
+    const [team, visitor] = within(list).getAllByRole("listitem");
 
-    const first = screen.getByRole("button", {
-      name: /notification admin notification/i,
-    });
-    const second = screen.getByRole("button", { name: /notification second/i });
+    expect(team).toHaveTextContent("Only when Joining is Online");
+    expect(team).toHaveTextContent("events@example.com, access@example.com");
+    expect(
+      await within(team!).findByText("Message: Form submission")
+    ).toBeInTheDocument();
+    expect(
+      within(team!).getByRole("switch", { name: "Notify your team active" })
+    ).toBeChecked();
 
-    await user.click(first);
-    expect(first).toHaveAttribute("aria-expanded", "true");
-
-    await user.click(second);
-    expect(second).toHaveAttribute("aria-expanded", "true");
-    // The part that matters: accumulating open rows would satisfy the line
-    // above and turn the list into a wall of fields.
-    expect(first).toHaveAttribute("aria-expanded", "false");
+    expect(visitor).toHaveTextContent("The person who submitted (Work email)");
+    expect(visitor).toHaveTextContent("No message: will not send");
+    expect(
+      within(visitor!).getByRole("switch", { name: "Confirmation active" })
+    ).not.toBeChecked();
   });
 
-  it("does not re-enable a rule that the summary switch turned off", async () => {
-    // The editor reads the rule from the form on every render rather than
-    // holding a copy. A copy goes stale the moment the summary switch writes to
-    // the form, and the next keystroke sends the whole stale rule back —
-    // silently re-enabling a notification the author turned off, which then
-    // sends mail they stopped.
+  it("turns a notification off from its row", async () => {
     notifications = [aNotification()];
     const user = userEvent.setup();
-    const { rerender } = render(<FormNotificationsTab defaults={null} />);
-
+    render(<FormNotificationsTab defaults={null} />);
     await user.click(
-      screen.getByRole("button", {
-        name: /notification admin notification/i,
-      })
+      screen.getByRole("switch", { name: "Notify your team active" })
     );
-
-    // The summary switch writes straight to the form, which re-renders the
-    // list with the rule disabled while this row stays open.
-    notifications = [aNotification({ enabled: false })];
-    rerender(<FormNotificationsTab defaults={null} />);
-    updateNotification.mockClear();
-
-    await user.type(screen.getByDisplayValue("Admin notification"), "!");
-
-    const [, patch] = updateNotification.mock.calls.at(-1) as [
-      string,
-      FormNotification,
-    ];
-    expect(patch.name).toBe("Admin notification!");
-    expect(patch.enabled).toBe(false);
+    expect(updateNotification).toHaveBeenCalledWith("n1", { enabled: false });
   });
 
-  it("dims the summary of a disabled rule, not the editor inside it", async () => {
-    // An expanded editor inside a faded card fades every label, input and
-    // validation message the author is reading in order to fix it.
-    notifications = [aNotification({ enabled: false })];
-    const user = userEvent.setup();
-    render(<FormNotificationsTab defaults={null} />);
-
-    const toggle = screen.getByRole("button", {
-      name: /notification admin notification/i,
-    });
-    await user.click(toggle);
-
-    const summary = toggle.parentElement;
-    expect(summary?.className).toContain("opacity-60");
-
-    const editor = document.getElementById(
-      toggle.getAttribute("aria-controls") as string
-    );
-    expect(editor?.className ?? "").not.toContain("opacity");
-    expect(editor?.closest(".opacity-60")).toBeNull();
-  });
-
-  it("keeps the toggle's accessible name still while it expands", async () => {
-    // `aria-expanded` carries the state, so the NAME must not. A name that
-    // moves with state cannot be referred to twice — a screen-reader user
-    // loses the control they were on, and any caller holding a handle to it
-    // loses it the moment they use it. That is precisely how the browser test
-    // for this broke.
+  it("opens a notification on its own address", async () => {
     notifications = [aNotification()];
     const user = userEvent.setup();
     render(<FormNotificationsTab defaults={null} />);
-
-    const toggle = screen.getByRole("button", {
-      name: "Edit notification Admin notification",
-    });
-
-    await user.click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(toggle).toHaveAccessibleName("Edit notification Admin notification");
+    const link = screen.getByRole("link", { name: "Notify your team" });
+    expect(link).toHaveAttribute("href", "/?section=n1");
+    await user.click(link);
+    expect(window.location.search).toBe("?section=n1");
+    expect(await screen.findByRole("textbox", { name: "Name" })).toHaveValue(
+      "Notify your team"
+    );
   });
 });
 
-describe("the notification's email template", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  /**
-   * The admin's answers: one template, and the caller's grants. Returns
-   * whether the grants have been answered, so a test can wait for that answer
-   * rather than assert against the state before it.
-   */
-  function serve(permissions: string[]): () => boolean {
-    let answered = false;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) => {
-        if (String(url).endsWith("/email-templates")) {
-          return new Response(
-            JSON.stringify({
-              templates: [
-                {
-                  id: "tpl-1",
-                  name: "Form submitted",
-                  slug: "form-submitted",
-                  isActive: true,
-                  kind: "template",
-                },
-              ],
-            })
-          );
-        }
-        if (String(url).endsWith("/me/permissions")) {
-          answered = true;
-          return new Response(JSON.stringify({ permissions }));
-        }
-        return new Response("{}", { status: 404 });
-      })
-    );
-    return () => answered;
-  }
-
-  async function openEditor() {
+describe("adding a notification", () => {
+  it("starts the team's with its starter message and the visitor as Reply-To", async () => {
     const user = userEvent.setup();
     render(<FormNotificationsTab defaults={null} />);
+    await user.click(screen.getByRole("button", { name: "Add notification" }));
     await user.click(
-      screen.getByRole("button", {
-        name: /edit notification admin notification/i,
-      })
+      screen.getByRole("menuitem", { name: /Notify your team/ })
     );
-  }
-
-  it("links to the chosen template in the Email hub, in a new tab", async () => {
-    serve(["read-email-templates", "update-email-templates"]);
-    notifications = [aNotification({ templateSlug: "form-submitted" })];
-    await openEditor();
-
-    const link = await screen.findByRole("link", {
-      name: /open form submitted in email/i,
+    const [created] = addNotification.mock.calls[0] as [FormNotification];
+    expect(created).toMatchObject({
+      kind: "team",
+      recipientType: "static",
+      replyTo: "{{email}}",
+      templateSlug: FORM_SUBMISSION_TEMPLATE,
+      attachFields: [],
     });
-    expect(link).toHaveAttribute("href", "/admin/email/messages/edit/tpl-1");
-    // A new tab, so leaving the builder can't lose its unsaved changes.
+    expect(window.location.search).toBe(`?section=${created.id}`);
+  });
+
+  it("sends a team preset to an address set on it afterwards", async () => {
+    const { createNotification } = await import(
+      "../../context/FormBuilderContext"
+    );
+    const { teamAddressesOf } = await import(
+      "../../../utils/notification-model"
+    );
+    // As the editor seeds a new form with the site's default recipient.
+    const seeded = {
+      ...createNotification("team", fields),
+      to: "team@site.test",
+    };
+    expect(teamAddressesOf(seeded)).toEqual(["team@site.test"]);
+  });
+
+  it("starts the visitor's confirmation at the form's Email field", async () => {
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
+    await user.click(screen.getByRole("button", { name: "Add notification" }));
+    await user.click(
+      screen.getByRole("menuitem", { name: /Confirm to the visitor/ })
+    );
+    const [created] = addNotification.mock.calls[0] as [FormNotification];
+    expect(created).toMatchObject({
+      kind: "visitor",
+      recipientType: "field",
+      to: "{{email}}",
+      templateSlug: FORM_CONFIRMATION_TEMPLATE,
+      attachFields: [],
+    });
+  });
+
+  it("offers no confirmation on a form with no Email field, saying why", async () => {
+    fields = [CV];
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
+    await user.click(screen.getByRole("button", { name: "Add notification" }));
+    const confirm = screen.getByRole("menuitem", {
+      name: /Confirm to the visitor/,
+    });
+    expect(confirm).toHaveAttribute("aria-disabled", "true");
+    expect(confirm).toHaveTextContent(
+      "Add an Email field to the form to confirm to the visitor."
+    );
+  });
+});
+
+describe("a notification's page", () => {
+  it("adds several team addresses, typed or pasted", async () => {
+    notifications = [aNotification({ recipients: ["events@example.com"] })];
+    openPage("n1");
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
+    await user.type(
+      screen.getByRole("textbox", { name: "Add to Team addresses" }),
+      "access@example.com; hr@example.com{Enter}"
+    );
+    expect(lastChange()).toEqual({
+      recipients: [
+        "events@example.com",
+        "access@example.com",
+        "hr@example.com",
+      ],
+      to: "events@example.com",
+    });
+  });
+
+  it("refuses an address that is not one, saying so", async () => {
+    notifications = [aNotification()];
+    openPage("n1");
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
+    await user.type(
+      screen.getByRole("textbox", { name: "Add to Team addresses" }),
+      "not-an-address{Enter}"
+    );
+    expect(
+      screen.getByText("not-an-address is not an email address.")
+    ).toBeInTheDocument();
+    expect(updateNotification).not.toHaveBeenCalled();
+  });
+
+  it("sends to the visitor from one Email field, with Reply-To from another", async () => {
+    notifications = [
+      aNotification({
+        recipientType: "field",
+        to: "{{email}}",
+        replyTo: "{{email}}",
+      }),
+    ];
+    openPage("n1");
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
+
+    await user.click(screen.getByRole("combobox", { name: "Email field" }));
+    await user.click(screen.getByRole("option", { name: "Work email" }));
+    expect(lastChange()).toEqual({ to: "{{work}}" });
+
+    await user.click(screen.getByRole("combobox", { name: "Reply-To" }));
+    await user.click(
+      screen.getByRole("option", { name: "The visitor, field: Work email" })
+    );
+    expect(lastChange()).toEqual({ replyTo: "{{work}}" });
+  });
+
+  it("sends only when any of several conditions hold", async () => {
+    notifications = [
+      aNotification({
+        condition: { field: "join", comparison: "equals", value: "online" },
+      }),
+    ];
+    openPage("n1");
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
+
+    // A single condition saved before reads as a list of one.
+    expect(
+      within(screen.getByRole("list", { name: "Conditions" })).getAllByRole(
+        "listitem"
+      )
+    ).toHaveLength(1);
+
+    await user.click(
+      screen.getByRole("combobox", { name: "How conditions combine" })
+    );
+    await user.click(screen.getByRole("option", { name: "Any" }));
+    expect(lastChange()).toEqual({
+      conditions: {
+        match: "any",
+        list: [{ field: "join", comparison: "equals", value: "online" }],
+      },
+    });
+    // The single condition is cleared, written as undefined, so the rule
+    // reads one way from here on.
+    expect(lastChange()).toHaveProperty("condition", undefined);
+  });
+
+  it("compares a box as checked or not, and a dropdown by its options' labels", async () => {
+    fields = [
+      EMAIL,
+      { type: "checkbox", name: "access", label: "Access needs" },
+      JOIN,
+    ];
+    notifications = [
+      aNotification({
+        conditions: {
+          match: "all",
+          list: [
+            { field: "access", comparison: "equals", value: true },
+            { field: "join", comparison: "equals", value: "online" },
+          ],
+        },
+      }),
+    ];
+    openPage("n1");
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
+
+    expect(
+      screen.getByRole("combobox", { name: "Condition 1 value" })
+    ).toHaveTextContent("checked");
+    expect(
+      screen.getByRole("combobox", { name: "Condition 2 value" })
+    ).toHaveTextContent("Online");
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Condition 1 value" })
+    );
+    await user.click(screen.getByRole("option", { name: "not checked" }));
+    // A box's answer is compared as stored: true or false, not text.
+    expect(lastChange().conditions?.list[0]).toEqual({
+      field: "access",
+      comparison: "equals",
+      value: false,
+    });
+  });
+
+  it("attaches the file fields ticked, starting from those a saved rule attached", async () => {
+    fields = [EMAIL, { ...CV, attachToEmail: true } as AnyFormField, PHOTO];
+    notifications = [aNotification()];
+    openPage("n1");
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
+    const files = screen.getByRole("list", { name: "Attach files from" });
+    expect(within(files).getByRole("checkbox", { name: "CV" })).toBeChecked();
+    expect(
+      within(files).getByRole("checkbox", { name: "Photo" })
+    ).not.toBeChecked();
+
+    await user.click(within(files).getByRole("checkbox", { name: "Photo" }));
+    expect(lastChange()).toEqual({ attachFields: ["cv", "photo"] });
+  });
+
+  it("says when the form has no file fields to attach", () => {
+    fields = [EMAIL];
+    notifications = [aNotification()];
+    openPage("n1");
+    render(<FormNotificationsTab defaults={null} />);
+    expect(
+      screen.getByText("This form has no file fields")
+    ).toBeInTheDocument();
+  });
+
+  it("shows the message's From and Provider as the defaults, in the Email hub's words", async () => {
+    notifications = [aNotification()];
+    openPage("n1");
+    render(
+      <FormNotificationsTab defaults={{ defaultFrom: "forms@example.com" }} />
+    );
+    expect(await screen.findByText("Subject:")).toBeInTheDocument();
+    // The site's default sender wins over the message's, as sending does.
+    expect(screen.getByRole("textbox", { name: "From" })).toHaveAttribute(
+      "placeholder",
+      "forms@example.com"
+    );
+    expect(
+      screen.getByRole("textbox", { name: "From" })
+    ).toHaveAccessibleDescription(
+      /forms@example.com, the site's default sender/
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Provider" })
+    ).toHaveTextContent("The message's provider (Resend)");
+    expect(
+      screen.getByRole("combobox", { name: "Reply-To" })
+    ).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Active" })).toBeChecked();
+  });
+
+  it("shows the message's From as the default when the site sets none", async () => {
+    notifications = [aNotification()];
+    openPage("n1");
+    render(<FormNotificationsTab defaults={null} />);
+    await screen.findByText("Subject:");
+    expect(screen.getByRole("textbox", { name: "From" })).toHaveAttribute(
+      "placeholder",
+      "hello@example.com"
+    );
+  });
+
+  it("links to the message in the Email hub, in a new tab, for someone who may edit it", async () => {
+    notifications = [aNotification()];
+    openPage("n1");
+    render(<FormNotificationsTab defaults={null} />);
+    const link = await screen.findByRole("link", { name: /Edit in Email/ });
+    expect(link).toHaveAttribute(
+      "href",
+      "/admin/settings/email/messages/edit/tpl-1"
+    );
     expect(link).toHaveAttribute("target", "_blank");
   });
 
-  it("offers no link to someone who may only read templates", async () => {
-    const answered = serve(["read-email-templates"]);
-    notifications = [aNotification({ templateSlug: "form-submitted" })];
-    await openEditor();
-
-    // The template is chosen and listed; only the link is withheld, since
-    // the editor it leads to would refuse them. Asserted once the grants are
-    // answered and applied, not against the state before they arrive.
-    await screen.findByText("Form submitted");
-    await waitFor(() => expect(answered()).toBe(true));
-    await act(async () => {});
-    expect(screen.queryByRole("link", { name: /in email/i })).toBeNull();
-  });
-
-  it("offers no link to a role holding only the retired manage-email-templates", async () => {
-    // A role `nextly upgrade` has not converted: the server refuses it the
-    // editor, so no link is shown.
-    const answered = serve(["read-email-templates", "manage-email-templates"]);
-    notifications = [aNotification({ templateSlug: "form-submitted" })];
-    await openEditor();
-
-    await screen.findByText("Form submitted");
-    await waitFor(() => expect(answered()).toBe(true));
-    await act(async () => {});
-    expect(screen.queryByRole("link", { name: /in email/i })).toBeNull();
-  });
-
-  it("offers no link until a template is chosen", async () => {
-    serve(["update-email-templates"]);
+  it("offers no Email hub link to someone who may only read messages", async () => {
+    serve(["read-email-templates", "manage-email-templates"]);
     notifications = [aNotification()];
-    await openEditor();
-    expect(screen.queryByRole("link", { name: /in email/i })).toBeNull();
+    openPage("n1");
+    render(<FormNotificationsTab defaults={null} />);
+    await screen.findByText("Subject:");
+    expect(screen.queryByRole("link", { name: /Edit in Email/ })).toBeNull();
   });
-});
 
-describe("the starter messages", () => {
-  async function openEditor() {
+  it("gives a notification with no message its starter in one press", async () => {
+    notifications = [
+      aNotification({
+        recipientType: "field",
+        to: "{{email}}",
+        templateSlug: undefined,
+      }),
+    ];
+    openPage("n1");
     const user = userEvent.setup();
     render(<FormNotificationsTab defaults={null} />);
     await user.click(
-      screen.getByRole("button", {
-        name: /edit notification admin notification/i,
-      })
+      screen.getByRole("button", { name: "Use Form confirmation" })
     );
-    return user;
-  }
+    expect(lastChange()).toEqual({ templateSlug: FORM_CONFIRMATION_TEMPLATE });
+  });
 
-  /** Picks `option` in the "Send to" select. */
-  async function sendTo(
-    user: ReturnType<typeof userEvent.setup>,
-    option: RegExp
-  ) {
-    await user.click(screen.getByRole("combobox", { name: /send to/i }));
-    await user.click(await screen.findByRole("option", { name: option }));
-  }
-
-  it("gives a rule with no message the team's starter in one press", async () => {
-    notifications = [aNotification({ templateSlug: undefined })];
-    const user = await openEditor();
-
+  it("follows the starter when it turns from the team to the visitor", async () => {
+    notifications = [aNotification()];
+    openPage("n1");
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
     await user.click(
-      screen.getByRole("button", { name: /use form submission/i })
+      screen.getByRole("radio", { name: "The person who submitted" })
     );
-
-    expect(updateNotification).toHaveBeenLastCalledWith(
-      "n1",
-      expect.objectContaining({ templateSlug: "forms-submission" })
-    );
+    expect(lastChange()).toMatchObject({
+      kind: "visitor",
+      recipientType: "field",
+      to: "{{email}}",
+      templateSlug: FORM_CONFIRMATION_TEMPLATE,
+    });
   });
 
-  it("offers the visitor's starter on a rule addressed to the visitor", async () => {
-    notifications = [
-      aNotification({
-        templateSlug: undefined,
-        recipientType: "field",
-        to: "{{email}}",
-      }),
-    ];
-    const user = await openEditor();
-
-    await user.click(
-      screen.getByRole("button", { name: /use form confirmation/i })
-    );
-
-    expect(updateNotification).toHaveBeenLastCalledWith(
-      "n1",
-      expect.objectContaining({ templateSlug: "forms-confirmation" })
-    );
+  it("goes back to the list", async () => {
+    notifications = [aNotification()];
+    openPage("n1");
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
+    await user.click(screen.getByRole("link", { name: "All notifications" }));
+    await waitFor(() => expect(window.location.search).toBe(""));
+    expect(
+      await screen.findByRole("list", { name: "Notifications" })
+    ).toBeInTheDocument();
   });
 
-  it("moves a rule still on the team's starter to the visitor's when it turns to the visitor", async () => {
-    notifications = [aNotification({ templateSlug: "forms-submission" })];
-    const user = await openEditor();
-
-    await sendTo(user, /the visitor/i);
-
-    expect(updateNotification).toHaveBeenLastCalledWith(
-      "n1",
-      expect.objectContaining({
-        recipientType: "field",
-        templateSlug: "forms-confirmation",
-      })
-    );
-  });
-
-  it("keeps a message the author chose when the recipient changes", async () => {
-    notifications = [aNotification({ templateSlug: "my-own-email" })];
-    const user = await openEditor();
-
-    await sendTo(user, /the visitor/i);
-
-    expect(updateNotification).toHaveBeenLastCalledWith(
-      "n1",
-      expect.objectContaining({
-        recipientType: "field",
-        templateSlug: "my-own-email",
-      })
-    );
+  it("says so when the address names a notification the form no longer has", () => {
+    openPage("gone");
+    render(<FormNotificationsTab defaults={null} />);
+    expect(
+      screen.getByText(/This notification is not on the form/)
+    ).toBeInTheDocument();
+    void act;
   });
 });

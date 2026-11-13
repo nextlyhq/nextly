@@ -54,6 +54,7 @@ import {
 import { entryDesignReads } from "./address-claims/design-reads";
 import { ENTRY_SLUG_FIELD } from "./address-claims/entry-claims";
 import {
+  collectionClaimInputs,
   registerEntryAddressClaims,
   releaseUndeclared,
   settleEntryClaimsAtStart,
@@ -64,9 +65,15 @@ import {
   describeFor,
   registerPageAddressClaims,
 } from "./address-claims/page-claims-hook";
+import {
+  runAddressStartup,
+  sortedPairs,
+  startMarkStore,
+  type AddressedCollection,
+  type RowsState,
+} from "./address-claims/start-pass";
 import { addressWaitingRoute } from "./address-claims/waiting-report-route";
 import { bindingFieldsRoute } from "./binding-fields-route";
-import { BINDINGS_TO_FIX_PAGE_HREF } from "./bindings-report/contract";
 import { schemaFingerprint } from "./bindings-report/fingerprint";
 import { BINDINGS_REPORT_JOB, bindingsReportJob } from "./bindings-report/job";
 import { layoutRegionsOf } from "./bindings-report/layout-regions";
@@ -85,7 +92,6 @@ import { bindingReportStore } from "./bindings-report/store";
 import {
   bindingsToFixAttention,
   bindingsToFixWidget,
-  EDIT_PAGES_PERMISSION,
 } from "./bindings-report/widget";
 import {
   BLOCK_SERVICE,
@@ -93,6 +99,7 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
+import { blocksListRoute } from "./blocks-list-route";
 import { registerRemovalWriteReport } from "./breakpoint-removal/after-commit";
 import { breakpointRemovalJob } from "./breakpoint-removal/job";
 import { removalRunStore } from "./breakpoint-removal/run-store";
@@ -107,7 +114,6 @@ import {
   nameDocumentsOnSite,
 } from "./breakpoint-removal/site-counter";
 import {
-  BINDINGS_TO_FIX_PAGE_COMPONENT,
   BUILDER_VIEW_COMPONENT,
   BUILDER_VIEW_PATH,
   COMPONENT_STORE_DELETE_HOST_COMPONENT,
@@ -129,6 +135,11 @@ import {
 import { classUsageIndex } from "./class-usage-reconcile";
 import { hostFieldReader } from "./class-usage-runtime";
 import {
+  collectionReach,
+  mayBeTemplated,
+  type CollectionReach,
+} from "./collection-reach";
+import {
   ADDRESS_CLAIMS_SLUG,
   addressClaimsCollection,
 } from "./collections/address-claims";
@@ -144,7 +155,11 @@ import {
 } from "./collections/components";
 import { LAYOUTS_SLUG, layoutsCollection } from "./collections/layouts";
 import type { PagesCollectionOptions } from "./collections/pages";
-import { PAGES_SLUG, pagesCollection } from "./collections/pages";
+import {
+  PAGES_CONTENT_FIELD,
+  PAGES_SLUG,
+  pagesCollection,
+} from "./collections/pages";
 import { PATTERNS_SLUG, patternsCollection } from "./collections/patterns";
 import { templatesCollection, TEMPLATES_SLUG } from "./collections/templates";
 import { usageBackfillStateCollection } from "./collections/usage-backfill-state";
@@ -169,7 +184,6 @@ import {
 } from "./component-page-reach";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageCount, componentUsageIndex } from "./component-usage";
-import { seedCompositionGraphLock } from "./composition-graph-lock";
 import { manifestRoute } from "./composition-manifest";
 import { registerCompositionRejudge } from "./composition-rejudge";
 import { COMPOSITION_SERVICE, compositionService } from "./composition-service";
@@ -192,6 +206,7 @@ import {
 } from "./default-layout/settings-single";
 import { readLayoutSettings } from "./default-layout/store";
 import { definitionActionsRoute } from "./definition-actions-route";
+import { DESIGN_SEO_SERVICE, designSeoService } from "./design-seo";
 import { entriesRoute, titleFieldIn } from "./entries-route";
 import type { BindingJudging } from "./fields/binding-judgement";
 import type {
@@ -241,7 +256,15 @@ import { loopCollectionsRoute } from "./loop-collections-route";
 import { namedQueriesRoute, registerNamedQueriesAtBoot } from "./named-queries";
 import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { originStore, type OriginStore } from "./origin-store";
+import {
+  PAGE_BUILDER_MENU,
+  PAGE_BUILDER_PAGES,
+  PAGE_BUILDER_PANEL,
+  PAGE_BUILDER_PLACEMENT,
+} from "./overview/admin-panel";
+import { overviewRoute } from "./overview/route";
 import { pageActionsRoute } from "./page-actions-route";
+import type { PageBuilderContentDirectApi } from "./page-content";
 import { pageAddressRoute, pagesSearchRoute } from "./pages-search-route";
 import { pagesWriteRoutes } from "./pages-write-route";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
@@ -278,6 +301,7 @@ import {
   pageBuilderSchema,
   pageBuilderSchemaPlugin,
 } from "./schema/definition";
+import { PAGE_BUILDER_SETTINGS_PLACE } from "./settings-place-contract";
 import {
   LOCK_SHARED_STYLES_DECLARATION,
   firstReadableTitle,
@@ -1382,6 +1406,43 @@ function installHoldsFor(
   });
 }
 
+/**
+ * One start's work on the address store: the check the boot waits for, and
+ * the passes it leaves running.
+ */
+interface AddressStart {
+  readonly check: () => Promise<void>;
+  readonly passes: () => Promise<void>;
+}
+
+/** The newest-first read of one row, for a collection's {@link RowsState}. */
+const NEWEST_ROW = {
+  sort: { field: "updatedAt", direction: "desc" as const },
+  pagination: { limit: 1 },
+  select: { id: true, updatedAt: true },
+  depth: 0 as const,
+};
+
+/** A collection's rows from a {@link NEWEST_ROW} read of it. */
+function rowsStateOf(found: {
+  readonly data: readonly unknown[];
+  readonly pagination: { readonly total: number };
+}): RowsState {
+  const newest = (found.data[0] as { updatedAt?: unknown } | undefined)
+    ?.updatedAt;
+  return {
+    total: found.pagination.total,
+    // A driver answers a timestamp as a Date, or as text or a number where
+    // the column keeps it so.
+    newest:
+      newest instanceof Date
+        ? newest.toISOString()
+        : typeof newest === "string" || typeof newest === "number"
+          ? String(newest)
+          : null,
+  };
+}
+
 /** The context the plugin's `init` is handed. */
 type InitContext = Parameters<
   NonNullable<Parameters<typeof definePlugin>[0]["init"]>
@@ -1763,10 +1824,6 @@ export const pageBuilder = (
    * handled long after it.
    */
   let defaultLayoutSetup: DefaultLayoutSetup | null = null;
-  // The claiming of existing pages' addresses, set by `init` and run once the
-  // boot has finished.
-  // It answers whether every page was settled.
-  let pageClaimsBackfill: (() => Promise<boolean>) | null = null;
   // Set once that pass has finished, after which a page save need not claim
   // the existing pages its list's later pages would fall on.
   let pageClaimsBackfilled = false;
@@ -1785,6 +1842,13 @@ export const pageBuilder = (
       templateAddresses.has(collection)
     )
   );
+  // Which collections a write may concern at all, known from the site's
+  // code (see `collection-reach`). Set by `init`, which a reload under HMR
+  // runs again; until then every collection may concern it.
+  let writeReach: CollectionReach = {
+    mayServeEntries: () => true,
+    mayHoldBlocks: () => true,
+  };
   // Who holds a path, for the site's content route, set by `init`.
   let contentAddresses: ContentAddressService | null = null;
   const requireContentAddresses = (): ContentAddressService => {
@@ -1795,13 +1859,11 @@ export const pageBuilder = (
     }
     return contentAddresses;
   };
-  // Refuses to start when a collection given a template address cannot have
-  // a template: run once every plugin's collections are registered.
-  let checkTemplateAddresses: (() => Promise<void>) | null = null;
-  // Brings the entries' claims to the declared addresses, after the pages'.
-  let entryClaimsPass: (() => Promise<void>) | null = null;
-  // Releases the claims of collections no longer given an address.
-  let undeclaredSweep: (() => Promise<void>) | null = null;
+  // One start's work on the address store, set by `init`: the check that
+  // refuses a collection given a template address that cannot have a
+  // template (run once every plugin's collections are registered), and the
+  // start-up passes, both over one read of the stored template addresses.
+  let beginAddressStart: (() => AddressStart) | null = null;
   // The start-up passes over the address store while they run: pages, the
   // sweep, then entries. The addresses listed for pre-rendering wait for it,
   // so a build never lists a store the passes are still filling or moving.
@@ -1868,12 +1930,6 @@ export const pageBuilder = (
     siteStyle: string;
     warn: (message: string, meta?: Record<string, unknown>) => void;
   } | null = null;
-
-  /**
-   * Put the composition graph lock's row in place, once the plugin's tables
-   * exist. Published by `init` for the reason `defaultLayoutSetup` is.
-   */
-  let seedGraphLock: (() => Promise<void>) | null = null;
 
   /** The installed spacing-model store, or a refusal naming why it is missing. */
   const requireSpacingSetup = (): NonNullable<typeof spacingSetup> => {
@@ -2014,6 +2070,9 @@ export const pageBuilder = (
           )
         );
     },
+    // A collection whose declaration holds no blocks field is not read
+    // again on each write to it to say so.
+    collectionMayHoldBlocks: collection => writeReach.mayHoldBlocks(collection),
     limits: () => opts.limits ?? DEFAULT_LIMITS,
     placeOf: at => {
       if (at.kind === "single") return "singles";
@@ -2429,6 +2488,9 @@ export const pageBuilder = (
       appearance: { icon: "Layout", label: "Page Builder" },
       description:
         "Build pages visually from blocks with drag-and-drop editing",
+      // Its own rail item after Forms, opening the overview: see
+      // `overview/admin-panel.ts`.
+      ...PAGE_BUILDER_PLACEMENT,
     },
     // Registers what other plugins DECLARED, and resolves the registry service
     // on the way, which is what empties it for the boot. The service is lazy:
@@ -2446,6 +2508,14 @@ export const pageBuilder = (
         ctx.self.collections
       );
       installed = installContext(ctx, opts);
+      // Read per question from `ctx.config`, the declarations as every
+      // plugin's contributions and extensions leave them.
+      writeReach = collectionReach({
+        collections: () => ctx.config.collections,
+        fieldGroups: declaredFieldGroups(ctx),
+        addresses: templateAddresses,
+        own: () => new Set(Object.values(ctx.self.collections)),
+      });
       registerCoreBlocks(ctx);
       registerDeclaredBlocks(ctx);
       // The site's named queries and the ones plugins declare, into a
@@ -2906,13 +2976,6 @@ export const pageBuilder = (
         sharedStyleUses: (ids, documents) =>
           storedSharedStyleUses(documents, opts.limits ?? DEFAULT_LIMITS)(ids),
       });
-      seedGraphLock = () =>
-        seedCompositionGraphLock(ctx.db, ctx.dialect).catch((error: unknown) =>
-          ctx.logger.warn(
-            "[page-builder] the composition graph lock's row could not be put in place; the first write locking it inserts it",
-            { error }
-          )
-        );
 
       usage.reconcile = registerClassUsageMaintenance({
         ctx,
@@ -2939,6 +3002,9 @@ export const pageBuilder = (
         // A failed write marks the index dirty, so health stops calling it
         // whole until a full rebuild has walked the site again.
         markDirty: () => usageBookkeeping(ctx.db, ctx.dialect).markDirty(),
+        // A collection whose declaration holds no blocks field derives no
+        // rows, known without reading it.
+        mayHoldBlocks: collection => writeReach.mayHoldBlocks(collection),
       });
       // A write of the site style dropping a variable still in use is
       // refused before its transaction, by the check the remove route makes.
@@ -3000,7 +3066,16 @@ export const pageBuilder = (
         // last connection never waits for a second one.
         publishedPages: tx => publishedPagesInTransaction(readPagesOn, tx),
       });
-      pageClaimsBackfill = async () => {
+      // The pages `ids` as stored, each matched by its id exactly (a database
+      // may compare loosely): their own columns, no relationship expanded,
+      // past every read hook, as the pages' pass judges their claims.
+      const pagesWithIds = (rows: readonly unknown[], ids: readonly string[]) =>
+        (rows as Readonly<Record<string, unknown>>[]).filter(
+          row =>
+            (typeof row.id === "string" || typeof row.id === "number") &&
+            ids.includes(String(row.id))
+        );
+      const pageClaimsBackfill = async () => {
         const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
         const complete = await backfillPageClaims({
           pages: pagesSlug,
@@ -3013,19 +3088,33 @@ export const pageBuilder = (
           // With no row lock: the pass holds the page's claims lock, which a
           // save of the page takes before it commits, while a share lock
           // here would wait for a save holding the row that is itself
-          // waiting for that claims lock.
+          // waiting for that claims lock. At depth 0: a page's claims follow
+          // from its own columns, and expanding its relationships costs a
+          // read per related document.
           readPage: async (tx, id) => {
-            try {
-              return await ctx.services.ownCollections.findEntryByIdInTransaction(
+            const found =
+              await ctx.services.ownCollections.listEntriesInTransaction(
                 tx,
                 pagesSlug,
-                id,
+                {
+                  where: { id: { equals: id } },
+                  pagination: { limit: 1 },
+                  depth: 0,
+                },
                 { lock: "none" }
               );
-            } catch (error) {
-              if (NextlyError.isNotFound(error)) return null;
-              throw error;
-            }
+            return pagesWithIds(found.data, [id])[0] ?? null;
+          },
+          readPages: async ids => {
+            const found = await ctx.services.ownCollections.listEntries(
+              pagesSlug,
+              {
+                where: { id: { in: [...ids] } },
+                pagination: { limit: ids.length },
+                depth: 0,
+              }
+            );
+            return pagesWithIds(found.data, ids);
           },
           withTransaction: work =>
             ctx.services.collections.withTransaction(work),
@@ -3216,21 +3305,22 @@ export const pageBuilder = (
             )
           ),
         // The page builder's own documents are pages, stores and
-        // bookkeeping, never entries served under a template address.
-        neverServed: collection =>
-          Object.values(ctx.self.collections).includes(collection),
+        // bookkeeping, never entries served under a template address; nor
+        // is an entry of a collection the site's code declares that no
+        // template may serve and no address in code names, such as another
+        // plugin's private records. Known from the code alone, so a write to
+        // one reads nothing (see `collection-reach`).
+        neverServed: collection => !writeReach.mayServeEntries(collection),
         // The template guard's own judgement of which collections may have
-        // one; a localized collection is refused an address.
+        // one; a localized collection is refused an address. The same rule
+        // `neverServed` asks of the code, asked of the registry's record.
         // Given a write's transaction, the registry is read on it.
         mayHaveTemplate: async (collection, tx) => {
-          const problem = await templateCollectionProblem(
+          const own = new Set(Object.values(ctx.self.collections));
+          return mayBeTemplated(
             collection,
-            slug => collectionRecord(slug, tx),
-            new Set(Object.values(ctx.self.collections))
-          );
-          return (
-            problem === null &&
-            (await collectionRecord(collection, tx))?.localized !== true
+            own.has(collection) ? null : await collectionRecord(collection, tx),
+            own
           );
         },
         storedAddressProblem: (address, collection) =>
@@ -3273,16 +3363,35 @@ export const pageBuilder = (
         warn: (message: string, meta: Record<string, unknown>) =>
           ctx.logger.warn(message, meta),
       };
-      entryClaimsPass = () => settleEntryClaimsAtStart(passDeps);
-      undeclaredSweep = () => releaseUndeclared(passDeps);
-      checkTemplateAddresses = async () => {
+      // Why a collection given an address in code cannot be served there, or
+      // null when it can.
+      const declaredAddressProblem = async (
+        collection: string,
+        own: ReadonlySet<string>
+      ): Promise<string | null> => {
+        const problem = await templateCollectionProblem(
+          collection,
+          collectionRecord,
+          own
+        );
+        if (problem !== null) return problem;
+        // One slug serves an entry in every language, as a page's does: a
+        // localized collection's entries have a slug and a state in each,
+        // which an address per language would have to follow.
+        return (await collectionRecord(collection))?.localized === true
+          ? `The collection "${collection}" is localized, and a localized collection's entries cannot be served under a template address yet.`
+          : null;
+      };
+      const checkTemplateAddresses = async (
+        storedAtStart: () => Promise<ReadonlyMap<string, string>>
+      ) => {
         const own = new Set(Object.values(ctx.self.collections));
         const problems: string[] = [];
         // An address declared in code is compared with every other
         // collection's stored one: two collections may not share one. A
         // collection promoted into code taking over its own stored address
         // is no clash.
-        const stored = await readStoredAddresses();
+        const stored = await storedAtStart();
         for (const [collection, address] of declaredPaths) {
           for (const [other, held] of stored) {
             if (held === address && other !== collection) {
@@ -3293,29 +3402,116 @@ export const pageBuilder = (
           }
         }
         for (const collection of templateAddresses.keys()) {
-          const problem = await templateCollectionProblem(
-            collection,
-            collectionRecord,
-            own
-          );
-          if (problem !== null) {
-            problems.push(problem);
-            continue;
-          }
-          // One slug serves an entry in every language, as a page's does: a
-          // localized collection's entries have a slug and a state in each,
-          // which an address per language would have to follow.
-          if ((await collectionRecord(collection))?.localized === true) {
-            problems.push(
-              `The collection "${collection}" is localized, and a localized collection's entries cannot be served under a template address yet.`
-            );
-          }
+          const problem = await declaredAddressProblem(collection, own);
+          if (problem !== null) problems.push(problem);
         }
         if (problems.length > 0) {
           throw new Error(
             `[page-builder] templates.addresses cannot be used: ${problems.join(" ")}`
           );
         }
+      };
+      // Where the start-up passes record that the store is settled.
+      const startMarks = startMarkStore(ctx.db, ctx.dialect);
+      // Each collection given a template address, as the start's mark reads
+      // it: read through the pool, before any pass's transaction opens. Its
+      // entries' count and newest save are read here, the rest as the pass
+      // reads it (`collectionClaimInputs`).
+      const addressedCollection = async (
+        collection: string
+      ): Promise<AddressedCollection> => {
+        const record = await collectionRecord(collection);
+        let rows: RowsState | null = null;
+        if (record !== null) {
+          // Newest save where its entries keep one; how many, either way.
+          const found = await ctx.services.collections.listEntries(
+            collection,
+            record.timestamps === false
+              ? { pagination: { limit: 1 }, select: { id: true }, depth: 0 }
+              : NEWEST_ROW,
+            { as: "system" }
+          );
+          rows =
+            record.timestamps === false
+              ? { total: found.pagination.total, newest: null }
+              : rowsStateOf(found);
+        }
+        return {
+          slug: collection,
+          // Asked of the claims' own deps, as the start-up pass asks them,
+          // so whatever decides what its entries hold moves the mark.
+          claims: await collectionClaimInputs(claimsDeps, collection),
+          rows,
+        };
+      };
+      beginAddressStart = () => {
+        // The template addresses set in the admin, read once for the whole
+        // start: by the check the boot waits for, and by every pass after it.
+        // A template saved meanwhile settles its entries' claims in its own
+        // transaction.
+        let storedRead: Promise<ReadonlyMap<string, string>> | undefined;
+        const storedAtStart = () => (storedRead ??= readStoredAddresses());
+        const startDeps = {
+          ...passDeps,
+          storedAddresses: async () =>
+            new Map(
+              [...(await storedAtStart()).entries()].map(
+                ([collection, address]) => [
+                  collection,
+                  addressSegments(address),
+                ]
+              )
+            ),
+        };
+        return {
+          check: () => checkTemplateAddresses(storedAtStart),
+          passes: () =>
+            runAddressStartup({
+              inputs: async () => {
+                const stored = await storedAtStart();
+                const addressed = [
+                  ...new Set([...declaredPaths.keys(), ...stored.keys()]),
+                ].sort();
+                const collections: AddressedCollection[] = [];
+                for (const collection of addressed) {
+                  collections.push(await addressedCollection(collection));
+                }
+                return {
+                  plugin: PLUGIN_VERSION,
+                  slugs: [pagesSlug, templatesSlug, claimsStore.slug],
+                  locales: [...siteLocales()],
+                  pagePath: opts.pagePreviewPath ?? null,
+                  declared: sortedPairs(declaredPaths),
+                  stored: sortedPairs(stored),
+                  collections,
+                  pages: rowsStateOf(
+                    await ctx.services.ownCollections.listEntries(pagesSlug, {
+                      ...NEWEST_ROW,
+                      where: { status: { equals: "published" } },
+                    })
+                  ),
+                  templates: rowsStateOf(
+                    await ctx.services.ownCollections.listEntries(
+                      templatesSlug,
+                      NEWEST_ROW
+                    )
+                  ),
+                  claims: await ctx.services.ownCollections.count(
+                    claimsStore.slug
+                  ),
+                };
+              },
+              mark: startMarks,
+              pages: pageClaimsBackfill,
+              sweep: () => releaseUndeclared(startDeps),
+              entries: () => settleEntryClaimsAtStart(startDeps),
+              skipped: () => {
+                if (claimsInit === pageClaimsInit) pageClaimsBackfilled = true;
+              },
+              current: () => claimsInit === pageClaimsInit,
+              warn: (message, meta) => ctx.logger.warn(message, meta),
+            }),
+        };
       };
       contentAddresses = contentAddressService({
         claims: claimsStore,
@@ -3504,6 +3700,7 @@ export const pageBuilder = (
         ctx,
         runs: () => removalRunStore(ctx.db, ctx.dialect),
         definedBreakpoints,
+        mayHoldBlocks: collection => writeReach.mayHoldBlocks(collection),
       });
       // A blocks field below the top level has no Page Builder to open, and the
       // operator should learn that from the log before an author meets it in
@@ -3520,32 +3717,23 @@ export const pageBuilder = (
       // A collection given a template address that cannot have a template
       // refuses to start, naming it: checked once every plugin's
       // collections are registered.
-      await checkTemplateAddresses?.();
+      const addressStart = beginAddressStart?.() ?? null;
+      await addressStart?.check();
       // Existing pages' addresses, claimed in the background, then the
-      // entries' under their collections' addresses, pages first: the
-      // passes never throw, and a boot is not held for them.
-      const backfill = pageClaimsBackfill;
-      const entryPass = entryClaimsPass;
-      const sweep = undeclaredSweep;
-      if (backfill !== null) {
-        // The entries' pass only after every page holds its address: until
-        // then an entry could take a path a page is still owed. Releasing a
-        // removed collection's claims takes nothing a page is owed, so it
-        // runs whether or not the pages' pass completed.
+      // entries' under their collections' addresses, pages first, unless
+      // nothing they follow from changed since the last start that settled
+      // them (see `runAddressStartup`): the passes never throw, and a boot
+      // is not held for them.
+      if (addressStart !== null) {
         // Not awaited, so the boot is not held; the address listing joins it
-        // instead (see the content address service).
-        const startup = backfill()
-          .then(async complete => {
-            await sweep?.();
-            if (complete) await entryPass?.();
-          })
-          .catch(() => undefined);
+        // instead (see the content address service), which is also how a
+        // test waits for it.
+        const startup = addressStart.passes().catch(() => undefined);
         addressStartup = startup;
         void startup.finally(() => {
           if (addressStartup === startup) addressStartup = null;
         });
       }
-      void seedGraphLock?.();
       const setup = defaultLayoutSetup;
       const spacing = spacingSetup;
       const seeded =
@@ -3638,6 +3826,41 @@ export const pageBuilder = (
         // collection's entry under its template address. Read as committed,
         // through the store every save's collision check writes.
         [CONTENT_ADDRESS_SERVICE]: () => requireContentAddresses(),
+        // What the design drawing a page says about it (its title,
+        // description and share image), for a plugin that asks about a page
+        // outside a request: worked out by the route's own derivation, over
+        // the design the route would draw, so it answers what the published
+        // page is answered with.
+        [DESIGN_SEO_SERVICE]: ctx =>
+          designSeoService({
+            nextly: async () => {
+              const { getCachedNextly } = await import("@nextlyhq/plugin-sdk");
+              return (await getCachedNextly()) as unknown as PageBuilderContentDirectApi;
+            },
+            pages: {
+              collection: ctx.self.collections[PAGES_SLUG] ?? PAGES_SLUG,
+              field: PAGES_CONTENT_FIELD,
+            },
+            templatesCollection:
+              ctx.self.collections[TEMPLATES_SLUG] ?? TEMPLATES_SLUG,
+            // Loaded when first asked: the renderer's Next-coupled entry is
+            // needed only once a page is asked about.
+            derive: async args => {
+              const { designMetadataFor } = await import(
+                "@nextlyhq/blocks-react/next"
+              );
+              return designMetadataFor({
+                ...args,
+                config: {
+                  // The booted Direct API the provider read through, which
+                  // the route's reads take as their reader.
+                  nextly: args.config.nextly as NonNullable<
+                    Parameters<typeof designMetadataFor>[0]["config"]["nextly"]
+                  >,
+                },
+              });
+            },
+          }),
         [SPACING_MODE_SERVICE]: (): SpacingModeReader => ({
           read: () =>
             readJoiningDecision(
@@ -3798,6 +4021,10 @@ export const pageBuilder = (
       // plugin route declares one permission, so the tier a role may read
       // without the other has to be reachable without the other's gate.
       routes: [
+        // Which registered blocks a blocks field accepts, with their props,
+        // for the Schema Builder's outline: code-defined metadata only, to
+        // any signed-in caller.
+        blocksListRoute(),
         patternLibraryRoute(),
         componentLibraryRoute(componentStoreOf(opts)),
         savePatternRoute(),
@@ -3980,6 +4207,9 @@ export const pageBuilder = (
         // An unbind's plan for the inspector, against the document it holds:
         // the same decision as the page actions API's, applied by the editor.
         unbindPlanRoute({ limits: () => opts.limits ?? DEFAULT_LIMITS }),
+        // The overview's libraries and where the builder is used, as the
+        // caller may see them.
+        overviewRoute(componentStoreOf(opts)),
         // The documents whose bindings no longer fit, for those who edit
         // pages, each listed only when the caller may read it.
         bindingsToFixRoute({
@@ -4199,17 +4429,12 @@ export const pageBuilder = (
           canvasPath,
           fontsOff: fonts.off,
         }),
-        // The "Bindings to fix" page, at
-        // `/admin/plugins/nextlyhq-plugin-page-builder/bindings-to-fix`,
-        // reached from its dashboard card and the editor's notice.
-        pages: [
-          {
-            path: "/bindings-to-fix",
-            component: BINDINGS_TO_FIX_PAGE_COMPONENT,
-            requiredPermission: EDIT_PAGES_PERMISSION,
-          },
-        ],
-        // The three LIBRARIES, and no link to Pages.
+        // The overview the rail item opens, and the "Bindings to fix" page,
+        // reached from the panel, its dashboard card and the editor's notice.
+        pages: PAGE_BUILDER_PAGES,
+        // The panel's headings: the libraries, then the checks.
+        panel: PAGE_BUILDER_PANEL,
+        // The LIBRARIES and the bindings report, and no link to Pages.
         //
         // Pages is an ordinary collection that happens to declare a `blocks`
         // field — a title, a slug and the document — and the Collections
@@ -4237,11 +4462,11 @@ export const pageBuilder = (
         // would strand the link and hide the item from the readers who can
         // open the list.
         //
-        // They sit under this plugin's own heading rather than a section of
-        // their own: the sidebar's section vocabulary is a closed list in core
-        // with no design entry, so grouping them elsewhere would mean widening
-        // that list — a change to the admin's navigation model, and a larger
-        // question than where three links go.
+        // They are listed in the plugin's own panel, beside its rail item,
+        // since the plugin is placed standalone; where the overview lists the
+        // collections and Singles that use the field, which is the answer to
+        // "where are the pages" that stays true as more of them declare it.
+        //
         // The editor is a full-screen view of the document, offered wherever a
         // blocks field is used — including collections the Schema Builder adds
         // later — and opened by the field's card at that address.
@@ -4258,6 +4483,16 @@ export const pageBuilder = (
         // delete and unpublish are refused. The slot is offered to every entry
         // form; the component draws only on a saved Layout's own.
         entryFormToolbarSlot: REMOVE_LAYOUT_ACTION_COMPONENT,
+        // The editor's Settings dialog, where other plugins may add a tab
+        // beside the page's or the design's own settings.
+        places: [
+          {
+            name: PAGE_BUILDER_SETTINGS_PLACE,
+            description:
+              "A tab in the Page Builder's Settings dialog, beside the page's or the design's own settings.",
+            accepts: ["tab"],
+          },
+        ],
         // An entry's own design, where an author meets it.
         //
         // The Design section of an entry's side panel, first, before Status:
@@ -4319,45 +4554,10 @@ export const pageBuilder = (
         ...(hostStoreOf(componentStoreOf(opts)) === undefined
           ? {}
           : { header: { slot: COMPONENT_STORE_DELETE_HOST_COMPONENT } }),
-        menu: [
-          {
-            label: "Patterns",
-            collection: PATTERNS_SLUG,
-            to: `/admin/collections/${PATTERNS_SLUG}`,
-            icon: "LayoutTemplate",
-          },
-          {
-            label: "Components",
-            collection: COMPONENTS_SLUG,
-            to: `/admin/collections/${COMPONENTS_SLUG}`,
-            icon: "Component",
-          },
-          {
-            label: "Layouts",
-            collection: LAYOUTS_SLUG,
-            to: `/admin/collections/${LAYOUTS_SLUG}`,
-            icon: "PanelsTopLeft",
-          },
-          // The designs collections' entries are drawn with, and where each
-          // collection's entries are served.
-          {
-            label: "Templates",
-            collection: TEMPLATES_SLUG,
-            to: `/admin/collections/${TEMPLATES_SLUG}`,
-            icon: "LayoutDashboard",
-          },
-          // The site-wide report of bindings that no longer fit, for those
-          // who edit pages, as its page asks.
-          {
-            label: "Bindings to fix",
-            to: BINDINGS_TO_FIX_PAGE_HREF,
-            // Neutral: the entry is there whether or not anything needs
-            // fixing; the warning sign is for the dashboard line and the
-            // editor's chip, which show only when something does.
-            icon: "Unlink",
-            requiredPermission: EDIT_PAGES_PERMISSION,
-          },
-        ],
+        // Each library's item with a quiet count of its collection, and
+        // "Bindings to fix" with its attention badge: see
+        // `overview/admin-panel.ts`.
+        menu: PAGE_BUILDER_MENU,
         // No `schemaBuilderSlot`. It named a component this package no longer
         // ships: a schema-builder toggle for turning a collection into a
         // page-builder one, from an editor that stored its own document

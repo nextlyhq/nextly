@@ -134,6 +134,7 @@ type ForwardedOption =
   | "depth"
   // Output shaping.
   | "richTextFormat"
+  | "richTextStyles"
   // Which collections hold form definitions and submissions — namespace
   // configuration.
   | "forms"

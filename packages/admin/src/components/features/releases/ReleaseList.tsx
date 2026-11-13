@@ -308,7 +308,7 @@ function TabLabel({
             className={cn(
               "ml-2 inline-flex min-w-5 justify-center rounded-full px-1.5 text-xs font-medium tabular-nums leading-5",
               urgent
-                ? "bg-destructive/10 text-destructive"
+                ? "bg-danger-text text-danger-surface"
                 : "bg-muted text-muted-foreground"
             )}
           >

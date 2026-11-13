@@ -112,6 +112,8 @@ In code, set `localized: false` on the field and run `nextly migrate:create`. It
 
 If the archive cannot be written, the change is refused and nothing is changed.
 
+In development, `next dev` makes the same move when you save the config, and so does `nextly db:sync` (and each re-sync of `nextly db:sync --watch`): the other languages go to the archive, the default language's value is copied into the shared column, and then the translated column is removed. A Required or Unique field gets its setting once its values are copied. When the values can't take it, the change is refused before anything changes, and the message names the field and how many entries are in the way.
+
 A field marked Required or Unique can stop being translated in the same change, as long as the default language's values can take the setting. The shared column is created without the setting, filled with the default language's values, and only then made required or unique. In the Schema Builder, the change is refused before anything runs when they can't, and the dialog says so before Apply: Required needs every entry to have a default-language value, and Unique needs no two entries to end up with the same value (an entry with no default-language value takes another language's, which counts). The refusal names the field and how many entries are in the way, never a value. In code, `migrate:create` writes the setting into the third file, after the copy and before the translated column is removed. `nextly migrate` checks the values before the first of the three files runs, and again before the third: when they can't take the setting, it refuses with the field and how many entries are in the way, and changes nothing. Give those entries their values, then run `nextly migrate` again. The values are checked once, before the move starts, so stop the app's writes while `nextly migrate` runs. Files that record the setting need this version of Nextly or a newer one to run.
 
 To bring those values back, make the field translated again, then restore that field:
@@ -294,9 +296,17 @@ languageAddresses: {
   serves the prefixes. Sending each domain to its language, and the default language's
   unprefixed addresses to the route, stays with your site, for example a rewrite in
   `next.config.ts` or a Proxy.
+- On a Page Builder route under a `[locale]` segment, a block's link to another entry is read in
+  the request's language and points at that entry's address in it: a German page's button links
+  to `/de/kontakt`, not the English `/contact`. A route mounted for one language with its own
+  `locale` keeps its links as it serves its pages. A route given its own `resolveEntryPath` is
+  handed the language as a third argument and answers the whole address itself.
 - `languageAddressOf(path, locale)`, from `nextly` or `@nextlyhq/plugin-sdk`, answers the address
   a path kept in a language is opened at: `{ status: "resolved", path, origin? }`, or
   `{ status: "unavailable" }` for a language the site does not have.
+- `addressOfRequest(url)`, from the same two places, answers the other way round: the language
+  and the kept path a request asks for, `{ locale, path }`, or `undefined` where no language
+  serves that address. A request on a host no domain rule names is read in the default language.
 
 ## Related
 

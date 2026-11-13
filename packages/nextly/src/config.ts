@@ -108,6 +108,7 @@ export type {
 export {
   isFieldLocalized,
   defaultLocalizedForType,
+  neverTranslatable,
   resolveLocalizedFieldNames,
 } from "./domains/i18n/classify-fields";
 
@@ -211,7 +212,16 @@ export {
   isPluginCategory,
   type PluginCategory,
 } from "./plugins/plugin-categories";
-export { pluginAdminSlug } from "./plugins/plugin-slug";
+export { pluginAdminSlug, pluginPageAddress } from "./plugins/plugin-slug";
+// The plugin pages' startup reads the admin layout writes into the prebuilt
+// page, and the one rule and bound of the startup request they keep to: the
+// layout, the admin's startup request and the route answering it read the
+// same answers.
+export {
+  ADMIN_STARTUP_SCREENS_ELEMENT_ID,
+  adminStartupScreensJson,
+} from "./plugins/startup-reads";
+export { MAX_STARTUP_PATHS } from "./route-handler/startup-path";
 // The admin places, for the same reason: the catalogue the server checks a
 // plugin's contributions against is the one the admin renders them from.
 export {
@@ -385,7 +395,14 @@ export {
 export { isAdminRelativePath } from "./domains/widgets/admin-path";
 // The admin's robots directives, for its layout's metadata and the admin's own
 // fallback tag.
-export { ADMIN_ROBOTS, adminMetadata } from "./domains/admin-metadata";
+export {
+  ADMIN_BRANDING_ELEMENT_ID,
+  ADMIN_ROBOTS,
+  adminBrandingJson,
+  adminMetadata,
+  adminMetadataFor,
+  type AdminPageBranding,
+} from "./domains/admin-metadata";
 // The settings the sheet draws beyond field configs (a collection, and a
 // filter, sort or grouping over it), and the union every rule reads, so the
 // admin's controls and reset are typed by core's vocabulary, not a copy of it.

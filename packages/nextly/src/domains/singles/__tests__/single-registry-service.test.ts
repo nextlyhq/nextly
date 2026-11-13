@@ -16,7 +16,15 @@
  * - Helpers: generateTableName, ensureTableNamePrefix, deserializeRecord
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// The adapter double holds no stored schema version: registry writes run as
+// they are (`unversionedRegistryWrites`).
+vi.mock("../../schema/schema-version", async importOriginal =>
+  (
+    await import("../../../__tests__/helpers/unversioned-registry-writes")
+  ).unversionedRegistryWrites(await importOriginal())
+);
 
 import { NextlyError } from "../../../errors";
 import { SingleRegistryService } from "../services/single-registry-service";
@@ -684,6 +692,12 @@ describe("SingleRegistryService", () => {
         }
         return null;
       });
+      // The sync reads every Single at once: the list holds the row the
+      // single-row read above answers with.
+      ctx.adapter.select.mockImplementation(async (table: string) => {
+        const row = await ctx.adapter.selectOne(table);
+        return row ? [row] : [];
+      });
       ctx.adapter.update.mockResolvedValue([dbRow()]);
 
       const result = await ctx.service.syncCodeFirstSingles([
@@ -750,6 +764,12 @@ describe("SingleRegistryService", () => {
           admin: JSON.stringify({ preview: { label: "Preview" } }),
         });
       });
+      // The sync reads every Single at once: the list holds the row the
+      // single-row read above answers with.
+      ctx.adapter.select.mockImplementation(async (table: string) => {
+        const row = await ctx.adapter.selectOne(table);
+        return row ? [row] : [];
+      });
       ctx.adapter.update.mockResolvedValue([dbRow()]);
 
       const result = await ctx.service.syncCodeFirstSingles([
@@ -802,6 +822,12 @@ describe("SingleRegistryService", () => {
           admin: JSON.stringify({ preview: { label: "Landing preview" } }),
           description: "An older description",
         });
+      });
+      // The sync reads every Single at once: the list holds the row the
+      // single-row read above answers with.
+      ctx.adapter.select.mockImplementation(async (table: string) => {
+        const row = await ctx.adapter.selectOne(table);
+        return row ? [row] : [];
       });
       ctx.adapter.update.mockResolvedValue([dbRow()]);
 

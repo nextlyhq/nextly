@@ -41,12 +41,18 @@ import { releaseBoundedRevalidate } from "../cache/release-cache-window";
 import {
   knownNoPageMetadataProvider,
   pageMetadataFor,
+  pageMetadataProviderToAsk,
+  pageStructuredDataFor,
+  type PageMetadataRequest,
 } from "../seo/page-metadata";
-import type { PageMetadataValues } from "../seo/page-metadata-contract";
+import type {
+  PageMetadataValues,
+  PageStructuredDataHints,
+} from "../seo/page-metadata-contract";
 
 import { deferToRequest } from "./defer-to-request";
 import { isMissOrDenied } from "./miss-or-denied";
-import { triggerNotFound } from "./not-found";
+import { answerNotFound } from "./not-found";
 import {
   confirmedLanguage,
   requestLanguage,
@@ -166,6 +172,16 @@ export interface SingleContext {
    * the translated documents that need it.
    */
   locale?: string;
+  /**
+   * The page's structured data, as JSON-LD text written so that no value can
+   * end its element: place it as the body of a JSON-LD script element, as a
+   * content route's `context.structuredData` is placed. Read from the same
+   * answer as the page's head; given to `render` only, and only where a
+   * plugin provides page metadata and its answer has some.
+   *
+   * @experimental Settles with the page-metadata contract.
+   */
+  structuredData?: string;
 }
 
 /** Config for {@link createSingleRoute} and {@link createPublicSingleRoute}. */
@@ -183,8 +199,9 @@ export interface SingleRouteConfig<TNode> {
    * Where a plugin provides page metadata, such as `@nextlyhq/plugin-seo`, its
    * answer decides the page's head and this is one of its inputs: the title,
    * description and social values set here are used where nobody set them for
-   * the page, and its `robots` and canonical are not used at all. Without such
-   * a plugin, this is served as returned.
+   * the page; its `robots` may hide the page, never list one the answer hides,
+   * and its other robots directives are kept; its canonical is kept only where
+   * the answer names none. Without such a plugin, this is served as returned.
    */
   buildMetadata?: (
     document: SingleDocument,
@@ -200,6 +217,31 @@ export interface SingleRouteConfig<TNode> {
     document: SingleDocument,
     context: SingleContext
   ) => PageMetadataValues | Promise<PageMetadataValues>;
+  /**
+   * @experimental What the route knows about the Single's page for its
+   * structured data and the Single does not hold: what kind of page it is,
+   * its own name, the entries it lists, the questions it answers. Asked only
+   * where a plugin provides page metadata, and only for the structured data,
+   * never the head, as a content route's `structuredDataHints` is.
+   */
+  structuredDataHints?: (
+    document: SingleDocument,
+    context: SingleContext
+  ) =>
+    | PageStructuredDataHints
+    | undefined
+    | Promise<PageStructuredDataHints | undefined>;
+  /**
+   * The address this route serves the Single at, from `/`, where the page's
+   * head should be answered for it: a later page of the Single's list, such
+   * as `/blog/page/2` for a blog Single at `/blog`, is then its own page to
+   * search engines, with its own canonical. Given as the address, or worked
+   * out from the route's params for a route with a variable part.
+   *
+   * Left out, the page-metadata provider is asked without one and answers
+   * for the Single's own address, which is right for a route served there.
+   */
+  path?: string | ((params: SingleRouteParams) => string);
   /**
    * A booted Nextly instance. Defaults to the runtime singleton, which requires
    * services to be registered — pass one explicitly (the value from
@@ -307,14 +349,154 @@ export interface SingleRouteConfig<TNode> {
   tags?: string[];
   /** Time-based revalidation for a public route. Tag-based busting needs none. */
   revalidate?: number | false;
+  /**
+   * How this route answers a request it has nothing for, in place of
+   * Next.js's `notFound()`: a site passes its own to do something for each
+   * miss, such as logging the address. The page and `generateMetadata` may
+   * both call it for one request. A handler that returns is followed by
+   * Next.js's `notFound()`; without one the route answers as before.
+   *
+   * @experimental Its name and shape may change before 1.0.
+   */
+  notFound?: () => never | Promise<never>;
 }
 
 /**
+ * The params Next hands a Single's route: none at a fixed path, `locale`
+ * under a `[locale]` segment, and whatever other variable parts the route's
+ * folder has, such as `page` in `app/blog/page/[page]/page.tsx`.
+ */
+export type SingleRouteParams = Readonly<
+  Record<string, string | string[] | undefined>
+> & { readonly locale?: string };
+
+/**
  * What Next hands a Single's page and `generateMetadata`: no params for a
- * route at a fixed path, and `locale` for one under a `[locale]` segment.
+ * route at a fixed path, `locale` for one under a `[locale]` segment, and the
+ * route's other params, which `path` may read.
  */
 export interface SingleRouteArgs {
-  params?: Promise<{ locale?: string }> | { locale?: string };
+  params?: Promise<SingleRouteParams> | SingleRouteParams;
+}
+
+/**
+ * The parts of a Single route's config a page's answer is asked with: what
+ * {@link singlePageMetadata} and {@link singlePageStructuredData} take.
+ */
+export type SinglePageAnswerConfig = Pick<
+  SingleRouteConfig<unknown>,
+  | "buildMetadata"
+  | "derivedMetadata"
+  | "structuredDataHints"
+  | "tags"
+  | "revalidate"
+>;
+
+/**
+ * What the page-metadata provider is asked about a Single, with the route's
+ * own metadata; null for a process known to have no provider. The head and
+ * the page's structured data are both asked with this, so they read one
+ * answer.
+ */
+async function singlePageRequest(
+  config: SinglePageAnswerConfig,
+  document: SingleDocument,
+  context: SingleContext,
+  path: string | undefined
+): Promise<{
+  code: Metadata | undefined;
+  request: PageMetadataRequest | null;
+}> {
+  const code = config.buildMetadata
+    ? await config.buildMetadata(document, context)
+    : undefined;
+  // Only where a provider can be asked: Nextly is started first where nothing
+  // has started it, and with no provider, or none reachable, the route's own
+  // metadata is served without the content being read for one.
+  if (!(await pageMetadataProviderToAsk(path))) return { code, request: null };
+  const derived = config.derivedMetadata
+    ? await config.derivedMetadata(document, context)
+    : undefined;
+  return {
+    code,
+    request: {
+      // Without an address the provider finds the Single's own.
+      ...(path === undefined ? {} : { path }),
+      ...(context.locale === undefined ? {} : { locale: context.locale }),
+      source: { kind: "single", slug: context.slug, document },
+      code,
+      ...(derived === undefined ? {} : { derived }),
+      // The tags the document's own read carries, so a write to the Single
+      // expires its head as it expires its body.
+      tags: readTags(nextlySingleTags(context.slug), config.tags),
+      ...(config.revalidate === undefined
+        ? {}
+        : { revalidate: config.revalidate }),
+    },
+  };
+}
+
+/**
+ * The head of a Single a route read itself: the page-metadata provider's
+ * answer where a plugin provides one, otherwise the route's own
+ * `buildMetadata`, as returned. Asked exactly as a Single route asks, so a
+ * site that renders its own pages serves the head a Single route would.
+ *
+ * `context.slug` names the Single. `path` is the address the request was
+ * served at; left out, the provider answers for the Single's own address.
+ *
+ * ```ts
+ * export async function generateMetadata() {
+ *   const about = await nextly.findSingle({ slug: "about-page" });
+ *   return singlePageMetadata(
+ *     { buildMetadata: () => ({ title: "About" }) },
+ *     about,
+ *     { slug: "about-page" },
+ *     "/about"
+ *   );
+ * }
+ * ```
+ *
+ * @experimental Settles with the page-metadata contract.
+ */
+export async function singlePageMetadata(
+  config: SinglePageAnswerConfig,
+  document: SingleDocument,
+  context: SingleContext,
+  path?: string
+): Promise<Metadata> {
+  const { code, request } = await singlePageRequest(
+    config,
+    document,
+    context,
+    path
+  );
+  return request === null ? (code ?? {}) : pageMetadataFor(request);
+}
+
+/**
+ * The structured data of a Single a route read itself, as the JSON-LD text a
+ * Single route hands its `render` as `context.structuredData`: read from the
+ * same answer as {@link singlePageMetadata} when asked with the same
+ * arguments, and nothing without a provider.
+ *
+ * @experimental Settles with the page-metadata contract.
+ */
+export async function singlePageStructuredData(
+  config: SinglePageAnswerConfig,
+  document: SingleDocument,
+  context: SingleContext,
+  path?: string
+): Promise<string | undefined> {
+  // Nobody to answer, or nobody reachable once Nextly's start was tried: the
+  // route's own metadata is not worked out for nothing.
+  if (!(await pageMetadataProviderToAsk(path))) return undefined;
+  const { request } = await singlePageRequest(config, document, context, path);
+  if (request === null) return undefined;
+  const hints = await config.structuredDataHints?.(document, context);
+  return pageStructuredDataFor(
+    hints === undefined ? request : { ...request, structuredDataHints: hints }
+  );
 }
 
 /** What a Single route hands back for the route file to export. */
@@ -351,7 +533,7 @@ function buildSingleRoute<TNode>(
       config.locale,
       getReader
     );
-    if (language === null) triggerNotFound();
+    if (language === null) return answerNotFound(config.notFound);
     return {
       language,
       context: {
@@ -502,41 +684,39 @@ function buildSingleRoute<TNode>(
     });
   }
 
+  /**
+   * The address the app serves this request at, where it names one: as
+   * given, or worked out from the request's params.
+   */
+  async function servedPathOf(
+    args: SingleRouteArgs | undefined
+  ): Promise<string | undefined> {
+    const { path } = config;
+    if (typeof path !== "function") return path;
+    return path((await args?.params) ?? {});
+  }
+
   async function generateMetadata(args?: SingleRouteArgs): Promise<Metadata> {
-    const buildMetadata = config.buildMetadata;
     // Nothing of its own to serve and no provider to ask: the document is not
     // read for its head at all, as before providers existed.
-    if (!buildMetadata && knownNoPageMetadataProvider()) return {};
+    if (!config.buildMetadata && knownNoPageMetadataProvider()) return {};
     // One memo of access lookups for the resolution and the callback, so a
     // preview's draft gate, the read it grants and any read the callback makes
     // look the person up once.
     const { context, language } = await contextFor(args);
     return runWithAccessMemo(async () => {
       const document = await documentFor(context, language);
-      if (!document) return {};
-      const code = buildMetadata
-        ? await buildMetadata(document, context)
-        : undefined;
-      // Worked out only where a provider may be asked: with none known, the
-      // route's own metadata is served and the content is not walked for it.
-      const derived =
-        config.derivedMetadata && !knownNoPageMetadataProvider()
-          ? await config.derivedMetadata(document, context)
-          : undefined;
-      // A Single route is mounted by the app and never told where, so the
-      // provider is asked without a path and finds the Single's address itself.
-      return pageMetadataFor({
-        ...(context.locale === undefined ? {} : { locale: context.locale }),
-        source: { kind: "single", slug: config.slug, document },
-        code,
-        ...(derived === undefined ? {} : { derived }),
-        // The tags the document's own read carries, so a write to the Single
-        // expires its head as it expires its body.
-        tags: readTags(nextlySingleTags(config.slug), config.tags),
-        ...(config.revalidate === undefined
-          ? {}
-          : { revalidate: config.revalidate }),
-      });
+      // A miss is answered by the site's own handler here as on the page, so
+      // whichever of the two Next asks first answers it; without one, the
+      // head stays empty and the page answers the miss, as before.
+      if (!document)
+        return config.notFound ? answerNotFound(config.notFound) : {};
+      return singlePageMetadata(
+        config,
+        document,
+        context,
+        await servedPathOf(args)
+      );
     });
   }
 
@@ -546,8 +726,19 @@ function buildSingleRoute<TNode>(
     // `generateMetadata`.
     return runWithAccessMemo(async () => {
       const document = await documentFor(context, language);
-      if (!document) triggerNotFound();
-      return config.render(document, context);
+      if (!document) return answerNotFound(config.notFound);
+      // Asked only where a provider may answer: a site with none renders as
+      // it always has, and works nothing out for it.
+      const structuredData = await singlePageStructuredData(
+        config,
+        document,
+        context,
+        await servedPathOf(args)
+      );
+      return config.render(
+        document,
+        structuredData === undefined ? context : { ...context, structuredData }
+      );
     });
   }
 

@@ -14,6 +14,7 @@ import {
   type SupportedDialect,
 } from "../services/field-column-descriptor";
 import { parseColumnType } from "../value-conversion/column-type";
+import type { JudgeColumnOptions } from "../value-conversion/judge-column";
 import {
   judgeStoredColumn,
   type KeyedBy,
@@ -25,6 +26,7 @@ import type {
 } from "../value-conversion/types";
 
 import { buildColumnConversion, type ColumnConversionPlan } from "./conversion";
+import { realToDoubleOnPostgres } from "./conversion/postgres";
 import type { ColumnLocation, ColumnState, RepairEntityKind } from "./types";
 
 /** Whether `column` is a JSON column. */
@@ -87,6 +89,11 @@ function conversionFor(
     to: expected,
     compareAs: compareAsFor(field, expected),
     ...(referenceList ? { referenceList: true } : {}),
+    // The PostgreSQL conversion reads a real becoming a double through its text
+    // (`conversion/postgres.ts`), so its judgement may count on it.
+    ...(realToDoubleOnPostgres(live, expected, dialect)
+      ? { throughText: true }
+      : {}),
   };
 }
 
@@ -94,13 +101,19 @@ function conversionFor(
 export async function classifyDifference(
   db: unknown,
   dialect: SupportedDialect,
-  difference: DifferenceToClass
+  difference: DifferenceToClass,
+  options: JudgeColumnOptions = {}
 ): Promise<ConversionJudgement> {
-  return judgeStoredColumn(db, conversionFor(difference, dialect), {
-    table: difference.liveTable,
-    column: difference.liveColumn,
-    keyedBy: difference.keyedBy,
-  });
+  return judgeStoredColumn(
+    db,
+    conversionFor(difference, dialect),
+    {
+      table: difference.liveTable,
+      column: difference.liveColumn,
+      keyedBy: difference.keyedBy,
+    },
+    options
+  );
 }
 
 /**

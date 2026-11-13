@@ -51,9 +51,11 @@ import { registerSetupTokenCommand } from "./commands/setup-token.command";
 import { registerTelemetryCommand } from "./commands/telemetry.command";
 import { registerUpgradeCommand } from "./commands/upgrade.command";
 import { registerWebhooksPruneCommand } from "./commands/webhooks-prune.command";
+import { registerWorkflowStrandedCommands } from "./commands/workflow-stranded.command";
 import { createContext, type CommandContext } from "./context";
 import { CLI_MODES, setModeLineWriter } from "./environment";
 import { addExitCodesHelp } from "./exit-codes";
+import { refuseHelpForUnknownCommands } from "./unknown-command-help";
 
 export {
   createContext,
@@ -173,6 +175,9 @@ ${pc.bold("Documentation:")}
   // Then end the program's help and every command's with what its exit
   // status means: last, so the block follows any help text added before it.
   addExitCodesHelp(program);
+  // `--help` after a name no command has is refused as unknown, not answered
+  // with the parent's help: once every command is attached, so all are.
+  refuseHelpForUnknownCommands(program);
 
   // Telemetry preAction/postAction hooks. We capture command_started before
   // the action runs and command_completed after it returns. The telemetry
@@ -267,6 +272,8 @@ function registerCommands(program: Command): void {
   registerRepairColumnsCommand(program, createContext); // report columns whose type or nullability differs from their field
   registerWebhooksPruneCommand(program); // manual webhook-queue retention pass
   registerEventsCommand(program); // report and abandon plugins' durable event deliveries
+  // Lists and moves documents in a workflow stage that no longer exists.
+  registerWorkflowStrandedCommands(program);
   registerSetupTokenCommand(program, createContext); // replace or generate the production setup token
   registerMigrateFreshCommand(program);
   registerMigrateDownCommand(program); // SP-2 — rollback

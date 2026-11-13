@@ -26,11 +26,10 @@ vi.mock("../../../di/container", () => ({
 }));
 
 // The plugins the dispatchers read the owned slugs from: one plugin whose
-// collection and Single a host renamed.
-vi.mock("../../../route-handler/auth-handler", async importOriginal => ({
-  ...(await importOriginal<
-    typeof import("../../../route-handler/auth-handler")
-  >()),
+// collection and Single a host renamed. Only `getHandlerConfig`, the one
+// export the list dispatchers read, so the test does not load the module
+// itself, which reaches the auth routes and every plugin's context.
+vi.mock("../../../route-handler/auth-handler", () => ({
   getHandlerConfig: () => ({
     plugins: [
       {

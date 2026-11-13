@@ -1,22 +1,22 @@
 /**
  * The SEO issues card and its Needs attention line: what each declares, and
- * what each answers from a scan.
+ * what each answers from the problem list.
  *
- * The read services are a stub, so each case can put one shape of data in
- * front of the card's `load` and the item's `count`. That core accepts both
- * declarations at boot, and that each reads as the person asking, is
- * `widget-source.integration.test.ts`'s job, against a real instance.
+ * The list is a stub, so each case can put one list in front of the card's
+ * `load` and the line's `count`. That core accepts both declarations at
+ * boot, and that each counts what the list's own route answers the same
+ * person, is `widget-card.integration.test.ts`'s job, against a real
+ * instance.
  */
-import { text } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
-import { defaultSeoFields } from "../fields";
+import type { Problem, ProblemKind } from "../problems/contract";
 import {
   SEO_ISSUES_WIDGET_ID,
-  seoIssuesAttentionItems,
+  SEO_PROBLEMS_ATTENTION_ID,
   seoIssuesWidget,
+  seoProblemsAttentionItem,
 } from "../widget-card";
-import { ISSUE_SCAN_PAGE_SIZE, ISSUE_SCAN_ROW_BUDGET } from "../widget-source";
 
 /** The fields of a declaration this file reads, which the contribution type does not name. */
 interface Declared {
@@ -30,349 +30,148 @@ interface Declared {
     name: string;
     data: { buckets: { value: string; count: number }[] };
   }[];
-  load: (input: { services: unknown }) => Promise<unknown>;
+  load: (input: unknown) => Promise<unknown>;
 }
-
-/** The issue each bar of the card's preview cases names, case by case. */
-const previewedIssues = (card: Declared) =>
-  (card.preview ?? []).map(sample =>
-    sample.data.buckets.map(bucket => bucket.value)
-  );
 
 function declared(card: ReturnType<typeof seoIssuesWidget>): Declared {
   if (card === undefined) throw new Error("expected a card");
   return card as unknown as Declared;
 }
 
-/** Read services whose every collection holds `rows`, all on one page. */
-function servicesHolding(rows: Record<string, Record<string, unknown>[]>) {
-  const find = vi.fn(async (slug: string) => ({
-    items: rows[slug] ?? [],
-    total: (rows[slug] ?? []).length,
-  }));
-  return { find };
+/** A problem of `kind` on a page of `type`. */
+function problem(kind: ProblemKind, type = "posts"): Problem {
+  return {
+    kind,
+    subject: { type, id: "1", label: "Harbour" },
+    what: "",
+    action: "",
+    fix: { place: "page", tab: "seo" },
+  };
 }
 
-/** Read services whose one collection holds more rows than a scan reads. */
-function servicesPastTheBudget() {
-  let next = 0;
-  const find = vi.fn(async () => {
-    // How many rows match after the cursor: twice the budget, less what the
-    // pages before this one answered, as the stored ids count them.
-    const total = ISSUE_SCAN_ROW_BUDGET * 2 - next;
-    const items = Array.from({ length: 50 }, () => ({
-      id: `r${String(next++).padStart(6, "0")}`,
-      seo: {},
-    }));
-    return { items, total };
-  });
-  return { find };
-}
-
-describe("the SEO issues card", () => {
-  it("is declared as seo/issues, drawn by core's bars view", () => {
-    const card = declared(seoIssuesWidget(["pages"], defaultSeoFields()));
-
-    expect(card.id).toBe(SEO_ISSUES_WIDGET_ID);
-    expect(SEO_ISSUES_WIDGET_ID).toBe("seo/issues");
-    expect(card.view).toBe("bars");
-    expect(card.skeleton).toBe("bars");
-  });
-
-  it("is offered only to a person who may read every collection it reads", () => {
-    // 🔴 Core judges `{ collections }` before `load` runs: a person refused it is
-    // told the card is not available, never shown a number about content they
-    // cannot read.
-    const card = declared(
-      seoIssuesWidget(["pages", "posts"], defaultSeoFields())
-    );
-
-    expect(card.access).toEqual({ collections: ["pages", "posts"] });
-  });
-
-  it("states its size in grid units, at least three rows tall", () => {
-    const { size } = declared(seoIssuesWidget(["pages"], defaultSeoFields()));
-
-    expect(size.default).toEqual({ w: 4, h: 3 });
-    expect(size.min?.h ?? size.default.h).toBeGreaterThanOrEqual(3);
-  });
-
-  it("answers one bar per issue found, in the order the issues are listed", async () => {
-    // The answer keeps `reportableIssues`'s order; the bars view draws its rows
-    // by count, so this is the answer's order, not the drawn one.
-    const card = declared(seoIssuesWidget(["pages"], defaultSeoFields()));
-    const services = servicesHolding({
-      pages: [
-        { id: "a", seo: { noindex: true } },
-        { id: "b", seo: { metaDescription: "D", canonical: "C" } },
-      ],
-    });
-
-    expect(await card.load({ services })).toEqual({
-      buckets: [
-        { value: "Hidden from search engines", count: 1 },
-        { value: "Missing meta title", count: 1 },
-        { value: "Missing social image", count: 1 },
-      ],
-    });
-  });
-
-  it("answers no bars for a site with nothing to fix, so the frame draws its empty state", async () => {
-    // A chart of zeros says less than "No SEO issues", and is not empty by the
-    // bars view's own rule.
-    const card = declared(seoIssuesWidget(["pages"], defaultSeoFields()));
-    const services = servicesHolding({
-      pages: [
-        {
-          id: "a",
-          seo: {
-            metaTitle: "T",
-            metaDescription: "D",
-            canonical: "C",
-            ogImage: "m",
-          },
-        },
-      ],
-    });
-
-    expect(await card.load({ services })).toEqual({ buckets: [] });
-    expect(card.empty?.message).toBe("No SEO issues in published pages.");
-  });
-
-  it("says its counts are floors when the scan stopped at its bound", async () => {
-    const card = declared(seoIssuesWidget(["pages"], defaultSeoFields()));
-
-    expect(await card.load({ services: servicesPastTheBudget() })).toEqual({
-      buckets: expect.any(Array),
-      atLeast: true,
-    });
-  });
-
-  it("reads the collections it was configured with, and no other", async () => {
-    const card = declared(
-      seoIssuesWidget(["pages", "posts"], defaultSeoFields())
-    );
-    const services = servicesHolding({ pages: [], posts: [] });
-
-    await card.load({ services });
-
-    expect(services.find.mock.calls.map(([slug]) => slug)).toEqual([
-      "pages",
-      "posts",
-    ]);
-  });
-
-  it("is withheld when no collection carries the fields", () => {
-    // 🔴 A plugin registered with no collections extends nothing, so every bar
-    // would answer zero: a clean site reported for a plugin doing nothing.
-    expect(seoIssuesWidget([], defaultSeoFields())).toBeUndefined();
-  });
-
-  it("previews a bar for each check the configured fields install, and no other", () => {
-    // 🔴 The preview page draws the card from these cases, so a bar there for
-    // a field the project never installed shows a check the card can never
-    // make: a canonical-only project previews the canonical check alone.
-    expect(
-      previewedIssues(
-        declared(seoIssuesWidget(["pages"], [text({ name: "canonical" })]))
-      )
-    ).toEqual([["Missing canonical URL"]]);
-    // Every default check, in the order `reportableIssues` lists them.
-    expect(
-      previewedIssues(declared(seoIssuesWidget(["pages"], defaultSeoFields())))
-    ).toEqual([
-      [
-        "Hidden from search engines",
-        "Missing meta title",
-        "Missing canonical URL",
-        "Missing meta description",
-        "Missing social image",
-      ],
-    ]);
-  });
-
-  it("is withheld when nothing it understands is installed", () => {
-    expect(
-      seoIssuesWidget(["pages"], [text({ name: "focusKeyword" })])
-    ).toBeUndefined();
-  });
-});
-
-/** What an item's `count` is handed, here the read services alone. */
-type CountInput = Parameters<
-  ReturnType<typeof seoIssuesAttentionItems>[number]["count"]
->[0];
-const countWith = (services: unknown, scope: unknown = oneAnswerScope()) =>
-  ({ services, scope }) as unknown as CountInput;
-
-/** The scope core hands every item of one plugin within one answer: work kept by key. */
-function oneAnswerScope() {
+/** A scope that computes each key once, as core's does for one answer. */
+function scope() {
   const kept = new Map<string, Promise<unknown>>();
   return {
-    getOrCompute<T>(key: string, compute: () => Promise<T>): Promise<T> {
+    getOrCompute: <T>(key: string, compute: () => Promise<T>): Promise<T> => {
       if (!kept.has(key)) kept.set(key, compute());
       return kept.get(key) as Promise<T>;
     },
   };
 }
 
-/**
- * Read services whose every collection holds far more rows than a scan reads,
- * each answering its own pages: `total` is what matches after the cursor, as
- * that collection's stored ids count them.
- */
-function largeCollections() {
-  const served = new Map<string, number>();
-  const find = vi.fn(async (slug: string) => {
-    const next = served.get(slug) ?? 0;
-    served.set(slug, next + 50);
-    const items = Array.from({ length: 50 }, (_, i) => ({
-      id: `${slug}-${String(next + i).padStart(6, "0")}`,
-      seo: {},
-    }));
-    return { items, total: ISSUE_SCAN_ROW_BUDGET * 2 - next };
-  });
-  return { find };
+/** What a card or line is handed, for one person. */
+const input = (shared = scope()) => ({
+  user: { id: "u1" },
+  services: {},
+  scope: shared,
+});
+
+/** The card and line over the list `problems`, and the stub that answers it. */
+function over(problems: Problem[], collections = ["posts", "pages"]) {
+  const problemsFor = vi.fn(async () => problems);
+  return {
+    card: seoIssuesWidget({ collections, problemsFor }),
+    item: seoProblemsAttentionItem({ collections, problemsFor }),
+    problemsFor,
+  };
 }
 
-describe("the SEO issues lines of Needs attention", () => {
-  it("are one per configured collection, each naming, linking to and counting its own", async () => {
-    // 🔴 An item's link is one path for everyone it shows to, and core shows an
-    // item to a reader of any collection it names. One collection per item is
-    // what makes the link one every reader of the line can open.
-    const items = seoIssuesAttentionItems(
-      ["pages", "posts"],
-      defaultSeoFields()
-    );
-
-    expect(
-      items.map(({ id, label, collections, link }) => ({
-        id,
-        label,
-        collections,
-        link,
-      }))
-    ).toEqual([
-      {
-        id: "seo/issues-pages",
-        label: "SEO issues in pages",
-        collections: ["pages"],
-        link: "collections/pages",
-      },
-      {
-        id: "seo/issues-posts",
-        label: "SEO issues in posts",
-        collections: ["posts"],
-        link: "collections/posts",
-      },
-    ]);
-    for (const item of items) expect(item).not.toHaveProperty("permission");
-
-    // Each counts its own collection, and reads no other.
-    const services = servicesHolding({
-      pages: [{ id: "a", seo: { noindex: true } }],
-      posts: [{ id: "b", seo: {} }],
-    });
-    expect(
-      await Promise.all(items.map(item => item.count(countWith(services))))
-    ).toEqual([1, 4]);
-    expect(services.find.mock.calls.map(([slug]) => slug).sort()).toEqual([
-      "pages",
-      "posts",
-    ]);
+describe("the SEO issues card", () => {
+  it("is declared as seo/issues, drawn by core's bars view", () => {
+    const card = declared(over([]).card);
+    expect(card.id).toBe(SEO_ISSUES_WIDGET_ID);
+    expect(SEO_ISSUES_WIDGET_ID).toBe("seo/issues");
+    expect(card.view).toBe("bars");
+    expect(card.skeleton).toBe("bars");
   });
 
-  it("list the first ten collections, while the card counts every one", async () => {
-    // Core refuses an eleventh item from one plugin at startup, so the first
-    // ten collections get a line each and the eleventh none. The card still
-    // reads all eleven, so no issue goes uncounted where a reader may see it.
-    const slugs = Array.from({ length: 11 }, (_, i) => `c${i + 1}`);
-    const items = seoIssuesAttentionItems(slugs, defaultSeoFields());
-
-    expect(items.map(item => item.collections)).toEqual(
-      slugs.slice(0, 10).map(slug => [slug])
-    );
-    expect(items.map(item => item.link)).toEqual(
-      slugs.slice(0, 10).map(slug => `collections/${slug}`)
-    );
-
-    const card = declared(seoIssuesWidget(slugs, defaultSeoFields()));
-    const services = servicesHolding(
-      Object.fromEntries(
-        slugs.map(slug => [slug, [{ id: `${slug}-1`, seo: { noindex: true } }]])
-      )
-    );
-    expect(await card.load({ services })).toEqual({
-      buckets: [{ value: "Hidden from search engines", count: 11 }],
-    });
-    expect(services.find.mock.calls.map(([slug]) => slug)).toEqual(slugs);
-  });
-
-  it("take ids core accepts, distinct even for slugs that read alike", () => {
-    // An item id holds lowercase letters, digits and dashes; a slug may not.
-    expect(
-      seoIssuesAttentionItems(
-        ["blog_posts", "blog-posts", "News"],
-        defaultSeoFields()
-      ).map(item => item.id)
-    ).toEqual([
-      "seo/issues-blog-posts",
-      "seo/issues-blog-posts-2",
-      "seo/issues-news",
-    ]);
-    // 🔴 A suffix is checked against every id taken, not only the base: here
-    // the third slug's first choice of suffix is the first slug's own id.
-    expect(
-      seoIssuesAttentionItems(
-        ["blog-posts-3", "blog-posts", "blog_posts"],
-        defaultSeoFields()
-      ).map(item => item.id)
-    ).toEqual([
-      "seo/issues-blog-posts-3",
-      "seo/issues-blog-posts",
-      "seo/issues-blog-posts-2",
-    ]);
-  });
-
-  it("share one scan budget between every line of one answer, the rest of their counts floors", async () => {
-    // 🔴 Core answers all of a plugin's lines in one request, at once, with one
-    // scope for that answer. A budget per line would let ten large collections
-    // read ten budgets' pages on every dashboard load.
-    const slugs = Array.from({ length: 10 }, (_, i) => `c${i + 1}`);
-    const items = seoIssuesAttentionItems(slugs, defaultSeoFields());
-    const services = largeCollections();
-    const scope = oneAnswerScope();
-
-    const answers = await Promise.all(
-      items.map(item => item.count(countWith(services, scope)))
-    );
-
-    expect(services.find.mock.calls.length).toBeLessThanOrEqual(
-      ISSUE_SCAN_ROW_BUDGET / ISSUE_SCAN_PAGE_SIZE
-    );
-    for (const answer of answers) {
-      expect(answer).toMatchObject({ atLeast: true });
-    }
-    // A new answer has a budget of its own.
-    await items[0]?.count(countWith(services, oneAnswerScope()));
-    expect(services.find.mock.calls.length).toBeGreaterThan(
-      ISSUE_SCAN_ROW_BUDGET / ISSUE_SCAN_PAGE_SIZE
-    );
-  });
-
-  it("say a count is a floor when the scan stopped at its bound", async () => {
-    const [item] = seoIssuesAttentionItems(["pages"], defaultSeoFields());
-
-    expect(await item?.count(countWith(servicesPastTheBudget()))).toEqual({
-      count: ISSUE_SCAN_ROW_BUDGET * 4,
-      atLeast: true,
+  it("is offered only to a person who may read every collection SEO is added to", () => {
+    expect(declared(over([]).card).access).toEqual({
+      collections: ["posts", "pages"],
     });
   });
 
-  it("are withheld where the card is", () => {
-    expect(seoIssuesAttentionItems([], defaultSeoFields())).toEqual([]);
-    expect(
-      seoIssuesAttentionItems(["pages"], [text({ name: "focusKeyword" })])
-    ).toEqual([]);
+  it("states its size in grid units, at least three rows tall", () => {
+    const card = declared(over([]).card);
+    expect(card.size.default).toEqual({ w: 4, h: 3 });
+    expect(card.size.min?.h).toBe(3);
+  });
+
+  it("answers a bar per kind the list holds, named as the list names it, in the list's order", async () => {
+    const { card } = over([
+      problem("longTitle"),
+      problem("noTitle"),
+      problem("longTitle", "pages"),
+      problem("imageAlt"),
+    ]);
+    expect(await declared(card).load(input())).toEqual({
+      buckets: [
+        { value: "Page with no title", count: 1 },
+        { value: "Title longer than Google shows", count: 2 },
+        { value: "Images with no alt text", count: 1 },
+      ],
+    });
+  });
+
+  it("answers no bars for a list with nothing to fix, so the frame draws its empty state", async () => {
+    const card = declared(over([]).card);
+    expect(await card.load(input())).toEqual({ buckets: [] });
+    expect(card.empty?.message).toBe(
+      "The SEO problem list has nothing to fix."
+    );
+  });
+
+  it("asks for the list of the person it is handed", async () => {
+    const { card, problemsFor } = over([]);
+    await declared(card).load(input());
+    expect(problemsFor).toHaveBeenCalledWith({
+      user: { id: "u1" },
+      services: {},
+    });
+  });
+
+  it("is withheld when no collection carries SEO", () => {
+    expect(over([], []).card).toBeUndefined();
+  });
+
+  it("previews bars drawn the way its load draws them", () => {
+    const [sample] = declared(over([]).card).preview ?? [];
+    expect(sample?.data.buckets.map(bucket => bucket.value)).toEqual([
+      "Page with no description",
+      "Title longer than Google shows",
+      "Share image missing or the wrong size",
+      "Images with no alt text",
+    ]);
+  });
+});
+
+describe("the SEO Needs attention line", () => {
+  it("counts the errors and warnings the list shows the person, linked to the list", async () => {
+    const { item } = over([
+      // A notice: left to the list.
+      problem("longTitle"),
+      // An error.
+      problem("noTitle", "pages"),
+      // A warning.
+      problem("noDescription", "pages"),
+      { ...problem("productionAddress"), subject: { label: "Whole site" } },
+    ]);
+    expect(item?.id).toBe(SEO_PROBLEMS_ATTENTION_ID);
+    expect(item?.link).toBe("plugins/nextlyhq-plugin-seo/problems");
+    expect(item?.collections).toEqual(["posts", "pages"]);
+    expect(await item?.count(input() as never)).toBe(3);
+  });
+
+  it("reads the list once with the card in one answer", async () => {
+    const { card, item, problemsFor } = over([problem("noTitle")]);
+    const shared = scope();
+    await declared(card).load(input(shared));
+    await item?.count(input(shared) as never);
+    expect(problemsFor).toHaveBeenCalledTimes(1);
+  });
+
+  it("is withheld where the card is", () => {
+    expect(over([], []).item).toBeUndefined();
   });
 });

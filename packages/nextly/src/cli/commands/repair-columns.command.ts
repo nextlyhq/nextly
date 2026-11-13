@@ -19,7 +19,19 @@ export function registerRepairColumnsCommand(
   program
     .command(REPAIR_COLUMNS_COMMAND)
     .description(
-      "Report every column whose type or nullability differs from its field (changes nothing)"
+      "Report every column whose type or nullability differs from its field; with --apply, convert the safe ones"
+    )
+    // Without it the run only reports and changes nothing; with it the run takes the schema lock.
+    .option(
+      "--apply",
+      "Convert each column whose stored values all convert exactly, and record each repair",
+      false
+    )
+    // The one data-loss consent, read by the same parser as every command's. A repair takes only
+    // the form naming its columns: the form without a list, or a table alone, never clears one.
+    .option(
+      "--accept-data-loss [targets]",
+      "With --apply, convert each lossy column named as table.column (--accept-data-loss=dc_posts.meta), clearing the values its report names; the form without a list, or a table alone, covers none. Same as NEXTLY_ACCEPT_DATA_LOSS."
     )
     // One versioned document on standard output, for CI; nothing else is written there.
     .option(

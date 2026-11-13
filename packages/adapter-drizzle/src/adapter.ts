@@ -12,6 +12,8 @@
  */
 
 import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
+import { Socket } from "node:net";
+import { TLSSocket } from "node:tls";
 
 import { count, getColumns, sql } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
@@ -19,6 +21,8 @@ import type { AnyRelations, SQL } from "drizzle-orm";
 import {
   bindStructuredAsJson,
   isJsonColumn,
+  jsonColumnText,
+  valueForJsonColumn,
   type ColumnKindInput,
 } from "./column-kinds";
 import { buildDrizzleOrderBy } from "./drizzle-order";
@@ -64,9 +68,12 @@ import type {
   DeleteOptions,
   UpsertOptions,
   TransactionContext,
+  TransactionInFlow,
   TransactionOptions,
   SessionOptions,
   StatementSession,
+  ConnectionEncryption,
+  ConnectionInspection,
   DatabaseCapabilities,
   PoolStats,
   DatabaseError,
@@ -621,6 +628,57 @@ export abstract class DrizzleAdapter {
     );
   }
 
+  /** The object each outermost transaction is known by outside (`transactionInFlow`). */
+  private readonly transactionMarks = new WeakMap<TransactionFrame, object>();
+
+  /**
+   * The open transaction each Drizzle handle a transaction context built runs
+   * on (`transactionDrizzleHandles`), recorded when the handle is built inside
+   * that transaction's work. A handle on the pool is never here.
+   */
+  private readonly handleTransactions = new WeakMap<object, TransactionFrame>();
+
+  /**
+   * The transaction the calling async flow is inside and that has not
+   * finished, as {@link transactionOpenInFlow} finds it, or none.
+   *
+   * @remarks
+   * For work that may reuse within one transaction what it read there, and
+   * nowhere else: a read on the transaction sees its uncommitted writes,
+   * which no other transaction may be answered with, and which a rollback
+   * takes away. `transaction` is the same object for every call made inside
+   * it and dies with it. `undone` answers whether any part of it has rolled
+   * back to its savepoint since this was asked: a read made before may
+   * describe a write the rollback took away, whichever part made the write
+   * and whichever made the read. `runsOn` answers whether an executor a
+   * caller was handed runs on this transaction's connection. Neither the
+   * frame nor the transaction's executors are handed out.
+   *
+   * @experimental
+   * @returns The open transaction, or undefined outside one
+   */
+  transactionInFlow(): TransactionInFlow | undefined {
+    const transaction = transactionAround(
+      this.scope.getStore(),
+      at => !at.finished
+    );
+    if (transaction === undefined) return undefined;
+    let mark = this.transactionMarks.get(transaction);
+    if (mark === undefined) {
+      mark = Object.freeze({});
+      this.transactionMarks.set(transaction, mark);
+    }
+    const rollbacksBefore = transaction.rollbacks;
+    return {
+      transaction: mark,
+      undone: () => transaction.rollbacks !== rollbacksBefore,
+      runsOn: executor =>
+        typeof executor === "object" &&
+        executor !== null &&
+        this.handleTransactions.get(executor) === transaction,
+    };
+  }
+
   /**
    * The frame a `transaction()` call made from the current async context
    * would join, or none when it would open a transaction of its own. Asks
@@ -859,6 +917,9 @@ export abstract class DrizzleAdapter {
           root.doomed = { error };
         }
         await this.rollBackQuietly(steps);
+        // Counted once the rollback has run, so a read made at any point
+        // before it, during it included, reads as undone afterwards.
+        root.rollbacks += 1;
         throw error;
       }
     });
@@ -1672,15 +1733,9 @@ export abstract class DrizzleAdapter {
     for (const [key, value] of Object.entries(data)) {
       const jsKey = sqlToJs.get(key) ?? key;
       // Parse pre-stringified JSON for JSON/JSONB columns to avoid double-encoding
-      if (jsonColumns.has(jsKey) && typeof value === "string") {
-        try {
-          mapped[jsKey] = JSON.parse(value);
-        } catch {
-          mapped[jsKey] = value;
-        }
-      } else {
-        mapped[jsKey] = value;
-      }
+      mapped[jsKey] = jsonColumns.has(jsKey)
+        ? valueForJsonColumn(value)
+        : value;
     }
     return mapped;
   }
@@ -1842,8 +1897,12 @@ export abstract class DrizzleAdapter {
    * on a UTC server the two agree and nothing is visibly wrong, which is why
    * this survives CI.
    *
-   * Only date columns are touched. A value that is not a `Date` is left as it
-   * is, so a caller that already encoded one is not encoded twice.
+   * Only date values are touched: on a declared date column, by that column's
+   * encoder; on a key the model does not declare, as this dialect's date
+   * column would encode it (`encodeUndeclaredDate`), so the same `Date`
+   * stores the same instant either way. A key declared as some other kind of
+   * column is left to its own encoding. A value that is not a `Date` is left
+   * as it is, so a caller that already encoded one is not encoded twice.
    *
    * Keys may be spelled either way at this point, so both the Drizzle property
    * name and the SQL column name resolve.
@@ -1855,23 +1914,97 @@ export abstract class DrizzleAdapter {
     if (!tableObj || typeof tableObj !== "object" || !data) return data;
 
     const dateColumns = new Map<string, DecodableColumn>();
+    const declared = new Set<string>();
     for (const [jsName, colDef] of Object.entries(
       tableObj as Record<string, unknown>
     )) {
+      const sqlName = (colDef as { name?: unknown } | null)?.name;
+      declared.add(jsName);
+      if (typeof sqlName === "string") declared.add(sqlName);
       if (!isDateColumn(colDef)) continue;
       dateColumns.set(jsName, colDef);
-      const sqlName = (colDef as { name?: unknown }).name;
       if (typeof sqlName === "string") dateColumns.set(sqlName, colDef);
     }
-    if (dateColumns.size === 0) return data;
 
     let encoded: Record<string, unknown> | undefined;
     for (const [key, value] of Object.entries(data)) {
       if (!(value instanceof Date)) continue;
       const column = dateColumns.get(key);
-      if (!column) continue;
+      if (!column && declared.has(key)) continue;
       encoded ??= { ...data };
-      encoded[key] = column.mapToDriverValue(value);
+      encoded[key] = column
+        ? column.mapToDriverValue(value)
+        : this.encodeUndeclaredDate(value);
+    }
+    return encoded ?? data;
+  }
+
+  /**
+   * The column this dialect declares a date field as, whose own encoder spells
+   * a `Date` written to a key the runtime model does not declare.
+   *
+   * A declared date column encodes its value before it is bound. A key the
+   * model does not know has no column to ask, and a driver handed the `Date`
+   * itself spells it in the server's zone: node-postgres sends the local wall
+   * clock with an offset, which a `timestamp` column drops, so the stored
+   * value moved with the server. Spelled as the declared column would spell
+   * it, the same instant lands whichever way a row is written.
+   *
+   * `null`, the default, leaves the value to the driver, as an adapter built
+   * on this class before the method existed did.
+   */
+  protected undeclaredDateColumn(): {
+    mapToDriverValue(value: unknown): unknown;
+  } | null {
+    return null;
+  }
+
+  /**
+   * A value for a key the runtime model does not declare, with a `Date`
+   * spelled as this dialect's date column spells one
+   * (`undeclaredDateColumn`) and anything else as it is.
+   */
+  protected encodeUndeclaredDate(value: unknown): unknown {
+    if (!(value instanceof Date)) return value;
+    const column = this.undeclaredDateColumn();
+    return column ? column.mapToDriverValue(value) : value;
+  }
+
+  /**
+   * Encode a row's JSON values as the JSON text a Drizzle query would bind for
+   * them (`jsonColumnText`), so a document written through a raw-SQL statement
+   * is stored as the document. Handed the bare value, mysql2 writes an object
+   * as `[object Object]` and node-postgres an array as a PostgreSQL array
+   * literal; neither is JSON.
+   *
+   * Only columns the model declares as JSON (`isJsonColumn`) are touched, and
+   * `null` is left as SQL NULL. Keys may be spelled either way, as for dates.
+   */
+  protected mapJsonValuesToDriver(
+    tableObj: unknown,
+    data: Record<string, unknown>
+  ): Record<string, unknown> {
+    if (!tableObj || typeof tableObj !== "object" || !data) return data;
+
+    const jsonKeys = new Set<string>();
+    for (const [jsName, colDef] of Object.entries(
+      tableObj as Record<string, unknown>
+    )) {
+      if (!colDef || typeof colDef !== "object") continue;
+      if (!isJsonColumn(colDef)) continue;
+      jsonKeys.add(jsName);
+      const sqlName = (colDef as { name?: unknown }).name;
+      if (typeof sqlName === "string") jsonKeys.add(sqlName);
+    }
+    if (jsonKeys.size === 0) return data;
+
+    let encoded: Record<string, unknown> | undefined;
+    for (const [key, value] of Object.entries(data)) {
+      if (!jsonKeys.has(key) || value === null || value === undefined) {
+        continue;
+      }
+      encoded ??= { ...data };
+      encoded[key] = jsonColumnText(value);
     }
     return encoded ?? data;
   }
@@ -1879,7 +2012,7 @@ export abstract class DrizzleAdapter {
   /**
    * Bring a row about to be written through a raw-SQL statement into the shape
    * a Drizzle query would have bound: SQL column names for keys, encoded values
-   * for date columns.
+   * for date and JSON columns.
    *
    * The mirror of {@link mapRowFromRawSql}. The raw-SQL write paths exist
    * because a dialect needs SQL a Drizzle query cannot express, not because
@@ -1889,9 +2022,12 @@ export abstract class DrizzleAdapter {
     tableObj: unknown,
     data: Record<string, unknown>
   ): Record<string, unknown> {
-    return this.mapDateValuesToDriver(
+    return this.mapJsonValuesToDriver(
       tableObj,
-      this.mapKeysToSqlColumns(tableObj, data)
+      this.mapDateValuesToDriver(
+        tableObj,
+        this.mapKeysToSqlColumns(tableObj, data)
+      )
     );
   }
 
@@ -2096,6 +2232,117 @@ export abstract class DrizzleAdapter {
    */
   getPoolStats(): PoolStats | null {
     return null;
+  }
+
+  /**
+   * What this adapter can say about its connection, for a health check:
+   * whether it is encrypted (read from a database session, never from
+   * configuration), whether the database is on this machine, the server's
+   * version and how long a small query took.
+   *
+   * @remarks
+   * Never throws: a read that fails answers `"unknown"` encryption, which a
+   * caller must treat as unchecked, not as encrypted. This default knows
+   * nothing about the connection, so it answers exactly that; the dialect
+   * adapters override it.
+   *
+   * @returns The inspection, holding no address
+   */
+  inspectConnection(): Promise<ConnectionInspection> {
+    return Promise.resolve({ encryption: "unknown", local: false });
+  }
+
+  /**
+   * Whether a connection is encrypted, from the two things a dialect adapter
+   * reads: what the database session said about itself, and whether this
+   * process's own socket to the server negotiated TLS.
+   *
+   * The site's own socket decides, where it can be read: it is the leg this
+   * machine's traffic leaves on. Behind a connection pooler or proxy
+   * (PgBouncer, a hosted provider's pooler) the session describes the
+   * pooler's own connection to the database, which can be plain while this
+   * socket is TLS, or encrypted while this socket is plain; either way the
+   * session does not speak for this leg. Where the socket cannot be read, the
+   * session's answer stands, as on a direct connection the two are one.
+   *
+   * A session that could not say is `"unknown"` whatever the socket is, so the
+   * answer is never "encrypted" on less than a read that succeeded.
+   *
+   * @param read.session - The session's own answer; `undefined` when it gave none
+   * @param read.ownSocketTls - Whether this process's socket negotiated TLS;
+   *   `undefined` when the socket could not be read
+   */
+  protected encryptionOf(read: {
+    session: boolean | undefined;
+    ownSocketTls: boolean | undefined;
+  }): ConnectionEncryption {
+    if (read.session === undefined) return "unknown";
+    const encrypted = read.ownSocketTls ?? read.session;
+    return encrypted ? "encrypted" : "unencrypted";
+  }
+
+  /**
+   * Whether a driver's connection handle talks to its server over a socket
+   * that negotiated TLS: node-postgres' client and mysql2's connection each
+   * hold their socket at `connection.stream`, which each replaces with a
+   * `TLSSocket` once TLS is negotiated. `false` for a plain socket (a TCP or
+   * local socket that is not TLS); `undefined` for a handle shaped otherwise,
+   * whose socket could not be read, so neither answer is guessed.
+   *
+   * @param handle - A pooled client or connection, as the driver hands it
+   */
+  protected ownSocketIsTls(handle: unknown): boolean | undefined {
+    if (typeof handle !== "object" || handle === null) return undefined;
+    if (!("connection" in handle)) return undefined;
+    const connection = handle.connection;
+    if (typeof connection !== "object" || connection === null) return undefined;
+    if (!("stream" in connection)) return undefined;
+    const stream = connection.stream;
+    if (stream instanceof TLSSocket) return true;
+    return stream instanceof Socket ? false : undefined;
+  }
+
+  /**
+   * Whether `host` names this machine: a loopback name or address, or a local
+   * socket path. Anything else, an empty or unreadable host included, is
+   * judged remote, so a connection is never excused for an address that
+   * could not be read.
+   *
+   * @param host - A host as configured or parsed from a connection string
+   */
+  protected isLocalHost(host: string | undefined): boolean {
+    if (host === undefined) return false;
+    let name = host.trim().toLowerCase();
+    try {
+      name = decodeURIComponent(name);
+    } catch {
+      return false;
+    }
+    if (name.startsWith("/")) return true;
+    if (name.startsWith("[") && name.endsWith("]")) name = name.slice(1, -1);
+    if (name === "localhost" || name.endsWith(".localhost")) return true;
+    if (name === "::1" || name === "0:0:0:0:0:0:0:1") return true;
+    const v4 = name.startsWith("::ffff:") ? name.slice("::ffff:".length) : name;
+    return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v4);
+  }
+
+  /**
+   * The host a connection string names, for {@link isLocalHost}: its
+   * `host` query parameter when it carries one (a socket directory), else
+   * its host name; `""` when it names none, so the driver's default applies;
+   * and `undefined` when the string cannot be read.
+   *
+   * @param url - A `postgres://` or `mysql://` connection string
+   */
+  protected hostOfUrl(url: string): string | undefined {
+    try {
+      const parsed = new URL(url);
+      const socket = parsed.searchParams.get("host");
+      if (socket !== null && socket !== "") return socket;
+      return parsed.hostname;
+    } catch {
+      return undefined;
+    }
   }
 
   // ============================================================
@@ -3421,7 +3668,23 @@ export abstract class DrizzleAdapter {
     bare: () => TBare;
     withRelations: <T = unknown>(relations: AnyRelations) => T;
   } {
-    return transactionDrizzleHandles(build);
+    // Each handle is recorded against the transaction whose work built it,
+    // so `transactionInFlow().runsOn` can tell it from a handle on the pool.
+    return transactionDrizzleHandles(relations => {
+      const handle = build(relations);
+      const transaction = transactionAround(
+        this.scope.getStore(),
+        at => !at.finished
+      );
+      if (
+        transaction !== undefined &&
+        typeof handle === "object" &&
+        handle !== null
+      ) {
+        this.handleTransactions.set(handle, transaction);
+      }
+      return handle;
+    });
   }
 
   /**
@@ -3545,12 +3808,14 @@ export abstract class DrizzleAdapter {
 
   /**
    * How a value binds to a column the model does not declare, on a driver
-   * that binds scalars, dates and binary natively: a structured value goes
-   * as JSON text, since what node-postgres and mysql2 make of a bare object
-   * or array is not JSON. For the adapters to hand `transactionUpdate`.
+   * that binds scalars and binary natively: a structured value goes as JSON
+   * text, since what node-postgres and mysql2 make of a bare object or array
+   * is not JSON, and a `Date` as this dialect's date column spells it
+   * (`encodeUndeclaredDate`), as the transactional insert binds one. For the
+   * adapters to hand `transactionUpdate`.
    */
   protected bindUnmodeledStructuredAsJson(value: unknown): unknown {
-    return bindStructuredAsJson(value);
+    return bindStructuredAsJson(this.encodeUndeclaredDate(value));
   }
 
   /**

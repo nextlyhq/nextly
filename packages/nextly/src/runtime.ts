@@ -75,6 +75,11 @@ export {
   type SeoMetaInput,
 } from "./runtime/seo";
 
+// @experimental Structured data placed in a page: the props of the JSON-LD
+// script element, `<script {...jsonLdScriptProps(data)} />`, escaped so no
+// value can end it.
+export { jsonLdScriptProps, type JsonLdScriptProps } from "./runtime/seo";
+
 // The page-metadata contract: what a plugin that works out a page's head is
 // asked and answers. The route helpers ask it by default; see
 // `runtime/seo/page-metadata-contract`.
@@ -87,6 +92,11 @@ export {
   type PageMetadataResolver,
   type PageMetadataSource,
   type PageMetadataValues,
+  type PageListItem,
+  type PageQuestion,
+  type PageStructuredDataHints,
+  type StructuredDataNode,
+  type StructuredDataValue,
 } from "./runtime/seo";
 
 // Draft previews — the route that turns a scoped preview link into a draft
@@ -108,6 +118,10 @@ export {
 // short, which is the combination that gets retyped subtly wrong — and its
 // failure grants every draft rather than erroring.
 export { previewDraftGate } from "./runtime/preview/preview-draft-gate";
+
+// The site's Proxy: the app's `proxy.ts` hands each request to the handlers
+// plugins contribute (`contributes.proxy`).
+export { createNextlyProxy, type NextlyProxyDeps } from "./runtime/proxy";
 
 // The Single counterpart. A sibling rather than a branch: a collection gate
 // returns an entry id so the route can compare it against the row a PATH
@@ -222,6 +236,9 @@ export {
   resolveContent,
   isReservedPath,
   contentPageMetadata,
+  contentPageStructuredData,
+  singlePageMetadata,
+  singlePageStructuredData,
   createContentRoute,
   createPublicContentRoute,
   createSingleRoute,
@@ -249,6 +266,8 @@ export {
   type NextlyContentReader,
   type SingleRoute,
   type SingleRouteArgs,
+  type SingleRouteParams,
+  type SinglePageAnswerConfig,
   type SingleRouteConfig,
   type SingleContext,
   type SingleDraftRequest,

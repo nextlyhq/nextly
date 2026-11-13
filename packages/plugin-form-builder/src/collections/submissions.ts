@@ -40,41 +40,30 @@ function trustedSubmittedAt(context: HookContext): boolean {
   return context.req?.http === undefined && Boolean(context.data?.submittedAt);
 }
 
+/** The unique index one response per person rests on. */
+const RESPONSE_KEY_INDEX = {
+  fields: ["form", "responseKey"],
+  unique: true,
+};
+
+/** Whether two index declarations name the same columns and uniqueness. */
+function sameIndex(
+  index: { fields: readonly string[]; unique?: boolean },
+  other: { fields: readonly string[]; unique?: boolean }
+): boolean {
+  return (
+    index.fields.join("\u0000") === other.fields.join("\u0000") &&
+    (index.unique ?? false) === (other.unique ?? false)
+  );
+}
+
 /**
- * Generate the Form Submissions collection configuration.
- *
- * Creates a collection for storing form submissions with:
- * - Reference to the parent form
- * - Submitted data (JSON)
- * - Status tracking (new, read, archived)
- * - Metadata (IP, user agent, timestamp)
- * - Internal notes for admin use
- *
- * @param pluginConfig - Resolved plugin configuration
- * @returns CollectionConfig for the Submissions collection
- *
- * @example
- * ```typescript
- * const submissionsCol = submissionsCollection(resolvedConfig);
- * // Returns a collection with slug "form-submissions" (or custom slug from config)
- * ```
+ * The fields the plugin itself gives every submission, whatever a host adds
+ * through `formSubmissionOverrides.fields`. One list, read by the collection
+ * and by what tells the admin which fields are the host's own.
  */
-export function submissionsCollection(
-  pluginConfig: ResolvedFormBuilderConfig
-): ExtendedCollectionConfig {
-  const {
-    slug,
-    labels,
-    fields: additionalFields,
-    access: accessOverrides,
-    ...overrides
-  } = pluginConfig.formSubmissionOverrides;
-
-  // Get the forms collection slug for the relationship
-  const formSlug = pluginConfig.formOverrides.slug;
-
-  // Build the default fields array
-  const defaultFields: FieldConfig[] = [
+function builtInSubmissionFields(formSlug: string): FieldConfig[] {
+  return [
     // ============================================================
     // Form Relationship
     // ============================================================
@@ -169,6 +158,15 @@ export function submissionsCollection(
       },
     }),
 
+    // The page it was sent from (`utils/sent-from`): origin and path, as the
+    // visitor's browser reported it. Long text, since a page's address may
+    // exceed what a short text column holds on MySQL.
+    textarea({
+      name: "page",
+      label: "Page",
+      admin: { hidden: true },
+    }),
+
     date({
       name: "submittedAt",
       label: "Submitted At",
@@ -200,18 +198,133 @@ export function submissionsCollection(
         description: "ID of the admin who last edited the submitted data",
       },
     }),
+
+    // The submission's one-response key: a keyed digest of the email answer
+    // or network address its form's "one response per person" compares,
+    // never the value itself. Written by the plugin at the write seam, never
+    // taken from a caller, and empty when the form allows several responses
+    // or the submission is spam. Unique per form (see `indexes`), so two
+    // submissions with the same value cannot both be stored.
+    text({
+      name: "responseKey",
+      label: "One-response key",
+      admin: { hidden: true },
+    }),
+
+    // What the submission was asked: each field's label, type and option
+    // labels, and which fields its conditions hid, so its page reads as it
+    // was answered after the form changes. Written by the plugin at the write
+    // seam, never taken from a caller.
+    json({
+      name: "asked",
+      label: "Fields asked",
+      admin: { hidden: true },
+    }),
+
+    // Who sent it, as the admin names it (`submission-title`): its title in
+    // the breadcrumb and lists. Written by the plugin from the answers, never
+    // taken from a caller.
+    text({
+      name: "title",
+      label: "Sender",
+      admin: { hidden: true },
+    }),
   ];
+}
 
-  // Process additional fields from formSubmissionOverrides
-  // Note: Function-style overrides should be resolved in plugin.ts before reaching here
-  let finalFields: FieldConfig[];
+/**
+ * The fields a host added to the submissions collection: every named
+ * top-level field that is not one of the plugin's own, and not one the host
+ * hid from the admin. The submission page shows them, since it replaces the
+ * default editor that would have drawn them.
+ */
+export function submissionExtensionFields(
+  pluginConfig: ResolvedFormBuilderConfig
+): Array<{ name: string; label: string; type: string }> {
+  const builtIn = new Set(
+    builtInSubmissionFields(pluginConfig.formOverrides.slug).map(fieldName)
+  );
+  return submissionsCollection(pluginConfig)
+    .fields.filter(field => !hiddenFromAdmin(field))
+    .map(field => ({
+      name: fieldName(field),
+      label: fieldLabel(field),
+      type: (field as { type: string }).type,
+    }))
+    .filter(field => field.name !== "" && !builtIn.has(field.name));
+}
 
-  if (Array.isArray(additionalFields) && additionalFields.length > 0) {
-    // Merge: append additional fields to defaults
-    finalFields = [...defaultFields, ...additionalFields];
-  } else {
-    finalFields = defaultFields;
-  }
+/**
+ * Whether the page leaves a field out: one configured to stay out of the
+ * admin; one shown only when a condition holds, which the page does not
+ * judge; or one holding fields of its own (a group, an array, blocks), whose
+ * value the page would show whole, hidden descendants included.
+ */
+function hiddenFromAdmin(field: FieldConfig): boolean {
+  const shape = field as {
+    admin?: { hidden?: unknown; condition?: unknown };
+    fields?: unknown;
+    blocks?: unknown;
+  };
+  return (
+    shape.admin?.hidden === true ||
+    shape.admin?.condition !== undefined ||
+    shape.fields !== undefined ||
+    shape.blocks !== undefined
+  );
+}
+
+/** A field's name, or "" for a layout field that has none. */
+function fieldName(field: FieldConfig): string {
+  return "name" in field && typeof field.name === "string" ? field.name : "";
+}
+
+/** A field's label as the page shows it: its own, else its name. */
+function fieldLabel(field: FieldConfig): string {
+  const label = (field as { label?: unknown }).label;
+  return typeof label === "string" && label !== "" ? label : fieldName(field);
+}
+
+/**
+ * Generate the Form Submissions collection configuration.
+ *
+ * Creates a collection for storing form submissions with:
+ * - Reference to the parent form
+ * - Submitted data (JSON)
+ * - Status tracking (new, read, archived)
+ * - Metadata (IP, user agent, timestamp)
+ * - Internal notes for admin use
+ *
+ * @param pluginConfig - Resolved plugin configuration
+ * @returns CollectionConfig for the Submissions collection
+ *
+ * @example
+ * ```typescript
+ * const submissionsCol = submissionsCollection(resolvedConfig);
+ * // Returns a collection with slug "form-submissions" (or custom slug from config)
+ * ```
+ */
+export function submissionsCollection(
+  pluginConfig: ResolvedFormBuilderConfig
+): ExtendedCollectionConfig {
+  const {
+    slug,
+    labels,
+    fields: additionalFields,
+    access: accessOverrides,
+    ...overrides
+  } = pluginConfig.formSubmissionOverrides;
+
+  // Get the forms collection slug for the relationship
+  const formSlug = pluginConfig.formOverrides.slug;
+
+  // The plugin's own fields, then any the host adds through
+  // formSubmissionOverrides (a function-style override is resolved in
+  // plugin.ts before it reaches here).
+  const submissionFields: FieldConfig[] = [
+    ...builtInSubmissionFields(formSlug),
+    ...(Array.isArray(additionalFields) ? additionalFields : []),
+  ];
 
   // Convert hyphenated slug to underscored table name (e.g., "form-submissions" -> "form_submissions")
   const dbName = slug.replace(/-/g, "_");
@@ -220,7 +333,7 @@ export function submissionsCollection(
     slug,
     dbName,
     labels,
-    fields: finalFields,
+    fields: submissionFields,
     timestamps: true,
 
     // Submissions carry visitor-entered answers plus ipAddress/userAgent, so the
@@ -240,7 +353,7 @@ export function submissionsCollection(
       isPlugin: true,
       group: "Forms",
       order: 51,
-      useAsTitle: "id",
+      useAsTitle: "title",
       description: "View and manage form submissions",
       // Submissions are created by visitors submitting forms — a hand-typed
       // "New Submission" would be fiction, so the admin never offers one.
@@ -248,10 +361,15 @@ export function submissionsCollection(
 
       components: {
         // The full submissions experience (per-form columns, status tabs,
-        // drawer detail, export) replaces the generic list.
+        // export) replaces the generic list.
         views: {
           List: {
             Component: "@nextlyhq/plugin-form-builder/admin#SubmissionsView",
+          },
+          // Each submission is a page of its own: its answers as asked, its
+          // activity, and its status, note and details beside them.
+          Edit: {
+            Component: "@nextlyhq/plugin-form-builder/admin#SubmissionPage",
           },
         },
       },
@@ -290,5 +408,17 @@ export function submissionsCollection(
 
     // Spread any additional overrides (excluding already used properties)
     ...overrides,
+
+    // One response per person, held by the database: a second submission
+    // with the same key on the same form is refused at its insert, even when
+    // two arrive at once. A submission with no key is not constrained. Kept
+    // beside any indexes the site adds, after the overrides, so customising
+    // the indexes cannot drop the one the rule depends on.
+    indexes: [
+      RESPONSE_KEY_INDEX,
+      ...(overrides.indexes ?? []).filter(
+        index => !sameIndex(index, RESPONSE_KEY_INDEX)
+      ),
+    ],
   };
 }

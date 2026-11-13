@@ -10,12 +10,17 @@
  * set in one sorted order, so a range and an address inside it meet on the
  * range's lock row, two saves in several languages never wait on each other
  * in a cycle, and two writes to one page's addresses (a save and the
- * catch-up at start) take turns. SQLite runs one writer at a time, so it
- * takes no locks.
+ * catch-up at start) take turns. A lock row is taken by a one-row update,
+ * and what is read after it is read locked, which on MySQL is what reads the
+ * latest rows rather than the save's snapshot. SQLite runs one writer at a
+ * time, so it takes no locks.
+ *
+ * The rows live in the plugin's own table (`address-record/store`), written
+ * on the save's transaction through the `db` core binds to it.
  *
  * @module address-record/participant
  */
-import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 import {
   NextlyError,
@@ -24,36 +29,40 @@ import {
   type HeldAddressUpdate,
   type ParticipantTransaction,
   type PluginContext,
+  type PluginTransaction,
   type PublicAddressParticipant,
 } from "@nextlyhq/plugin-sdk";
 
-import { ADDRESS_RECORD_SLUG } from "./collection";
+import { redirectsSlug } from "../redirects/collection";
+import { movedRedirect } from "../redirects/moves";
+import { dropReplacedRedirect, putRedirect } from "../redirects/store";
+import { SEO_ADMIN_SLUG } from "../settings/contract";
 
-/** What a row of the record is. */
-type RowKind = "address" | "range" | "lock";
-
-/** A row of the record, read back. */
-export interface RecordRow {
-  id: string;
-  kind: RowKind;
-  address: HeldAddress | null;
-  holder: AddressHolder | null;
-}
+import {
+  claimKey,
+  keysHolding,
+  pathsAbove,
+  sha256,
+  within,
+  type RecordRow,
+  type RowKind,
+} from "./rows";
+import {
+  announceRecordChanged,
+  deleteRows,
+  holdersByKey,
+  insertClaim,
+  onFlowTransaction,
+  recordReady,
+  releaseCollection,
+  rowsByKeys,
+  rowsOfHolder,
+  rowsUnder,
+  takeLock,
+  type RowLock,
+} from "./store";
 
 type Transaction = ParticipantTransaction["transaction"];
-
-/** How many rows one read takes. */
-const READ_PAGE = 200;
-
-/** The SHA-256 of `text`, the same on every dialect. */
-function sha256(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex");
-}
-
-/** The stored claim key of an address, range or path lock row. */
-function claimKey(kind: RowKind, locale: string, path: string): string {
-  return sha256(`${kind}:${locale}|${path}`);
-}
 
 /** The claim key of a page's own lock row. */
 function holderLockKey(holder: AddressHolder): string {
@@ -63,23 +72,6 @@ function holderLockKey(holder: AddressHolder): string {
 /** The kind of row an address is kept as. */
 function kindOf(address: HeldAddress): RowKind {
   return address.range === true ? "range" : "address";
-}
-
-/** Every path above `path`, root first, the root itself included. */
-function pathsAbove(path: string): string[] {
-  if (path === "/") return [];
-  const segments = path.split("/").filter(segment => segment !== "");
-  const above = ["/"];
-  for (let at = 1; at < segments.length; at++) {
-    above.push(`/${segments.slice(0, at).join("/")}`);
-  }
-  return above;
-}
-
-/** Whether `path` is `range` or below it. */
-function within(path: string, range: string): boolean {
-  if (path === range) return true;
-  return path.startsWith(range === "/" ? "/" : `${range}/`);
 }
 
 /**
@@ -99,37 +91,12 @@ function sameHolder(a: AddressHolder, b: AddressHolder): boolean {
   return a.collection === b.collection && a.id === b.id;
 }
 
-/** A stored row read back, every column checked rather than trusted. */
-export function rowOf(entry: unknown): RecordRow {
-  const row = entry as Record<string, unknown>;
-  const text = (value: unknown) => (typeof value === "string" ? value : null);
-  const locale = text(row.locale);
-  const path = text(row.path);
-  const kind: RowKind =
-    row.kind === "address" || row.kind === "range" ? row.kind : "lock";
-  const collection = text(row.holderCollection);
-  const id = text(row.holderId);
-  const label = text(row.holderLabel);
-  return {
-    id: String(row.id),
-    kind,
-    address:
-      locale === null || path === null
-        ? null
-        : { locale, path, ...(kind === "range" ? { range: true } : {}) },
-    holder:
-      collection === null || id === null
-        ? null
-        : { collection, id, ...(label ? { label } : {}) },
-  };
-}
-
 /**
- * The record's slug as this site has it: the plugin's own, or the name the
- * site renamed it to with the plugin's `rename`.
+ * How a read inside a save locks the rows it reads: none on SQLite, which
+ * runs one writer at a time, and `mode` elsewhere.
  */
-export function recordSlug(ctx: PluginContext): string {
-  return ctx.self.collections[ADDRESS_RECORD_SLUG] ?? ADDRESS_RECORD_SLUG;
+function lockFor(ctx: PluginContext, mode: Exclude<RowLock, "none">): RowLock {
+  return ctx.dialect === "sqlite" ? "none" : mode;
 }
 
 /**
@@ -139,173 +106,278 @@ export function recordSlug(ctx: PluginContext): string {
  * held by a document that no longer exists could never be taken again.
  */
 export function releaseOnCollectionDelete(ctx: PluginContext): void {
-  const record = recordSlug(ctx);
   ctx.hooks.onCollectionDelete({
-    inTransaction: async ({ slug, transaction }) => {
-      for (;;) {
-        const { data } =
-          await ctx.services.ownCollections.listEntriesInTransaction(
-            transaction,
-            record,
-            {
-              where: { holderCollection: { equals: slug } },
-              pagination: { limit: READ_PAGE, page: 1 },
-              depth: 0,
-            },
-            { lock: "update" }
-          );
-        const rows = (data as unknown[]).map(rowOf);
-        for (const row of rows) {
-          await ctx.services.collections.deleteEntryInTransaction(
-            transaction,
-            record,
-            row.id
-          );
-        }
-        // Each page is deleted before the next is read, so page 1 again.
-        if (rows.length < READ_PAGE) return;
-      }
+    inTransaction: async ({ slug }) => {
+      await recordReady(ctx);
+      // On the delete's transaction, which the flow is in.
+      const released = await onFlowTransaction(ctx, db =>
+        releaseCollection(db, slug)
+      );
+      if (released > 0) announceRecordChanged(ctx);
     },
   });
 }
 
-/** Reading and locking the record's rows on a transaction. */
-function recordRows(ctx: PluginContext) {
-  const slug = recordSlug(ctx);
-  const collections = ctx.services.collections;
-  const reads = ctx.services.ownCollections;
+/**
+ * Hold the lock row `key` until `db`'s transaction ends. SQLite runs one
+ * writer at a time, so there none is taken.
+ */
+async function holdLock(
+  ctx: PluginContext,
+  db: PluginTransaction,
+  key: string,
+  fields: { locale: string; path: string }
+): Promise<void> {
+  if (ctx.dialect !== "sqlite") await takeLock(ctx, db, key, fields);
+}
 
-  /** Every row `where` selects, read on the save's transaction. */
-  async function rowsWhere(
-    transaction: Transaction,
-    where: Record<string, unknown>,
-    lock: "share" | "update" | "none"
-  ): Promise<RecordRow[]> {
-    const found: RecordRow[] = [];
-    for (let page = 1; ; page++) {
-      const { data } = await reads.listEntriesInTransaction(
-        transaction,
-        slug,
-        {
-          where,
-          pagination: { limit: READ_PAGE, page },
-          sort: { field: "claimKey", direction: "asc" },
-          depth: 0,
-        },
-        { lock }
-      );
-      const rows = (data as unknown[]).map(rowOf);
-      found.push(...rows);
-      // A short page ends the read: the total beside it is an unlocked count.
-      if (rows.length < READ_PAGE) return found;
-    }
-  }
-
-  /**
-   * Hold the lock row `key` until the transaction ends: read for update where
-   * it exists, made with `fields` where it does not (a save making it at the
-   * same moment waits on the key's index), and written, which is the lock.
-   */
-  async function holdLock(
-    transaction: Transaction,
-    key: string,
-    fields: { locale: string; path: string }
-  ): Promise<void> {
-    const byKey = { claimKey: { equals: key } };
-    let [row] = await rowsWhere(transaction, byKey, "update");
-    if (row === undefined) {
-      try {
-        await collections.createEntryInTransaction(transaction, slug, {
-          claimKey: key,
-          kind: "lock",
-          ...fields,
-        });
-        return;
-      } catch (error) {
-        if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
-      }
-      [row] = await rowsWhere(transaction, byKey, "update");
-      if (row === undefined) {
-        throw NextlyError.internal({
-          logContext: { reason: "address-lock-vanished", ...fields },
-        });
-      }
-    }
-    await collections.updateEntryInTransaction(transaction, slug, row.id, {
-      kind: "lock",
-      _overwrite: true,
-    });
-  }
-
-  /** Hold `holder`'s own lock row until the transaction ends. */
-  function holdHolderLock(
-    transaction: Transaction,
-    holder: AddressHolder
-  ): Promise<void> {
-    return holdLock(transaction, holderLockKey(holder), {
-      locale: "",
-      path: `${holder.collection}:${holder.id}`,
-    });
-  }
-
-  /**
-   * The addresses and ranges `holder` keeps, read for update, or with no row
-   * lock (`none`) where the page's own lock already keeps them from changing.
-   */
-  async function rowsOf(
-    transaction: Transaction,
-    holder: AddressHolder,
-    lock: "update" | "none" = "update"
-  ): Promise<RecordRow[]> {
-    return rowsWhere(
-      transaction,
-      {
-        and: [
-          { kind: { in: ["address", "range"] } },
-          { holderCollection: { equals: holder.collection } },
-          { holderId: { equals: holder.id } },
-        ],
-      },
-      lock
-    );
-  }
-
-  return { slug, rowsWhere, holdLock, holdHolderLock, rowsOf };
+/** Hold `holder`'s own lock row until `db`'s transaction ends. */
+function holdHolderLock(
+  ctx: PluginContext,
+  db: PluginTransaction,
+  holder: AddressHolder
+): Promise<void> {
+  return holdLock(ctx, db, holderLockKey(holder), {
+    locale: "",
+    path: `${holder.collection}:${holder.id}`,
+  });
 }
 
 /**
- * What the record says `holder` holds now, read on `transaction` with the
- * page's own lock held until it ends: a save of the page waits for it, so
- * what is read cannot change before the transaction's own writes.
+ * What the record says `holder` holds now, read on the transaction the
+ * calling flow is in (`_transaction` stands for it) with the page's own lock
+ * held until it ends: a save of the page waits for it, so what is read
+ * cannot change before the transaction's own writes.
  *
- * The rows themselves are read with no row lock. Every write to a page's rows
- * takes the page's lock first, so none can change them meanwhile, and a lock
- * on them here, before the path locks a move takes next, would invert the
- * order a save of another page takes them in: path locks, then the rows.
+ * Every write to a page's rows takes the page's lock first, so none can
+ * change them meanwhile. They are read with a share lock all the same, which
+ * reads the latest rows on MySQL, where a plain read answers from the
+ * transaction's snapshot; a share lock keeps no other save's read waiting,
+ * and only a save replacing a redirect writes rows it does not hold.
  */
 export async function heldNow(
   ctx: PluginContext,
-  transaction: Transaction,
+  _transaction: Transaction,
   holder: AddressHolder
 ): Promise<HeldAddress[]> {
-  const rows = recordRows(ctx);
-  if (ctx.dialect !== "sqlite") await rows.holdHolderLock(transaction, holder);
-  return (await rows.rowsOf(transaction, holder, "none")).flatMap(row =>
-    row.address === null ? [] : [row.address]
+  await recordReady(ctx);
+  return onFlowTransaction(ctx, async db => {
+    await holdHolderLock(ctx, db, holder);
+    return (await rowsOfHolder(db, holder, lockFor(ctx, "share"))).flatMap(
+      row => (row.address === null ? [] : [row.address])
+    );
+  });
+}
+
+/**
+ * Who holds each of `paths` in `locale`, read for all of them at once while
+ * `work` runs: `addressHolders` asked about one of them in `locale` answers
+ * from this read, so a list of pages worked through one by one costs one read
+ * of the record rather than one a page. Any other address is read as before.
+ */
+export async function withAddressHolders<T>(
+  ctx: PluginContext,
+  locale: string,
+  paths: readonly string[],
+  work: () => Promise<T>
+): Promise<T> {
+  const keysByPath = new Map(
+    paths.map(path => [path, keysHolding(locale, path)])
   );
+  const allKeys = [...new Set([...keysByPath.values()].flat())];
+  const holderByKey = await holdersByKey(ctx, allKeys);
+  const known = new Map<string, AddressHolder[]>();
+  for (const [path, keys] of keysByPath) {
+    known.set(
+      `${locale}|${path}`,
+      keys.flatMap(claim => holderByKey.get(claim) ?? [])
+    );
+  }
+  return holdersKnown.run(known, work);
+}
+
+/** The holders a `withAddressHolders` read found, while its work runs. */
+const holdersKnown = new AsyncLocalStorage<Map<string, AddressHolder[]>>();
+
+/**
+ * Who the record says holds the address `path` in `locale`, or in the site's
+ * default language where the route named none: the page holding it exactly,
+ * or holding a range it falls in, read by the rows' unique keys, so a page
+ * that still holds `path` in another language is never taken for its holder
+ * here. None where no page holds it, as before the record has caught up with
+ * a site's content.
+ */
+export async function addressHolders(
+  ctx: PluginContext,
+  path: string,
+  locale: string | undefined
+): Promise<AddressHolder[]> {
+  const language = locale ?? (await ctx.publicAddresses.defaultLanguage());
+  const known = holdersKnown.getStore()?.get(`${language}|${path}`);
+  if (known !== undefined) return known;
+  return [...(await holdersByKey(ctx, keysHolding(language, path))).values()];
+}
+
+/** What one page's addresses became in a recorded batch. */
+export interface AddressMove {
+  /** The addresses it held before and holds no more. */
+  released: readonly HeldAddress[];
+  /** Every address it holds now. */
+  holds: readonly HeldAddress[];
+}
+
+/**
+ * The event the record announces each page's addresses on, once a batch of
+ * saves it recorded has committed: every page, never a redirect. Never for
+ * a save that was undone, since the event waits for the save's transaction.
+ */
+export const ADDRESSES_MOVED: string = `${SEO_ADMIN_SLUG}.addresses-moved`;
+
+/** The payload `ADDRESSES_MOVED` carries. */
+export interface AddressesMoved {
+  moves: readonly AddressMove[];
+}
+
+/**
+ * Announce `moves` once the save that recorded them commits. Announcing
+ * never fails the save: whatever goes wrong only costs the announcement.
+ */
+function announceMoves(
+  ctx: PluginContext,
+  moves: readonly AddressMove[]
+): void {
+  if (moves.length === 0) return;
+  try {
+    const payload: AddressesMoved = { moves };
+    ctx.events.emit(ADDRESSES_MOVED, payload);
+  } catch (error) {
+    ctx.logger.warn("The SEO plugin could not announce moved addresses", {
+      error,
+    });
+  }
+}
+
+/**
+ * The event the record announces, once a batch of saves it recorded has
+ * committed, where any redirect's From address was claimed or let go of:
+ * what the Proxy's kept redirect addresses are dropped on. Never for a save
+ * that was undone.
+ */
+export const REDIRECTS_CHANGED: string = `${SEO_ADMIN_SLUG}.redirects-changed`;
+
+/**
+ * Announce that redirects changed, where any of `holders` is a redirect, once
+ * the save commits; never failing it.
+ */
+function announceRedirectsChanged(
+  ctx: PluginContext,
+  holders: readonly AddressHolder[],
+  isRedirect: (holder: AddressHolder) => boolean
+): void {
+  if (!holders.some(isRedirect)) return;
+  try {
+    ctx.events.emit(REDIRECTS_CHANGED, {});
+  } catch (error) {
+    ctx.logger.warn("The SEO plugin could not announce changed redirects", {
+      error,
+    });
+  }
 }
 
 /** The participant, bound to the SEO plugin's context. */
 export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
-  const { slug, rowsWhere, holdLock, holdHolderLock, rowsOf } = recordRows(ctx);
-  const collections = ctx.services.collections;
+  const redirects = redirectsSlug(ctx);
+  /** Whether `holder` is a redirect, holding its From address. */
+  const isRedirect = (holder: AddressHolder) => holder.collection === redirects;
+
+  /**
+   * Whether `held`, held by `holder`, keeps `asker` from holding `asked`.
+   *
+   * A page is kept off an address another page holds, and never off one a
+   * redirect holds: it replaces that redirect. A redirect is kept off an
+   * address a page holds, exactly or in a range above it, and off another
+   * redirect's same From address; a pattern above an exact address does not
+   * keep it off, since an exact redirect answers first. A pattern is kept off
+   * only by the same pattern, or by a page's range covering all of it: a page
+   * at an address inside a pattern is served, and the pattern redirects the
+   * rest.
+   */
+  function keepsOff(
+    holder: AddressHolder,
+    held: HeldAddress,
+    asker: AddressHolder,
+    asked: HeldAddress
+  ): boolean {
+    if (!isRedirect(asker)) return !isRedirect(holder) && overlaps(held, asked);
+    return asked.range === true
+      ? keepsPatternOff(holder, held, asked)
+      : !(isRedirect(holder) && held.range === true) && overlaps(held, asked);
+  }
+
+  /** Whether `held`, held by `holder`, keeps a pattern redirect off `asked`. */
+  function keepsPatternOff(
+    holder: AddressHolder,
+    held: HeldAddress,
+    asked: HeldAddress
+  ): boolean {
+    if (held.range !== true || held.locale !== asked.locale) return false;
+    if (held.path === asked.path) return true;
+    return !isRedirect(holder) && within(asked.path, held.path);
+  }
+
+  /**
+   * Leave a permanent redirect from each address `update`'s page let go of
+   * to the address it holds now in the same language, as a save of a moved
+   * page would want. None where the page holds nothing in that language now,
+   * or where another page holds the old address once every claim stands: the
+   * redirect's own claim is refused there, which is also why two pages
+   * swapping addresses in one batch make none. A
+   * redirect that cannot be saved fails the save, naming the address, so the
+   * page keeps its old one.
+   */
+  async function redirectReleased(
+    transaction: Transaction,
+    update: HeldAddressUpdate,
+    released: readonly HeldAddress[]
+  ): Promise<void> {
+    for (const old of released) {
+      const input = movedRedirect(old, update.holds);
+      if (input === undefined) continue;
+      let outcome: Awaited<ReturnType<typeof putRedirect>>;
+      try {
+        outcome = await putRedirect(ctx, transaction, input);
+      } catch (error) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message: `The old address ${old.path} (${old.locale}) could not be kept as a redirect, so the address was not changed. Try again, or remove the redirects that point to it first.`,
+          cause: error instanceof Error ? error : undefined,
+          logContext: {
+            reason: "automatic-redirect-failed",
+            old,
+            input,
+            holder: update.holder,
+          },
+        });
+      }
+      // Refused only where another page serves the old address, which then
+      // needs no redirect, or where the address cannot be one.
+      if ("refused" in outcome && outcome.reason !== "held") {
+        ctx.logger.warn("A moved page's old address was given no redirect", {
+          old,
+          input,
+          holder: update.holder,
+          refused: outcome.refused,
+        });
+      }
+    }
+  }
 
   /**
    * Take the lock rows of every address in `batch` and every path above each,
    * in one sorted order, before any of them is read.
    */
   async function holdLocks(
-    transaction: Transaction,
+    db: PluginTransaction,
     batch: readonly HeldAddressUpdate[]
   ): Promise<void> {
     if (ctx.dialect === "sqlite") return;
@@ -316,7 +388,7 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     );
     for (const key of [...holders.keys()].sort()) {
       const holder = holders.get(key);
-      if (holder !== undefined) await holdHolderLock(transaction, holder);
+      if (holder !== undefined) await holdHolderLock(ctx, db, holder);
     }
     const keys = new Map<string, { locale: string; path: string }>();
     for (const update of batch) {
@@ -330,60 +402,54 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
     for (const key of [...keys.keys()].sort()) {
       const at = keys.get(key);
       if (at !== undefined) {
-        await holdLock(transaction, claimKey("lock", at.locale, at.path), at);
+        await holdLock(ctx, db, claimKey("lock", at.locale, at.path), at);
       }
     }
   }
 
   /** The held rows `asked` could meet: at it or above it, or below a range. */
   async function rowsMeeting(
-    transaction: Transaction,
+    db: PluginTransaction,
     asked: HeldAddress
   ): Promise<RecordRow[]> {
-    const held = { kind: { in: ["address", "range"] } };
-    const inLocale = { locale: { equals: asked.locale } };
+    // Read with a share lock, which reads the latest rows: on MySQL a plain
+    // read here answers from the snapshot the save's first read took, which
+    // misses a save this one waited for on a lock row.
+    const lock = lockFor(ctx, "share");
     // The address itself, held exactly or as a range, and every range above
     // it, found through the unique claim key's index rather than a scan of
     // the language's addresses.
-    const keys = [
-      claimKey("address", asked.locale, asked.path),
-      ...[asked.path, ...pathsAbove(asked.path)].map(path =>
-        claimKey("range", asked.locale, path)
-      ),
-    ];
-    const atOrAbove = await rowsWhere(
-      transaction,
-      { claimKey: { in: keys } },
-      "share"
+    const atOrAbove = await rowsByKeys(
+      db,
+      keysHolding(asked.locale, asked.path),
+      lock
     );
     if (asked.range !== true) return atOrAbove;
-    // `contains` matches the text literally on every dialect (a `like` there
-    // would read `_` and `%` as wildcards), and anywhere in the path, so the
-    // rows it finds are only candidates; `overlaps` keeps those truly below.
-    const below = await rowsWhere(
-      transaction,
-      {
-        and: [
-          held,
-          inLocale,
-          { path: { contains: asked.path === "/" ? "/" : `${asked.path}/` } },
-        ],
-      },
-      "share"
+    // Candidates only: `overlaps` keeps those truly below.
+    const below = await rowsUnder(
+      db,
+      asked.locale,
+      asked.path === "/" ? "/" : `${asked.path}/`,
+      lock
     );
     return [...atOrAbove, ...below];
   }
 
-  /** Delete the rows `holder` keeps that `holds` no longer has; answer the rest. */
+  /**
+   * Delete the rows `holder` keeps that `holds` no longer has; answer the
+   * keys of the rest, and the addresses let go.
+   */
   async function release(
-    transaction: Transaction,
+    db: PluginTransaction,
     update: HeldAddressUpdate
-  ): Promise<Set<string>> {
+  ): Promise<{ still: Set<string>; released: HeldAddress[] }> {
     const wanted = new Set(
       update.holds.map(h => claimKey(kindOf(h), h.locale, h.path))
     );
-    const rows = await rowsOf(transaction, update.holder);
+    const rows = await rowsOfHolder(db, update.holder, lockFor(ctx, "update"));
     const still = new Set<string>();
+    const released: HeldAddress[] = [];
+    const gone: string[] = [];
     for (const row of rows) {
       const key = row.address
         ? claimKey(row.kind, row.address.locale, row.address.path)
@@ -392,55 +458,72 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
         still.add(key);
         continue;
       }
-      await collections.deleteEntryInTransaction(transaction, slug, row.id);
+      gone.push(row.id);
+      if (row.address) released.push(row.address);
     }
-    return still;
+    // One statement for every row let go of.
+    await deleteRows(db, gone);
+    return { still, released };
+  }
+
+  /**
+   * Claim every address `update` holds that `kept` does not already;
+   * answers how many were claimed.
+   */
+  async function claimNew(
+    db: PluginTransaction,
+    transaction: Transaction,
+    update: HeldAddressUpdate,
+    kept: ReadonlySet<string> = new Set()
+  ): Promise<number> {
+    let claimed = 0;
+    for (const held of update.holds) {
+      if (!kept.has(claimKey(kindOf(held), held.locale, held.path))) {
+        await claim(db, transaction, update, held);
+        claimed += 1;
+      }
+    }
+    return claimed;
   }
 
   /** Write `held` for `update.holder`, refused by the key where another holds it. */
   async function claim(
+    db: PluginTransaction,
     transaction: Transaction,
     update: HeldAddressUpdate,
     held: HeldAddress
   ): Promise<void> {
     const key = claimKey(kindOf(held), held.locale, held.path);
-    try {
-      await collections.createEntryInTransaction(transaction, slug, {
-        claimKey: key,
-        kind: kindOf(held),
-        locale: held.locale,
-        path: held.path,
-        holderCollection: update.holder.collection,
-        holderId: update.holder.id,
-        holderLabel: update.holder.label ?? null,
-      });
-    } catch (error) {
-      if (!NextlyError.isCode(error, "DUPLICATE")) throw error;
-      const [other] = await rowsWhere(
-        transaction,
-        { claimKey: { equals: key } },
-        "share"
-      );
-      // Only the address in the message: the saver may not be allowed to read
-      // the page holding it, which the log names instead.
-      throw NextlyError.duplicate({
-        message: `${held.path} (${held.locale}) is already the address of another page. Choose another address for this entry.`,
-        logContext: {
-          reason: "public-address-held",
-          held,
-          holder: update.holder,
-          heldBy: other?.holder,
-        },
-      });
+    if (!isRedirect(update.holder)) {
+      // A published page taking a redirect's From address replaces the
+      // redirect: the page is meant to live there now.
+      const [taken] = await rowsByKeys(db, [key], lockFor(ctx, "update"));
+      if (taken?.holder && isRedirect(taken.holder)) {
+        await deleteRows(db, [taken.id]);
+        await dropReplacedRedirect(ctx, transaction, taken.holder.id);
+      }
     }
+    if (await insertClaim(ctx, db, key, held, update.holder)) return;
+    // Only the address in the message: the saver may not be allowed to read
+    // the page holding it. The key refused the row, which on PostgreSQL ends
+    // the transaction, so nothing more is read on it.
+    throw NextlyError.duplicate({
+      message: `${held.path} (${held.locale}) is already the address of another page. Choose another address for this entry.`,
+      logContext: {
+        reason: "public-address-held",
+        held,
+        holder: update.holder,
+      },
+    });
   }
 
   return {
-    async holderOf(asked, asker, batch, { transaction }) {
-      await holdLocks(transaction, batch);
+    async holderOf(asked, asker, batch, { db }) {
+      await recordReady(ctx);
+      await holdLocks(db, batch);
       // The batch's holders are judged by what they will hold, not their rows.
       const moving = batch.map(update => update.holder);
-      const stored = (await rowsMeeting(transaction, asked)).flatMap(row =>
+      const stored = (await rowsMeeting(db, asked)).flatMap(row =>
         row.address &&
         row.holder &&
         !moving.some(holder => sameHolder(holder, row.holder as AddressHolder))
@@ -453,27 +536,59 @@ export function addressRecord(ctx: PluginContext): PublicAddressParticipant {
       const found = [...stored, ...coming].find(
         candidate =>
           !sameHolder(candidate.holder, asker) &&
-          overlaps(candidate.address, asked)
+          keepsOff(candidate.holder, candidate.address, asker, asked)
       );
       return found?.holder ?? null;
     },
 
-    async record(batch, { transaction }) {
-      await holdLocks(transaction, batch);
+    async record(batch, { db, transaction }) {
+      await recordReady(ctx);
+      await holdLocks(db, batch);
       // Every release first, so an address passing between holders in one
       // batch is free by the time it is claimed.
-      const still = new Map<HeldAddressUpdate, Set<string>>();
+      const letGo = new Map<
+        HeldAddressUpdate,
+        { still: Set<string>; released: HeldAddress[] }
+      >();
+      let changed = 0;
       for (const update of batch) {
-        still.set(update, await release(transaction, update));
+        const outcome = await release(db, update);
+        letGo.set(update, outcome);
+        changed += outcome.released.length;
       }
       for (const update of batch) {
-        const kept = still.get(update) ?? new Set<string>();
-        for (const held of update.holds) {
-          if (!kept.has(claimKey(kindOf(held), held.locale, held.path))) {
-            await claim(transaction, update, held);
-          }
+        changed += await claimNew(
+          db,
+          transaction,
+          update,
+          letGo.get(update)?.still
+        );
+      }
+      // Page heads read who holds an address, so they expire once a change
+      // to it commits; a save that changed nothing expires none.
+      if (changed > 0) announceRecordChanged(ctx);
+      // Once every claim stands, so a redirect never meets an address the
+      // batch is about to take.
+      for (const update of batch) {
+        const released = letGo.get(update)?.released ?? [];
+        if (released.length > 0 && !isRedirect(update.holder)) {
+          await redirectReleased(transaction, update, released);
         }
       }
+      announceRedirectsChanged(
+        ctx,
+        batch.map(update => update.holder),
+        isRedirect
+      );
+      announceMoves(
+        ctx,
+        batch
+          .filter(update => !isRedirect(update.holder))
+          .map(update => ({
+            released: letGo.get(update)?.released ?? [],
+            holds: update.holds,
+          }))
+      );
     },
   };
 }

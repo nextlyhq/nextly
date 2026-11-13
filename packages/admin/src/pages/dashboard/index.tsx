@@ -12,6 +12,7 @@
 import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import type React from "react";
 
+import { GreetingActionProvider } from "@admin/components/features/dashboard/GreetingAction";
 import { WelcomeHeader } from "@admin/components/features/dashboard/WelcomeHeader";
 import { WidgetGrid } from "@admin/components/features/widgets/WidgetGrid";
 import { AlertCircle } from "@admin/components/icons";
@@ -89,11 +90,14 @@ const DashboardPage: React.FC = () => {
   return (
     <ErrorBoundary fallback={DashboardErrorFallback}>
       <PageContainer>
-        {/* The greeting's own bottom margin is the space above the cards, as
+        {/* The greeting row's own bottom margin is the space above the cards, as
             the approved design draws it. No padding of its own above or
             below: the page container's is every admin page's, so the greeting
             starts where other pages' headings do. */}
-        <div className="max-w-[1600px] mx-auto animate-in fade-in slide-in-from-bottom-4 duration-1000">
+        {/* No entrance motion: the greeting and the cards replace the
+            dashboard's outline where it stands, and sliding them in would
+            move every part the outline had placed. */}
+        <div className="max-w-[1600px] mx-auto">
           {/* Every card, through ONE grid.
  
               The seed prompt, the collection counts, the singles and the team
@@ -112,7 +116,11 @@ const DashboardPage: React.FC = () => {
               the resource sections competes with getting an editor to their
               content without answering a question they actually have. The
               component still ships and is cheap to restore, as a widget now. */}
-          <DashboardPlace />
+          {/* Above both the greeting and the grid: the grid draws its cog
+              into the greeting row's place. */}
+          <GreetingActionProvider>
+            <DashboardPlace />
+          </GreetingActionProvider>
         </div>
       </PageContainer>
     </ErrorBoundary>

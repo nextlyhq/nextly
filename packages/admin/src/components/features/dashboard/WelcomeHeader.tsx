@@ -2,7 +2,13 @@
 
 import { useEffect, useState, type JSX } from "react";
 
+import {
+  LOADING_FRAME_TIMES,
+  useDelayedReveal,
+} from "@admin/components/shared/loading-frame/delayed-reveal";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
+
+import { GreetingActionTarget } from "./GreetingAction";
 
 /**
  * The id of the dashboard's level-one heading.
@@ -38,8 +44,10 @@ function useMinuteClock(): Date {
 
 /**
  * The dashboard's one line above the cards, "Good afternoon, Ada": the page's
- * only level-one heading. The page's own action, Customize dashboard, is in the
- * admin's top bar rather than here.
+ * only level-one heading, with the page's own action, the cog that opens
+ * Customize dashboard, at the row's right end, beside what it changes. In
+ * customise mode the cog leaves the row and the mode's controls are in the
+ * admin's top bar, which stays put while the cards scroll.
  *
  * It renders in every state, from first paint: the heading is where a
  * screen-reader or keyboard user lands when they jump by heading, and every
@@ -47,36 +55,55 @@ function useMinuteClock(): Date {
  * is on its way the line keeps its height with a placeholder, so the cards
  * below do not move when the name arrives; it is named "Dashboard" meanwhile,
  * since a heading with no name is skipped by screen readers' heading lists.
+ * The row is the cog's 34px tall from first paint, with or without the cog,
+ * so the cards do not move when it arrives or leaves.
  */
 export function WelcomeHeader(): JSX.Element {
   const { user, isLoading } = useDashboardUser();
   const now = useMinuteClock();
+  // The placeholder follows the frame's timing, as the cards' outline below
+  // it does: nothing for a quick answer, a still bar for a slow one.
+  const placeholderShown = useDelayedReveal(
+    isLoading,
+    LOADING_FRAME_TIMES.outline
+  );
 
   return (
-    <h1
-      id={DASHBOARD_HEADING_ID}
-      // Focusable only PROGRAMMATICALLY (`-1` keeps it out of the Tab
-      // sequence), so focus can be returned here when the element holding it
-      // is taken off the page, and as customise mode ends.
-      tabIndex={-1}
-      // `min-h-7` is the line's own height (`text-xl` sets a 28px line), with
-      // the placeholder or the greeting in it. The ring shows only where the
-      // browser shows a keyboard's focus.
-      className="mb-[18px] min-h-7 rounded-sm text-xl font-semibold tracking-[-0.01em] text-foreground focus:outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
-      data-testid="dashboard-greeting"
+    // The row's own bottom margin is the space above the cards, as the
+    // approved design draws it.
+    <div
+      className="mb-[18px] flex min-h-[34px] items-center gap-2.5"
+      data-testid="dashboard-greeting-row"
     >
-      {isLoading ? (
-        <>
-          <span className="sr-only">Dashboard</span>
-          <span
-            aria-hidden="true"
-            data-testid="dashboard-greeting-placeholder"
-            className="inline-block h-5 w-56 max-w-full rounded bg-primary/5 align-middle animate-pulse motion-reduce:animate-none"
-          />
-        </>
-      ) : (
-        greetingFor(user?.name, now)
-      )}
-    </h1>
+      <h1
+        id={DASHBOARD_HEADING_ID}
+        // Focusable only PROGRAMMATICALLY (`-1` keeps it out of the Tab
+        // sequence), so focus can be returned here when the element holding it
+        // is taken off the page, and as customise mode ends.
+        tabIndex={-1}
+        // `min-h-7` is the line's own height (`text-xl` sets a 28px line), with
+        // the placeholder or the greeting in it. The ring shows only where the
+        // browser shows a keyboard's focus.
+        className="min-h-7 min-w-0 flex-1 rounded-sm text-xl font-semibold tracking-[-0.01em] text-foreground focus:outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-primary"
+        data-testid="dashboard-greeting"
+      >
+        {isLoading ? (
+          <>
+            <span className="sr-only">Dashboard</span>
+            {placeholderShown ? (
+              // Still, as every outline in the frame is: nothing pulses.
+              <span
+                aria-hidden="true"
+                data-testid="dashboard-greeting-placeholder"
+                className="inline-block h-5 w-56 max-w-full rounded-md bg-secondary align-middle"
+              />
+            ) : null}
+          </>
+        ) : (
+          greetingFor(user?.name, now)
+        )}
+      </h1>
+      <GreetingActionTarget />
+    </div>
   );
 }

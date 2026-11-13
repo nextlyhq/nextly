@@ -26,7 +26,7 @@ import { expectNoAxeViolations } from "./support/axe";
 import { signInAsLimitedUser, type LimitedUser } from "./support/limited-user";
 import { LOCK } from "./support/locks";
 import { createEntry, expectOk } from "./support/runtime-collection";
-import { test } from "./support/test";
+import { includingHidden, test } from "./support/test";
 
 // Creates roles for its two viewers; the posts it reads are its own.
 test.describe.configure({ mode: "serial", lock: [LOCK.usersRoles] });
@@ -310,16 +310,19 @@ test("a block behind a permission is drawn for a viewer who holds it and not for
     [viewerB, false],
   ] as const) {
     const viewerPage = await viewer.context.newPage();
-    // What the server sent this reader: the evidence is its pruning, not an
-    // element the browser hid.
-    const workspace = viewerPage.waitForResponse(response =>
-      response.url().includes("/admin/api/admin-meta/workspace")
+    // What the server sends this reader: the evidence is its pruning, not an
+    // element the browser hid. Asked of the workspace route directly, as this
+    // reader: the admin now folds that read into its one startup request, so
+    // there is no separate response of its own to wait for.
+    const workspace = await viewer.context.request.get(
+      "/admin/api/admin-meta/workspace"
+    );
+    expect(workspace.ok(), "the workspace read").toBe(true);
+    const contributions = JSON.stringify(
+      ((await workspace.json()) as { contributions?: unknown }).contributions ??
+        {}
     );
     await gotoAdmin(viewerPage, `/collections/posts/${draftId}`);
-    const contributions = JSON.stringify(
-      ((await (await workspace).json()) as { contributions?: unknown })
-        .contributions ?? {}
-    );
     expect(contributions.includes("contributions-fixture.gated-block")).toBe(
       sent
     );
@@ -349,7 +352,9 @@ for (const theme of ["light", "dark"] as const satisfies readonly Theme[]) {
       `Fixture replacement of the editor, for ${storyId}`
     );
     // Instead of the editor, not beside it: none of the story's fields.
-    await expect(page.getByLabel("Summary", { exact: true })).toHaveCount(0);
+    await expect(
+      includingHidden(page).getByLabel("Summary", { exact: true })
+    ).toHaveCount(0);
     await expectReadable(page, replacement);
     await expectNoAxeViolations(page, {
       include: "[aria-label='Fixture replacement']",

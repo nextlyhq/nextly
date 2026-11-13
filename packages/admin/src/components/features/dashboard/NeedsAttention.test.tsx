@@ -185,6 +185,14 @@ describe("NeedsAttention", () => {
       /\/releases\?tab=attention&reason=overdue$/
     );
 
+    // Each mark in its status's text colour, never a tinted shade.
+    expect(within(overdue).getByTestId("needs-attention-mark")).toHaveClass(
+      "text-danger-text"
+    );
+    expect(within(seo).getByTestId("needs-attention-mark")).toHaveClass(
+      "text-warning-text"
+    );
+
     // A plugin's warning: a triangle rather than a circle, its floor capped at "99+", and no
     // reason line when the plugin gave none.
     expect(
@@ -320,5 +328,55 @@ describe("NeedsAttention", () => {
   it("says nothing of arriving when it was drawn from the start", () => {
     draw([STOPPED, OVERDUE]);
     expect(screen.queryByText(/need your attention/)).toBeNull();
+  });
+
+  it("draws the database's danger and couldn't-check items with How to fix, opening the docs in a new tab", () => {
+    const docs = "https://nextlyhq.com/docs/database/encrypted-connections";
+    draw([
+      {
+        id: "core/system-connection-unencrypted",
+        kind: "system",
+        label: "Database connection is not encrypted",
+        count: 1,
+        single: true,
+        severity: "critical",
+        reason: "Passwords and data cross the network as plain text.",
+        help: docs,
+      },
+      {
+        id: "core/system-connection-unchecked",
+        kind: "system",
+        label: "Couldn't check the database connection's encryption",
+        count: 1,
+        single: true,
+        severity: "warning",
+        reason: "It may cross the network as plain text.",
+        help: docs,
+      },
+    ]);
+    const [danger, unchecked] = screen.getAllByTestId("needs-attention-item");
+    expect(within(danger).getByTestId("needs-attention-critical")).toBeTruthy();
+    expect(danger.textContent).toContain(
+      "Database connection is not encrypted"
+    );
+    expect(danger.textContent).not.toContain("· 1");
+    expect(danger.textContent).toContain(
+      "Passwords and data cross the network as plain text."
+    );
+    expect(
+      within(unchecked).getByTestId("needs-attention-warning")
+    ).toBeTruthy();
+    for (const [row, label] of [
+      [danger, "database connection is not encrypted"],
+      [unchecked, "couldn't check the database connection's encryption"],
+    ] as const) {
+      const fix = within(row).getByRole("link", {
+        name: `How to fix: ${label}`,
+      });
+      expect(fix.textContent).toBe("How to fix");
+      expect(fix.getAttribute("href")).toBe(docs);
+      expect(fix.getAttribute("target")).toBe("_blank");
+      expect(fix.getAttribute("rel")).toContain("noopener");
+    }
   });
 });

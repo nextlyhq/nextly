@@ -33,6 +33,7 @@ import {
   respondDoc,
   respondList,
   respondMutation,
+  withSessionCacheHeaders,
 } from "../../api/response-shapes";
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import { container } from "../../di/container";
@@ -55,9 +56,13 @@ import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
 } from "../../domains/schema/builder-save/schema-change-save";
+import { introspectLiveSnapshot } from "../../domains/schema/pipeline/diff/introspect-live";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
+import { reachesRelationStorage } from "../../domains/schema/pipeline/recorded-shapes";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
+import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
+import { writeRegistryRows } from "../../domains/schema/schema-version";
 import {
   applyCollectionSchemaChange,
   recordedFieldsOf,
@@ -72,8 +77,7 @@ import {
   applyPluginAdminViews,
   type CollectionWithAdmin,
 } from "../../plugins/admin-views";
-import { getHandlerConfig } from "../../route-handler/auth-handler";
-import { withSessionCacheHeaders } from "../../routeHandler";
+import { bumpSchemaVersion } from "../../route-handler/schema-version";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
@@ -109,7 +113,9 @@ import {
 } from "../helpers/service-envelope";
 import {
   isTruthyParam,
+  parseCountParam,
   parseRichTextFormat,
+  parseRichTextStyles,
   parseSelectParam,
   parseStatusParam,
   parseWhereParam,
@@ -118,7 +124,11 @@ import {
   readClientWhere,
   toNumber,
 } from "../helpers/validation";
-import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
+import {
+  restoreFieldsOf,
+  versionInputOf,
+  versionInputOfQuery,
+} from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
 import { readListOwner, slugListsForOwner } from "./list-owner";
@@ -346,6 +356,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         request,
         // The version the restore was made from, judged as its update is.
         version: versionInputOf(body),
+        // The fields chosen; every field the version holds when none are.
+        fields: restoreFieldsOf(body),
       });
       return respondAction("Version restored.", result);
     },
@@ -518,7 +530,7 @@ const COLLECTIONS_METHODS: Record<
       );
       // The site's own collections or the plugins', as conditions on the
       // same query: the plugins' list only narrows what the reader may read.
-      const slugLists = slugListsForOwner(owner, "collections", readable);
+      const slugLists = await slugListsForOwner(owner, "collections", readable);
 
       const result = await svc.listCollections({
         page: toNumber(p.page),
@@ -586,7 +598,13 @@ const COLLECTIONS_METHODS: Record<
       });
       // Fold plugin view overrides (contributes.admin.views, D23) onto the
       // collection so the list page's injection slots resolve. Collection slots
-      // win; plugin fills empties (see applyPluginAdminViews).
+      // win; plugin fills empties (see applyPluginAdminViews). The route
+      // handler's config store is loaded here, not imported at the top: it
+      // reaches the auth routes and every plugin's context, several hundred
+      // modules the other collection operations never need.
+      const { getHandlerConfig } = await import(
+        "../../route-handler/auth-handler"
+      );
       const config = getHandlerConfig();
       const [collectionWithViews] = applyPluginAdminViews(
         [collection as CollectionWithAdmin],
@@ -958,6 +976,25 @@ const COLLECTIONS_METHODS: Record<
           // `dialect` is an abstract readonly property on DrizzleAdapter, not a method.
           const dialect = adapter.dialect;
 
+          // A field renamed onto a column that is already there is refused before anything
+          // changes, on either way below: written and run as a migration, or pushed. The dialog
+          // never offers such a change as a rename, only as the old column dropped beside a field
+          // kept on the column that is there, so it is found from the field lists.
+          await refuseRenamedFieldOntoTakenColumn(
+            adapter,
+            {
+              previousFields: (collection.fields ??
+                []) as unknown as FieldDefinition[],
+              fields: fields as unknown as FieldDefinition[],
+              mainTable: tableName,
+              wasLocalized: storesPerLanguage({ localized: wasLocalized }),
+              isLocalized: isStoredPerLanguage,
+              dialect,
+              builtBy: "collection",
+            },
+            { collection: p.collectionName }
+          );
+
           // One apply of the schema pipeline, with the admin's answers from the dialog, then the
           // companion brought in step: the same path a Builder save of the collection takes. Legacy
           // per-field answers are translated to typed resolutions inside the prompt dispatcher.
@@ -968,11 +1005,6 @@ const COLLECTIONS_METHODS: Record<
           const acknowledgedConversions = (
             body as { acknowledgedConversions?: string[] }
           ).acknowledgedConversions;
-          // A translated collection, or one turning translation on or off,
-          // keeps its push in development, which carries values across the
-          // change; the writer writes its migration and records it once the
-          // push has run.
-          const translated = wasLocalized || isLocalized;
           const change: Parameters<typeof applyCollectionSchemaChange>[0] = {
             slug: p.collectionName,
             collection,
@@ -993,7 +1025,27 @@ const COLLECTIONS_METHODS: Record<
             pushedSummary = (await applyCollectionSchemaChange(change)).summary;
           };
           const written = await saveThroughWriter({
-            ...(translated ? { appliedBy: push } : {}),
+            appliedBy: push,
+            // Whether the push applies the change in development, the writer recording its
+            // migration once the push has run: a translated collection, or one turning
+            // translation on or off, whose push carries its values across the change; and a change
+            // reaching a relation's storage (`reachesRelationStorage`), which the push plans from
+            // the live table, where the file alone, written from the newest snapshot, does not.
+            pushWhen: async () =>
+              wasLocalized ||
+              isLocalized ||
+              reachesRelationStorage({
+                before: collection.fields ?? [],
+                after: fields as unknown as FieldDefinition[],
+                liveTable: async () =>
+                  (
+                    await introspectLiveSnapshot(
+                      adapter.getDrizzle(),
+                      dialect,
+                      [tableName]
+                    )
+                  ).tables[0],
+              }),
             slug: p.collectionName,
             collection: writerRowOf(collection),
             fields: fields as unknown as FieldDefinition[],
@@ -1037,25 +1089,29 @@ const COLLECTIONS_METHODS: Record<
           const newSchemaVersion = currentVersion + 1;
           let versionPersisted = true;
           try {
-            await adapter.update(
-              "dynamic_collections",
-              {
-                fields: JSON.stringify(storedFields),
-                schema_version: newSchemaVersion,
-                // Written but not run outside development: `nextly migrate`
-                // applies it on deploy.
-                ...(written !== undefined && !written.applied
-                  ? { migration_status: "pending" }
-                  : {}),
-                // i18n: persist the state this apply actually ran with (mirrors
-                // the singles apply). The DDL above already performed any
-                // false→true transition, so leaving the stored flag behind would
-                // make the settings write that follows read another false→true
-                // transition and reconcile the companion a second time.
-                localized: isLocalized,
-                updated_at: new Date(),
-              },
-              { and: [{ column: "slug", op: "=", value: p.collectionName }] }
+            // The row and the stored schema version in one transaction, so the
+            // version's count moves with the save it records (`writeRegistryRows`).
+            await writeRegistryRows(adapter, tx =>
+              tx.update(
+                "dynamic_collections",
+                {
+                  fields: JSON.stringify(storedFields),
+                  schema_version: newSchemaVersion,
+                  // Written but not run outside development: `nextly migrate`
+                  // applies it on deploy.
+                  ...(written !== undefined && !written.applied
+                    ? { migration_status: "pending" }
+                    : {}),
+                  // i18n: persist the state this apply actually ran with (mirrors
+                  // the singles apply). The DDL above already performed any
+                  // false→true transition, so leaving the stored flag behind would
+                  // make the settings write that follows read another false→true
+                  // transition and reconcile the companion a second time.
+                  localized: isLocalized,
+                  updated_at: new Date(),
+                },
+                { and: [{ column: "slug", op: "=", value: p.collectionName }] }
+              )
             );
             // Written past the registry services, so the cached rows are cleared
             // here: a read during the save may have cached the row from before it.
@@ -1171,12 +1227,7 @@ const COLLECTIONS_METHODS: Record<
           // successful pipeline apply. The bump only matters for UI-first
           // applies (sets the X-Schema-Version response header so admin tabs
           // know to refetch); HMR and boot paths don't need it.
-          try {
-            const { bumpSchemaVersion } = await import("../../routeHandler");
-            bumpSchemaVersion();
-          } catch {
-            // routeHandler may be unavailable in non-server contexts (tests).
-          }
+          bumpSchemaVersion();
 
           // applySchemaChanges is a non-CRUD mutation: there's no "item" to
           // surface. The action result carries the new schema version (so
@@ -1250,6 +1301,8 @@ const COLLECTIONS_METHODS: Record<
         select: parseSelectParam(p.select),
         where: parseWhereParam(p.where, p.whereBrackets),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
+        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+        richTextStyles: parseRichTextStyles(p.richTextStyles),
         sort,
         status,
         // i18n M4: `?locale=` + `?fallback-locale=` select the content language.
@@ -1257,6 +1310,8 @@ const COLLECTIONS_METHODS: Record<
         fallbackLocale: p["fallback-locale"],
         // i18n M7: `?translation-status=1` attaches the per-locale `_translations` overview map.
         translationStatus: isTruthyParam(p["translation-status"]),
+        // `?count=capped` counts the total no further than the list shows.
+        countUpTo: parseCountParam(p.count),
       });
 
       type PaginatedShape = {
@@ -1267,6 +1322,7 @@ const COLLECTIONS_METHODS: Record<
         totalPages: number;
         hasNextPage: boolean;
         hasPrevPage: boolean;
+        totalCapped?: true;
       };
       const paginated = unwrapServiceResult<PaginatedShape>(result, {
         collectionName: p.collectionName,
@@ -1377,6 +1433,8 @@ const COLLECTIONS_METHODS: Record<
           p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
         select: parseSelectParam(p.select),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
+        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+        richTextStyles: parseRichTextStyles(p.richTextStyles),
         status,
         // `?draft=true` overlays the pending working draft in place of the live
         // row (draft/published split), matching Payload's read-side `draft`
@@ -1758,7 +1816,13 @@ async function writerSaveOf(change: WriterChange): Promise<
   if (!container.has("builderSaveSetup")) return undefined;
   const setup = container.get<BuilderSaveSetup>("builderSaveSetup");
   const adapter = getAdapterFromDI();
-  if (!adapter) throw new Error("Database adapter not initialized");
+  // A writer registered with no adapter is a wiring fault of the app, not the editor's: reported
+  // as an internal error, with what was missing in the log.
+  if (!adapter) {
+    throw NextlyError.internal({
+      logContext: { reason: "database adapter not initialized" },
+    });
+  }
   const logger = getLoggerFromDI() ?? consoleLogger;
   const dynamic = new DynamicCollectionService(adapter, logger);
   const before = change.collection.fields ?? [];
@@ -1802,14 +1866,26 @@ async function saveThroughWriter(
   change: WriterChange & {
     /** Applies the change in development instead of the file (`writeCollectionSave`). */
     appliedBy?: () => Promise<void>;
+    /**
+     * Whether `appliedBy` applies this change rather than the file. Asked only where the
+     * answer is used, a save the writer runs in development, so a production save or one with
+     * no writer reads nothing for it. Absent, `appliedBy` applies whenever it is given.
+     */
+    pushWhen?: () => Promise<boolean>;
   }
 ): Promise<{ fields: FieldDefinition[]; applied: boolean } | undefined> {
   const prepared = await writerSaveOf(change);
   if (prepared === undefined) return undefined;
+  const viaPush =
+    change.appliedBy !== undefined &&
+    prepared.deps.applies &&
+    (change.pushWhen === undefined || (await change.pushWhen()));
   const result = await writeCollectionSave(
     prepared.deps,
     prepared.save,
-    change.appliedBy === undefined ? {} : { appliedBy: change.appliedBy }
+    viaPush && change.appliedBy !== undefined
+      ? { appliedBy: change.appliedBy }
+      : {}
   );
   return { fields: prepared.fields, applied: result.applied };
 }

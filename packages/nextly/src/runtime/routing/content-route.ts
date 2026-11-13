@@ -37,17 +37,23 @@ import { nextlyTags } from "../cache/nextly-tags";
 import {
   knownNoPageMetadataProvider,
   pageMetadataFor,
+  pageMetadataProviderToAsk,
+  pageStructuredDataFor,
+  type PageMetadataRequest,
 } from "../seo/page-metadata";
-import type { PageMetadataValues } from "../seo/page-metadata-contract";
+import type {
+  PageMetadataValues,
+  PageStructuredDataHints,
+} from "../seo/page-metadata-contract";
 
-import { triggerNotFound, triggerPermanentRedirect } from "./not-found";
-import { isReservedPath } from "./reserved-paths";
+import { answerNotFound, triggerPermanentRedirect } from "./not-found";
 import {
   confirmedLanguage,
   requestLanguage,
   servedAddress,
   type RequestLanguage,
 } from "./request-language";
+import { isReservedPath } from "./reserved-paths";
 import {
   resolveContent,
   type ContentEntry,
@@ -138,6 +144,26 @@ export interface RenderContext extends ResolvedContext {
    * @experimental Settles with list pagination.
    */
   listPages?: number;
+  /**
+   * The page's structured data, as JSON-LD text written so that no value can
+   * end its element: place it as the body of a JSON-LD script element, so it
+   * is in the HTML a crawler receives.
+   *
+   * ```tsx
+   * {context.structuredData && (
+   *   <script
+   *     type="application/ld+json"
+   *     dangerouslySetInnerHTML={{ __html: context.structuredData }}
+   *   />
+   * )}
+   * ```
+   *
+   * Read from the same answer as the page's head. Given to `render` only, and
+   * only where a plugin provides page metadata and its answer has some.
+   *
+   * @experimental Settles with the page-metadata contract.
+   */
+  structuredData?: string;
 }
 
 /**
@@ -164,8 +190,9 @@ export interface ContentRouteConfig<TNode> {
    * Where a plugin provides page metadata, such as `@nextlyhq/plugin-seo`, its
    * answer decides the page's head and this is one of its inputs: the title,
    * description and social values set here are used where nobody set them for
-   * the page, and its `robots` and canonical are not used at all. Without such
-   * a plugin, this is served as returned.
+   * the page; its `robots` may hide the page, never list one the answer hides,
+   * and its other robots directives are kept; its canonical is kept only where
+   * the answer names none. Without such a plugin, this is served as returned.
    */
   buildMetadata?: (
     entry: ContentEntry,
@@ -181,6 +208,20 @@ export interface ContentRouteConfig<TNode> {
     entry: ContentEntry,
     context: RenderContext
   ) => PageMetadataValues | Promise<PageMetadataValues>;
+  /**
+   * @experimental What the route knows about the entry's page for its
+   * structured data and the entry does not hold: what kind of page it is,
+   * its own name, the entries it lists, the questions it answers. Asked only
+   * where a plugin provides page metadata, and only for the structured data,
+   * never the head, so a list read here costs nothing in `generateMetadata`.
+   */
+  structuredDataHints?: (
+    entry: ContentEntry,
+    context: RenderContext
+  ) =>
+    | PageStructuredDataHints
+    | undefined
+    | Promise<PageStructuredDataHints | undefined>;
   /** Field holding the slug (default `"slug"`). */
   slugField?: string;
   /**
@@ -376,7 +417,17 @@ export interface ContentRouteConfig<TNode> {
    *
    * @experimental Settles with list pagination.
    */
-  mountPath?: string;
+  mountPath?: string /**
+   * How this route answers a request it has nothing for, in place of
+   * Next.js's `notFound()`: a site passes its own to do something for each
+   * miss, such as logging the address. The page and `generateMetadata` may
+   * both call it for one request. A handler that returns is
+   * followed by Next.js's `notFound()`; without one the route answers as
+   * before.
+   *
+   * @experimental Its name and shape may change before 1.0.
+   */;
+  notFound?: () => never | Promise<never>;
 }
 
 /**
@@ -843,7 +894,7 @@ function buildRoute<TNode>(
     const language = await requestLanguage(
       (await args?.params)?.locale,
       config.locale,
-      async () => nextly
+      () => Promise.resolve(nextly)
     );
     if (language === null) return [];
     const locale = language.locale;
@@ -951,20 +1002,22 @@ function buildRoute<TNode>(
   ): Promise<T> {
     const params = await args.params;
     const slug = joinSlug(params);
-    if (isReservedPath(`/${slug}`)) triggerNotFound();
+    if (isReservedPath(`/${slug}`)) return answerNotFound(config.notFound);
     // A `[locale]` naming none of the site's languages is not a page here.
     const language = await requestLanguage(
       params.locale,
       config.locale,
       getInstance
     );
-    if (language === null) triggerNotFound();
+    if (language === null) return answerNotFound(config.notFound);
     return runWithAccessMemo(async () => {
       const resolved = await resolvePath(slug, language);
       // A language read before Nextly had started is confirmed now the read
       // has started it, before anything is served in it.
-      if (!(await confirmedLanguage(language))) triggerNotFound();
-      if (!resolved) triggerNotFound();
+      if (!(await confirmedLanguage(language))) {
+        return answerNotFound(config.notFound);
+      }
+      if (!resolved) return answerNotFound(config.notFound);
       return use(resolved, language);
     });
   }
@@ -977,24 +1030,106 @@ function buildRoute<TNode>(
       // A redirect's metadata is never read: the page answers with it.
       if ("redirect" in resolved) return {};
       const { entry, context } = resolved;
-      // The address this request was served at: a later page of the entry's
-      // list is its own address, not the list's first page.
-      const path =
-        context.page !== undefined && context.listPagePath !== undefined
-          ? context.listPagePath(context.page)
-          : await addressOf(context.slug, language);
-      return contentPageMetadata(config, entry, context, path);
+      return contentPageMetadata(
+        config,
+        entry,
+        context,
+        await servedPathOf(context, language)
+      );
     });
   }
 
+  /**
+   * The address a request was served at: a later page of the entry's list is
+   * its own address, not the list's first page.
+   */
+  function servedPathOf(
+    context: RenderContext,
+    language: RequestLanguage
+  ): Promise<string> {
+    return context.page !== undefined && context.listPagePath !== undefined
+      ? Promise.resolve(context.listPagePath(context.page))
+      : addressOf(context.slug, language);
+  }
+
   async function ContentPage(args: ContentRouteArgs): Promise<TNode> {
-    return servedAt(args, resolved => {
+    return servedAt(args, async (resolved, language) => {
       if ("redirect" in resolved) triggerPermanentRedirect(resolved.redirect);
-      return config.render(resolved.entry, resolved.context);
+      const { entry, context } = resolved;
+      // Asked only where a provider may answer: a site with none renders as
+      // it always has, and works nothing out for it.
+      const structuredData = knownNoPageMetadataProvider()
+        ? undefined
+        : await contentPageStructuredData(
+            config,
+            entry,
+            context,
+            await servedPathOf(context, language)
+          );
+      return config.render(
+        entry,
+        structuredData === undefined ? context : { ...context, structuredData }
+      );
     });
   }
 
   return { generateStaticParams, generateMetadata, ContentPage };
+}
+
+/** The parts of a content route's config a page's answer is asked with. */
+type PageAnswerConfig<TNode> = Pick<
+  ContentRouteConfig<TNode>,
+  | "buildMetadata"
+  | "derivedMetadata"
+  | "structuredDataHints"
+  | "tags"
+  | "revalidate"
+>;
+
+/**
+ * What the page-metadata provider is asked about a page this route resolved,
+ * with the route's own metadata; null for a process known to have no
+ * provider, where only that metadata is needed.
+ *
+ * The head and the page's structured data are both asked with this, so they
+ * read one answer.
+ */
+async function contentPageRequest<TNode>(
+  config: PageAnswerConfig<TNode>,
+  entry: ContentEntry,
+  context: RenderContext,
+  path: string
+): Promise<{
+  code: Metadata | undefined;
+  request: PageMetadataRequest | null;
+}> {
+  const code = config.buildMetadata
+    ? await config.buildMetadata(entry, context)
+    : undefined;
+  // What the content offers costs reads of its own, so it is worked out only
+  // where a provider can be asked: Nextly is started first where nothing has
+  // started it, and with no provider, or none reachable, the route's own
+  // metadata is served without the content being read for one.
+  if (!(await pageMetadataProviderToAsk(path))) return { code, request: null };
+  const derived = config.derivedMetadata
+    ? await config.derivedMetadata(entry, context)
+    : undefined;
+  return {
+    code,
+    request: {
+      path,
+      ...(context.locale === undefined ? {} : { locale: context.locale }),
+      source: { kind: "entry", collection: context.collection, entry },
+      ...(derived === undefined ? {} : { derived }),
+      code,
+      // The tags the page's own read carries, so a write to its document
+      // expires its head as it expires its body.
+      tags: [...nextlyTags(context.collection), ...(config.tags ?? [])],
+      ...(config.revalidate === undefined
+        ? {}
+        : { revalidate: config.revalidate }),
+    },
+  };
 }
 
 /**
@@ -1009,36 +1144,45 @@ function buildRoute<TNode>(
  * @experimental Settles with the page-metadata contract.
  */
 export async function contentPageMetadata<TNode>(
-  config: Pick<
-    ContentRouteConfig<TNode>,
-    "buildMetadata" | "derivedMetadata" | "tags" | "revalidate"
-  >,
+  config: PageAnswerConfig<TNode>,
   entry: ContentEntry,
   context: RenderContext,
   path: string
 ): Promise<Metadata> {
-  const code = config.buildMetadata
-    ? await config.buildMetadata(entry, context)
-    : undefined;
-  // What the content offers costs reads of its own, so it is not worked out
-  // for a process known to have nobody to give it to.
-  if (knownNoPageMetadataProvider()) return code ?? {};
-  const derived = config.derivedMetadata
-    ? await config.derivedMetadata(entry, context)
-    : undefined;
-  return pageMetadataFor({
-    path,
-    ...(context.locale === undefined ? {} : { locale: context.locale }),
-    source: { kind: "entry", collection: context.collection, entry },
-    ...(derived === undefined ? {} : { derived }),
-    code,
-    // The tags the page's own read carries, so a write to its document
-    // expires its head as it expires its body.
-    tags: [...nextlyTags(context.collection), ...(config.tags ?? [])],
-    ...(config.revalidate === undefined
-      ? {}
-      : { revalidate: config.revalidate }),
-  });
+  const { code, request } = await contentPageRequest(
+    config,
+    entry,
+    context,
+    path
+  );
+  return request === null ? (code ?? {}) : pageMetadataFor(request);
+}
+
+/**
+ * The structured data of a page this route resolved, as the JSON-LD text a
+ * content route hands its `render` as `context.structuredData`: read from the
+ * same answer as {@link contentPageMetadata}, and nothing without a provider.
+ *
+ * Exported for a route that resolves its entries its own way, so its pages
+ * carry the same structured data a content route's do.
+ *
+ * @experimental Settles with the page-metadata contract.
+ */
+export async function contentPageStructuredData<TNode>(
+  config: PageAnswerConfig<TNode>,
+  entry: ContentEntry,
+  context: RenderContext,
+  path: string
+): Promise<string | undefined> {
+  // Nobody to answer, or nobody reachable once Nextly's start was tried: the
+  // route's own metadata is not worked out for nothing.
+  if (!(await pageMetadataProviderToAsk(path))) return undefined;
+  const { request } = await contentPageRequest(config, entry, context, path);
+  if (request === null) return undefined;
+  const hints = await config.structuredDataHints?.(entry, context);
+  return pageStructuredDataFor(
+    hints === undefined ? request : { ...request, structuredDataHints: hints }
+  );
 }
 
 /**

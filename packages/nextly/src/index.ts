@@ -331,6 +331,7 @@ export type {
   QueueTemplateEmailArgs,
   QueuedEmail,
   QueuedEmailState,
+  CancelQueuedEmailArgs,
 } from "./direct-api/types";
 
 // Email templates (experimental). Template data takes lists and objects;
@@ -547,6 +548,7 @@ export {
   type PasswordHelper,
   type PasswordRules,
   type OpaqueSecrets,
+  type KeyedDigests,
   type OneTimeSecrets,
   type SecretData,
   type TxOption,
@@ -563,6 +565,7 @@ export {
   type FrozenValue,
   type PluginEmailSettings,
   type PluginContext,
+  type PluginDurableEvents,
   type PluginEmitOptions,
   type PluginEvents,
   type PluginContributions,
@@ -629,6 +632,8 @@ export {
   type PluginRouteLimitKey,
   type Middleware,
   type RouteMethod,
+  type PluginProxyHandler,
+  type ProxyAnswer,
   type NextlyPrincipals,
   type PluginPrincipalsApi,
   type PluginRoutePrincipal,
@@ -650,6 +655,7 @@ export {
   type JsonValue,
   type PluginAdminContributions,
   type PluginAdminPage,
+  type PluginPageStartupRead,
   type PluginCollectionView,
   type OverridableDocumentAction,
   type PluginDocumentActionOverride,
@@ -672,12 +678,36 @@ export {
   type PluginListFilterDeclaration,
   type PluginListFilterOption,
   type PluginMenuItem,
+  type PluginMenuItemFields,
   type PluginNavSection,
+  type PluginAdminPanel,
+  type PluginPanelGroup,
+  type PluginItemCount,
+  type PluginHeaderContributions,
+  type PluginHeaderSlotContributions,
+  type PluginHeaderUserMenuContributions,
+  type PluginItemPlace,
+  type PluginUserMenuAction,
+  type PluginUserMenuItem,
+  type PluginUserMenuLink,
   CORE_ADMIN_PLACES,
   type AdminPlaceId,
   type AdminPlaces,
   type CoreAdminPlaceId,
 } from "./plugins";
+export type { ForgetSendsInput } from "./domains/email/plugin-send-forgetting";
+// What a plugin is told of its queued emails' changes, and reads of them.
+export type {
+  QueuedEmailCancelCause,
+  QueuedEmailChange,
+  QueuedEmailRecipient,
+  QueuedRecipientOutcome,
+} from "./domains/email/queued-send-changes";
+export type {
+  QueuedEmailStanding,
+  QueuedEmailStatus,
+} from "./domains/email/queued-send-read";
+export type { QueuedEmailChangeHandler } from "./plugins/plugin-context";
 
 // "Every content type except these", one answer for each reader of a scope.
 // @experimental
@@ -688,6 +718,22 @@ export {
   type ContentTypeKind,
   type ContentTypeScope,
 } from "./plugins/content-type-scope";
+
+// The later pages of a paginated list's address (`/news/page/2`): one
+// spelling per page, read the way the content routes read them.
+// @experimental
+export { listPageNumber, listPageOf } from "./runtime/routing/slug-param";
+
+// The cache tags a read of a collection, or of one entry in it, carries:
+// what a write to it expires. For code that caches an answer built from
+// those reads, such as a plugin's page metadata.
+// @experimental
+export { nextlyTags } from "./runtime/cache/nextly-tags";
+
+// The paths every robots.txt of a Nextly site keeps crawlers out of, read
+// by `nextlyRobots` and by a plugin that serves the file.
+// @experimental
+export { FRAMEWORK_CRAWL_EXCLUSIONS } from "./shared/crawl-exclusions";
 
 // Where an entry is served, as the site declares it: one answer for every
 // reader of a page's public address.
@@ -703,7 +749,9 @@ export {
 // declares it: the address a path kept in one language is opened at.
 // @experimental
 export {
+  addressOfRequest,
   languageAddressOf,
+  type KeptAddress,
   type LanguageAddress,
   type LanguageAddressRule,
 } from "./domains/i18n/language-addresses";
@@ -1193,6 +1241,13 @@ export type { SchemaEligibilityCollection as ResolvedDraftSplitCollection } from
 // root-level `fields`, `status` or `versions`, so its result is not assignable
 // to `ResolvedDraftSplitCollection` however faithfully the record carries them.
 export { resolvedCollectionView } from "./domains/versions/resolved-collection-view";
+
+// A plugin's durable events (`ctx.events.emitDurable` / `onDurable`): what a
+// subscriber receives, and the handler that receives it.
+export type {
+  DurableEvent,
+  DurableHandler,
+} from "./domains/plugin-events/subscribers";
 
 // Plugin event bus (D8/D51) — `ctx.events` surface + types.
 export {

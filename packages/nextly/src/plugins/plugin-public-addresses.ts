@@ -11,13 +11,14 @@
  * @module plugins/plugin-public-addresses
  * @experimental
  */
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SupportedDialect,
+  TransactionContext,
+} from "@nextlyhq/adapter-drizzle/types";
 
-import {
-  addressFingerprint,
-  heldPage,
-  type HeldDocument,
-} from "../domains/public-addresses/held-listing";
+import { toDbError } from "../database/errors";
+import { whenServicesRegistered } from "../di/service-access";
+import type { HeldDocument } from "../domains/public-addresses/held-listing";
 import {
   addParticipant,
   firstHolder,
@@ -32,7 +33,7 @@ import {
   siteTypes,
   type PublicAddressType,
 } from "../domains/public-addresses/public-address";
-import { whenServicesRegistered } from "../di/service-access";
+import { NextlyError } from "../errors/nextly-error";
 import type { HookOwner } from "../hooks/types";
 
 import type { PluginTransaction } from "./database/plugin-database";
@@ -107,8 +108,10 @@ export interface PluginPublicAddresses {
     transaction: PluginCollectionTransaction
   ): Promise<{ refused: RefusedAddressUpdate[] }>;
   /**
-   * One page of a type's documents, oldest first, each with every address it
-   * holds now; `next` is the cursor of the following page.
+   * One page of a type's documents, in id order, each with every address it
+   * holds now and when it was made; `next` is the cursor of the following
+   * page. Paged by id, so documents deleted or made meanwhile never move one
+   * not yet read behind the cursor.
    *
    * Waits for the boot to finish, so call it from work `init` or `onReady`
    * starts without awaiting: awaited inside them, which the boot waits for,
@@ -130,6 +133,19 @@ export interface PluginPublicAddresses {
    * with `held`. Waits for the boot to finish, as `held` does.
    */
   types(): Promise<PublicAddressType[]>;
+  /**
+   * The language an address is held in where a read names none: the site's
+   * default language as it is now, one chosen in Settings included, or
+   * `"en"` on a site with no languages.
+   */
+  defaultLanguage(): Promise<string>;
+  /**
+   * The languages an address is held in: the site's languages as they are
+   * now, a list set in Settings included, its default first; or, on a site
+   * with no languages, the one it serves (its default, `"en"` where none
+   * is named).
+   */
+  languages(): Promise<string[]>;
 }
 
 /** What the plugin context hands this surface. */
@@ -141,21 +157,43 @@ export interface PublicAddressesDeps {
   owner: HookOwner;
   /** Called with the undo of each `participate`, so teardown withdraws it. */
   onTeardown: (undo: () => void) => void;
+  /** The database's dialect, read when a participant's statement fails. */
+  dialect: () => SupportedDialect;
 }
 
-/** Run `work` with this plugin's handles on the save's transaction `tx`. */
-function withParticipantTransaction<T>(
+/**
+ * Run `work` with this plugin's handles on the save's transaction `tx`.
+ *
+ * A participant writing through `db` meets the database's own failures, and
+ * two saves of one address at once can deadlock on a row both make. Such a
+ * failure is reported as core reports its own: a deadlock or a serialization
+ * failure asks the editor to try again (`CONFLICT`) rather than surfacing as
+ * an internal error. Anything else is passed on as thrown.
+ */
+async function withParticipantTransaction<T>(
   deps: PublicAddressesDeps,
   tx: TransactionContext,
   work: (handles: ParticipantTransaction) => Promise<T>
 ): Promise<T> {
-  return deps.bindTo(tx, db =>
-    withWriteTransactionToken(
-      tx,
-      transaction => work({ db, transaction }),
-      "ctx.publicAddresses"
-    )
-  );
+  try {
+    return await deps.bindTo(tx, db =>
+      withWriteTransactionToken(
+        tx,
+        transaction => work({ db, transaction }),
+        "ctx.publicAddresses"
+      )
+    );
+  } catch (error) {
+    if (NextlyError.is(error)) throw error;
+    const failure = toDbError(deps.dialect(), error);
+    if (
+      failure.kind === "deadlock" ||
+      failure.kind === "serialization-failure"
+    ) {
+      throw NextlyError.fromDatabaseError(failure);
+    }
+    throw error;
+  }
 }
 
 /** Build `ctx.publicAddresses` for one plugin. */
@@ -206,13 +244,36 @@ export function pluginPublicAddresses(
         })
       );
     },
-    held: args => heldPage(args),
-    fingerprint: () => addressFingerprint(),
+    held: async args => (await heldListing()).heldPage(args),
+    fingerprint: async () => (await heldListing()).addressFingerprint(),
     types: async () => {
       await whenServicesRegistered();
       return (await siteTypes()).map(({ type }) => type);
     },
+    defaultLanguage: async () =>
+      (await heldAddresses()).defaultAddressLanguage(),
+    languages: async () => {
+      const held = await heldAddresses();
+      const first = held.defaultAddressLanguage();
+      const all = held.addressLanguages();
+      return [first, ...all.filter(code => code !== first)];
+    },
   };
+}
+
+/**
+ * The listing of every document's held addresses, loaded when a participant
+ * first reads it rather than imported at the top: this module is part of
+ * every plugin's context, which most of the package imports, and the listing
+ * reaches the boot entry, which loads nearly all of it.
+ */
+function heldListing() {
+  return import("../domains/public-addresses/held-listing");
+}
+
+/** The addresses each document holds, loaded when first asked, as above. */
+function heldAddresses() {
+  return import("../domains/public-addresses/held-addresses");
 }
 
 /**

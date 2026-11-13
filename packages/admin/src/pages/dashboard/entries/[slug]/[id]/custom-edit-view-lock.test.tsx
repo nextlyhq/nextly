@@ -9,10 +9,11 @@
  * @module pages/dashboard/entries/[slug]/[id]/custom-edit-view-lock.test
  */
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { useReportUnsavedWork } from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
 import type { UpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import {
@@ -186,6 +187,28 @@ describe("a custom collection edit view", () => {
     withCustomView();
     renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
     expect(customViewProps?.initialData).toEqual({ id: "42", title: "A post" });
+  });
+
+  it("leads back to its list under the list's own name, the plural", () => {
+    // A collection answers `label` with its one-entry name as well as its
+    // labels; the trail's step opens the list, which is called by the plural.
+    collectionSchema = {
+      name: "form-submissions",
+      slug: "form-submissions",
+      label: "Submission",
+      labels: { singular: "Submission", plural: "Submissions" },
+    };
+    withCustomView();
+    renderWithProviders(
+      <EditEntryPage params={{ slug: "form-submissions", id: "42" }} />
+    );
+    const trail = screen.getByRole("navigation", { name: "Breadcrumb" });
+    const step = within(trail).getByRole("link", { name: "Submissions" });
+    expect(step).toHaveAttribute(
+      "href",
+      expect.stringContaining("/collections/form-submissions")
+    );
+    expect(within(trail).queryByText("Submission")).toBeNull();
   });
 
   it("leaves the default form the merged entry", () => {
@@ -668,5 +691,120 @@ describe("a site collection's own edit view", () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(screen.queryByText("site order editor")).toBeNull();
     expect(entryFormProps).toBeDefined();
+  });
+});
+
+describe("a custom edit view with pages of its own", () => {
+  /** The view's pages, each a document view that draws the view itself. */
+  function withPages() {
+    registerDocumentViews([
+      { slug: "posts", path: "settings", component: CUSTOM_VIEW },
+      { slug: "posts", path: "preview", component: CUSTOM_VIEW },
+    ]);
+  }
+
+  it("draws the view at each page's address, told which page, and keeps it mounted from page to page", () => {
+    let mounts = 0;
+    registerComponent(CUSTOM_VIEW, (props: Record<string, unknown>) => {
+      // Counted once per mount: a remount would lose what the view holds.
+      useState(() => (mounts += 1));
+      customViewProps = props;
+      return <div>bespoke product editor</div>;
+    });
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: CUSTOM_VIEW } } } },
+    };
+    withPages();
+
+    const page = renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "settings" }} />
+    );
+    // The view draws its own page; the form hosts nothing.
+    expect(screen.getByText("bespoke product editor")).toBeInTheDocument();
+    expect(entryFormProps).toBeUndefined();
+    expect(customViewProps?.view).toBe("settings");
+    // It is the document's editor, so it claims the document.
+    expect(claimRequest()).toMatchObject({ enabled: true });
+
+    page.rerender(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+    expect(customViewProps?.view).toBeUndefined();
+    page.rerender(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "preview" }} />
+    );
+    expect(customViewProps?.view).toBe("preview");
+    expect(mounts).toBe(1);
+  });
+
+  it("leaves a view drawing another component to the form", () => {
+    // The control: only a view whose component IS the edit view is one of
+    // its pages.
+    registerDocumentViews([
+      { slug: "posts", path: "settings", component: "@acme/other#View" },
+    ]);
+    withCustomView();
+    renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "settings" }} />
+    );
+    expect(screen.queryByText("bespoke product editor")).toBeNull();
+    expect(entryFormProps?.documentView).toMatchObject({
+      component: "@acme/other#View",
+    });
+  });
+
+  it("asks before leaving while the view holds unsaved work, but not to move between its pages", async () => {
+    registerComponent(CUSTOM_VIEW, () => {
+      useReportUnsavedWork("product", true);
+      return <div>bespoke product editor</div>;
+    });
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: CUSTOM_VIEW } } } },
+    };
+    withPages();
+    window.history.pushState(null, "", "/admin/collections/posts/42");
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    // One of the view's own pages: the same document, so not asked about.
+    act(() => {
+      window.history.pushState(
+        null,
+        "",
+        "/admin/collections/posts/42/settings"
+      );
+    });
+    expect(window.location.pathname).toBe(
+      "/admin/collections/posts/42/settings"
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+
+    // Away from the document: held, and asked about.
+    act(() => {
+      window.history.pushState(null, "", "/admin/collections/posts");
+    });
+    expect(window.location.pathname).toBe(
+      "/admin/collections/posts/42/settings"
+    );
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+  });
+
+  it("lets a view with nothing unsaved leave without asking", () => {
+    // The control for the case above: the page asks only because the view
+    // said it holds work.
+    registerComponent(CUSTOM_VIEW, () => {
+      useReportUnsavedWork("product", false);
+      return <div>bespoke product editor</div>;
+    });
+    collectionSchema = {
+      ...collectionSchema,
+      admin: { components: { views: { Edit: { Component: CUSTOM_VIEW } } } },
+    };
+    window.history.pushState(null, "", "/admin/collections/posts/42");
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+    act(() => {
+      window.history.pushState(null, "", "/admin/collections/posts");
+    });
+    expect(window.location.pathname).toBe("/admin/collections/posts");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });

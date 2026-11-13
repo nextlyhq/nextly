@@ -35,7 +35,11 @@ export { definePlugin } from "nextly";
  * the route, and turn its `PageMetadataAnswer` into the page's head. Its
  * `tags` name what the answer depends on, so a change to them refreshes every
  * page. Boot refuses a second provider, and a provider without the service.
- * Type-only, so importing it pulls no runtime into the plugin.
+ * `PageStructuredDataHints` (with `PageListItem` and `PageQuestion`) is what
+ * a route says about its page for its structured data, handed in as
+ * `input.structuredDataHints`; experimental with the rest of the contract,
+ * and intended to become stable with it. Type-only, so importing it pulls
+ * no runtime into the plugin.
  */
 export type {
   PageMetadataAnswer,
@@ -44,6 +48,9 @@ export type {
   PageMetadataResolver,
   PageMetadataSource,
   PageMetadataValues,
+  PageListItem,
+  PageQuestion,
+  PageStructuredDataHints,
 } from "nextly/runtime";
 
 /**
@@ -441,7 +448,10 @@ export type {
  *   `security.breachedPasswords`; `OpaqueSecrets` (`ctx.security.opaque`); and
  *   `OneTimeSecrets` (`ctx.security.secrets`) with `SecretData` and
  *   `TxOption`. Held experimental until a first-party plugin signs people in
- *   with them (see STABILITY.md). `PluginReceivedWebhooks`
+ *   with them (see STABILITY.md). `KeyedDigests` (`ctx.security.digests`),
+ *   keyed one-way digests under the plugin's own key that survive a secret
+ *   rotation, is experimental until a first-party plugin has shipped with it.
+ *   `PluginReceivedWebhooks`
  *   (`ctx.security.webhooks`), verifying a received webhook against a
  *   `standardWebhooks` or a plugin's own `InboundWebhookScheme` and claiming
  *   it once (`claimDelivery`, with `ClaimDeliveryOptions`, `DeliveryClaim`,
@@ -456,6 +466,7 @@ export type {
   PasswordCheck,
   BreachedPasswordsConfig,
   OpaqueSecrets,
+  KeyedDigests,
   OneTimeSecrets,
   SecretData,
   TxOption,
@@ -494,12 +505,25 @@ export type {
 /**
  * Field authoring — the factories and `FieldConfig` type a plugin uses to build
  * the fields it contributes (`contributes.collections` / `contributes.extend`).
- * @public Exercised by `plugin-seo` (its `seo` field group). Field factories
- *   graduate here as first-party plugins exercise them (D55); more can be added
- *   the same way.
+ * @public Exercised by `plugin-seo` (its `seo` field group) and
+ *   `plugin-form-builder` (its internal `form-uploads` and
+ *   `form-submission-sends` collections, typed `CollectionConfig`, with
+ *   `date`, `json` and `number` fields: a send's when, its recipients and
+ *   cancel causes, and its attempts). Intended to be stable, as the other
+ *   factories here are. Field factories graduate here as first-party plugins
+ *   exercise them; more can be added the same way.
  */
-export { text, textarea, checkbox, upload, group } from "nextly";
-export type { FieldConfig } from "nextly";
+export {
+  text,
+  textarea,
+  checkbox,
+  upload,
+  group,
+  date,
+  json,
+  number,
+} from "nextly";
+export type { FieldConfig, CollectionConfig } from "nextly";
 
 /**
  * Which fields a level addresses, with presentational groups flattened.
@@ -560,6 +584,17 @@ export { publicAddressOf, typesWithoutAddress } from "nextly";
 export type { PublicAddress, PublicAddressType } from "nextly";
 
 /**
+ * The paths every robots.txt of a Nextly site keeps crawlers out of: the
+ * admin and the API, on a path boundary. A plugin that serves robots.txt
+ * reads them here, as `nextlyRobots` does in core, so a correction reaches
+ * every such file. Intended to become stable once the SEO plugin's robots.txt
+ * has shipped on it.
+ *
+ * @experimental
+ */
+export { FRAMEWORK_CRAWL_EXCLUSIONS } from "nextly";
+
+/**
  * Where a page kept in one language is opened: `languageAddressOf(path,
  * locale)` forms the address a path kept in `locale` is served at, under the
  * language's prefix or on its own domain, as the site declares
@@ -570,6 +605,17 @@ export type { PublicAddress, PublicAddressType } from "nextly";
  */
 export { languageAddressOf } from "nextly";
 export type { LanguageAddress, LanguageAddressRule } from "nextly";
+
+/**
+ * The other way round: `addressOfRequest(url)` answers the language and the
+ * kept path a request asks for, by the same rule, so a Proxy handler can look
+ * an address up in a record kept by language and path. Intended to become
+ * stable with `languageAddressOf`.
+ *
+ * @experimental
+ */
+export { addressOfRequest } from "nextly";
+export type { KeptAddress } from "nextly";
 
 /**
  * Keeping every public address to one page. A plugin that keeps a record of
@@ -697,6 +743,14 @@ export type {
   PluginUserService,
   PluginMediaService,
   PluginEmailService,
+  ForgetSendsInput,
+  QueuedEmailChangeHandler,
+  QueuedEmailChange,
+  QueuedEmailCancelCause,
+  QueuedEmailRecipient,
+  QueuedRecipientOutcome,
+  QueuedEmailStanding,
+  QueuedEmailStatus,
   PluginVersionsService,
   PluginCollectionTransaction,
   PluginVersionPins,
@@ -767,6 +821,23 @@ export { getCachedNextly } from "nextly";
 export { pluginCacheTag } from "nextly";
 
 /**
+ * @experimental The cache tags a read of a collection, or of one of its
+ * entries, carries, which a write to it expires: for a plugin whose cached
+ * answer is built from those reads, such as page metadata naming the media
+ * it shows. Intended to be stable with the page-metadata contract.
+ */
+export { nextlyTags } from "nextly";
+
+/**
+ * @experimental How the content routes read a later page of a paginated list
+ * (`news/page/2`): `listPageOf` splits a path into the address it is a page
+ * of and the page's segment, and `listPageNumber` reads the one spelling of
+ * a page number. For a plugin naming a later page's own address. Intended to
+ * be stable with the page-metadata contract.
+ */
+export { listPageNumber, listPageOf } from "nextly";
+
+/**
  * @experimental The canonical response envelopes, and the trusted-client-IP
  *   facade. Graduates per D55 once `plugin-form-builder`'s public form routes
  *   ship in a release.
@@ -812,6 +883,16 @@ export type {
   PluginRoutePermissionResolver,
   PluginRoutePermissionScope,
 } from "nextly";
+
+/**
+ * What a plugin adds to the site's Proxy (`contributes.proxy`): a handler that
+ * may answer a request before its page is served, set headers on what is
+ * served, or pass headers on to the page's render. Intended to become stable
+ * once the SEO plugin's redirects run on it.
+ *
+ * @experimental
+ */
+export type { PluginProxyHandler, ProxyAnswer } from "nextly";
 
 // A VALUE, so it cannot ride in the type-only block above. `narrowScope` is the
 // only correct way for a route to restrict its own scope before a call: the
@@ -918,6 +999,64 @@ export type {
   PluginNavSection,
   PluginCollectionView,
   PluginMenuItem,
+} from "nextly";
+
+/**
+ * @experimental One read a plugin page makes as it opens, declared on the page
+ * as `contributes.admin.pages[].startupReads`: a route of the plugin's own,
+ * named as `usePluginRoute` names it. A fresh tab that opens on the page asks
+ * for it inside the admin's startup request, in its first round, and the
+ * page's own read takes that answer. See `STABILITY.md`.
+ */
+export type { PluginPageStartupRead } from "nextly";
+
+/**
+ * @experimental What a standalone plugin declares about its own panel
+ * (`contributes.admin.panel`, and `group`, `count` and `badge` on a menu
+ * item), drawn by the admin with no plugin code running in the browser:
+ *
+ * - `PluginAdminPanel` holds the panel's `groups`, each a `PluginPanelGroup`
+ *   `{ id, label }`, drawn as headings in the order declared. A menu item's
+ *   `group` names one; items naming none are listed first, under no heading.
+ * - A menu item takes a quiet `count` or an attention `badge`, never both,
+ *   each a `PluginItemCount`: `{ collection, where? }` counts one of the
+ *   plugin's own collections for the reader, `{ attention }` reads one of its
+ *   own dashboard attention items' count. A count is drawn at 0 too; a badge
+ *   only above 0.
+ * - `PluginMenuItemFields` is a menu item's fields apart from its number.
+ *
+ * A development start reports a group, count or badge naming nothing the
+ * plugin declares or owns, and a menu item linking to a page of the plugin's
+ * own that it does not register, which is left out.
+ */
+export type {
+  PluginAdminPanel,
+  PluginItemCount,
+  PluginMenuItemFields,
+  PluginPanelGroup,
+} from "nextly";
+
+/**
+ * @experimental Where a plugin's own item goes (`contributes.admin.header`):
+ * the top bar's right end (the default), the rail's foot above the Inbox, or
+ * the person's menu.
+ *
+ * - `PluginItemPlace` is the three places: `"bar"`, `"rail-foot"`, `"menu"`.
+ * - `PluginHeaderSlotContributions` takes a component, `slot`, kept mounted at
+ *   the bar or the rail's foot for as long as the bar is.
+ * - `PluginHeaderUserMenuContributions` takes `place: "menu"` and a declared
+ *   `item`, a `PluginUserMenuItem`: a label, an icon, and either a link
+ *   (`PluginUserMenuLink`) or an action (`PluginUserMenuAction`). It takes no
+ *   component, since a closed menu's contents are not mounted.
+ */
+export type {
+  PluginHeaderContributions,
+  PluginHeaderSlotContributions,
+  PluginHeaderUserMenuContributions,
+  PluginItemPlace,
+  PluginUserMenuAction,
+  PluginUserMenuItem,
+  PluginUserMenuLink,
 } from "nextly";
 
 /**
@@ -1091,6 +1230,15 @@ export type {
  * @experimental
  */
 export type { PluginEmitOptions } from "nextly";
+
+/**
+ * A plugin's durable events: `ctx.events.emitDurable` and `onDurable`
+ * (`PluginDurableEvents`, beside `PluginEvents` on `ctx.events`), what an
+ * `onDurable` subscriber receives (the event's id, which it de-duplicates on,
+ * its name, payload and which try this is) and the handler that receives it.
+ * @experimental
+ */
+export type { DurableEvent, DurableHandler, PluginDurableEvents } from "nextly";
 
 /**
  * Event-name constants (D69) — document/auth/media families. The event names

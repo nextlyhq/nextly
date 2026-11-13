@@ -40,15 +40,18 @@ import {
 } from "@nextlyhq/ui";
 import { MoreHorizontal } from "lucide-react";
 import {
+  Fragment,
   createContext,
   useContext,
+  useId,
   useMemo,
   useSyncExternalStore,
   type Context,
-  type KeyboardEvent,
   type JSX,
+  type ReactNode,
 } from "react";
 
+import { ChevronRight } from "@admin/components/icons";
 import { Pagination } from "@admin/components/shared/pagination";
 import type { PaginationProps } from "@admin/components/shared/pagination/types";
 import { navigateTo } from "@admin/lib/navigation";
@@ -62,7 +65,22 @@ import {
   subscribeToDataTablePlugins,
   type DataTablePluginRegistrations,
 } from "./plugin-registry";
-import type { CellContext, NextlyColumn, RowAction } from "./types";
+import {
+  isListEmpty,
+  rowCountLabel,
+  sectionRows,
+  useToggledIds,
+  type PlacedRow,
+  type RowSection,
+} from "./row-groups";
+import type {
+  CellContext,
+  DataTableGroup,
+  DataTableGrouping,
+  DataTableRowDetail,
+  NextlyColumn,
+  RowAction,
+} from "./types";
 
 /** Controlled selection contract. When supplied, a checkbox column is shown. */
 export interface DataTableSelection<
@@ -99,6 +117,17 @@ export interface DataTableViewProps<Row extends object> {
   selection?: DataTableSelection<Row>;
   /** Per-row action menu (three-dots). */
   rowActions?: (row: Row) => RowAction<Row>[];
+  /**
+   * Draw the rows in groups, each under a header row with its title, a badge,
+   * a count and actions. In the table each group is its own row group, named
+   * by its title; in the narrow card view, a section.
+   */
+  grouping?: DataTableGrouping<Row>;
+  /**
+   * A region below a row, opened and closed by a toggle in the row's first
+   * column: a button that says whether the region is open and names it.
+   */
+  rowDetail?: DataTableRowDetail<Row>;
   /** Current sort (column name + direction). Enables sort indicators on headers. */
   sort?: { field: string; order: "asc" | "desc" };
   /** Called when a sortable column header is clicked. Sorting is server-side. */
@@ -192,6 +221,290 @@ export function useDataTablePluginRegistrations(): DataTablePluginRegistrations 
   );
 }
 
+/** Where a row leads: a page to open, or a handler a click runs. */
+interface RowNavigation {
+  href?: string;
+  onClick?: () => void;
+}
+
+/**
+ * The focus ring of a row's way in, the one the shared Button draws, so the
+ * keyboard's position in a list reads like it does on any other control.
+ */
+const ROW_ENTRY_FOCUS =
+  "rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+
+/**
+ * `py-0.5 -my-0.5` gives the way in a 24px-tall target around 20px text, the
+ * minimum WCAG 2.5.8 asks of a pointer target, while its margin box keeps the
+ * text's height: the row is drawn exactly as tall as before.
+ */
+const ROW_ENTRY_HIT_AREA = "py-0.5 -my-0.5";
+
+/**
+ * A row's way in: its primary cell as a link to the row's page, or as a button
+ * running the row's click handler, or as it is when the row leads nowhere.
+ *
+ * The row and the card are NOT themselves focusable or given a role. They hold
+ * other controls (the selection box, the actions menu), and a control inside a
+ * control is announced as one and cannot be reached as the other. This element
+ * is the keyboard's one way to the row; a pointer may still click anywhere on
+ * the row, which runs the same navigation without being a second target.
+ * `data-row-entry` lets a page find it again, to return focus to the row.
+ */
+function RowEntry({
+  nav,
+  children,
+}: {
+  nav: RowNavigation;
+  children: ReactNode;
+}): JSX.Element {
+  const { href, onClick } = nav;
+  if (href) {
+    return (
+      <a
+        href={href}
+        data-row-entry=""
+        onClick={e => {
+          e.preventDefault();
+          e.stopPropagation();
+          navigateTo(href);
+        }}
+        className={cn(
+          // A block as wide as its text, not an inline-block: an inline-block
+          // in a table cell sits on the cell's line by its own baseline and
+          // drew the title above the row's other cells.
+          "block w-fit max-w-full text-foreground font-medium hover:underline",
+          ROW_ENTRY_HIT_AREA,
+          ROW_ENTRY_FOCUS
+        )}
+      >
+        {children}
+      </a>
+    );
+  }
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        data-row-entry=""
+        onClick={e => {
+          e.stopPropagation();
+          onClick();
+        }}
+        // Drawn as the cell it replaces: block and full width as the cell's
+        // content was, aligned and cased as the cell says (a button centres
+        // its text by default).
+        className={cn(
+          "block w-full cursor-pointer [text-align:inherit] [text-transform:inherit]",
+          ROW_ENTRY_HIT_AREA,
+          ROW_ENTRY_FOCUS
+        )}
+      >
+        {children}
+      </button>
+    );
+  }
+  return <>{children}</>;
+}
+
+/**
+ * A header's `aria-sort`: the order of the sorted column, `none` on a column
+ * that can be sorted but is not, and nothing on one that cannot be sorted.
+ * The header cell keeps its native `columnheader` role, the only role besides
+ * `rowheader` that may carry the attribute.
+ */
+function ariaSortOf(
+  sorted: "asc" | "desc" | null,
+  canSort: boolean
+): "ascending" | "descending" | "none" | undefined {
+  if (sorted) return sorted === "asc" ? "ascending" : "descending";
+  return canSort ? "none" : undefined;
+}
+
+/**
+ * A header's label, and for a sortable column the button that sorts it. The
+ * button sits inside the header cell rather than the cell becoming one, so
+ * the cell stays a column header and its sort state stays announced. Its
+ * `after:` layer spans the cell (which is `relative`), so a click anywhere on
+ * the header still sorts, as it did when the whole cell was the control.
+ */
+function HeaderLabel({
+  label,
+  sorted,
+  align,
+  onSort,
+}: {
+  label: ReactNode;
+  sorted: "asc" | "desc" | null;
+  align: NextlyColumn<object>["align"];
+  onSort?: () => void;
+}): JSX.Element {
+  const layout = cn(
+    "inline-flex items-center gap-1",
+    align === "right" && "flex-row-reverse",
+    align === "center" && "justify-center"
+  );
+  const content = (
+    <>
+      {label}
+      {sorted && (
+        <span className="text-muted-foreground">
+          {sorted === "asc" ? "↑" : "↓"}
+        </span>
+      )}
+    </>
+  );
+  if (!onSort) return <span className={layout}>{content}</span>;
+  return (
+    <button
+      type="button"
+      onClick={onSort}
+      className={cn(
+        layout,
+        "cursor-pointer select-none [text-transform:inherit] after:absolute after:inset-0",
+        ROW_ENTRY_FOCUS
+      )}
+    >
+      {content}
+    </button>
+  );
+}
+
+/**
+ * The chevron of a toggle: pointing right while what it controls is hidden,
+ * down while it is shown. A picture only; the button's `aria-expanded` is what
+ * says the state.
+ */
+function ToggleChevron({ open }: { open: boolean }): JSX.Element {
+  return (
+    <ChevronRight
+      aria-hidden="true"
+      className={cn(
+        "h-4 w-4 shrink-0 transition-transform motion-reduce:transition-none",
+        open && "rotate-90"
+      )}
+    />
+  );
+}
+
+/**
+ * A group's header content, the same in the table and the card view: its
+ * title (inside the button that folds the group, when it folds), its badge,
+ * its count, its actions at the end, and its description below. `titleId` is
+ * what names the group, so it sits on the title alone rather than on the whole
+ * header, which would read the actions' text into the group's name.
+ */
+function GroupHeading({
+  group,
+  rowCount,
+  titleId,
+  fold,
+}: {
+  group: DataTableGroup;
+  rowCount: number;
+  titleId: string;
+  /** The fold button's state and target, when the group can fold. */
+  fold?: { open: boolean; controls: string; onToggle: () => void };
+}): JSX.Element {
+  const title = (
+    <span id={titleId} className="font-semibold text-foreground">
+      {group.title}
+    </span>
+  );
+  return (
+    <div className="flex flex-col gap-0.5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {fold ? (
+          <button
+            type="button"
+            aria-expanded={fold.open}
+            aria-controls={fold.controls}
+            onClick={fold.onToggle}
+            className={cn(
+              "-ml-1 inline-flex min-h-6 cursor-pointer items-center gap-1.5 px-1 text-left",
+              ROW_ENTRY_FOCUS
+            )}
+          >
+            <ToggleChevron open={fold.open} />
+            {title}
+          </button>
+        ) : (
+          title
+        )}
+        {group.badge}
+        <span className="text-sm text-muted-foreground">
+          {group.count ?? rowCountLabel(rowCount)}
+        </span>
+        {group.actions && (
+          <div className="ml-auto flex items-center gap-2">{group.actions}</div>
+        )}
+      </div>
+      {group.description && (
+        <p className="text-sm font-normal text-muted-foreground">
+          {group.description}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The button that opens a row's region. Its name is "Details" followed by the
+ * row's identifying cell (`nameId`), so each row's toggle is told apart, or
+ * the page's own `label`; `aria-expanded` says whether the region is open and
+ * `aria-controls` points at it. A click stays on the button: it never runs the
+ * row's way in.
+ */
+function DetailToggle({
+  open,
+  controls,
+  nameId,
+  label,
+  onToggle,
+  visibleText = false,
+}: {
+  open: boolean;
+  controls: string;
+  nameId: string;
+  label?: string;
+  onToggle: () => void;
+  /** Whether "Details" is shown beside the chevron, as in a row card. */
+  visibleText?: boolean;
+}): JSX.Element {
+  const textId = `${controls}-toggle`;
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      aria-controls={controls}
+      aria-label={label}
+      aria-labelledby={label ? undefined : `${textId} ${nameId}`}
+      onClick={e => {
+        e.stopPropagation();
+        onToggle();
+      }}
+      className={cn(
+        "inline-flex min-h-6 min-w-6 cursor-pointer items-center justify-center gap-1 rounded-sm text-sm text-muted-foreground hover:text-foreground",
+        ROW_ENTRY_FOCUS
+      )}
+    >
+      <ToggleChevron open={open} />
+      <span id={textId} className={cn(!visibleText && "sr-only")}>
+        Details
+      </span>
+    </button>
+  );
+}
+
+/**
+ * Takes the bottom border off the last row a body SHOWS. The table primitive
+ * flattens its last row, but a body can end in rows that are hidden (a closed
+ * row's region, a folded group's rows), and the row above them then drew a
+ * second line against the card's border.
+ */
+const LAST_SHOWN_ROW_FLAT = "[&>tr:not(:has(~tr:not([hidden])))]:border-b-0";
+
 export function DataTableView<Row extends object>({
   columns,
   rows,
@@ -201,6 +514,8 @@ export function DataTableView<Row extends object>({
   primaryColumn,
   selection,
   rowActions,
+  grouping,
+  rowDetail,
   sort,
   onSortChange,
   registryKey,
@@ -238,7 +553,11 @@ export function DataTableView<Row extends object>({
     () => visibleColumns.filter(c => !c.hideOnMobile),
     [visibleColumns]
   );
-  const firstColName = primaryColumn ?? visibleColumns[0]?.name;
+  // The column holding each row's way in. A primary column that is not shown
+  // falls back to the first shown one, so a row is never left without it.
+  const firstColName =
+    visibleColumns.find(c => c.name === primaryColumn)?.name ??
+    visibleColumns[0]?.name;
 
   // Card-view primary/secondary split (skip synthetic select/actions columns).
   const cardPrimary = useMemo(
@@ -267,8 +586,14 @@ export function DataTableView<Row extends object>({
   const someSelected =
     selectableRows.some(r => selectedSet.has(getRowId(r))) && !allSelected;
 
-  // Resolve a cell's rendered content: explicit cell -> registry -> text.
-  const renderCell = (col: NextlyColumn<Row>, row: Row, href?: string) => {
+  // Resolve a cell's rendered content: explicit cell -> registry -> text. The
+  // cell holding the row's way in (`asEntry`) is wrapped in it.
+  const renderCell = (
+    col: NextlyColumn<Row>,
+    row: Row,
+    nav: RowNavigation,
+    asEntry: boolean
+  ) => {
     const value = col.accessor
       ? col.accessor(row)
       : (row as Record<string, unknown>)[col.name];
@@ -277,50 +602,28 @@ export function DataTableView<Row extends object>({
       row,
       column: col,
       field: col.field,
-      href,
+      href: nav.href,
       viewType: "list",
     };
     const renderer = resolveCellRenderer<Row>(col.cell, col.fieldType);
     const content = renderer(ctx);
-    // Primary column becomes the navigation link when rowClick yields an href.
-    if (href && col.name === firstColName) {
-      return (
-        <a
-          href={href}
-          onClick={e => {
-            e.preventDefault();
-            e.stopPropagation();
-            navigateTo(href);
-          }}
-          className="text-foreground font-medium hover:underline"
-        >
-          {content}
-        </a>
-      );
-    }
-    return content;
+    if (!asEntry) return content;
+    return <RowEntry nav={nav}>{content}</RowEntry>;
   };
 
   // Per-row navigation: a pure href (navigate + anchor) or a click side-effect.
   // rowHref runs during render, so it must stay side-effect free; onRowClick only
   // ever runs on an actual click.
-  const resolveRow = (row: Row): { href?: string; onClick?: () => void } => {
+  const resolveRow = (row: Row): RowNavigation => {
     const href = rowHref?.(row);
     if (href) return { href };
     if (onRowClick) return { onClick: () => onRowClick(row) };
     return {};
   };
 
-  // Activate a mouse-only control from the keyboard (Enter/Space) so clickable
-  // rows/cards and sortable headers are operable without a pointer.
-  const onActivateKey = (fn: () => void) => (e: KeyboardEvent<HTMLElement>) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      fn();
-    }
-  };
-
-  const activateRow = (nav: { href?: string; onClick?: () => void }) => () => {
+  // A pointer click anywhere on a row or card. The keyboard reaches the same
+  // navigation through the row's way in (`RowEntry`).
+  const activateRow = (nav: RowNavigation) => () => {
     if (nav.href) navigateTo(nav.href);
     else nav.onClick?.();
   };
@@ -371,8 +674,359 @@ export function DataTableView<Row extends object>({
     );
   };
 
-  const colSpan =
-    visibleColumns.length + (selection ? 1 : 0) + (hasRowActions ? 1 : 0);
+  // The columns before the data: the detail toggle's, then the selection's. A
+  // row's region spans the rest, so it lines up under the first data column.
+  const leadColumns = (rowDetail ? 1 : 0) + (selection ? 1 : 0);
+  const colSpan = leadColumns + visibleColumns.length + (hasRowActions ? 1 : 0);
+
+  // Element ids for the toggles' `aria-controls` and the regions' names, built
+  // from the row's place in the list rather than its id, which may hold
+  // characters an id list cannot. Prefixed per view: both views are mounted.
+  const baseId = useId();
+  const placed = useMemo<PlacedRow<Row>[]>(
+    () => rows.map((row, index) => ({ row, id: getRowId(row), index })),
+    [rows, getRowId]
+  );
+  const sections = useMemo(
+    () => sectionRows(placed, grouping),
+    [placed, grouping]
+  );
+  const listIsEmpty = isListEmpty(rows, grouping);
+
+  // One open state and one folded state, read by both views, so a row opened
+  // in the cards is open in the table when the width changes.
+  const expanded = useToggledIds(
+    rowDetail?.expandedIds,
+    rowDetail?.defaultExpandedIds,
+    rowDetail?.onExpandedChange
+  );
+  const folded = useToggledIds(
+    grouping?.collapsedIds,
+    grouping?.defaultCollapsedIds,
+    grouping?.onCollapsedChange
+  );
+  // What either view needs to draw a row, decided once for both: where it
+  // leads, whether it can be selected, and whether it has a region, open or
+  // closed. `view` prefixes the element ids, since both views are mounted.
+  const describeRow = (entry: PlacedRow<Row>, view: "t" | "c") => {
+    const { row, id, index } = entry;
+    const nav = resolveRow(row);
+    const detail =
+      rowDetail !== undefined && (rowDetail.hasDetail?.(row) ?? true);
+    const elementId = `${baseId}-${view}${index}`;
+    return {
+      row,
+      id,
+      nav,
+      clickable: Boolean(nav.href || nav.onClick),
+      selectable: selection?.isSelectable?.(row) ?? true,
+      detail,
+      open: detail && expanded.isOn(id),
+      elementId,
+      nameId: `${elementId}-name`,
+      regionId: `${elementId}-detail`,
+    };
+  };
+
+  // One row of the table, and below it the row's region when it has one. The
+  // region's row is in the DOM while closed (hidden), so the toggle's
+  // `aria-controls` always names an element; its content is asked for only
+  // while open. `hiddenByGroup` hides both while their group is folded.
+  const renderTableRow = (entry: PlacedRow<Row>, hiddenByGroup: boolean) => {
+    const {
+      row,
+      id,
+      nav,
+      clickable,
+      selectable,
+      detail,
+      open,
+      elementId,
+      nameId,
+      regionId,
+    } = describeRow(entry, "t");
+    return (
+      <Fragment key={id}>
+        <TableRow
+          id={elementId}
+          hidden={hiddenByGroup}
+          // The same name the card view gives this row.
+          data-row-id={id}
+          data-state={selectedSet.has(id) ? "selected" : undefined}
+          className={cn(
+            "hover-unified-table-row",
+            clickable && "cursor-pointer",
+            selectedSet.has(id) && "bg-muted/50",
+            // An open row and its region read as one band.
+            open && "border-b-0 bg-muted/30"
+          )}
+          // No role or tab stop: the primary cell is the row's
+          // way in, and the row holds other controls.
+          onClick={activateRow(nav)}
+        >
+          {rowDetail && (
+            <TableCell className="w-10 pr-0" onClick={e => e.stopPropagation()}>
+              {detail && (
+                <DetailToggle
+                  open={open}
+                  controls={regionId}
+                  nameId={nameId}
+                  label={rowDetail?.toggleLabel?.(row)}
+                  onToggle={() => expanded.toggle(id)}
+                />
+              )}
+            </TableCell>
+          )}
+          {selection && (
+            <TableCell className="w-10" onClick={e => e.stopPropagation()}>
+              <Checkbox
+                checked={selectedSet.has(id)}
+                disabled={!selectable}
+                onCheckedChange={() => selection.onToggle(row)}
+                aria-label="Select row"
+              />
+            </TableCell>
+          )}
+          {visibleColumns.map(col => (
+            <TableCell
+              key={col.name}
+              // The identifying cell names the row's toggle and region.
+              id={col.name === firstColName ? nameId : undefined}
+              className={cn(
+                col.align === "right" && "text-right",
+                col.align === "center" && "text-center"
+              )}
+            >
+              {renderCell(col, row, nav, col.name === firstColName)}
+            </TableCell>
+          ))}
+          {hasRowActions && (
+            <TableCell
+              className="w-12 text-right"
+              onClick={e => e.stopPropagation()}
+            >
+              {renderRowActions(row)}
+            </TableCell>
+          )}
+        </TableRow>
+        {detail && (
+          <TableRow
+            hidden={hiddenByGroup || !open}
+            data-row-detail={id}
+            className="bg-muted/30"
+          >
+            <TableCell colSpan={leadColumns} className="p-0" />
+            <TableCell colSpan={colSpan - leadColumns} className="pt-0">
+              <div id={regionId} role="region" aria-labelledby={nameId}>
+                {open ? rowDetail?.render(row) : null}
+              </div>
+            </TableCell>
+          </TableRow>
+        )}
+      </Fragment>
+    );
+  };
+
+  // One run of the table's rows: a row group under its header row when it is
+  // a group, a plain body otherwise. The header names the group through its
+  // title alone, and a folding group's button controls its rows.
+  const renderTableSection = (section: RowSection<Row>, position: number) => {
+    const { group } = section;
+    if (!group) {
+      return (
+        <TableBody key="rows" className={LAST_SHOWN_ROW_FLAT}>
+          {section.rows.map(entry => renderTableRow(entry, false))}
+        </TableBody>
+      );
+    }
+    const titleId = `${baseId}-g${position}-t-title`;
+    const open = !folded.isOn(group.id);
+    const folds = Boolean(grouping?.collapsible) && section.rows.length > 0;
+    return (
+      <TableBody
+        key={`group:${group.id}`}
+        aria-labelledby={titleId}
+        data-group-id={group.id}
+        className={LAST_SHOWN_ROW_FLAT}
+      >
+        <TableRow data-group-header="" className="border-t bg-muted/30">
+          <th
+            scope="rowgroup"
+            colSpan={colSpan}
+            className="px-4 py-2.5 text-left align-middle text-sm font-normal"
+          >
+            <GroupHeading
+              group={group}
+              rowCount={section.rows.length}
+              titleId={titleId}
+              fold={
+                folds
+                  ? {
+                      open,
+                      controls: section.rows
+                        .map(entry => describeRow(entry, "t").elementId)
+                        .join(" "),
+                      onToggle: () => folded.toggle(group.id),
+                    }
+                  : undefined
+              }
+            />
+          </th>
+        </TableRow>
+        {section.rows.map(entry => renderTableRow(entry, !open))}
+      </TableBody>
+    );
+  };
+
+  // One row as a card. A row with a region gets a toggle in the card, below
+  // its fields; a click there stays there rather than opening the card.
+  const renderCard = (entry: PlacedRow<Row>) => {
+    const {
+      row,
+      id,
+      nav,
+      clickable,
+      selectable,
+      detail,
+      open,
+      nameId,
+      regionId,
+    } = describeRow(entry, "c");
+    return (
+      <Card
+        key={id}
+        // Names the row, so a page can find the card again by the
+        // row's id: to return focus to it, for one.
+        data-row-id={id}
+        variant={clickable ? "interactive" : "default"}
+        className={cn(clickable && "cursor-pointer")}
+        // No role or tab stop: the title is the card's way in.
+        onClick={activateRow(nav)}
+      >
+        <CardHeader className="flex flex-row items-start justify-between gap-2 pb-3">
+          {/* min-w-0: without it the title refuses to shrink below
+              its content and pushes the header row past the card,
+              painting long primary/secondary text over the border. */}
+          <CardTitle id={nameId} className="min-w-0 text-base">
+            {cardPrimary ? (
+              renderCell(cardPrimary, row, nav, true)
+            ) : (
+              <RowEntry nav={nav}>{id}</RowEntry>
+            )}
+          </CardTitle>
+          <div
+            className="flex items-center gap-1"
+            onClick={e => e.stopPropagation()}
+          >
+            {selection && (
+              <Checkbox
+                checked={selectedSet.has(id)}
+                disabled={!selectable}
+                onCheckedChange={() => selection.onToggle(row)}
+                aria-label="Select row"
+              />
+            )}
+            {renderRowActions(row)}
+          </div>
+        </CardHeader>
+        {cardSecondary.length > 0 && (
+          <CardContent className="pb-3">
+            <dl className="flex flex-col gap-2">
+              {cardSecondary.map(col => (
+                <div
+                  key={col.name}
+                  className="flex items-start justify-between gap-4 text-sm"
+                >
+                  {!col.hideLabelOnMobile && (
+                    <dt className="min-w-20 shrink-0 text-muted-foreground">
+                      {col.header}
+                    </dt>
+                  )}
+                  <dd
+                    className={cn(
+                      // min-w-0 with flex-1: a long value (URLs,
+                      // version strings) must be allowed to shrink
+                      // so truncate/wrap inside the cell engages.
+                      "min-w-0 flex-1",
+                      col.hideLabelOnMobile ? "text-left" : "text-right"
+                    )}
+                  >
+                    {renderCell(col, row, nav, false)}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </CardContent>
+        )}
+        {detail && (
+          <CardContent className="pt-0 pb-3" onClick={e => e.stopPropagation()}>
+            <DetailToggle
+              visibleText
+              open={open}
+              controls={regionId}
+              nameId={nameId}
+              label={rowDetail?.toggleLabel?.(row)}
+              onToggle={() => expanded.toggle(id)}
+            />
+            {/* `hidden` alone loses to a display utility, so the class
+                follows the state too. */}
+            <div
+              id={regionId}
+              role="region"
+              aria-labelledby={nameId}
+              hidden={!open}
+              className={open ? "mt-2 text-sm" : "hidden"}
+            >
+              {open ? rowDetail?.render(row) : null}
+            </div>
+          </CardContent>
+        )}
+      </Card>
+    );
+  };
+
+  // One run of cards: a named section under the group's header when it is a
+  // group, whose fold button controls the cards' container.
+  const renderCardSection = (section: RowSection<Row>, position: number) => {
+    const { group } = section;
+    if (!group) {
+      return <Fragment key="rows">{section.rows.map(renderCard)}</Fragment>;
+    }
+    const titleId = `${baseId}-g${position}-c-title`;
+    const cardsId = `${baseId}-g${position}-c-rows`;
+    const open = !folded.isOn(group.id);
+    const folds = Boolean(grouping?.collapsible) && section.rows.length > 0;
+    return (
+      <section
+        key={`group:${group.id}`}
+        aria-labelledby={titleId}
+        data-group-id={group.id}
+        className="flex flex-col gap-3"
+      >
+        <GroupHeading
+          group={group}
+          rowCount={section.rows.length}
+          titleId={titleId}
+          fold={
+            folds
+              ? {
+                  open,
+                  controls: cardsId,
+                  onToggle: () => folded.toggle(group.id),
+                }
+              : undefined
+          }
+        />
+        <div
+          id={cardsId}
+          hidden={!open}
+          className={open ? "flex flex-col gap-4" : "hidden"}
+        >
+          {section.rows.map(renderCard)}
+        </div>
+      </section>
+    );
+  };
 
   // The surface that holds the views and the footer, defined once because BOTH
   // return paths below render a footer into it. Written out in each branch, the
@@ -443,7 +1097,7 @@ export function DataTableView<Row extends object>({
       <div className={cn("@container/table w-full space-y-4", className)}>
         <div
           role="alert"
-          className="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+          className="rounded-md border border-danger-border bg-danger-surface p-3 text-sm text-danger-text"
         >
           <TableError message={error} />
         </div>
@@ -465,7 +1119,7 @@ export function DataTableView<Row extends object>({
       {error && (
         <div
           role="alert"
-          className="mb-3 rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+          className="mb-3 rounded-md border border-danger-border bg-danger-surface p-3 text-sm text-danger-text"
         >
           <TableError message={error} />
         </div>
@@ -479,94 +1133,17 @@ export function DataTableView<Row extends object>({
           inside as the table's own footer. */}
       <div className={surfaceClassName}>
         {/* Mobile / narrow: card view */}
-        <div className="flex flex-col gap-4 @md/table:hidden">
+        <div data-view="cards" className="flex flex-col gap-4 @md/table:hidden">
           {loading && rows.length === 0 ? (
             <div className="p-8 text-center">
               <TableLoading />
             </div>
-          ) : rows.length === 0 ? (
+          ) : listIsEmpty ? (
             <div className="p-8 text-center">
               <p className="text-sm text-muted-foreground">{emptyMessage}</p>
             </div>
           ) : (
-            rows.map(row => {
-              const id = getRowId(row);
-              const nav = resolveRow(row);
-              const clickable = Boolean(nav.href || nav.onClick);
-              const selectable = selection?.isSelectable?.(row) ?? true;
-              return (
-                <Card
-                  key={id}
-                  // Names the row, so a page can find the card again by the
-                  // row's id: to return focus to it, for one.
-                  data-row-id={id}
-                  variant={clickable ? "interactive" : "default"}
-                  className={cn(clickable && "cursor-pointer")}
-                  role={clickable ? "button" : undefined}
-                  tabIndex={clickable ? 0 : undefined}
-                  onClick={activateRow(nav)}
-                  onKeyDown={
-                    clickable ? onActivateKey(activateRow(nav)) : undefined
-                  }
-                >
-                  <CardHeader className="flex flex-row items-start justify-between gap-2 pb-3">
-                    {/* min-w-0: without it the title refuses to shrink below
-                        its content and pushes the header row past the card,
-                        painting long primary/secondary text over the border. */}
-                    <CardTitle className="min-w-0 text-base">
-                      {cardPrimary
-                        ? renderCell(cardPrimary, row, nav.href)
-                        : id}
-                    </CardTitle>
-                    <div
-                      className="flex items-center gap-1"
-                      onClick={e => e.stopPropagation()}
-                    >
-                      {selection && (
-                        <Checkbox
-                          checked={selectedSet.has(id)}
-                          disabled={!selectable}
-                          onCheckedChange={() => selection.onToggle(row)}
-                          aria-label="Select row"
-                        />
-                      )}
-                      {renderRowActions(row)}
-                    </div>
-                  </CardHeader>
-                  {cardSecondary.length > 0 && (
-                    <CardContent className="pb-3">
-                      <dl className="flex flex-col gap-2">
-                        {cardSecondary.map(col => (
-                          <div
-                            key={col.name}
-                            className="flex items-start justify-between gap-4 text-sm"
-                          >
-                            {!col.hideLabelOnMobile && (
-                              <dt className="min-w-20 shrink-0 text-muted-foreground">
-                                {col.header}
-                              </dt>
-                            )}
-                            <dd
-                              className={cn(
-                                // min-w-0 with flex-1: a long value (URLs,
-                                // version strings) must be allowed to shrink
-                                // so truncate/wrap inside the cell engages.
-                                "min-w-0 flex-1",
-                                col.hideLabelOnMobile
-                                  ? "text-left"
-                                  : "text-right"
-                              )}
-                            >
-                              {renderCell(col, row, nav.href)}
-                            </dd>
-                          </div>
-                        ))}
-                      </dl>
-                    </CardContent>
-                  )}
-                </Card>
-              );
-            })
+            sections.map(renderCardSection)
           )}
         </div>
 
@@ -576,6 +1153,11 @@ export function DataTableView<Row extends object>({
             <Table aria-label={ariaLabel} className="w-full min-w-max">
               <TableHeader>
                 <TableRow>
+                  {rowDetail && (
+                    <TableHead className="w-10 pr-0">
+                      <span className="sr-only">Details</span>
+                    </TableHead>
+                  )}
                   {selection && (
                     <TableHead className="w-10">
                       <Checkbox
@@ -597,137 +1179,49 @@ export function DataTableView<Row extends object>({
                         className={cn(
                           col.align === "right" && "text-right",
                           col.align === "center" && "text-center",
-                          canSort && "cursor-pointer select-none"
+                          canSort && "relative cursor-pointer select-none"
                         )}
-                        role={canSort ? "button" : undefined}
-                        tabIndex={canSort ? 0 : undefined}
-                        aria-sort={
-                          sorted === "asc"
-                            ? "ascending"
-                            : sorted === "desc"
-                              ? "descending"
-                              : canSort
-                                ? "none"
-                                : undefined
-                        }
-                        onClick={
-                          canSort
-                            ? () =>
-                                onSortChange?.(
-                                  col.name,
-                                  sorted === "asc" ? "desc" : "asc"
-                                )
-                            : undefined
-                        }
-                        onKeyDown={
-                          canSort
-                            ? onActivateKey(() =>
-                                onSortChange?.(
-                                  col.name,
-                                  sorted === "asc" ? "desc" : "asc"
-                                )
-                              )
-                            : undefined
-                        }
+                        aria-sort={ariaSortOf(sorted, canSort)}
                       >
-                        <span
-                          className={cn(
-                            "inline-flex items-center gap-1",
-                            col.align === "right" && "flex-row-reverse",
-                            col.align === "center" && "justify-center"
-                          )}
-                        >
-                          {col.header}
-                          {sorted && (
-                            <span className="text-muted-foreground">
-                              {sorted === "asc" ? "↑" : "↓"}
-                            </span>
-                          )}
-                        </span>
+                        <HeaderLabel
+                          label={col.header}
+                          sorted={sorted}
+                          align={col.align}
+                          onSort={
+                            canSort
+                              ? () =>
+                                  onSortChange?.(
+                                    col.name,
+                                    sorted === "asc" ? "desc" : "asc"
+                                  )
+                              : undefined
+                          }
+                        />
                       </TableHead>
                     );
                   })}
                   {hasRowActions && <TableHead className="w-12 text-right" />}
                 </TableRow>
               </TableHeader>
-              <TableBody>
-                {loading && rows.length === 0 ? (
+              {loading && rows.length === 0 ? (
+                <TableBody>
                   <TableRow>
                     <TableCell colSpan={colSpan} className="h-24 text-center">
                       <TableLoading />
                     </TableCell>
                   </TableRow>
-                ) : rows.length > 0 ? (
-                  rows.map(row => {
-                    const id = getRowId(row);
-                    const nav = resolveRow(row);
-                    const clickable = Boolean(nav.href || nav.onClick);
-                    const selectable = selection?.isSelectable?.(row) ?? true;
-                    return (
-                      <TableRow
-                        key={id}
-                        // The same name the card view gives this row.
-                        data-row-id={id}
-                        data-state={
-                          selectedSet.has(id) ? "selected" : undefined
-                        }
-                        className={cn(
-                          "hover-unified-table-row",
-                          clickable && "cursor-pointer",
-                          selectedSet.has(id) && "bg-muted/50"
-                        )}
-                        role={clickable ? "button" : undefined}
-                        tabIndex={clickable ? 0 : undefined}
-                        onClick={activateRow(nav)}
-                        onKeyDown={
-                          clickable
-                            ? onActivateKey(activateRow(nav))
-                            : undefined
-                        }
-                      >
-                        {selection && (
-                          <TableCell
-                            className="w-10"
-                            onClick={e => e.stopPropagation()}
-                          >
-                            <Checkbox
-                              checked={selectedSet.has(id)}
-                              disabled={!selectable}
-                              onCheckedChange={() => selection.onToggle(row)}
-                              aria-label="Select row"
-                            />
-                          </TableCell>
-                        )}
-                        {visibleColumns.map(col => (
-                          <TableCell
-                            key={col.name}
-                            className={cn(
-                              col.align === "right" && "text-right",
-                              col.align === "center" && "text-center"
-                            )}
-                          >
-                            {renderCell(col, row, nav.href)}
-                          </TableCell>
-                        ))}
-                        {hasRowActions && (
-                          <TableCell
-                            className="w-12 text-right"
-                            onClick={e => e.stopPropagation()}
-                          >
-                            {renderRowActions(row)}
-                          </TableCell>
-                        )}
-                      </TableRow>
-                    );
-                  })
-                ) : (
+                </TableBody>
+              ) : listIsEmpty ? (
+                <TableBody>
                   <TableRow>
                     <TableCell colSpan={colSpan} className="h-24 text-center">
                       <TableEmpty message={emptyMessage} />
                     </TableCell>
                   </TableRow>
-                )}
-              </TableBody>
+                </TableBody>
+              ) : (
+                sections.map(renderTableSection)
+              )}
             </Table>
           </div>
         </div>

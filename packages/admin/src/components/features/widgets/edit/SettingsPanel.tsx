@@ -63,7 +63,12 @@ import {
   type RefObject,
   type JSX,
 } from "react";
-import { FormProvider, useForm, type UseFormReturn } from "react-hook-form";
+import {
+  FormProvider,
+  useForm,
+  useWatch,
+  type UseFormReturn,
+} from "react-hook-form";
 
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
@@ -94,11 +99,13 @@ import {
 } from "./panel-values";
 import { PendingRowsContext, usePendingRows } from "./pending-rows";
 import { overlongMessage, overlongSetting } from "./setting-length";
+import { settingRulesOf, type SettingRule } from "./setting-rules";
 import { SettingEditorControl } from "./SettingEditorControl";
 import {
   bringRefusedPanelForward,
   useOnePanelOpen,
 } from "./settings-panel-registry";
+import { useToastAboveFooter } from "./useToastAboveFooter";
 
 export interface SettingsPanelProps {
   /** The card this configures, by its placement: one panel is open at a time (`useOnePanelOpen`). */
@@ -551,7 +558,7 @@ function PanelNotices({
         </p>
       )}
       {failure === undefined ? null : (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="text-sm text-danger-text">
           {failure}
         </p>
       )}
@@ -571,6 +578,7 @@ function SettingControl({
   saving,
   widget,
   opened,
+  rule,
 }: {
   setting: AnyWidgetSetting;
   sources: WidgetSources;
@@ -578,6 +586,8 @@ function SettingControl({
   widget: DashboardWidget | undefined;
   /** The setting's value as the drawer opened on it: the card's own, for a choice to keep. */
   opened: unknown;
+  /** What it does beside the card's other settings as the drawer holds them now. */
+  rule: SettingRule | undefined;
 }) {
   // A setting with its own editor is drawn by it, whatever its type.
   if (setting.editor !== undefined) {
@@ -591,7 +601,7 @@ function SettingControl({
     );
   }
   // A short choice, an on/off or a note's text: the drawer's own controls.
-  const own = drawerControlOf(setting, saving, opened);
+  const own = drawerControlOf(setting, saving, opened, rule);
   if (own !== undefined) return own;
   if (isContentSetting(setting)) {
     return (
@@ -661,17 +671,30 @@ function SectionFields({
   /** The values the drawer opened on (`usePanelBaseline`), by setting name. */
   baseline: Readonly<Record<string, unknown>>;
 }) {
+  // The card's settings as the drawer holds them now, for its rules: one setting's choices follow
+  // another's as the reader changes it.
+  const values = useWatch() as Record<string, unknown> | undefined;
+  const rules = settingRulesOf(widget?.id);
+  const ruled = settings.map(setting => ({
+    setting,
+    rule: rules?.(setting.name, values ?? {}, sources ?? []),
+  }));
   return (
     <>
-      {settings.map(setting => (
-        <div key={setting.name} className="flex flex-col gap-1.5">
-          <SettingControl
-            {...{ setting, sources, saving, widget }}
-            opened={baseline[setting.name]}
-          />
-          <ResetNotice setting={setting} notice={resetNotices[setting.name]} />
-        </div>
-      ))}
+      {ruled.map(({ setting, rule }) =>
+        rule?.hidden === true ? null : (
+          <div key={setting.name} className="flex flex-col gap-1.5">
+            <SettingControl
+              {...{ setting, sources, saving, widget, rule }}
+              opened={baseline[setting.name]}
+            />
+            <ResetNotice
+              setting={setting}
+              notice={resetNotices[setting.name]}
+            />
+          </div>
+        )
+      )}
     </>
   );
 }
@@ -705,11 +728,11 @@ function TitleField({
         aria-invalid={problem !== undefined}
         onChange={event => onChange(event.target.value)}
       />
-      <p id={hintId} className="text-sm text-muted-foreground">
-        Leave it empty to title the card from its settings.
+      <p id={hintId} className="text-xs text-muted-foreground">
+        Leave empty to use the name shown.
       </p>
       {problem === undefined ? null : (
-        <p id={problemId} role="alert" className="text-sm text-destructive">
+        <p id={problemId} role="alert" className="text-sm text-danger-text">
           {problem}
         </p>
       )}
@@ -748,7 +771,8 @@ function SectionHeading({
           size="sm"
           // In the text's own colour, underlined: the link variant's primary colour falls under
           // 4.5:1 on the drawer when a brand colour replaces the default primary.
-          className="h-auto p-0 text-xs text-foreground underline"
+          // At least 24px tall, a target a finger can hit beside the heading.
+          className="h-auto min-h-6 p-0 text-xs text-foreground underline"
           disabled={saving}
           aria-label={`Reset ${label} to defaults`}
           onClick={onReset}
@@ -800,9 +824,15 @@ function PanelActions({
   blocked: string | undefined;
   onCancel: () => void;
 }) {
+  // A toast said while the drawer is open stands above these buttons, not over them.
+  const [footer, setFooter] = useState<HTMLDivElement | null>(null);
+  useToastAboveFooter(footer);
   return (
     // At the drawer's foot, below the part that scrolls, so Cancel and Save are always in reach.
-    <div className="flex shrink-0 flex-row justify-end gap-2 border-t border-border bg-background px-5 py-3">
+    <div
+      ref={setFooter}
+      className="flex shrink-0 flex-row justify-end gap-2 border-t border-border bg-background px-5 py-3"
+    >
       <Button
         type="button"
         variant="outline"

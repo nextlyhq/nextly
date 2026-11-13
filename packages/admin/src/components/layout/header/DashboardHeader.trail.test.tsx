@@ -92,7 +92,7 @@ describe("the top bar's trail", () => {
       "Content",
       "Blog posts",
     ]);
-    expect(links[0]).toHaveAttribute("href", "/admin/collections");
+    expect(links[0]).toHaveAttribute("href", "/admin/content");
     expect(links[1]).toHaveAttribute("href", "/admin/collections/posts");
     // The last step is the page itself, named and not a link.
     const here = within(trail()).getByText("Spring is here");
@@ -107,6 +107,7 @@ describe("the top bar's trail", () => {
 
     const links = within(trail()).getAllByRole("link");
     expect(links.map(link => link.textContent)).toEqual(["Content", "Singles"]);
+    expect(links[0]).toHaveAttribute("href", "/admin/content");
     expect(links[1]).toHaveAttribute("href", "/admin/singles");
     expect(within(trail()).getByText("Homepage")).toHaveAttribute(
       "aria-current",
@@ -161,6 +162,11 @@ describe("the top bar's trail", () => {
     ).toContain("@max-[37.5rem]/topbar:inline");
     // Measured against the bar itself, so a sidebar narrowing it counts.
     expect(screen.getByRole("banner").className).toContain("@container/topbar");
+    // An open document's controls measure the bar's right part, the room they have.
+    expect(
+      screen.getByRole("banner").querySelector('[data-top-bar-place="end"]')
+        ?.className
+    ).toContain("@container/toolbar");
   });
 
   it("lets a long list name shrink and truncate rather than push into the controls, keeping it whole in the tooltip", () => {
@@ -188,11 +194,16 @@ describe("the top bar's trail", () => {
       <Editor trail={{ ...ENTRY, pluralLabel: long }} title="Spring is here" />
     );
     const slot = trail().parentElement!;
-    // Grows into the bar from a basis of none, and may shrink below its content: a long label is
-    // cut short within the bar, never wider than it.
-    expect(slot.className).toMatch(/(^|\s)flex-1(\s|$)/);
+    // Keeps its own width and may shrink below its content: a long label is cut short within
+    // the bar, never wider than it. The bar's right part is the one that grows into the rest,
+    // so an open document's state sits right after the trail.
     expect(slot.className).toMatch(/(^|\s)min-w-0(\s|$)/);
     expect(slot.className).not.toMatch(/(^|\s)shrink-0(\s|$)/);
+    expect(slot.className).not.toMatch(/(^|\s)flex-1(\s|$)/);
+    const end = screen
+      .getByRole("banner")
+      .querySelector('[data-top-bar-place="end"]');
+    expect(end?.className).toMatch(/(^|\s)flex-1(\s|$)/);
     // The trail's row is the bar's own: the account menu and help links are no longer in the
     // bar, so nothing beside it takes its width.
     expect(slot.parentElement).toBe(screen.getByRole("banner"));

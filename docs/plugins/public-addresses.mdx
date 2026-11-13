@@ -21,7 +21,10 @@ A draft holds nothing, and neither does a working draft of a published page unti
 ## Taking part
 
 ```ts
-import { definePlugin, type PublicAddressParticipant } from "@nextlyhq/plugin-sdk";
+import {
+  definePlugin,
+  type PublicAddressParticipant,
+} from "@nextlyhq/plugin-sdk";
 
 const participant: PublicAddressParticipant = {
   async holderOf(address, asker, batch, { db }) {
@@ -60,7 +63,12 @@ A plugin whose own logic moves addresses, outside an entry's save, asks the same
 ```ts
 const { refused } = await ctx.services.collections.withTransaction(tx =>
   ctx.publicAddresses.move(
-    [{ holder: { collection: "pages", id: "1" }, holds: [{ locale: "en", path: "/about" }] }],
+    [
+      {
+        holder: { collection: "pages", id: "1" },
+        holds: [{ locale: "en", path: "/about" }],
+      },
+    ],
     tx
   )
 );
@@ -113,6 +121,8 @@ export const withCatchUp = definePlugin({
 ```
 
 - `ctx.publicAddresses.fingerprint()` changes whenever an address template, the language list or the fallback settings do. Store it, and catch up when it differs.
-- `ctx.publicAddresses.held({ type, after, limit })` pages through one type's documents oldest first, each with every address it holds now. Pass the returned `next` as `after` for the following page.
+- `ctx.publicAddresses.held({ type, after, limit })` pages through one type's documents in id order, each with every address it holds now and when it was made (`createdAt`), so a caller settling claims oldest first sorts by that. Pass the returned `next` as `after` for the following page.
+- `ctx.publicAddresses.defaultLanguage()` is the language an address is held in where a read names none: the site's default language as it is now, one chosen in Settings included, or `"en"` on a site with no languages. Look up a page read without a language under it, rather than under the `localization` block in code.
+- `ctx.publicAddresses.languages()` lists the languages an address is held in: the site's languages as they are now, a list set in Settings included, its default first; or `["en"]`, its one language, on a site with none. Walk a page's languages with it rather than with the `localization` block in code, which a list set in Settings never reaches.
 
 Where two documents clash after a deploy, the one already holding the address keeps it.

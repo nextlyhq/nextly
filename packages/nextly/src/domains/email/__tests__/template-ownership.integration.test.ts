@@ -138,6 +138,45 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         });
       });
 
+      it("keeps a presentation-only save on a template the site has not overridden", async () => {
+        // A label the site gives a declared variable is never an owner
+        // change (see sameDetails), so the save leaves the row following
+        // its owner; the next boot must not read the stored presentation as
+        // the row's own version and rewrite it away. The owner's version
+        // has not moved, so there is nothing to write. Watched failing:
+        // the boot rewrote the row to the owner's columns and the label
+        // went with it.
+        const declared: PluginEmailTemplate = {
+          slug: "orders-shipped",
+          name: "Order shipped",
+          subject: "Your order shipped",
+          htmlContent: V1,
+          description: "Sent when an order ships.",
+          variables: [{ name: "days", description: "Days until arrival" }],
+        };
+        const first = await bootShipping(declared);
+        const id = (await shippedTemplate(first)).id;
+        await first.updateTemplate(
+          id,
+          {
+            variables: [
+              {
+                name: "days",
+                description: "Days until arrival",
+                label: "Working days",
+              },
+            ],
+          },
+          ACTOR
+        );
+        expect((await shippedTemplate(first)).overridden).toBe(false);
+
+        const second = await bootShipping(declared);
+        expect((await shippedTemplate(second)).variables?.[0]).toMatchObject({
+          label: "Working days",
+        });
+      });
+
       it("keeps the site's version when the owner's changes, and marks that it changed", async () => {
         const first = await boot(V1);
         const id = (await shippedTemplate(first)).id;
