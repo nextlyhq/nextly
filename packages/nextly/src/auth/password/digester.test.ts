@@ -98,6 +98,52 @@ describe("passwordDigester with an app's hasher", () => {
     expect(verify).not.toHaveBeenCalledWith("wrong", coreEra);
   });
 
+  it("lets the hasher's refusal stand for a value it claims, whatever bcrypt would say", async () => {
+    // A peppered bcrypt stores bcrypt of `pepper:<password>`; offered that
+    // string itself, plain bcrypt matches it, and the hasher does not.
+    const peppered = (
+      isHash?: (stored: string) => boolean
+    ): PasswordHasher => ({
+      hash: password => hashPassword(`pepper:${password}`, 4),
+      verify: (password, stored) =>
+        verifyPassword(`pepper:${password}`, stored),
+      reach: 64,
+      ...(isHash ? { isHash } : {}),
+    });
+    for (const hasher of [peppered(), peppered(() => true)]) {
+      const digester = passwordDigester(hasher);
+      const stored = await digester.hash("Str0ng-P@ssw0rd!");
+      expect(await digester.verify("pepper:Str0ng-P@ssw0rd!", stored)).toEqual({
+        ok: false,
+      });
+    }
+  });
+
+  it("keeps a core-era bcrypt password as bcrypt when the attempt runs past bcrypt's 72 bytes", async () => {
+    const own: PasswordHasher = {
+      hash: password => Promise.resolve(`own$${password}`),
+      verify: (password, stored) =>
+        Promise.resolve(stored === `own$${password}`),
+      reach: "unbounded",
+      isHash: stored => stored.startsWith("own$"),
+    };
+    const original = `Str0ng-P@ss-${"x".repeat(60)}`;
+    expect(Buffer.byteLength(original)).toBe(72);
+    const coreEra = await hashPassword(original, 4);
+    const digester = passwordDigester(own);
+    // bcrypt never compares past 72 bytes, so the suffix was not proven:
+    // admitted as before, but not stored as the password.
+    expect(await digester.verify(`${original}-suffix`, coreEra)).toEqual({
+      ok: true,
+      rehash: false,
+    });
+    // The control: the original itself is stored again with the hasher.
+    expect(await digester.verify(original, coreEra)).toEqual({
+      ok: true,
+      rehash: true,
+    });
+  });
+
   it("makes its decoy from a password the hasher accepts", async () => {
     // A hasher that refuses anything over 8 bytes, as its reach says.
     const hash = vi.fn((password: string) =>

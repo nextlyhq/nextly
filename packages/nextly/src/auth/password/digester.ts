@@ -9,12 +9,13 @@
  * `passwordDigester`, so which scheme a password is stored in never depends on
  * which path wrote it.
  *
- * With an app's hasher, a stored value is offered to the hasher first,
- * whatever it looks like, so a hasher whose own output is bcrypt-shaped (a
- * peppered bcrypt) keeps verifying it. A value the hasher does not verify may
- * be core's bcrypt from before the hasher was configured: one core verifies
- * is reported for re-hashing, and the sign-in that proved it stores it again
- * with the hasher.
+ * With an app's hasher, a value the hasher claims (by its `isHash`, or any
+ * bcrypt value where the hasher writes bcrypt itself, a peppered bcrypt) is
+ * the hasher's alone to verify, and its refusal stands. Any other bcrypt value
+ * is core's from before the hasher was configured: one core verifies is
+ * reported for re-hashing, and the sign-in that proved it stores it again with
+ * the hasher. A hasher that writes bcrypt and declares no `isHash` claims
+ * every bcrypt value, so core's older ones then verify only through it.
  *
  * @module auth/password/digester
  */
@@ -27,8 +28,8 @@ import { hashPassword, isPasswordHash, verifyPassword } from "./index";
 export type PasswordVerdict =
   | { ok: false }
   /**
-   * `rehash`: core's bcrypt verified it, the app hashes with its own hasher,
-   * and that hasher takes the whole password.
+   * `rehash`: core's bcrypt verified it, read the whole of it, the app hashes
+   * with its own hasher, and that hasher takes the whole password.
    */
   | { ok: true; rehash: boolean };
 
@@ -164,17 +165,24 @@ export function passwordDigester(
         return { ok: true, rehash: false };
       }
       if (coreEra) await hasherVerifies(hasher, password, ownDecoy);
+      // A value the hasher claims is the hasher's alone to answer: its refusal
+      // stands, and core's bcrypt weighs only its decoy, so a peppered
+      // hasher's value never admits the peppered input itself.
       const coreOk = await coreCompare(
         password,
-        bcrypt ? stored : BCRYPT_DECOY
+        coreEra ? stored : BCRYPT_DECOY
       );
-      if (!bcrypt || !coreOk) return { ok: false };
-      // Proven by core's bcrypt. Stored again with the hasher only when the
-      // hasher takes the whole password (its reach, or its own validate): one
-      // it would cut short is kept as bcrypt, which goes on verifying it.
+      if (!coreEra || !coreOk) return { ok: false };
+      // Proven by core's bcrypt. Stored again with the hasher only when
+      // bcrypt read the whole of it (past its 72 bytes, a suffix was never
+      // compared, so storing it would replace the password with the attempt)
+      // and the hasher takes the whole of it (its reach, or its own
+      // validate). Anything else is kept as bcrypt, which goes on verifying it.
       return {
         ok: true,
-        rehash: checkDigesterReach(password, hasher) === null,
+        rehash:
+          checkDigesterReach(password) === null &&
+          checkDigesterReach(password, hasher) === null,
       };
     },
   };

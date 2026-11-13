@@ -495,8 +495,8 @@ export default defineConfig({
 Set it in the config rather than passing `passwordHasher` to `getNextly`: Nextly starts once per process, and a request to the route handler can start it before your code calls `getNextly`. Every way it starts reads the config. Two different hashers, one in each place, are refused at startup.
 
 - `reach` (or `validate`) is required: it tells the password rules how much of a password your hasher reads, so a longer one is refused rather than cut short.
-- `isHash` is optional. Without it, any stored value that is not core's bcrypt goes to your `verify`.
-- Accounts that already have a bcrypt password keep signing in. The first sign-in that proves the password stores it again with your hasher. Only the hash changes: existing sessions stay signed in, and the time the password was set is kept.
+- `isHash` is optional. Without it, any stored value that is not core's bcrypt goes to your `verify`. If your hasher writes bcrypt itself (a peppered bcrypt, say), declare `isHash` so its values can be told from core's older ones: without it, every bcrypt value counts as yours, and an older one signs in only if your `verify` accepts it.
+- Accounts that already have a bcrypt password keep signing in. The first sign-in that proves the password stores it again with your hasher, provided your hasher reads the whole password and the password is no longer than the 72 bytes bcrypt compares; otherwise it stays bcrypt. Only the hash changes: existing sessions stay signed in, and the time the password was set is kept.
 - Password fields in your collections are content, not sign-in credentials, and keep using core's bcrypt (`verifyPassword` from `nextly/auth` checks them).
 
 ## Auth configuration
