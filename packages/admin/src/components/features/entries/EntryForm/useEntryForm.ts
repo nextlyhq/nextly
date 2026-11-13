@@ -44,6 +44,7 @@ import {
   holdsPlaceholders,
   withoutPlaceholders,
 } from "@admin/lib/form/stored-references";
+import { readsHeldDraft } from "@admin/lib/held-draft";
 import type { Entry, EntryValue } from "@admin/types/collection";
 import type { RemovedFromCodeMark } from "@admin/types/removed-from-code";
 
@@ -145,6 +146,12 @@ export interface EntryFormCollection extends RemovedFromCodeMark {
    * server-side — only code-first collections enable it.
    */
   draftsEnabled?: boolean;
+  /**
+   * Why drafts are off, when the configuration asked for them. With
+   * `localized-component`, a draft saved before may still be held, and the
+   * editor reads it (`readsHeldDraft`).
+   */
+  draftsDisabledReason?: string;
 }
 
 /**
@@ -1075,7 +1082,7 @@ export function useEntryForm({
         // cancelQueries key onto the same cached document the form is showing. The
         // caller passes how it read the entry; absent that, assume the full-page
         // editor's mode (the working-draft overlay for a drafts collection).
-        draft: readDraft ?? collection.draftsEnabled === true,
+        draft: readDraft ?? readsHeldDraft(collection),
         translationStatus: asksTranslationStatus,
         refusedForm,
       },

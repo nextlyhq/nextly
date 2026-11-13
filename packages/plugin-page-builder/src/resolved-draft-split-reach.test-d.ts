@@ -22,11 +22,15 @@ import type {
   resolvedCollectionDraftSplit,
 } from "@nextlyhq/plugin-sdk";
 
-/** What the dynamic registry stores: `versions` already resolved. */
+/**
+ * What the dynamic registry stores: `versions` already resolved, and whether
+ * the collection itself is translated, which the drafts rule reads.
+ */
 type RegistryRecord = {
   status: true;
   versions: { drafts: { enabled: true } };
   fields: [];
+  localized: false;
 };
 
 /** What an author writes in config. Neither form is the other. */

@@ -60,6 +60,7 @@ import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
 import { versionForLanguage } from "@admin/lib/document-version";
+import { readsHeldDraft } from "@admin/lib/held-draft";
 import { cn } from "@admin/lib/utils";
 import { entryApi } from "@admin/services/entryApi";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
@@ -476,6 +477,9 @@ export function EntryForm({
     recovering || changeAwaiting
   );
 
+  // Whether this editor reads the held draft rather than the live entry: as
+  // the caller read it, or as the collection says (`readsHeldDraft`).
+  const readsDraft = readDraft ?? readsHeldDraft(collection);
   // Content-locale context for field components — the active locale's writing
   // direction (RTL for Arabic/Hebrew/…), the collection's master localization switch (so a
   // field can tell whether it is translatable), and whether the active language differs from
@@ -497,7 +501,7 @@ export function EntryForm({
     shown: () => ({
       version: versionStartedFrom(),
       locale,
-      draft: readDraft ?? collection.draftsEnabled === true,
+      draft: readsDraft,
     }),
   });
   // Publishing every language waits for the entry's recordings in flight.
@@ -642,7 +646,7 @@ export function EntryForm({
         readShown: () =>
           entryApi.findByID(collection.name, String(entry?.id ?? ""), {
             locale,
-            draft: readDraft ?? collection.draftsEnabled === true,
+            draft: readsDraft,
           }),
       }),
     [
@@ -650,9 +654,8 @@ export function EntryForm({
       defaultLocale,
       versionStartedFrom,
       collection.name,
-      collection.draftsEnabled,
       entry?.id,
-      readDraft,
+      readsDraft,
     ]
   );
   const viewedVersionHost = useViewedVersion(
