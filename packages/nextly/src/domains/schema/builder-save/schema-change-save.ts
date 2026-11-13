@@ -50,6 +50,11 @@ type Answer =
  * stops here, with nothing written.
  */
 export function saveOfSchemaChange(args: {
+  /**
+   * The kind of entity changed: a collection when absent. A Single's or a
+   * field group's change is read from, and written to, its own list.
+   */
+  kind?: "collection" | "single" | "fieldGroup";
   slug: string;
   /** The collection's table, which every answer's event must name. */
   table: string;
@@ -63,11 +68,19 @@ export function saveOfSchemaChange(args: {
   fields: readonly FieldDefinition[];
   localized: boolean;
   answers: SchemaChangeAnswers;
-  junctions: NonNullable<CollectionSave["junctions"]>;
-  keys: NonNullable<CollectionSave["keys"]>;
+  /** A collection's junction statements; a Single and a field group have none here. */
+  junctions?: NonNullable<CollectionSave["junctions"]>;
+  /** A collection's relationship keys; a Single and a field group have none here. */
+  keys?: NonNullable<CollectionSave["keys"]>;
 }): { save: CollectionSave; fields: FieldDefinition[] } {
+  const listed =
+    args.kind === "single"
+      ? args.definition.singles
+      : args.kind === "fieldGroup"
+        ? args.definition.components
+        : args.definition.collections;
   const previous =
-    args.definition.collections.find(c => c.slug === args.slug) ??
+    listed.find(c => c.slug === args.slug) ??
     ({
       slug: args.slug,
       labels: args.row.labels ?? { singular: args.slug, plural: args.slug },
@@ -100,6 +113,7 @@ export function saveOfSchemaChange(args: {
   return {
     fields,
     save: {
+      ...(args.kind === undefined ? {} : { kind: args.kind }),
       slug: args.slug,
       previous,
       entity,
@@ -109,8 +123,8 @@ export function saveOfSchemaChange(args: {
       ...(args.answers.acknowledgedConversions === undefined
         ? {}
         : { acknowledgedConversions: args.answers.acknowledgedConversions }),
-      junctions: args.junctions,
-      keys: args.keys,
+      ...(args.junctions === undefined ? {} : { junctions: args.junctions }),
+      ...(args.keys === undefined ? {} : { keys: args.keys }),
     },
   };
 }

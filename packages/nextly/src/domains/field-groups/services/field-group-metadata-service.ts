@@ -34,6 +34,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { readRequestLocalized } from "../../../dispatcher/helpers/request-localized";
 import { NextlyError } from "../../../errors";
+import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
   DynamicFieldGroupInsert,
@@ -48,6 +49,11 @@ import {
 } from "../../../shared/address-rule";
 import type { Logger } from "../../../shared/types";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import {
+  writeCollectionSave,
+  type BuilderSaveSetup,
+  type CollectionSaveDeps,
+} from "../../schema/builder-save/collection-save";
 import { writeRegistryRowsWith } from "../../schema/schema-version";
 import { identifierBytes } from "../../schema/services/index-name";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
@@ -145,6 +151,33 @@ export class FieldGroupMetadataService {
      */
     private readonly adapter?: DrizzleAdapter
   ) {}
+
+  /** Where a Builder save writes its migration, when the app has one set up. */
+  private builderSave?: BuilderSaveSetup;
+
+  /**
+   * Have every save here write its migration and snapshot through the
+   * Builder save writer (`writeCollectionSave`), as a collection's does.
+   * Set by the service registration.
+   */
+  setBuilderSave(setup: BuilderSaveSetup): void {
+    this.builderSave = setup;
+  }
+
+  /** The writer's dependencies for a save here, when a writer is set up. */
+  private saveDeps(): CollectionSaveDeps | undefined {
+    if (this.builderSave === undefined || this.adapter === undefined) {
+      return undefined;
+    }
+    return {
+      ...this.builderSave,
+      adapter: this.adapter,
+      logger: this.logger,
+      // Development runs each file and records it applied, as the Builder
+      // does for a collection; elsewhere the deploy's `nextly migrate` does.
+      applies: process.env.NODE_ENV === "development",
+    };
+  }
 
   /**
    * The dialect the DDL is generated for.
@@ -244,14 +277,32 @@ export class FieldGroupMetadataService {
     // 1a. REFUSE names the database would not store, read from the statements themselves.
     await this.assertIdentifiersFit(input, migrationSQL);
 
-    // 2. APPLY. Never throws; a failure is reported as a status so the row can still record it.
-    const migrationStatus = await this.applyCreateDdl(input, migrationSQL);
+    // 2. APPLY. Through the Builder save writer where one is set up: it writes the field group's
+    // migration and snapshot, as a collection's save does, and in development runs them, so the
+    // table is on record for every migration after it. Without one, the DDL runs here as before.
+    // The direct apply never throws (a failure is a status the row records); the writer refuses
+    // a save it could not write, leaving neither file nor table.
+    const deps = this.saveDeps();
+    const migrationStatus =
+      deps === undefined
+        ? await this.applyCreateDdl(input, migrationSQL)
+        : await this.writeCreate(deps, input);
 
     // 3. RECORD, with the outcome already known.
     // The row and the stored schema version in one transaction, so the
     // version's count moves with the save it records (`writeRegistryRows`).
+    // A migration the writer ran writes the field group's row as `nextly migrate` does, so it
+    // stands already and takes the rest of the record.
+    const rowWritten =
+      deps?.applies === true &&
+      (await this.registry.findComponentForWrite(input.slug)) !== null;
     const record = await writeRegistryRowsWith(this.adapter, () =>
-      this.registry.registerComponent({ ...input, migrationStatus })
+      rowWritten
+        ? this.registry.updateComponent(input.slug, {
+            ...input,
+            migrationStatus,
+          })
+        : this.registry.registerComponent({ ...input, migrationStatus })
     );
 
     // 4. BIND the runtime schema, and only now.
@@ -1153,6 +1204,55 @@ export class FieldGroupMetadataService {
   }
 
   /**
+   * Write the create's migration and snapshot through the Builder save
+   * writer and, in development, run them; then provision a translated field
+   * group's companion as the direct apply does. Outside development nothing
+   * runs, and the row records the field group as pending.
+   */
+  private async writeCreate(
+    deps: CollectionSaveDeps,
+    input: CreateFieldGroupInput
+  ): Promise<FieldGroupMigrationStatus> {
+    await writeCollectionSave(deps, {
+      kind: "fieldGroup",
+      slug: input.slug,
+      previous: null,
+      entity: fieldGroupEntity(input),
+      change: "create",
+    });
+    if (!deps.applies) return "pending";
+    // Observed, not assumed, as the direct apply observes it.
+    if (!(await deps.adapter.tableExists(input.tableName))) {
+      this.logger.error(
+        `[FieldGroups] Table "${input.tableName}" was not created by its migration`
+      );
+      return "failed";
+    }
+    const { reconcileComponentCompanion } = await import(
+      "./field-group-table-provisioning"
+    );
+    try {
+      await reconcileComponentCompanion({
+        slug: input.slug,
+        tableName: input.tableName,
+        oldFields: [],
+        newFields: input.fields as unknown as FieldDefinition[],
+        localized: storesPerLanguage(input),
+        wasLocalized: false,
+        adapter: deps.adapter,
+      });
+    } catch (error) {
+      this.logger.error(
+        `[FieldGroups] Companion provisioning failed for "${input.tableName}": ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return "failed";
+    }
+    return "applied";
+  }
+
+  /**
    * Run the create DDL, reporting how far it got.
    *
    * Never throws: a schema change that fails is recorded rather than raised, so the caller still has
@@ -1230,4 +1330,19 @@ export class FieldGroupMetadataService {
 
     return "applied";
   }
+}
+
+/**
+ * A field group as the Builder's definition file records it: what the save
+ * writer reads and writes for it, as it does a collection's entity.
+ */
+function fieldGroupEntity(input: CreateFieldGroupInput): UiSchemaEntity {
+  return {
+    slug: input.slug,
+    labels: { singular: input.label, plural: input.label },
+    ...(input.description == null ? {} : { description: input.description }),
+    ...(input.admin == null ? {} : { admin: input.admin }),
+    ...(input.localized == null ? {} : { localized: input.localized }),
+    fields: input.fields as unknown as UiSchemaEntity["fields"],
+  };
 }

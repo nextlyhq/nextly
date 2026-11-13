@@ -26,4 +26,30 @@ describe("migrationDriftError", () => {
       suggestedActions: ["A", "B", "C"],
     });
   });
+
+  it("names the Builder save that records a field group's or Single's table no migration records", () => {
+    const err = migrationDriftError({
+      migration: "20261113_articles_create",
+      file: "src/db/migrations/20261113_articles_create.sql",
+      driftItems: [
+        { kind: "+", detail: "table 'comp_meta' present in DB" },
+        { kind: "+", detail: "table 'single_notice' present in DB" },
+      ],
+    });
+
+    expect(err.publicMessage).toContain("comp_meta");
+    expect(err.publicMessage).toMatch(
+      /made in the Schema Builder[\s\S]*open it there and save it once/
+    );
+  });
+
+  it("says nothing of the Builder for a table that is neither", () => {
+    const err = migrationDriftError({
+      migration: "20261113_articles_create",
+      file: "src/db/migrations/20261113_articles_create.sql",
+      driftItems: [{ kind: "+", detail: "table 'dc_posts' present in DB" }],
+    });
+
+    expect(err.publicMessage).not.toContain("Schema Builder");
+  });
 });

@@ -49,6 +49,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { FieldConfig } from "@nextly/collections";
 
 import { NextlyError } from "../../../errors";
+import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
   DynamicSingleInsert,
@@ -81,6 +82,11 @@ import {
   type TranslationLayoutChange,
 } from "../../i18n/per-language-storage";
 import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
+import {
+  writeCollectionSave,
+  type BuilderSaveSetup,
+  type CollectionSaveDeps,
+} from "../../schema/builder-save/collection-save";
 import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
 import { writeRegistryRowsWith } from "../../schema/schema-version";
 import {
@@ -378,6 +384,33 @@ export class SingleMetadataService {
     private readonly adapter?: DrizzleAdapter
   ) {}
 
+  /** Where a Builder save writes its migration, when the app has one set up. */
+  private builderSave?: BuilderSaveSetup;
+
+  /**
+   * Have every save here write its migration and snapshot through the
+   * Builder save writer (`writeCollectionSave`), as a collection's does.
+   * Set by the service registration.
+   */
+  setBuilderSave(setup: BuilderSaveSetup): void {
+    this.builderSave = setup;
+  }
+
+  /** The writer's dependencies for a save here, when a writer is set up. */
+  private saveDeps(): CollectionSaveDeps | undefined {
+    if (this.builderSave === undefined || this.adapter === undefined) {
+      return undefined;
+    }
+    return {
+      ...this.builderSave,
+      adapter: this.adapter,
+      logger: this.logger,
+      // Development runs each file and records it applied, as the Builder
+      // does for a collection; elsewhere the deploy's `nextly migrate` does.
+      applies: process.env.NODE_ENV === "development",
+    };
+  }
+
   /**
    * The dialect the DDL is generated for.
    *
@@ -453,8 +486,16 @@ export class SingleMetadataService {
     // been persisted and no statement has run.
     await this.resetOrphanStorage(input);
 
-    // 3. APPLY. Never throws; a failure is reported as a status so the row can still record it.
-    const migrationStatus = await this.applyCreateDdl(input, plan);
+    // 3. APPLY. Through the Builder save writer where one is set up: it writes the Single's
+    // migration and snapshot, as a collection's save does, and in development runs them, so the
+    // table is on record for every migration after it. Without one, the DDL runs here as before.
+    // The direct apply never throws (a failure is a status the row records); the writer refuses
+    // a save it could not write, leaving neither file nor table.
+    const deps = this.saveDeps();
+    const migrationStatus =
+      deps === undefined
+        ? await this.applyCreateDdl(input, plan)
+        : await this.writeCreate(deps, input, plan);
 
     // 4. RECORD, with the outcome already known.
     //
@@ -467,10 +508,19 @@ export class SingleMetadataService {
     // The row and the stored schema version in one transaction, so the
     // version's count moves with the save it records (`writeRegistryRows`);
     // the permissions are seeded once it has committed.
-    const record = await this.registry.registerSingle(
-      { ...input, migrationStatus },
-      { writeRow: write => writeRegistryRowsWith(this.adapter, write) }
-    );
+    // A migration the writer ran writes the Single's row as `nextly migrate` does, so it stands
+    // already and takes the rest of the record.
+    const rowWritten =
+      deps?.applies === true &&
+      (await this.registry.getSingleForWrite(input.slug)) !== null;
+    const record = rowWritten
+      ? await writeRegistryRowsWith(this.adapter, () =>
+          this.registry.updateSingle(input.slug, { ...input, migrationStatus })
+        )
+      : await this.registry.registerSingle(
+          { ...input, migrationStatus },
+          { writeRow: write => writeRegistryRowsWith(this.adapter, write) }
+        );
 
     return { record, migrationStatus };
   }
@@ -2315,11 +2365,33 @@ export class SingleMetadataService {
    * has a row describing what was attempted. That is the same choice the request handler made
    * before this service existed, and it is what makes the state repairable instead of lost.
    */
+  /**
+   * Write the create's migration and snapshot through the Builder save
+   * writer and, in development, run them; then bind the table and provision
+   * a translated Single's companion as the direct apply does. Outside
+   * development nothing runs, and the row records the Single as pending.
+   */
+  private async writeCreate(
+    deps: CollectionSaveDeps,
+    input: CreateSingleInput,
+    plan: CreateDdlPlan
+  ): Promise<SingleMigrationStatus> {
+    await writeCollectionSave(deps, {
+      kind: "single",
+      slug: input.slug,
+      previous: null,
+      entity: singleEntity(input, plan.fields),
+      change: "create",
+    });
+    if (!deps.applies) return "pending";
+    return this.finishCreate(input, plan, deps.adapter);
+  }
+
   private async applyCreateDdl(
     input: CreateSingleInput,
     plan: CreateDdlPlan
   ): Promise<SingleMigrationStatus> {
-    const { migrationSQL, fields, isLocalized, hasStatus } = plan;
+    const { migrationSQL } = plan;
     const adapter = this.adapter;
     if (!adapter) {
       this.logger.warn(
@@ -2341,6 +2413,20 @@ export class SingleMetadataService {
       return "failed";
     }
 
+    return this.finishCreate(input, plan, adapter);
+  }
+
+  /**
+   * What follows a create's statements, whoever ran them: the table
+   * observed, bound to the running server, and a translated Single's
+   * companion provisioned.
+   */
+  private async finishCreate(
+    input: CreateSingleInput,
+    plan: CreateDdlPlan,
+    adapter: DrizzleAdapter
+  ): Promise<SingleMigrationStatus> {
+    const { fields, isLocalized, hasStatus } = plan;
     // Observed, not assumed. "Applied" has to mean the table is there.
     if (!(await adapter.tableExists(input.tableName))) {
       this.logger.error(
@@ -2433,4 +2519,26 @@ export class SingleMetadataService {
       );
     }
   }
+}
+
+/**
+ * A Single as the Builder's definition file records it: what the save writer
+ * reads and writes for it, as it does a collection's entity.
+ */
+function singleEntity(
+  // A setting stored as null is left unsaid, as the definition file writes it.
+  input: CreateSingleInput,
+  fields: FieldDefinition[]
+): UiSchemaEntity {
+  const label = input.label ?? input.slug;
+  return {
+    slug: input.slug,
+    labels: { singular: label, plural: label },
+    ...(input.description == null ? {} : { description: input.description }),
+    ...(input.admin == null ? {} : { admin: input.admin }),
+    ...(input.status == null ? {} : { status: input.status }),
+    ...(input.localized == null ? {} : { localized: input.localized }),
+    ...(input.versions == null ? {} : { versions: input.versions }),
+    fields: fields as unknown as UiSchemaEntity["fields"],
+  } as UiSchemaEntity;
 }

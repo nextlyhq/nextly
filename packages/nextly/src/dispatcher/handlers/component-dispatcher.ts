@@ -68,6 +68,12 @@ import type { FieldGroupRegistryService } from "../../services/field-groups/fiel
 import { readableSlugsOfKind } from "../../services/lib/readable-slug-allowlist";
 import type { Logger } from "../../shared/types";
 import { readAuthenticatedUser } from "../helpers/authenticated-user";
+import {
+  builderSaveDeps,
+  checkBuilderSaveHistory,
+  writeBuilderDelete,
+  writeBuilderSchemaChange,
+} from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import {
   builderSchemaPush,
@@ -740,6 +746,9 @@ export const COMPONENTS_METHODS: Record<
           );
           // The dialog's answer on a translated field's rename, refused when it does not
           // say, before anything changes.
+          // The history checks a save makes, before anything below changes the table.
+          const builderSave = builderSaveDeps();
+          await checkBuilderSaveHistory(builderSave);
           const companionRename = await resolveCompanionRename(
             renameResolutions,
             {
@@ -844,43 +853,66 @@ export const COMPONENTS_METHODS: Record<
           // The push excludes companion tables, so comp_<slug>_locales is brought in step right
           // after it: created on the first translatable field, then ADD/DROPped as the field set
           // changes.
-          await pushAndReconcileCompanion(push, desired, "component", {
-            slug,
-            tableName,
-            oldFields: component.fields as unknown as FieldDefinition[],
-            newFields: fields as unknown as FieldDefinition[],
-            localized: isStored,
-            wasLocalized: wasStored,
-            adapter,
-            renamed: companionRename ?? undefined,
-            // The settings the first push left off, once the shared columns hold the default
-            // language's values. A new desired schema rather than an edit of the first: the
-            // pipeline keeps the last one it applied, by reference, to skip a push that changes
-            // nothing.
-            settleLeaving: settingsDeferred
-              ? leavingSettingsStep({
-                  adapter,
-                  entity: slug,
-                  tableName,
-                  builtBy: "fieldGroup",
-                  oldFields: (component.fields ??
-                    []) as unknown as FieldDefinition[],
-                  newFields: fields as unknown as FieldDefinition[],
-                  renamed: companionRename,
-                  push: () =>
-                    push({
-                      ...desired,
-                      components: {
-                        ...desired.components,
-                        [slug]: {
-                          ...desired.components[slug],
-                          fields: fields as DesiredFieldGroup["fields"],
-                        },
-                      },
-                    }),
-                })
-              : undefined,
-          });
+          // The change applied by the push and written as the field group's migration, so its table
+          // stands on record for every migration after it, as a collection's Builder save leaves it.
+          await writeBuilderSchemaChange(
+            builderSave,
+            () =>
+              pushAndReconcileCompanion(push, desired, "component", {
+                slug,
+                tableName,
+                oldFields: component.fields as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                localized: isStored,
+                wasLocalized: wasStored,
+                adapter,
+                renamed: companionRename ?? undefined,
+                // The settings the first push left off, once the shared columns hold the default
+                // language's values. A new desired schema rather than an edit of the first: the
+                // pipeline keeps the last one it applied, by reference, to skip a push that changes
+                // nothing.
+                settleLeaving: settingsDeferred
+                  ? leavingSettingsStep({
+                      adapter,
+                      entity: slug,
+                      tableName,
+                      builtBy: "fieldGroup",
+                      oldFields: (component.fields ??
+                        []) as unknown as FieldDefinition[],
+                      newFields: fields as unknown as FieldDefinition[],
+                      renamed: companionRename,
+                      push: () =>
+                        push({
+                          ...desired,
+                          components: {
+                            ...desired.components,
+                            [slug]: {
+                              ...desired.components[slug],
+                              fields: fields as DesiredFieldGroup["fields"],
+                            },
+                          },
+                        }),
+                    })
+                  : undefined,
+              }),
+            {
+              kind: "fieldGroup",
+              slug,
+              table: tableName,
+              row: {
+                labels: { singular: component.label, plural: component.label },
+                fields: (component.fields ??
+                  []) as unknown as FieldDefinition[],
+              },
+              fields: fields as unknown as FieldDefinition[],
+              localized: isLocalized,
+              answers: {
+                renameResolutions: renameResolutions ?? [],
+                eventResolutions: eventResolutions ?? [],
+                ...(resolutions ? { resolutions } : {}),
+              },
+            }
+          );
 
           const newSchemaVersion = currentVersion + 1;
 
@@ -1144,7 +1176,25 @@ export const COMPONENTS_METHODS: Record<
         });
       }
 
-      await svc.registry.deleteComponent(slug);
+      // The field group as it stood, and the history checks a save makes, before its table goes.
+      const removed = await svc.registry.getComponentForWrite(slug);
+      const builderSave = builderSaveDeps();
+      await checkBuilderSaveHistory(builderSave);
+
+      // The delete, written as the field group's migration, so no snapshot after it still
+      // records the table.
+      await writeBuilderDelete(
+        builderSave,
+        () => svc.registry.deleteComponent(slug),
+        {
+          kind: "fieldGroup",
+          slug,
+          row: {
+            labels: { singular: removed.label, plural: removed.label },
+            fields: (removed.fields ?? []) as unknown as FieldDefinition[],
+          },
+        }
+      );
 
       return respondAction(`Component "${slug}" deleted successfully.`, {
         slug,

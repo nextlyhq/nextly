@@ -97,6 +97,12 @@ import {
   readAuthenticatedUser,
   requireAuthenticatedUser,
 } from "../helpers/authenticated-user";
+import {
+  builderSaveDeps,
+  checkBuilderSaveHistory,
+  writeBuilderDelete,
+  writeBuilderSchemaChange,
+} from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import {
   builderSchemaPush,
@@ -921,7 +927,27 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // registry row another request took as the outcome asked for. Everything else it raises —
       // storage that would not go away — is a failed delete and has to reach the caller, whatever
       // words the driver chose for it.
-      await svc.metadata.deleteSingle(slug, single.tableName);
+      // The history checks a save makes, before the Single's table goes.
+      const builderSave = builderSaveDeps();
+      await checkBuilderSaveHistory(builderSave);
+
+      // The delete, written as the Single's migration, so no snapshot after it still records the
+      // table.
+      await writeBuilderDelete(
+        builderSave,
+        () => svc.metadata.deleteSingle(slug, single.tableName),
+        {
+          kind: "single",
+          slug,
+          row: {
+            labels: {
+              singular: single.label ?? slug,
+              plural: single.label ?? slug,
+            },
+            fields: (single.fields ?? []) as unknown as FieldDefinition[],
+          },
+        }
+      );
 
       // Spec divergence: spec §5.1 / §7.4 strictly maps delete to
       // respondMutation, but registry.deleteSingle returns void (no
@@ -1365,6 +1391,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // before anything changes. This and the preflights below ask where the values are stored
           // (`layout.wasStored`/`isStored`), not whether the Single is translated: an untranslated
           // Single kept per language moves a field leaving translation out of its companion too.
+          // The history checks a save makes, before anything below changes the table.
+          const builderSave = builderSaveDeps();
+          await checkBuilderSaveHistory(builderSave);
           const companionRename = await resolveCompanionRename(
             renameResolutions,
             {
@@ -1459,47 +1488,72 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // The push excludes companion tables, so single_<slug>_locales is brought in step right
           // after it: created on the first translatable field, then ADD/DROPped as the field set
           // changes (mirrors collections).
-          await pushAndReconcileCompanion(push, desired, "single", {
-            slug,
-            tableName,
-            oldFields: single.fields as unknown as FieldDefinition[],
-            newFields: fields as unknown as FieldDefinition[],
-            localized: layout.isStored,
-            wasLocalized: layout.wasStored,
-            // Read from the same persisted record as `wasLocalized`: the companion's per-language
-            // `_status` before and after this apply.
-            status: layout.isPublishedPerLanguage,
-            wasStatus: layout.wasPublishedPerLanguage,
-            statusFromEntryInEveryLanguage:
-              layout.statusFromEntryInEveryLanguage,
-            adapter,
-            renamed: companionRename ?? undefined,
-            // The settings the first push left off, once the shared columns hold the default
-            // language's values. A new desired schema rather than an edit of the first: the pipeline
-            // keeps the last one it applied, by reference, to skip a push that changes nothing.
-            settleLeaving: settingsDeferred
-              ? leavingSettingsStep({
-                  adapter,
-                  entity: slug,
-                  tableName,
-                  builtBy: "collection",
-                  oldFields: single.fields as unknown as FieldDefinition[],
-                  newFields: fields as unknown as FieldDefinition[],
-                  renamed: companionRename,
-                  push: () =>
-                    push({
-                      ...desired,
-                      singles: {
-                        ...desired.singles,
-                        [slug]: {
-                          ...desired.singles[slug],
-                          fields: fields as DesiredSingle["fields"],
-                        },
-                      },
-                    }),
-                })
-              : undefined,
-          });
+          // The change applied by the push and written as the Single's migration, so its table
+          // stands on record for every migration after it, as a collection's Builder save leaves it.
+          await writeBuilderSchemaChange(
+            builderSave,
+            () =>
+              pushAndReconcileCompanion(push, desired, "single", {
+                slug,
+                tableName,
+                oldFields: single.fields as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                localized: layout.isStored,
+                wasLocalized: layout.wasStored,
+                // Read from the same persisted record as `wasLocalized`: the companion's per-language
+                // `_status` before and after this apply.
+                status: layout.isPublishedPerLanguage,
+                wasStatus: layout.wasPublishedPerLanguage,
+                statusFromEntryInEveryLanguage:
+                  layout.statusFromEntryInEveryLanguage,
+                adapter,
+                renamed: companionRename ?? undefined,
+                // The settings the first push left off, once the shared columns hold the default
+                // language's values. A new desired schema rather than an edit of the first: the pipeline
+                // keeps the last one it applied, by reference, to skip a push that changes nothing.
+                settleLeaving: settingsDeferred
+                  ? leavingSettingsStep({
+                      adapter,
+                      entity: slug,
+                      tableName,
+                      builtBy: "collection",
+                      oldFields: single.fields as unknown as FieldDefinition[],
+                      newFields: fields as unknown as FieldDefinition[],
+                      renamed: companionRename,
+                      push: () =>
+                        push({
+                          ...desired,
+                          singles: {
+                            ...desired.singles,
+                            [slug]: {
+                              ...desired.singles[slug],
+                              fields: fields as DesiredSingle["fields"],
+                            },
+                          },
+                        }),
+                    })
+                  : undefined,
+              }),
+            {
+              kind: "single",
+              slug,
+              table: tableName,
+              row: {
+                labels: {
+                  singular: single.label ?? slug,
+                  plural: single.label ?? slug,
+                },
+                fields: (single.fields ?? []) as unknown as FieldDefinition[],
+              },
+              fields: fields as unknown as FieldDefinition[],
+              localized: isLocalized,
+              answers: {
+                renameResolutions: renameResolutions ?? [],
+                eventResolutions: eventResolutions ?? [],
+                ...(resolutions ? { resolutions } : {}),
+              },
+            }
+          );
 
           const newSchemaVersion = currentVersion + 1;
 
