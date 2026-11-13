@@ -219,13 +219,20 @@ export function isRememberedSchemaPath(path: string): boolean {
   return SCHEMA_READS.some(pattern => pattern.test(path));
 }
 
-/** How each kind is checked on the way in, and whether it carries labels. */
+/**
+ * How each kind is checked on the way in, and which labels it carries: all of
+ * them (`true`), so it is read again only for this person under the same
+ * schema and access; the person alone (`"person"`); or none (`false`).
+ */
 const KINDS = {
   menu: { schema: rememberedMenuSchema, labelled: true },
   schema: { schema: rememberedSchemaSchema, labelled: true },
   branding: { schema: rememberedBrandingSchema, labelled: false },
-  // Labelled: what a list drew depends on what this person may read.
-  layout: { schema: rememberedLayoutSchema, labelled: true },
+  // This person's alone: how tall a part was drawn is a size, not something
+  // they may read, and it stays as good a guess when the schema or anyone's
+  // access changes, which moves the versions for every person at once (a
+  // role, a grant or an account added anywhere in the install).
+  layout: { schema: rememberedLayoutSchema, labelled: "person" },
 } as const;
 
 type MemoryKind = keyof typeof KINDS;
@@ -421,14 +428,16 @@ function keysOf(
 /** Whether an entry's labels say it is still true now. */
 function labelsMatch(kind: MemoryKind, labels: StoredEntry["labels"]): boolean {
   if (labels.build !== buildLabel()) return false;
-  if (!KINDS[kind].labelled) return true;
+  const scope: boolean | "person" = KINDS[kind].labelled;
+  if (scope === false) return true;
   // Before the server answers only the build can be compared.
   const now = state.labels;
   if (now === null) return true;
+  if (labels.user !== now.user) return false;
   return (
-    labels.user === now.user &&
-    labels.schemaVersion === now.schemaVersion &&
-    labels.permissionVersion === now.permissionVersion
+    scope === "person" ||
+    (labels.schemaVersion === now.schemaVersion &&
+      labels.permissionVersion === now.permissionVersion)
   );
 }
 

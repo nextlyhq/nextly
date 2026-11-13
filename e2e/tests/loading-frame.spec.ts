@@ -821,6 +821,39 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
             await visitOnce(page, "");
             await expectStillLoad(page, "", mode, { revisit: true });
           });
+
+          test(`moves no part of the dashboard on a revisit after anyone's access changed, ${mode}`, async ({
+            page,
+          }) => {
+            test.setTimeout(90_000);
+            await visitOnce(page, "");
+            // A role made anywhere in the install moves the access version
+            // every person's answers are labelled with; a card's drawn
+            // height is this person's alone, and is drawn at all the same.
+            const list = await page.request.get(
+              "/admin/api/permissions?page=1&limit=1000"
+            );
+            const { items } = (await list.json()) as {
+              items: { id: string; slug: string }[];
+            };
+            const readPosts = items.find(each => each.slug === "read-posts");
+            expect(readPosts).toBeDefined();
+            const stamp = `${Date.now().toString(36)}-${test.info().repeatEachIndex}-${test.info().workerIndex}`;
+            const role = await page.request.post("/admin/api/roles", {
+              data: {
+                name: `Frame role ${stamp}`,
+                slug: `frame-role-${stamp}`,
+                permissionIds: [readPosts?.id],
+              },
+            });
+            expect(role.status(), await role.text()).toBe(201);
+            const { item } = (await role.json()) as { item: { id: string } };
+            try {
+              await expectStillLoad(page, "", mode, { revisit: true });
+            } finally {
+              await page.request.delete(`/admin/api/roles/${item.id}`);
+            }
+          });
         }
       });
 
