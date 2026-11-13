@@ -11,7 +11,11 @@ interface SessionUser {
   email: string;
   name: string;
   image: string | null;
-  roleIds: string[];
+  /**
+   * The roles the session's token was minted with. Absent where the app's
+   * own `determineUser` resolved the person, which names no roles.
+   */
+  roleIds?: string[];
   [key: string]: unknown;
 }
 
@@ -156,7 +160,10 @@ export async function sessionStanding(): Promise<SessionStanding> {
   const isAuthenticated = Boolean(user?.id);
   return {
     isAuthenticated,
-    hasRole: isAuthenticated && (user?.roleIds?.length ?? 0) > 0,
+    // Only a session that names its roles, and names none, is role-less: one
+    // that names none at all (the app's own `determineUser`) is not known to
+    // lack one, and the server still refuses whatever it may not do.
+    hasRole: isAuthenticated && (user?.roleIds?.length ?? 1) > 0,
     email: isAuthenticated ? (user?.email ?? null) : null,
   };
 }
