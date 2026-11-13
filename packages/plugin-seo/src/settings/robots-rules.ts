@@ -529,6 +529,18 @@ function matchesEverything(pattern: string): boolean {
 }
 
 /**
+ * The paths an allow pattern names: each wildcard as nothing, and as `~`,
+ * and the first of them with a page name after it, which an allow of `/`
+ * opens though it names no page itself.
+ */
+function witnessesOf(pattern: string): string[] {
+  const body = pattern.endsWith("$") ? pattern.slice(0, -1) : pattern;
+  const rooted = body.startsWith("/") ? body : `/${body}`;
+  const bare = rooted.replace(/\*/g, "");
+  return [bare, rooted.replace(/\*/g, "~"), `${bare}a`];
+}
+
+/**
  * The rule that keeps `agent` away from the whole site, where one does: a
  * disallow matching every path that no allow overrides, but one opening the
  * home page alone (`/$`), which leaves every other page blocked. A rule that
@@ -544,11 +556,16 @@ function wholeSiteRule(
   );
   const widest = everything.sort((a, b) => specificity(b) - specificity(a))[0];
   if (widest === undefined) return undefined;
+  // An exception counts only where it leaves a page other than the home
+  // page open under the rules as crawlers apply them: tried at the paths
+  // its own pattern names, with each wildcard read as nothing and as a
+  // character. One a longer disallow overrides opens nothing.
   const opened = rules.some(
     rule =>
       rule.allow &&
-      normalizedPath(rule.pattern) !== "/$" &&
-      specificity(rule) >= specificity(widest)
+      witnessesOf(rule.pattern).some(
+        path => path !== "/" && blockingRule(groups, agent, path) === undefined
+      )
   );
   return opened ? undefined : widest;
 }

@@ -315,3 +315,20 @@ describe("the forms Google reads that other crawlers may not", () => {
     ).toBeUndefined();
   });
 });
+
+describe("an exception that opens nothing", () => {
+  it("is no exception: the whole site is still refused", () => {
+    const text =
+      "User-agent: Googlebot\nDisallow: /\nAllow: /$\nAllow: /private\nDisallow: /private*";
+    expect(refusals(text)[0]?.message).toContain(
+      "would keep Googlebot away from the whole site"
+    );
+  });
+
+  it("is one where it leaves a page open", () => {
+    expect(
+      refusals("User-agent: *\nDisallow: /\nAllow: /$\nAllow: /docs/")[0]
+        ?.message
+    ).toBeUndefined();
+  });
+});
