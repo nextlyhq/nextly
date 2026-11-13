@@ -6720,16 +6720,7 @@ export class CollectionMutationService extends BaseService {
       translatedIn
     );
     const decided = await this.decideRewriteValues(tx, args, ref, translatedIn);
-    // Only copies whose value moves are written: a live value the rewrite
-    // leaves as it was keeps the live copy, its date and its events as they
-    // were, and a draft whose value stays is not saved again.
-    const liveChanges = !sameSharedValue(
-      decided.liveValue,
-      decided.liveBefore.value
-    );
-    const drafts = decided.drafts.filter(
-      d => !sameSharedValue(d.value, d.slot.snapshot[args.field])
-    );
+    const { liveChanges, drafts } = decided;
     // Whether each language's pending change was already behind the live
     // shared values on a field other than this one, read before the live
     // copy moves: such a change keeps its base (`moveRewrittenDraftBases`).
@@ -6941,6 +6932,8 @@ export class CollectionMutationService extends BaseService {
     >;
     liveCopy: FieldRewriteCopy;
     liveValue: unknown;
+    /** Whether the live value moves; drafts holds only those that do. */
+    liveChanges: boolean;
     drafts: { slot: DraftSlot; value: unknown }[];
   }> {
     const { set } = args.call.request;
@@ -6950,17 +6943,24 @@ export class CollectionMutationService extends BaseService {
       args.field,
       translatedIn === null ? null : { locale: translatedIn }
     );
+    // Only copies whose value moves are judged and written: one the rewrite
+    // leaves as it was keeps its copy, its date and its events as they were.
     const liveCopy: FieldRewriteCopy = { form: "live", locale: translatedIn };
     const liveValue = await rewrittenValue(set, liveBefore.value, liveCopy);
-    await this.assertRewrittenValueAllowed(tx, args, liveCopy, liveValue);
+    const liveChanges = !sameSharedValue(liveValue, liveBefore.value);
+    if (liveChanges) {
+      await this.assertRewrittenValueAllowed(tx, args, liveCopy, liveValue);
+    }
     const drafts: { slot: DraftSlot; value: unknown }[] = [];
     for (const slot of slots) {
       const copy: FieldRewriteCopy = { form: "draft", locale: slot.locale };
-      const value = await rewrittenValue(set, slot.snapshot[args.field], copy);
+      const current = slot.snapshot[args.field];
+      const value = await rewrittenValue(set, current, copy);
+      if (sameSharedValue(value, current)) continue;
       await this.assertRewrittenValueAllowed(tx, args, copy, value);
       drafts.push({ slot, value });
     }
-    return { liveBefore, liveCopy, liveValue, drafts };
+    return { liveBefore, liveCopy, liveValue, liveChanges, drafts };
   }
 
   /**
