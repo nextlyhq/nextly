@@ -143,10 +143,15 @@ async function holdAdminRequestsFor(page: Page, holdMs: number) {
   });
 }
 
-/** Opens `path` in light mode, without waiting for anything to answer. */
-async function openHeld(page: Page, path: string): Promise<void> {
-  await page.addInitScript(() =>
-    window.localStorage.setItem("nextly-theme", "light")
+/** Opens `path` in `theme` (light unless said), without waiting for anything to answer. */
+async function openHeld(
+  page: Page,
+  path: string,
+  theme: "light" | "dark" = "light"
+): Promise<void> {
+  await page.addInitScript(
+    chosen => window.localStorage.setItem("nextly-theme", chosen),
+    theme
   );
   await page.goto(`${ADMIN}${path}`, { waitUntil: "commit" });
 }
@@ -567,8 +572,11 @@ async function expectStillLoad(
     revisit = false,
     parts = true,
     holding,
+    theme = "light",
   }: {
     revisit?: boolean;
+    /** The theme the screen is opened in. */
+    theme?: "light" | "dark";
     /**
      * The parts held still, by their shift sources' names, where not every
      * part can be: all of them when absent.
@@ -590,14 +598,14 @@ async function expectStillLoad(
   let outlined: Record<string, PartBox> = {};
   if (mode === "held") {
     const held = await holdAdminRequests(page);
-    await openHeld(page, path);
+    await openHeld(page, path, theme);
     await expect(page.locator(SELECTORS.outline).first()).toBeVisible();
     before = await shellBoxes(page);
     outlined = await frameParts(page, "outline");
     releasedAt = await page.evaluate(() => performance.now());
     held.release();
   } else {
-    await openHeld(page, path);
+    await openHeld(page, path, theme);
   }
   await screenArrived(page);
   await expect(page.locator('[data-shell-answers="pending"]')).toHaveCount(0, {
@@ -820,6 +828,22 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
             // and the next, in a fresh tab, draws each card at it.
             await visitOnce(page, "");
             await expectStillLoad(page, "", mode, { revisit: true });
+          });
+
+          test(`moves no part of the dashboard on a revisit in the dark theme, ${mode}`, async ({
+            page,
+          }) => {
+            test.setTimeout(90_000);
+            // The same loading states, drawn on the dark theme's surfaces.
+            await visitOnce(page, "");
+            await expectStillLoad(page, "", mode, {
+              revisit: true,
+              theme: "dark",
+            });
+            // The control: the admin was drawn dark.
+            await expect(page.locator(".nextly-admin").first()).toHaveClass(
+              /(^|\s)dark(\s|$)/
+            );
           });
 
           test(`moves no part of the dashboard on a revisit after anyone's access changed, ${mode}`, async ({
