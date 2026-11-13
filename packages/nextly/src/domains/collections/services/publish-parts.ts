@@ -88,7 +88,15 @@ export interface PartsState {
   /** Each stored language's own publishing state and its own values, never fallback-filled. */
   languages: ReadonlyMap<
     string,
-    { live: boolean; values: Readonly<Record<string, unknown>> }
+    {
+      live: boolean;
+      values: Readonly<Record<string, unknown>>;
+      /**
+       * The shared fields this language's pending change edits, where a language's change holds
+       * the shared values too (without per-language storage): publishing it writes them.
+       */
+      pendingSharedEdits?: readonly string[];
+    }
   >;
   fields: readonly PartsField[];
   /** Every language must hold its own value for each required translated field. */
@@ -312,6 +320,27 @@ function goingLiveIssues(judged: Judged): Issue[] {
   });
 }
 
+/**
+ * A publish that leaves the shared part as it is, of a language whose pending change also edits
+ * shared fields: publishing that change would put its shared edits live, so the caller is told to
+ * publish the shared part with it. Nothing of the change is lost.
+ */
+function sharedEditIssues(judged: Judged): Issue[] {
+  if (judged.direction !== "publish" || judged.sharedPart) return [];
+  return judged.chosen.flatMap((locale): Issue[] => {
+    const edits = judged.reads.state.languages.get(locale)?.pendingSharedEdits;
+    if (edits === undefined || edits.length === 0) return [];
+    return [
+      {
+        path: edits.join(", "),
+        code: "SHARED_EDITS_PENDING",
+        locale,
+        message: `${namedLanguage(locale)}'s pending change also edits ${edits.join(", ")}, which every language shares: publish the shared part with it (\`shared: true\`).`,
+      },
+    ];
+  });
+}
+
 /** Every refusal the request meets before anything is written. */
 async function refusalsOf(
   judged: Judged,
@@ -322,6 +351,7 @@ async function refusalsOf(
     ...sharedIssues(judged),
     ...(await gateIssues(judged, engines)),
     ...stillLiveIssues(judged),
+    ...sharedEditIssues(judged),
     ...goingLiveIssues(judged),
   ];
 }

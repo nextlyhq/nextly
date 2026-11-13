@@ -732,6 +732,11 @@ export interface BulkOperationResult<T = { id: string }> {
 export interface PublishArgs<TSlug extends CollectionSlug = CollectionSlug>
   extends DirectAPIConfig,
     RunAsPrincipal {
+  /**
+   * Skip cache revalidation for this change (the outbox drain still runs), as an update can: for
+   * a caller that owns its cache strategy.
+   */
+  disableRevalidate?: boolean;
   /** Collection slug (required). */
   collection: TSlug;
   /** The entry's id (required). */

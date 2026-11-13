@@ -322,6 +322,54 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     expect(await states(id)).toEqual(before);
   });
 
+  // Without per-language storage a language's pending change holds the shared values too, so a
+  // publish of that language alone would put its shared edits live. It is refused instead, naming
+  // them, and nothing is written; published with the shared part, it goes live.
+  it("refuses a languages-only publish whose pending change edits the shared part", async () => {
+    await boot(posts({ versions: { drafts: true } }));
+    const id = await entry({ es: { title: "Hola" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    // Held as Spanish's pending change, since the entry is live.
+    await t!.nextly.update({
+      collection: "posts",
+      id,
+      locale: "es",
+      data: { title: "Hola 2", tagline: "Changed", _overwrite: true },
+    });
+
+    const refusal = await refusalOf(
+      t!.nextly.publish({
+        collection: "posts",
+        id,
+        locales: ["es"],
+        data: { _overwrite: true },
+      })
+    );
+    const [main] = await t!.adapter.executeQuery<{ tagline: string }>(
+      `SELECT ${q("tagline")} AS tagline FROM ${q("dc_posts")} WHERE ${q("id")} = '${id}'`
+    );
+
+    expect(refusal).toMatch(/tagline/);
+    expect(main?.tagline).toBe("Shared");
+
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: ["es"],
+      shared: true,
+      data: { _overwrite: true },
+    });
+    const [after] = await t!.adapter.executeQuery<{ tagline: string }>(
+      `SELECT ${q("tagline")} AS tagline FROM ${q("dc_posts")} WHERE ${q("id")} = '${id}'`
+    );
+    expect(after?.tagline).toBe("Changed");
+  });
+
   /** A gate holding back the parts `held` names: a language code, or "shared". */
   function holdBack(held: readonly string[]): void {
     container.registerSingleton<PublishGate>("publishGate", () => ({

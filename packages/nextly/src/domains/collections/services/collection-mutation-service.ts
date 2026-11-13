@@ -1056,6 +1056,33 @@ interface StoredDocument {
 }
 
 /**
+ * The shared fields a language's pending change edits, judged against the entry's live row: each
+ * shared field the change holds whose value differs from the live one. Read where a language's
+ * change holds the shared values too, so a publish of it alone would write them. A field the row
+ * does not carry under its name or its column name is not judged.
+ */
+function sharedFieldsEdited(
+  fields: readonly { name: string; translatable: boolean }[],
+  pending: Readonly<Record<string, unknown>>,
+  live: Readonly<Record<string, unknown>>
+): string[] {
+  const comparable = (value: unknown): string =>
+    JSON.stringify(
+      value instanceof Date ? value.toISOString() : (value ?? null)
+    );
+  return fields.flatMap(field => {
+    if (field.translatable || !(field.name in pending)) return [];
+    const column = field.name.replace(/[A-Z]/g, c => `_${c.toLowerCase()}`);
+    const key =
+      field.name in live ? field.name : column in live ? column : undefined;
+    if (key === undefined) return [];
+    return comparable(pending[field.name]) === comparable(live[key])
+      ? []
+      : [field.name];
+  });
+}
+
+/**
  * A pending change's language as stored, read before its promotion is judged.
  * Every change's language is read; one missing is a defect, refused rather
  * than judged against an empty document, which every field would differ from.
@@ -11705,6 +11732,15 @@ export class CollectionMutationService extends BaseService {
       languages.set(draft.locale, {
         live: stored?.live ?? false,
         values: { ...stored?.values, ...pending },
+        ...(draftsKeptByPart()
+          ? {}
+          : {
+              pendingSharedEdits: sharedFieldsEdited(
+                fields,
+                snapshotRecord(draft.snapshot),
+                existingEntry as Record<string, unknown>
+              ),
+            }),
       });
     }
     const state: PartsState = {
