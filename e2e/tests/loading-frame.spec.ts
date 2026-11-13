@@ -611,8 +611,14 @@ async function expectStillLoad(
   {
     revisit = false,
     parts = true,
+    holding,
   }: {
     revisit?: boolean;
+    /**
+     * The parts held still, by their shift sources' names, where not every
+     * part can be: all of them when absent.
+     */
+    holding?: RegExp;
     /**
      * Whether the outline's named parts are held to the screen's. Not where a
      * plugin draws a block above them, which the outline cannot know of
@@ -657,7 +663,11 @@ async function expectStillLoad(
     description: `${mode} ${path}: ${total.toFixed(4)}`,
   });
   // Nothing moves: not a part of the screen, not the frame around it.
-  expect(shifts, JSON.stringify(shifts)).toEqual([]);
+  const held =
+    holding === undefined
+      ? shifts
+      : shifts.filter(shift => shift.sources.some(src => holding.test(src)));
+  expect(held, JSON.stringify(shifts)).toEqual([]);
 
   if (!parts) return;
   const loaded = await frameParts(page, "screen");
@@ -750,6 +760,13 @@ async function visitOnce(page: Page, path: string): Promise<void> {
   await page.goto("about:blank");
 }
 
+/**
+ * The new site's dashboard's first two rows: the setup card and Needs
+ * attention, then Continue where you left off and the content table.
+ */
+const FIRST_DASHBOARD_ROWS =
+  /widget-cell-core\/(setup|needs-attention|continue|content-table)\)/;
+
 test.describe("each screen's outline, held to the screen it stands for", () => {
   /** Entries the tests made, deleted after each, so no list counts them. */
   const made: string[] = [];
@@ -827,11 +844,17 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
         ownSeat(31 + index);
 
         for (const mode of ["held", "unheld"] as const) {
-          test(`moves no part of the dashboard, ${mode}`, async ({ page }) => {
+          test(`moves none of the dashboard's first rows on a first visit, ${mode}`, async ({
+            page,
+          }) => {
             test.setTimeout(90_000);
-            // A first visit: the cards' loading states stand as tall as the
-            // cards, the setup card's as its checklist.
-            await expectStillLoad(page, "", mode);
+            // A first visit: the setup card loads as its checklist, so its
+            // row stands as tall as the row it becomes and the row under it
+            // stays. A card's loading state elsewhere is a guess until the
+            // card has been drawn here once (the revisit below).
+            await expectStillLoad(page, "", mode, {
+              holding: FIRST_DASHBOARD_ROWS,
+            });
           });
 
           test(`moves no part of the dashboard on a revisit, ${mode}`, async ({
