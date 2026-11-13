@@ -4,7 +4,13 @@
  */
 import { render } from "@testing-library/react";
 import { useRef } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  applyRememberingSwitch,
+  confirmLabels,
+  resetDeviceMemoryForTests,
+} from "@admin/lib/device-memory/device-memory";
 
 import {
   forgetHeldCardHeights,
@@ -17,16 +23,18 @@ function Cell({
   id,
   loading,
   height,
+  width = 100,
   onHeld,
 }: {
   id: string;
   loading: boolean;
   height: number;
+  width?: number;
   onHeld: (held: number | undefined) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   onHeld(useHeldCardHeight(id, loading, ref));
-  return <div ref={ref} data-height={height} />;
+  return <div ref={ref} data-height={height} data-width={width} />;
 }
 
 /** jsdom lays nothing out: each cell measures the height its `data-height` names. */
@@ -35,12 +43,13 @@ function measureFromDataHeight() {
     .spyOn(HTMLElement.prototype, "getBoundingClientRect")
     .mockImplementation(function (this: HTMLElement) {
       const height = Number(this.dataset.height ?? 0);
+      const width = Number(this.dataset.width ?? 100);
       return {
         height,
-        width: 100,
+        width,
         top: 0,
         left: 0,
-        right: 100,
+        right: width,
         bottom: height,
         x: 0,
         y: 0,
@@ -48,6 +57,12 @@ function measureFromDataHeight() {
       };
     });
 }
+
+beforeEach(() => {
+  window.localStorage.clear();
+  resetDeviceMemoryForTests();
+  confirmLabels({ user: "u", schemaVersion: "1", permissionVersion: "p" });
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -97,10 +112,58 @@ describe("useHeldCardHeight", () => {
     first.unmount();
     const held: (number | undefined)[] = [];
     render(<Cell id="a" loading height={90} onHeld={h => held.push(h)} />);
-    expect(held[0]).toBe(300);
+    // Read before the browser paints, where the cell's width is known.
+    expect(held.at(-1)).toBe(300);
     const other: (number | undefined)[] = [];
     render(<Cell id="b" loading height={90} onHeld={h => other.push(h)} />);
     expect(other.at(-1)).toBeUndefined();
+  });
+});
+
+describe("a card's height in a fresh tab", () => {
+  it("is held from the device, where this page has drawn nothing yet", () => {
+    measureFromDataHeight();
+    render(<Cell id="a" loading={false} height={247} onHeld={() => {}} />);
+    // A fresh tab: this page's memory is empty, the device's is not.
+    forgetHeldCardHeights();
+    const held: (number | undefined)[] = [];
+    render(<Cell id="a" loading height={90} onHeld={h => held.push(h)} />);
+    expect(held.at(-1)).toBe(247);
+  });
+
+  it("is held only for a cell about as wide as the one it was drawn in", () => {
+    measureFromDataHeight();
+    render(
+      <Cell id="a" loading={false} height={247} width={520} onHeld={() => {}} />
+    );
+    forgetHeldCardHeights();
+    const near: (number | undefined)[] = [];
+    render(
+      <Cell id="a" loading height={90} width={524} onHeld={h => near.push(h)} />
+    );
+    expect(near.at(-1)).toBe(247);
+    // Half as wide, its rows wrap otherwise: no height of another width.
+    const narrow: (number | undefined)[] = [];
+    render(
+      <Cell
+        id="a"
+        loading
+        height={90}
+        width={260}
+        onHeld={h => narrow.push(h)}
+      />
+    );
+    expect(narrow.at(-1)).toBeUndefined();
+  });
+
+  it("is kept nowhere but this page where the site turned remembering off", () => {
+    measureFromDataHeight();
+    applyRememberingSwitch(false);
+    render(<Cell id="a" loading={false} height={247} onHeld={() => {}} />);
+    forgetHeldCardHeights();
+    const held: (number | undefined)[] = [];
+    render(<Cell id="a" loading height={90} onHeld={h => held.push(h)} />);
+    expect(held.at(-1)).toBeUndefined();
   });
 });
 
