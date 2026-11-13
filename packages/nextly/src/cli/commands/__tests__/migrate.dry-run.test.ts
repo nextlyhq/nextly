@@ -380,14 +380,18 @@ describe("migrate --dry-run", () => {
       return true;
     });
   });
-  /** A dry run against a MySQL server that accepts a CHECK without enforcing it. */
-  const previewOnUnenforcingServer = () =>
+  /**
+   * A dry run against a server that accepts a CHECK without enforcing it. The
+   * judgement reads only the server's capabilities; a run that gets past it
+   * goes on to read the test database, so it names the database's dialect.
+   */
+  const previewOnUnenforcingServer = (dialect: "mysql" | "sqlite" = "mysql") =>
     previewMigrate({
       adapter: testDb.adapter as unknown as Parameters<
         typeof previewMigrate
       >[0]["adapter"],
       db: testDb.db,
-      dialect: "mysql",
+      dialect,
       migrationsDir: dir,
       plugins: [],
       logger: {
@@ -434,7 +438,7 @@ describe("migrate --dry-run", () => {
       JSON.stringify({
         version: 1,
         migrationHash: "a".repeat(64),
-        dialect: "mysql",
+        dialect: "sqlite",
         snapshot: {
           tables: [
             {
@@ -458,7 +462,6 @@ describe("migrate --dry-run", () => {
         },
       })
     );
-    await loadDialectTables("mysql");
-    await expect(previewOnUnenforcingServer()).resolves.toBeUndefined();
+    await expect(previewOnUnenforcingServer("sqlite")).resolves.toBeUndefined();
   });
 });
