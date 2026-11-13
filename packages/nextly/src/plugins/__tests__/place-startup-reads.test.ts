@@ -133,6 +133,74 @@ describe("the boot check of a contribution's startup reads", () => {
     }
   );
 
+  it("refuses startup reads on a list's row action, as on any kind", () => {
+    const plugin: PluginDefinition = {
+      name: "@acme/designs",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        admin: {
+          contributions: [
+            {
+              id: "acme-designs.restyle",
+              kind: "rowAction",
+              place: "collection.list",
+              label: "Restyle",
+              action: { open: "@acme/designs/admin#Restyle" },
+              startupReads: [{ path: "/styles" }],
+            } as unknown as AdminContribution,
+          ],
+        },
+      },
+    };
+    expect(refusal(plugin)).toContain('at "collection.list", where no page');
+  });
+
+  it("refuses startup reads at a plugin's own place", () => {
+    const plugin: PluginDefinition = {
+      name: "@acme/designs",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        admin: {
+          places: [{ name: "acme-designs.board", accepts: ["block"] }],
+          contributions: [
+            {
+              id: "acme-designs.summary",
+              kind: "block",
+              place: "acme-designs.board",
+              component: "@acme/designs/admin#Summary",
+              startupReads: [{ path: "/summary" }],
+            } as unknown as AdminContribution,
+          ],
+        },
+      },
+    };
+    expect(refusal(plugin)).toContain('at "acme-designs.board", where no page');
+  });
+
+  it.each(["{entry_id}", "{entryId2}", "{}", "{ entryId }"])(
+    "refuses a brace %s that names none of the place's ids",
+    braces => {
+      expect(
+        refusal(
+          sectionWith([
+            { path: `/designs?collection={collection}&entry=${braces}` },
+          ])
+        )
+      ).toContain(braces);
+    }
+  );
+
+  it("refuses a brace left open or closed alone", () => {
+    expect(
+      refusal(sectionWith([{ path: "/designs?entry={entryId" }]))
+    ).toContain("/designs?entry={entryId");
+    expect(refusal(sectionWith([{ path: "/designs?entry=}" }]))).toContain(
+      "a brace"
+    );
+  });
+
   it("starts reads at an entry's form, with its kind, slug and id", () => {
     expect(PLACE_STARTUP_IDS["entry.form"]).toEqual([
       "kind",

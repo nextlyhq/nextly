@@ -306,8 +306,8 @@ session, the menu and the settings, before its own code has loaded. Your page's
 > **Experimental.** `startupReads` on a place contribution may change before it is
 > marked stable.
 
-A part you add to an editor's places (a block, a tab, a side panel section, any kind)
-can name the reads of your plugin's own routes it makes as it opens, with the same
+A part you add to an editor's places (whatever kind the place takes: a block, a tab, a
+side panel section) can name the reads of your plugin's own routes it makes as it opens, with the same
 `startupReads` a page takes. The places whose page starts them are `collection.edit`,
 `single.edit` and `entry.form` (the form inside both); the app refuses to start if a
 part names `startupReads` anywhere else, where nothing would start them. Its paths may

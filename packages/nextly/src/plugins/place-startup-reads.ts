@@ -67,8 +67,12 @@ export type UnnamedPlaceStartupIds = {
 const STARTING_PLACES_SAID =
   '"collection.edit", "single.edit" and "entry.form"';
 
-/** One id named in a read's path: `{collection}`. */
-const NAMED_ID = /\{([A-Za-z]+)\}/g;
+/**
+ * One pair of braces in a read's path, and what it names: `{collection}`.
+ * Any text between braces is read as a name, so a misspelt one
+ * (`{entry_id}`) is refused by name rather than sent as written.
+ */
+const NAMED_ID = /\{([^{}]*)\}/g;
 
 /** The ids a read's path names, in order. */
 export function namedPlaceIds(path: string): string[] {
@@ -126,39 +130,59 @@ export function placeStartupReadsProblem(
     );
   }
   for (const read of reads as unknown[]) {
-    if (
-      typeof read !== "object" ||
-      read === null ||
-      typeof (read as { path?: unknown }).path !== "string"
-    ) {
-      return "it declares a startup read with no path";
-    }
-    const declared = read as PluginPageStartupRead;
-    const stray = namedPlaceIds(declared.path).find(
-      name => !allowed.includes(name)
+    const problem = startupReadProblem(pluginName, allowed, read);
+    if (problem !== undefined) return problem;
+  }
+  return undefined;
+}
+
+/**
+ * Why one declared startup read cannot be started at a place whose ids are
+ * `allowed`, or `undefined` when it can.
+ */
+function startupReadProblem(
+  pluginName: string,
+  allowed: readonly string[],
+  read: unknown
+): string | undefined {
+  if (
+    typeof read !== "object" ||
+    read === null ||
+    typeof (read as { path?: unknown }).path !== "string"
+  ) {
+    return "it declares a startup read with no path";
+  }
+  const declared = read as PluginPageStartupRead;
+  const stray = namedPlaceIds(declared.path).find(
+    name => !allowed.includes(name)
+  );
+  if (stray !== undefined) {
+    return (
+      `its startup read "${declared.path}" names {${stray}}, which ` +
+      `is not one of the place's ids (${allowed.map(id => `{${id}}`).join(", ")})`
     );
-    if (stray !== undefined) {
-      return (
-        `its startup read "${declared.path}" names {${stray}}, which ` +
-        `is not one of the place's ids (${allowed.map(id => `{${id}}`).join(", ")})`
-      );
-    }
-    // Filled as the page fills it, each id with a sample value, so the path
-    // checked is the shape of the path asked for.
-    const sample = fillPlaceStartupPath(
-      declared.path,
-      Object.fromEntries(allowed.map(id => [id, "sample-id"]))
+  }
+  // Filled as the page fills it, each id with a sample value, so the path
+  // checked is the shape of the path asked for.
+  const sample = fillPlaceStartupPath(
+    declared.path,
+    Object.fromEntries(allowed.map(id => [id, "sample-id"]))
+  );
+  if (sample !== null && /[{}]/.test(sample)) {
+    return (
+      `its startup read "${declared.path}" has a brace that opens or ` +
+      `closes no id: name an id as {id}`
     );
-    if (
-      sample === null ||
-      carriedStartupRead(pluginName, { ...declared, path: sample }) === null
-    ) {
-      return (
-        `its startup read "${declared.path}" is not a path the admin can ` +
-        `ask for: name a route path starting with "/", of plain segments, ` +
-        `with no ".." and at most 512 characters`
-      );
-    }
+  }
+  if (
+    sample === null ||
+    carriedStartupRead(pluginName, { ...declared, path: sample }) === null
+  ) {
+    return (
+      `its startup read "${declared.path}" is not a path the admin can ` +
+      `ask for: name a route path starting with "/", of plain segments, ` +
+      `with no ".." and at most 512 characters`
+    );
   }
   return undefined;
 }
