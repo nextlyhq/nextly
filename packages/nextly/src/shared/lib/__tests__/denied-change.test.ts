@@ -955,7 +955,9 @@ describe("resolvePromotedDocument judges a pending value by the document it prod
       ).publicData?.errors?.map(e => e.path)
     ).toEqual(["ops.secret"]);
   });
-  it("refuses a pending deletion of a protected value the produced siblings would deny", async () => {
+  // The pending change's group is denied on its own, so every change it makes inside it is refused:
+  // the deletion of the protected value, and the sibling it changed.
+  it("refuses a pending deletion of a protected value inside a group the pending change is denied", async () => {
     // `ops` needs `kind` "public"; `ops.secret` needs its sibling `mode` to be "allow".
     const rules = (document: Record<string, unknown>): Promise<void> => {
       const ops = document.ops as Record<string, unknown> | undefined;
@@ -983,7 +985,7 @@ describe("resolvePromotedDocument judges a pending value by the document it prod
       (
         refused as { publicData?: { errors?: { path: string }[] } }
       ).publicData?.errors?.map(e => e.path)
-    ).toEqual(["ops.secret"]);
+    ).toEqual(["ops.mode", "ops.secret"]);
   });
 
   it("never writes a pending value's __proto__ key onto the shared prototype", async () => {
@@ -995,14 +997,47 @@ describe("resolvePromotedDocument judges a pending value by the document it prod
       '{"kind":"private","payload":{"__proto__":{"reviewProbe":"injected"}}}'
     ) as Record<string, unknown>;
     const callerSupplied = { kind: "public", payload: {} };
-    await resolvePromotedDocument({
+    const refused = await resolvePromotedDocument({
       slug: "posts",
       applyRules: rules,
       before: { kind: "public", payload: {} },
       live: { kind: "public", payload: {} },
       pending,
       callerSupplied,
-    });
+    }).catch((error: unknown) => error);
+    expect(NextlyError.isValidation(refused)).toBe(true);
     expect(({} as Record<string, unknown>).reviewProbe).toBeUndefined();
+  });
+  // Live's sibling is not put back: the group the pending change is denied stays denied, so its
+  // protected child, and the sibling it deleted, are refused.
+  it("refuses a pending child whose sibling the pending change deleted, though live holds it", async () => {
+    // `ops` needs `kind` "public"; `ops.secret` needs its sibling `mode` to be "allow".
+    const rules = (document: Record<string, unknown>): Promise<void> => {
+      const ops = document.ops as Record<string, unknown> | undefined;
+      if (!ops) return Promise.resolve();
+      if (document.kind !== "public") delete document.ops;
+      else if (ops.mode !== "allow") delete ops.secret;
+      return Promise.resolve();
+    };
+    const pending = { kind: "private", ops: { secret: "pending edit" } };
+    const callerSupplied = { kind: "public", ops: { note: "caller" } };
+    let refused: unknown;
+    try {
+      await resolvePromotedDocument({
+        slug: "posts",
+        applyRules: rules,
+        before: { kind: "public", ops: { note: "caller" } },
+        live: { kind: "public", ops: { mode: "allow" } },
+        pending,
+        callerSupplied,
+      });
+    } catch (error) {
+      refused = error;
+    }
+    expect(
+      (
+        refused as { publicData?: { errors?: { path: string }[] } }
+      ).publicData?.errors?.map(e => e.path)
+    ).toEqual(["ops.mode", "ops.secret"]);
   });
 });

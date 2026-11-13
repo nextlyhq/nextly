@@ -176,10 +176,14 @@ export async function resolvePromotedDocument(
     [input.before, permittedBefore],
     [input.live, permittedLive],
   ]);
-  // The pending change judged as this publish will write it, in one pass of the rules (see
-  // `deniedAsPublished`).
-  for (const path of await deniedAsPublished(input, permittedPending)) {
-    denied.add(path);
+  // The pending change judged on its own, with one exemption (`allowedAsProduced`): a plain value
+  // the document the publish produces allows, though the draft's own siblings denied it.
+  if (input.pending && permittedPending) {
+    for (const path of deniedPaths(input.pending, permittedPending, "")) {
+      if (denied.has(path)) continue;
+      if (await allowedAsProduced(input, path)) continue;
+      denied.add(path);
+    }
   }
   const refusals = [...denied].flatMap(path =>
     refusedLeaves(input, path, credited)
@@ -524,39 +528,55 @@ function isRefusal(
 }
 
 /**
- * The paths the rules deny on the pending change as this publish writes it: the live row, with the
- * pending change laid over it and the caller's payload over that (`overlay`, which merges records
- * key by key and copies only own keys). One document, judged once:
- * - a rule reading a sibling the publish changes reads the value the publish writes, not the
- *   draft's, so a publish the produced document allows is not refused for the draft's sibling;
- * - a protected value the pending change adds inside a group the caller's payload replaced is still
- *   there to be judged, where the produced document holds the live value instead;
- * - a value the pending change deletes stands at its live value, judged against the siblings the
- *   publish writes, so deleting a protected value is judged too.
+ * Whether a path the pending change is denied on its own is allowed by the document the publish
+ * produces, holding the pending value there.
  *
- * Each path found here is a refusal only where the pending change's own value there differs from
- * the live one and the caller was not allowed to send it (`refusedLeaves`). A list's rows are
- * paired by identity and the caller's new rows are not laid in, so a path inside a list keeps the
- * pending change's own judgment, as before.
+ * A rule reads the document's other fields. Judged on the pending change alone, a value is judged
+ * against the draft's siblings, and a publish that sets a sibling the rule reads (a `kind` the rule
+ * asks for) is refused though the document it writes allows the value. So such a value is judged
+ * once more, on the produced document with the pending value put at its path. Only a plain value is
+ * judged so: a container, a value inside a list, a value whose containers the produced document
+ * lacks, or a path through a name an object inherits, stays denied, as before. A pending change can
+ * add or delete inside a container in ways the produced document does not show, so those keep the
+ * pending change's own judgment.
  */
-async function deniedAsPublished(
+async function allowedAsProduced(
   input: PromotionAccessInput,
-  permittedPending: Record<string, unknown> | undefined
-): Promise<string[]> {
-  if (!input.pending) return [];
-  const laid = overlay(
-    overlay(input.live, input.pending),
-    input.callerSupplied ?? {}
-  );
-  const asPublished = isRecord(laid) ? laid : input.pending;
-  const judged = detachData(asPublished);
+  path: string
+): Promise<boolean> {
+  const value = valueAt(input.pending, path);
+  if (path.includes("[") || isRecord(value) || Array.isArray(value)) {
+    return false;
+  }
+  const produced = detachData(input.before);
+  if (!putOwnPath(produced, path, detachData(value))) return false;
+  const judged = detachData(produced);
   await input.applyRules(judged);
-  const inLists = permittedPending
-    ? deniedPaths(input.pending, permittedPending, "").filter(path =>
-        path.includes("[")
-      )
-    : [];
-  return [...deniedPaths(asPublished, judged, ""), ...inLists];
+  return !deniedPaths(produced, judged, "").some(
+    denied => denied === path || path.startsWith(`${denied}.`)
+  );
+}
+
+/**
+ * Put `value` at a dotted path of named fields, through containers the document holds as its OWN
+ * plain records only; false, writing nothing, where one is missing or the path names
+ * `__proto__`, so nothing can reach an inherited object.
+ */
+function putOwnPath(
+  root: Record<string, unknown>,
+  path: string,
+  value: unknown
+): boolean {
+  const steps = path.split(".");
+  if (steps.includes("__proto__")) return false;
+  let current: Record<string, unknown> = root;
+  for (const step of steps.slice(0, -1)) {
+    const next = hasOwn(current, step) ? current[step] : undefined;
+    if (!isRecord(next)) return false;
+    current = next;
+  }
+  assign(current, steps[steps.length - 1], value);
+  return true;
 }
 
 /** Refuse the promotion, naming every field at fault, in a stable order. */
