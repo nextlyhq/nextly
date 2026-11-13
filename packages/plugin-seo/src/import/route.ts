@@ -39,12 +39,59 @@ import {
   applyImport,
   importGroups,
   planImport,
+  typesWithOwnSeo,
   type ImportEngine,
   type ImportSetup,
 } from "./plan";
 import { count } from "./records";
 
 const TARGET = z.enum(IMPORT_TARGETS as [ImportTarget, ...ImportTarget[]]);
+
+/** Text from a file, as its reader keeps it. */
+const TEXT = z.string().max(100_000);
+
+/**
+ * A file read in the browser: what it holds for each page, in the shape the
+ * readers give it. Parsed here as outside input, since the browser sent it.
+ */
+const PARSED = z.object({
+  records: z
+    .array(
+      z.object({
+        label: TEXT,
+        match: z.object({
+          path: TEXT.optional(),
+          origin: TEXT.optional(),
+          slug: TEXT.optional(),
+        }),
+        values: z.object({
+          title: TEXT.optional(),
+          description: TEXT.optional(),
+          socialTitle: TEXT.optional(),
+          socialDescription: TEXT.optional(),
+          canonical: TEXT.optional(),
+          image: z
+            .union([z.object({ id: TEXT }), z.object({ url: TEXT })])
+            .optional(),
+          hidden: z.boolean().optional(),
+        }),
+        variables: z.enum(["yoast", "rankMath"]).optional(),
+        sourceTitle: TEXT.optional(),
+        redirect: z
+          .object({
+            source: TEXT.optional(),
+            address: TEXT.optional(),
+            target: TEXT,
+            permanent: z.boolean(),
+          })
+          .optional(),
+      })
+    )
+    .max(200_000),
+  from: z.record(z.string(), z.array(TEXT)),
+  left: z.array(TEXT),
+  warnings: z.array(TEXT),
+});
 
 const SOURCE = z.discriminatedUnion("kind", [
   z.object({
@@ -57,11 +104,18 @@ const SOURCE = z.discriminatedUnion("kind", [
     fileName: z.string().min(1).max(500),
     text: z.string().min(1).max(IMPORT_FILE_LIMIT),
   }),
+  z.object({
+    kind: z.literal("records"),
+    tool: z.enum(["yoast", "rankMath", "payload"]),
+    fileName: z.string().min(1).max(500),
+    parsed: PARSED,
+  }),
 ]);
 
 const REQUEST = z.object({
   source: SOURCE,
   locale: z.string().min(1).nullish(),
+  includeNeverServed: z.boolean().optional(),
 });
 
 const APPLY = REQUEST.extend({ plan: z.string().min(1) });
@@ -99,6 +153,7 @@ async function requestOf(
   return {
     source: body.source,
     ...(locale === undefined ? {} : { locale }),
+    ...(body.includeNeverServed === true ? { includeNeverServed: true } : {}),
   };
 }
 
@@ -124,8 +179,11 @@ export function importRoutes(setup: ImportSetup): PluginRoute[] {
       requiredPermission: MANAGE_SEO_PERMISSION,
       handler: async (req, ctx) => {
         const locale = await defaultLanguageOnly(ctx, queryOf(req).locale);
+        const engine = await engineFor(ctx, setup);
         const body: ImportGroupsBody = {
-          groups: await importGroups(await engineFor(ctx, setup), locale),
+          groups: await importGroups(engine, locale),
+          ownSeo: await typesWithOwnSeo(engine),
+          language: locale ?? (await ctx.publicAddresses.defaultLanguage()),
         };
         return respondDoc(body);
       },

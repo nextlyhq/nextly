@@ -134,21 +134,24 @@ export async function readSingle(
 
 /**
  * Write `seo` as the Single's whole `seo` group, as `access`, at the version
- * `rev` it was read at (any version where none is named). Answers the
- * Single's new version, where it keeps one.
+ * `rev` it was read at (any version where none is named), with `more` beside
+ * it (the state a published Single keeping drafts is written in). Answers
+ * the Single's new version, where it keeps one.
  */
 export async function writeSingleSeo(
   slug: string,
   access: SingleAccess,
   locale: string | undefined,
   seo: Record<string, unknown>,
-  rev: string | undefined
+  rev: string | undefined,
+  more: Readonly<Record<string, unknown>> = {}
 ): Promise<string | undefined> {
   const nextly = await getCachedNextly();
   const saved: unknown = await nextly.updateSingle({
     slug,
     ...access,
     data: {
+      ...more,
       [SEO_GROUP]: seo,
       ...(rev === undefined ? { _overwrite: true } : { _rev: rev }),
     },

@@ -66,6 +66,7 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
+import { readsHeldDraft } from "@admin/lib/held-draft";
 import { navigateTo } from "@admin/lib/navigation";
 import {
   getComponent,
@@ -219,7 +220,7 @@ export default function EditEntryPage({
     // collection has the draft/published split enabled, so the editor shows and
     // saves onto the unpublished edits. Inert for non-drafts collections (the
     // server only overlays a draft it actually has).
-    draft: collection?.draftsEnabled === true,
+    draft: readsHeldDraft(collection),
     locale,
     // Edit the ACTUAL per-locale values — disable fallback so an untranslated field
     // shows empty (not the default-language text, which a save would otherwise persist
@@ -239,7 +240,7 @@ export default function EditEntryPage({
   const storedEntry = useStoredEntry({
     collectionSlug: slug,
     entryId: id,
-    draft: collection?.draftsEnabled === true,
+    draft: readsHeldDraft(collection),
     locale,
     fallbackLocale: localizationEnabled ? "none" : undefined,
     // Held for the schema, as the populated read above is.
@@ -579,6 +580,10 @@ export default function EditEntryPage({
   }
 
   const collectionLabel = collection.label || collection.name || slug;
+  // The trail's step leads to the collection's list, so it says what the
+  // list and the default editor's trail say: the plural ("Submissions"),
+  // not the one-entry label a collection may also answer as `label`.
+  const listLabel = collection.labels?.plural || collectionLabel;
   // Cast entry to Record<string, unknown> for getEntryTitle helper
   const entryData = entry as unknown as Record<string, unknown>;
   const entryTitle = getEntryTitle(entryData, id, collection.admin?.useAsTitle);
@@ -640,7 +645,7 @@ export default function EditEntryPage({
           breadcrumbs={
             <EditEntryBreadcrumbs
               collectionSlug={slug}
-              collectionLabel={collectionLabel}
+              collectionLabel={listLabel}
               entryTitle={entryTitle}
             />
           }

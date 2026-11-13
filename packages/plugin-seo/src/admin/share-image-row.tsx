@@ -5,7 +5,7 @@
  *
  * @module admin/share-image-row
  */
-import { Button } from "@nextlyhq/ui";
+import { Button } from "@nextlyhq/plugin-sdk/admin";
 import { Check } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
@@ -68,6 +68,17 @@ function ImageSummary({
 }
 
 /** What keeps the picture from showing in full, and the action that fixes it. */
+/**
+ * Whether a 1200 × 630 copy made from the image fixes any of its problems:
+ * the one decision behind "Make a share image", beside the notice above the
+ * fields and in this row alike.
+ */
+export function copyFixes(
+  problems: readonly { fix: string }[] | undefined
+): boolean {
+  return (problems ?? []).some(problem => problem.fix === "make");
+}
+
 function ImageProblems({
   problems,
   onMake,
@@ -78,7 +89,7 @@ function ImageProblems({
   writable: boolean;
 }): ReactNode {
   if (problems.length === 0) return null;
-  const makeable = onMake !== undefined && problems.some(p => p.fix === "make");
+  const makeable = onMake !== undefined && copyFixes(problems);
   return (
     <Note tone="warning">
       <b className="font-semibold">
@@ -177,6 +188,55 @@ function shownImage(
   );
 }
 
+/** Whether the last share image copy asked for could not be made. */
+export interface MakeFailure {
+  failed: boolean;
+  /** Follows a copy asked for: cleared as it starts, set if none comes back. */
+  track: (asked: Promise<string | undefined>) => void;
+}
+
+/**
+ * A copy that could not be made, said only while the page's image is still
+ * the one it was asked for from: choosing another image, or asking again,
+ * lets the warning go.
+ */
+export function useMakeFailure(ogImage: unknown): MakeFailure {
+  const image = imageIdOf(ogImage) ?? null;
+  const [failedFor, setFailedFor] = useState<
+    { image: string | null } | undefined
+  >(undefined);
+  return {
+    failed: failedFor !== undefined && failedFor.image === image,
+    track: asked => {
+      setFailedFor(undefined);
+      void asked.then(id =>
+        setFailedFor(id === undefined ? { image } : undefined)
+      );
+    },
+  };
+}
+
+/**
+ * A copy that couldn't be made, said in the row: a status kept in place,
+ * empty until a copy fails, so a screen reader announces the failure as it
+ * happens, and the note that shows it.
+ */
+function MakeFailed({ failed }: { failed: boolean }): ReactNode {
+  return (
+    <>
+      <p role="status" className="sr-only">
+        {failed ? "The share image couldn't be made." : ""}
+      </p>
+      {failed ? (
+        <Note tone="warning">
+          The share image couldn&apos;t be made. Try again, or choose another
+          image.
+        </Note>
+      ) : null}
+    </>
+  );
+}
+
 /** The picture shown when someone shares the page. */
 export function ShareImageRow(props: AdvancedProps): ReactNode {
   const {
@@ -192,6 +252,8 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
   } = props;
   // The copy made in this visit; the row says so while it is the page's image.
   const [copy, setCopy] = useState<Made | undefined>(undefined);
+  // Whether the last copy asked for could not be made, said in the row.
+  const failure = useMakeFailure(values.ogImage);
   const chosen = values.ogImage !== null && values.ogImage !== undefined;
   const made =
     copy !== undefined && copy.id === imageIdOf(values.ogImage)
@@ -203,7 +265,9 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
     (() => {
       // Named as it was when the copy was asked for, before it replaces it.
       const from = madeFromOf(props, chosen);
-      void onMakeShareImage().then(id => {
+      const asked = onMakeShareImage();
+      failure.track(asked);
+      void asked.then(id => {
         setCopy(id === undefined ? undefined : { id, from });
       });
     });
@@ -244,6 +308,7 @@ export function ShareImageRow(props: AdvancedProps): ReactNode {
           </SourceRow>
         </div>
       </div>
+      <MakeFailed failed={failure.failed} />
       {made ? (
         <Note tone="success" icon={<Check className="size-4" />}>
           <span data-testid="seo-share-made">

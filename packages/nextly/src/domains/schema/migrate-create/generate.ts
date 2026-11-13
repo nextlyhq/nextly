@@ -45,6 +45,7 @@ import { planFieldAddedToTranslationMigration } from "../../i18n/migration/field
 import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
 import {
   type LeavingTranslationRefusal,
+  moveKeepsEveryValue,
   refusalsForFieldsJoiningTranslation,
   refusalsForFieldsLeavingTranslation,
   refusalsForMovedJoinsNarrowed,
@@ -153,6 +154,7 @@ import {
   type EntitySettingsRecord,
   type RecordedEntitySettings,
 } from "./entity-settings";
+import { planFieldGroupRenames } from "./field-group-renames";
 import {
   formatMigrationFile,
   formatSnapshotRecordFile,
@@ -1001,6 +1003,17 @@ export async function generateMigration(
       next: desiredSnapshot,
     });
   }
+  // 4-6, field groups. A renamed field-group field changes no column, so the diff above holds
+  //      nothing for it; each pair that may hold the same rows is asked about as a column rename
+  //      is, and an accepted one re-keys its stored rows to the new name (`planFieldGroupRenames`).
+  //      Every field group's table is looked up in the whole configuration, a scoped run's too.
+  const groupRenames = await planFieldGroupRenames({
+    entities,
+    previous: previous?.data.entities,
+    groupTables: new Map(requested.components.map(c => [c.slug, c.tableName])),
+    dialect: args.dialect,
+    decide: candidates => renameDecisions(candidates, args),
+  });
   // A MySQL column widened into TEXT under a whole-column index cannot be altered; refused before
   // any file is written (`refuseIndexedTextWidening`).
   refuseIndexedTextWidening({
@@ -1073,11 +1086,19 @@ export async function generateMigration(
     args.dialect,
     previousSnapshot.tables
   );
+  // A renamed field group's rows move once its tables are as the file leaves them, and move back
+  // before the DOWN takes those tables back.
+  sqlStatements.push(...groupRenames.up);
+  downSqlStatements.unshift(...groupRenames.down);
 
   // 7b. Append UI metadata-row upserts for any UI-built table this migration
   //     touches (§4.12.7), and for any whose entity's settings changed: the row
   //     is where a Builder entity's settings live, so it travels with them.
-  const touched = new Set(operations.map(operationTableName));
+  const touched = new Set([
+    ...operations.map(operationTableName),
+    // A renamed field group's parent changes with it, though no statement names that table.
+    ...groupRenames.parentTables,
+  ]);
   const rows = registryRowsFor(
     touched,
     tablesOfSettingsChanges(changedSettings, args),
@@ -1364,6 +1385,7 @@ export async function generateMigration(
     // A junction table the caller adds is a table this file changes.
     changesNoTable:
       operations.length === 0 &&
+      groupRenames.up.length === 0 &&
       (added?.up.first.length ?? 0) + (added?.up.last.length ?? 0) === 0,
     now,
   });
@@ -1395,7 +1417,8 @@ export async function generateMigration(
       path: companionMigrationPath(args.migrationsDir, spec, opts),
     })),
     operationCount: operations.length,
-    renamesAccepted: decisions.filter(d => d.accepted).length,
+    renamesAccepted:
+      decisions.filter(d => d.accepted).length + groupRenames.accepted,
     settingsChanges: changedSettings,
     permissionChanges: changedPermissions,
     deletions: judged.all,
@@ -3022,13 +3045,18 @@ function assertFieldsMayJoinTranslation(
     moved: new Set<string>(),
     narrowed: new Set<string>(),
   };
+  // Reshaped only where the column it would have cannot hold every value the column it has holds,
+  // by the one rule every judge of a move asks, with the snapshots' types alone.
   const reshaped = joining
     .filter(({ field, column }) => {
       const before = typeIn(prevMain, column.name);
+      const after = typeIn(sharedMain, column.name);
       return (
         !moved.has(field.name) &&
         before !== undefined &&
-        before !== typeIn(sharedMain, column.name)
+        before !== after &&
+        (after === undefined ||
+          !moveKeepsEveryValue({ type: before }, { type: after }, dialect))
       );
     })
     .map(({ field }) => field.name);

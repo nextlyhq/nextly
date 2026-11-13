@@ -115,6 +115,7 @@ import {
   isTruthyParam,
   parseCountParam,
   parseRichTextFormat,
+  parseRichTextStyles,
   parseSelectParam,
   parseStatusParam,
   parseWhereParam,
@@ -238,6 +239,66 @@ function allLocalesLifecycle(
         // The version the move was made from, judged on every language.
         data: versionInputOf(body),
       });
+      const entry = unwrapServiceResult(result, { collectionName, entryId });
+      return respondMutation(result.message ?? successMessage, entry);
+    },
+  };
+}
+
+/**
+ * The body of a publish or unpublish of an entry's chosen parts: the languages, or `"all"`, whether
+ * the shared part is chosen too, and whether to only say what it would do. The version fields
+ * (`_rev`, `_overwrite`) are read beside it, as for every lifecycle move.
+ */
+const PublishPartsBody = z
+  .object({
+    locales: z.union([
+      z.literal("all"),
+      z.array(z.string().min(1).max(64)).max(500),
+    ]),
+    shared: z.boolean().optional(),
+    describe: z.boolean().optional(),
+  })
+  .passthrough();
+
+/**
+ * Publishing or unpublishing the parts of one entry the body chooses (@experimental). Forwarded as
+ * the every-language moves forward theirs: the caller's identity and scope, `routeAuthorized`
+ * false, and the version the move was made from.
+ */
+function partsLifecycle(
+  direction: "publish" | "unpublish",
+  successMessage: string
+): MethodHandler<CollectionsHandlerType> {
+  return {
+    execute: async (svc, p, body, request) => {
+      const collectionName = requireParam(p, "collectionName");
+      const entryId = requireParam(p, "entryId");
+      let parts: z.infer<typeof PublishPartsBody>;
+      try {
+        parts = PublishPartsBody.parse(body ?? {});
+      } catch (error) {
+        if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
+        throw error;
+      }
+      const result = await svc.publishParts(
+        {
+          request,
+          collectionName,
+          entryId,
+          actor: readAuthenticatedActor(),
+          ...callerUser(),
+          routeAuthorized: false,
+          authenticatedScope: readAuthenticatedScope(),
+          data: versionInputOf(body),
+        },
+        {
+          direction,
+          locales: parts.locales,
+          shared: parts.shared,
+          describe: parts.describe,
+        }
+      );
       const entry = unwrapServiceResult(result, { collectionName, entryId });
       return respondMutation(result.message ?? successMessage, entry);
     },
@@ -1300,6 +1361,8 @@ const COLLECTIONS_METHODS: Record<
         select: parseSelectParam(p.select),
         where: parseWhereParam(p.where, p.whereBrackets),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
+        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+        richTextStyles: parseRichTextStyles(p.richTextStyles),
         sort,
         status,
         // i18n M4: `?locale=` + `?fallback-locale=` select the content language.
@@ -1430,6 +1493,8 @@ const COLLECTIONS_METHODS: Record<
           p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
         select: parseSelectParam(p.select),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
+        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+        richTextStyles: parseRichTextStyles(p.richTextStyles),
         status,
         // `?draft=true` overlays the pending working draft in place of the live
         // row (draft/published split), matching Payload's read-side `draft`
@@ -1496,6 +1561,8 @@ const COLLECTIONS_METHODS: Record<
     "unpublishAllLocales",
     "All languages unpublished."
   ),
+  publishParts: partsLifecycle("publish", "Published."),
+  unpublishParts: partsLifecycle("unpublish", "Unpublished."),
 
   previewPublishAllLocales: {
     // What publishing every language would do, language by language, without

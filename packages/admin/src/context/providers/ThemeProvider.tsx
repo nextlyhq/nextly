@@ -13,6 +13,10 @@ import {
   type JSX,
 } from "react";
 
+import {
+  InlineScript,
+  scriptJson,
+} from "@admin/components/shared/inline-script";
 import { onDeviceMemoryChange } from "@admin/lib/device-memory/device-memory";
 import { devicePreferenceStore } from "@admin/lib/device-memory/preference-store";
 
@@ -110,14 +114,6 @@ function paintAdmin(
   }
 }
 
-/**
- * A value as JSON that is safe inside an inline `<script>`: `<` is escaped,
- * so a string such as `</script>` in a storage key cannot end the script and
- * start markup.
- */
-const scriptJson = (value: unknown) =>
-  JSON.stringify(value).replace(/</g, "\\u003c");
-
 /** The inline script's source: `paintAdmin` called with the two rules and the config. */
 function paintScript(config: ThemeConfig): string {
   return `(${paintAdmin.toString()})(${pickTheme.toString()},${resolveTheme.toString()},${scriptJson(config)},${scriptJson(THEME_SYNC_TARGETS)})`;
@@ -179,9 +175,6 @@ function save(storageKey: string, theme: string): void {
 const readSystemDark = () => window.matchMedia(DARK_QUERY).matches;
 const unknownOnServer = () => undefined;
 const nothingSaved = () => null;
-const neverChanges = () => () => {};
-const onTheClient = () => false;
-const onTheServer = () => true;
 
 /** What `useTheme` returns. */
 export interface UseThemeProps {
@@ -238,17 +231,9 @@ export function ThemePaintScript({
   nonce?: string;
 }): JSX.Element | null {
   const { config, nonce: providerNonce } = useContext(ThemeContext);
-  const serverOrHydrating = useSyncExternalStore(
-    neverChanges,
-    onTheClient,
-    onTheServer
-  );
-  if (!config || !serverOrHydrating) return null;
+  if (!config) return null;
   return (
-    <script
-      nonce={nonce ?? providerNonce}
-      dangerouslySetInnerHTML={{ __html: paintScript(config) }}
-    />
+    <InlineScript source={paintScript(config)} nonce={nonce ?? providerNonce} />
   );
 }
 

@@ -513,7 +513,7 @@ describe("dashboard activity scope", () => {
       if (name === "collectionRegistryService") {
         return {
           getAllSlugs: vi.fn().mockResolvedValue(["posts", "pb_patterns"]),
-          getAllCollections: vi
+          getAllCollectionsForRead: vi
             .fn()
             .mockResolvedValue([
               { slug: "posts" },
@@ -524,7 +524,7 @@ describe("dashboard activity scope", () => {
       if (name === "singleRegistryService") {
         return {
           getAllSlugs: vi.fn().mockResolvedValue([]),
-          getAllSingles: vi.fn().mockResolvedValue([]),
+          getAllSinglesForRead: vi.fn().mockResolvedValue([]),
         };
       }
       return serviceStub;

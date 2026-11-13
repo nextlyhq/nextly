@@ -88,7 +88,10 @@ afterEach(async () => {
 async function generate(
   dialect: TestDialect,
   name: string,
-  config: Record<string, unknown>
+  config: Record<string, unknown>,
+  // Where nobody can be asked, a file that drops a table is written only
+  // under consent naming it, as `--accept-data-loss` gives it.
+  consent: { acceptDataLoss?: string } = {}
 ): Promise<{ exited: string | undefined; errors: string[] }> {
   process.env.DATABASE_URL = URLS[dialect];
   process.env.DB_DIALECT = dialect;
@@ -112,7 +115,7 @@ async function generate(
   try {
     await runMigrateCreate(
       name,
-      { name, config: configPath, cwd: dir },
+      { name, config: configPath, cwd: dir, ...consent },
       context
     );
   } catch (error) {
@@ -206,10 +209,12 @@ describeEachDialect(
         fieldGroups: [plainSeoGroup],
       });
 
-      const run = await generate(dialect, "drop_both", {
-        collections: [],
-        fieldGroups: [],
-      });
+      const run = await generate(
+        dialect,
+        "drop_both",
+        { collections: [], fieldGroups: [] },
+        { acceptDataLoss: "dc_dep_articles,comp_dep_seo" }
+      );
 
       expect(run).toEqual({ exited: undefined, errors: [] });
       expect(await migrationFiles()).toHaveLength(2);
@@ -353,10 +358,12 @@ describeEachDialect(
         fieldGroups: [plainSeoGroup],
       });
 
-      const run = await generate(dialect, "drop_both", {
-        singles: [],
-        fieldGroups: [],
-      });
+      const run = await generate(
+        dialect,
+        "drop_both",
+        { singles: [], fieldGroups: [] },
+        { acceptDataLoss: "single_dep_home,comp_dep_seo" }
+      );
 
       expect(run).toEqual({ exited: undefined, errors: [] });
       expect(await migrationFiles()).toHaveLength(2);

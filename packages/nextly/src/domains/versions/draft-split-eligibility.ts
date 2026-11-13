@@ -27,10 +27,12 @@
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { FieldConfig } from "../../collections/fields/types";
 import { isVirtualField } from "../../collections/fields/virtual";
+import { NextlyError } from "../../errors/nextly-error";
 import { hasPasswordField } from "../../shared/lib/password-fields";
 import { consoleLogger } from "../../shared/types";
 import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
 
+import { draftsKeptByPart } from "./part-drafts";
 import { resolveVersionsConfig } from "./resolve-config";
 import type { ComponentSchemas } from "./restore-snapshot";
 import { resolveComponentSchemas } from "./restore-version";
@@ -50,13 +52,14 @@ export interface DraftSplitEligibilityInput {
    * a `null` map is never reached while still eligible.
    */
   componentSchemas: ComponentSchemas | null;
-  /**
-   * The entity's kind, and whether the document itself is localized, for the
-   * rule only a Single applies yet: see `localized-component`. A caller that
-   * passes neither, as the collection paths do, is judged without it.
-   */
+  /** The entity's kind, collection or Single, for the caller's own record. */
   entityKind?: "collection" | "single";
-  documentLocalized?: boolean;
+  /**
+   * Whether the document itself is localized, for the `localized-component`
+   * rule. Required: a caller that left it out would be judged as a localized
+   * document, which that rule never refuses.
+   */
+  documentLocalized: boolean;
 }
 
 /** Why the split does not run for a collection that asked for it. */
@@ -68,10 +71,12 @@ export type DraftSplitDisabledReason =
   /** A component the fields reference has no record in the registry. */
   | "unresolvable-component"
   /**
-   * A Single that is not localized reaches a localized component. Its working
-   * draft is keyed with no language, while the component stores a value per
-   * language, so one draft would hold several languages' edits and a publish
-   * could write one language's into another's.
+   * A collection or Single that is not localized reaches a localized
+   * component, without per-language storage. Its working draft is keyed with
+   * no language, while the component stores a value per language, so one
+   * draft would hold several languages' edits and a publish could write one
+   * language's into another's. Under per-language storage every draft is
+   * keyed by its language, so the rule does not apply there.
    */
   | "localized-component";
 
@@ -151,7 +156,9 @@ export function evaluateDraftSplitEligibility(
       componentSlug: withPassword[0],
     };
   }
-  if (input.entityKind === "single" && input.documentLocalized === false) {
+  // Kept by part, every document's draft is keyed by its language
+  // (`workingDraftLocale`), so a localized component's values are never mixed.
+  if (input.documentLocalized === false && !draftsKeptByPart()) {
     // A component named only by virtual fields stores no rows, so it holds no
     // per-language values for a language-less draft to mix.
     const virtualOnly = reachedOnlyThroughVirtualFields(
@@ -175,6 +182,35 @@ export function evaluateDraftSplitEligibility(
   // including the ones the schema and mutation paths read. Cheap here because
   // the object has three fields and this runs once per eligibility question.
   return { ...ELIGIBLE };
+}
+
+/**
+ * Whether a document the verdict refuses may still hold a draft saved before
+ * it was refused: the `localized-component` rule refuses documents that held
+ * drafts before it. Such a draft is read-only: shown and discardable, never
+ * promoted and never lost.
+ */
+export function heldBeforeTheRule(verdict: DraftSplitEligibility): boolean {
+  return verdict.reason === "localized-component";
+}
+
+/**
+ * The refusal of a live write (a save, a publish of one language or of every
+ * language) while a draft held before the `localized-component` rule is
+ * there. That draft names no language, so a publish could put one language's
+ * component values into another's row, and a save beside it would leave it
+ * to resurface.
+ */
+export function heldBeforeTheRuleRefusal(
+  collection: string,
+  entryId: string
+): NextlyError {
+  return NextlyError.conflict({
+    reason: "state",
+    message:
+      "This document has a draft held from before it stopped holding drafts. Copy what you need from it, then discard it.",
+    logContext: { reason: "held-before-the-rule", collection, entryId },
+  });
 }
 
 /**
@@ -218,12 +254,14 @@ export interface SchemaEligibilityCollection {
   fields: FieldConfig[];
   /** Names the entity in the warning an unresolvable component emits. */
   slug?: string;
-  /** Whether the document itself is localized; see `entityKind`. */
-  localized?: boolean;
   /**
-   * The entity's kind. A Single passes it, with `localized`, so a schema read
-   * reports the `localized-component` rule its writes apply.
+   * Whether the document itself is localized, so a schema read reports the
+   * `localized-component` rule its writes apply. Optional on this published
+   * input: absent, a collection is judged as it was before the rule covered
+   * collections (the rule is not asked), and a Single as it always was.
    */
+  localized?: boolean;
+  /** The entity's kind, collection or Single, for the caller's own record. */
   entityKind?: "collection" | "single";
 }
 
@@ -253,6 +291,18 @@ function reportUnresolvableComponent(
       `for it: a draft snapshot cannot represent a component it cannot read. ` +
       `Create the component or remove the field that references it.`
   );
+}
+
+/**
+ * Whether the schema-read input's document is localized, for the rule that
+ * reads it. `localized` is optional on that published input: a caller that
+ * leaves it out about a collection is judged as before the rule covered
+ * collections, so a plugin built against the earlier input keeps its answer;
+ * a Single without it is judged as untranslated, as it always was.
+ */
+function documentLocalizedOf(collection: SchemaEligibilityCollection): boolean {
+  if (collection.localized !== undefined) return collection.localized;
+  return collection.entityKind !== "single";
 }
 
 /**
@@ -286,7 +336,7 @@ export async function schemaDraftSplit(
     fields: collection.fields,
     componentSchemas,
     entityKind: collection.entityKind,
-    documentLocalized: collection.localized === true,
+    documentLocalized: documentLocalizedOf(collection),
   });
   if (
     result.reason === "unresolvable-component" &&
@@ -332,7 +382,7 @@ export async function schemaDraftsEnabled(
  */
 export type AuthoredDraftSplitCollection = Pick<
   CollectionConfig,
-  "status" | "versions" | "fields"
+  "status" | "versions" | "fields" | "localized"
 > & {
   slug?: CollectionConfig["slug"];
 };
@@ -362,6 +412,9 @@ export async function collectionDraftSplit(
     versions: resolveVersionsConfig(collection.versions, collection.status),
     fields: collection.fields,
     slug: collection.slug,
+    // The authored config is authoritative: no `localized` there means the
+    // collection is untranslated, so the rule gets an explicit answer.
+    localized: collection.localized === true,
   });
 }
 
@@ -379,6 +432,21 @@ function reachedOnlyThroughVirtualFields(
   fields: FieldConfig[],
   componentSchemas: ComponentSchemas | null
 ): Set<string> {
+  const reached = componentsReached(fields, componentSchemas);
+  return new Set(
+    [...reached.virtual].filter(slug => !reached.stored.has(slug))
+  );
+}
+
+/**
+ * The components `fields` reach at any depth (inside groups and repeaters,
+ * and inside the components `componentSchemas` describes), by whether a
+ * stored field reaches each or only a virtual one does.
+ */
+export function componentsReached(
+  fields: readonly unknown[],
+  componentSchemas: ComponentSchemas | null
+): { stored: Set<string>; virtual: Set<string> } {
   const reached = { stored: new Set<string>(), virtual: new Set<string>() };
   // Each field list once per state, so a group whose fields lead back to
   // itself ends, and a work list rather than recursion, so a deep chain of
@@ -393,9 +461,7 @@ function reachedOnlyThroughVirtualFields(
       work.push(...stepsFrom(field, state, reached, componentSchemas));
     }
   }
-  return new Set(
-    [...reached.virtual].filter(slug => !reached.stored.has(slug))
-  );
+  return reached;
 }
 
 /** Whether the walk is under a virtual field, which stores nothing. */

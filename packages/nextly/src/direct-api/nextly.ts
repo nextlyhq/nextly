@@ -169,6 +169,8 @@ import type {
   SingleListResult,
   SingleSlug,
   UpdateArgs,
+  PublishArgs,
+  PublishResult,
   UpdateSingleArgs,
   UserContext,
   VerifyEmailArgs,
@@ -592,6 +594,29 @@ export class Nextly implements NextlyContext {
   }
 
   /**
+   * Publish the parts of one entry `args` chooses: some of its languages, or every one, and its
+   * shared part. With `describe`, say what publishing them would do, and change nothing.
+   *
+   * @experimental Until publishing per language is complete.
+   */
+  publish(args: PublishArgs): Promise<MutationResult<PublishResult>> {
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.publish(this, callArgs)
+    );
+  }
+
+  /**
+   * Unpublish the parts of one entry `args` chooses, or say what doing so would do.
+   *
+   * @experimental Until publishing per language is complete.
+   */
+  unpublish(args: PublishArgs): Promise<MutationResult<PublishResult>> {
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.unpublish(this, callArgs)
+    );
+  }
+
+  /**
    * Delete a document by ID or by `where` clause.
    *
    * where `item` carries the deleted `id`. The bulk-by-where path still
@@ -966,6 +991,12 @@ export const nextly = {
     (await requireNextlyOnceStarted()).create(args),
   update: async <TSlug extends CollectionSlug>(args: UpdateArgs<TSlug>) =>
     (await requireNextlyOnceStarted()).update(args),
+  /** Publish the chosen parts of one entry. @experimental */
+  publish: async (args: PublishArgs) =>
+    (await requireNextlyOnceStarted()).publish(args),
+  /** Unpublish the chosen parts of one entry. @experimental */
+  unpublish: async (args: PublishArgs) =>
+    (await requireNextlyOnceStarted()).unpublish(args),
   delete: async (args: DeleteArgs) =>
     (await requireNextlyOnceStarted()).delete(args),
   count: async (args: CountArgs) =>

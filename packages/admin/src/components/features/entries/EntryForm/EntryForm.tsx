@@ -31,6 +31,7 @@ import {
   historyEnabledFrom,
   historyRetentionFrom,
 } from "@admin/components/features/versions/history-enabled";
+import { useEditorRestoreSurface } from "@admin/components/features/versions/useEditorRestoreSurface";
 import { PREVIOUS_VERSION } from "@admin/components/features/versions/version-search-params";
 import { versionsHref } from "@admin/components/features/versions/versions-href";
 import {
@@ -60,6 +61,7 @@ import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
 import { versionForLanguage } from "@admin/lib/document-version";
+import { readsHeldDraft } from "@admin/lib/held-draft";
 import { cn } from "@admin/lib/utils";
 import { entryApi } from "@admin/services/entryApi";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
@@ -417,6 +419,7 @@ export function EntryForm({
 
   const {
     form,
+    formRestore,
     defaultValues,
     handleSubmit: submitEntry,
     writeStatus,
@@ -476,6 +479,9 @@ export function EntryForm({
     recovering || changeAwaiting
   );
 
+  // Whether this editor reads the held draft rather than the live entry: as
+  // the caller read it, or as the collection says (`readsHeldDraft`).
+  const readsDraft = readDraft ?? readsHeldDraft(collection);
   // Content-locale context for field components — the active locale's writing
   // direction (RTL for Arabic/Hebrew/…), the collection's master localization switch (so a
   // field can tell whether it is translatable), and whether the active language differs from
@@ -497,7 +503,7 @@ export function EntryForm({
     shown: () => ({
       version: versionStartedFrom(),
       locale,
-      draft: readDraft ?? collection.draftsEnabled === true,
+      draft: readsDraft,
     }),
   });
   // Publishing every language waits for the entry's recordings in flight.
@@ -642,7 +648,7 @@ export function EntryForm({
         readShown: () =>
           entryApi.findByID(collection.name, String(entry?.id ?? ""), {
             locale,
-            draft: readDraft ?? collection.draftsEnabled === true,
+            draft: readsDraft,
           }),
       }),
     [
@@ -650,15 +656,30 @@ export function EntryForm({
       defaultLocale,
       versionStartedFrom,
       collection.name,
-      collection.draftsEnabled,
       entry?.id,
-      readDraft,
+      readsDraft,
     ]
   );
+  // What a restore puts values back into: this form. The document's lock is
+  // decided further down, so a restore reads it when it asks.
+  const restoreReadOnly = useRef(false);
+  // The language being edited: the default where the address names none.
+  const editingLocale = locale ?? defaultLocale;
+  const editingLanguage = getLocale(editingLocale)?.label;
+  const editorRestore = useEditorRestoreSurface({
+    restore: formRestore,
+    form,
+    fields: allFields,
+    readOnly: () => restoreReadOnly.current,
+    localized: collection.localized === true,
+    ...(editingLanguage ? { language: editingLanguage } : {}),
+    ...(editingLocale ? { locale: editingLocale } : {}),
+  });
   const viewedVersionHost = useViewedVersion(
     allFields,
     takeoverTypes,
-    versionFor
+    versionFor,
+    editorRestore
   );
   const {
     viewingVersion,
@@ -804,6 +825,9 @@ export function EntryForm({
       release: releaseVersionHold,
     }
   );
+  useEffect(() => {
+    restoreReadOnly.current = lock.readOnly;
+  }, [lock.readOnly]);
   useEffect(() => {
     setChangeAwaiting(lock.changeAwaitingAnswer);
   }, [lock.changeAwaitingAnswer]);
@@ -954,13 +978,22 @@ export function EntryForm({
     () => autosaveScopeFor("collection", collection.name, savedEntryId),
     [savedEntryId, collection.name]
   );
+  /*
+   * Whether this entry keeps recovery points: a saved entry of a collection
+   * with autosave on. The server refuses a recording anywhere else, so where
+   * this is false the editor records nothing, offers nothing back and shows no
+   * recording status. One answer for every recorder in the editor, the page
+   * builder's included, and for keeping a refused save's edits.
+   */
+  const keepsRecoveryPoints =
+    autosaveScope !== null && autosaveEnabledFor(collection);
   // The other half of recording: offer the work back when the editor opens, and
   // write it into this form when the author accepts.
   const recovery = offerHeldWhileRecovering(
     useAutosaveRecovery({
       // A reader is offered no recovery point: restoring one would make the
       // read-only form dirty with work it cannot save.
-      scope: readOnlyForReader ? null : autosaveScope,
+      scope: readOnlyForReader || !keepsRecoveryPoints ? null : autosaveScope,
       form,
       // The language the form shows: a point recorded in another is never
       // taken for the document.
@@ -997,8 +1030,12 @@ export function EntryForm({
      * shared predicate states the rule once for both editors.
      */
     // Nor is a reader's form recorded, which cannot change the document, nor
-    // one whose language's answer is on its way, which may not yet.
-    enabled: !updatesHeld && mayRecordRecovery(isSubmitting, viewingVersion),
+    // one whose language's answer is on its way, which may not yet. Nor an
+    // entry that keeps no recovery points at all.
+    enabled:
+      keepsRecoveryPoints &&
+      !updatesHeld &&
+      mayRecordRecovery(isSubmitting, viewingVersion),
     // The pace the collection configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(collection),
     // Each point records the version its edits began from.
@@ -1137,7 +1174,7 @@ export function EntryForm({
    * header's chip, and a document view's own through the host.
    */
   const recoveryPoint: RecoveryPointState = {
-    enabled: autosaveScope !== null,
+    enabled: keepsRecoveryPoints,
     storedAt: autosave.lastSavedAt,
     // A recovery point newer than the stored document, still on offer: its
     // edits are not stored, whatever the form says.
@@ -1206,8 +1243,6 @@ export function EntryForm({
   // and the author's choices, over the edits it keeps. The comparison is of
   // the change that made the save stale, where the entry keeps history.
   const staleHistory = versionConflict?.stale.historyVersion;
-  const keepsRecoveryPoints =
-    autosaveScope !== null && autosaveEnabledFor(collection);
   lock.now.keepsEdits = keepsRecoveryPoints;
   // Load the current version, keeping the edits as a recovery point where the
   // document keeps them and offering it then; elsewhere the edits are
@@ -1248,6 +1283,8 @@ export function EntryForm({
         {...contextDocumentStatus}
         // The fields, so a field inside a repeater's row has an address.
         fields={getCollectionFields(collection)}
+        // So a field recording its own state stays quiet where this does.
+        keepsRecoveryPoints={keepsRecoveryPoints}
       >
         <DocumentFormSource form={form} contentHeld={contentHeld}>
           <EntryFormProvider
@@ -1420,6 +1457,9 @@ export function EntryForm({
                   // The fields, so a field inside a repeater's row has an
                   // address the Page Builder and other views open it by.
                   fields={getCollectionFields(collection)}
+                  // So a field recording its own state, the Page Builder's
+                  // canvas, stays quiet where the editor's recording does.
+                  keepsRecoveryPoints={keepsRecoveryPoints}
                   // Only where a takeover can happen. The embedded branch renders
                   // the whole body in a modal and hides nothing, so a panel there
                   // would offer a second copy of fields already on screen.

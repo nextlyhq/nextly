@@ -21,13 +21,18 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
-import { recordSlug, rowOf } from "../address-record/participant";
-import { notFoundSlug } from "../not-found/collection";
+import { heldRows } from "../address-record/store";
+import {
+  type LoggedRow,
+  readNotFoundLog,
+  setNotFoundIgnored,
+} from "../not-found/log";
+import { isBotProbe } from "../not-found/probes";
 import { closestPageIn, type LivePage } from "../not-found/suggest";
 import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
 
 import { redirectsSlug } from "./collection";
-import type { NotFoundView, RedirectView } from "./contract";
+import type { NotFoundView, RedirectType, RedirectView } from "./contract";
 import { importRedirects, readImportFile } from "./import";
 import { readProxyStatus } from "./proxy-seen";
 import { keptFrom, originBeside, servedOf } from "./served";
@@ -47,27 +52,62 @@ const MOST_CANDIDATES = 5000;
 
 const PAGE = 200;
 
+/** A redirect's type as a body names it: a gone address needs no To address. */
+const typeField = z
+  .enum(["permanent", "temporary", "gone"])
+  .default("permanent");
+
 const addBody = z.object({
   from: z.string().max(2048),
-  to: z.string().max(2048),
-  type: z.enum(["permanent", "temporary"]).default("permanent"),
+  to: z.string().max(2048).default(""),
+  type: typeField,
 });
 
 const editBody = z.object({
-  to: z.string().max(2048),
-  type: z.enum(["permanent", "temporary"]).default("permanent"),
+  to: z.string().max(2048).default(""),
+  type: typeField,
 });
 
-async function viewOf(redirect: StoredRedirect): Promise<RedirectView> {
+/**
+ * What a body's type and its To address, read as kept (`to`), are stored
+ * as: a gone address keeps no To, and is permanent.
+ */
+function storedAs(
+  body: { to: string; type: RedirectType },
+  to: { locale?: string; path: string } | undefined
+): { target: string; permanent: boolean; gone: boolean } {
+  return {
+    target: to === undefined ? "" : to.locale === undefined ? body.to : to.path,
+    permanent: body.type !== "temporary",
+    gone: body.type === "gone",
+  };
+}
+
+/** The type a stored redirect is shown as. */
+function typeOf(redirect: StoredRedirect): RedirectType {
+  if (redirect.gone) return "gone";
+  return redirect.permanent ? "permanent" : "temporary";
+}
+
+async function viewOf(
+  redirect: StoredRedirect,
+  reader: string | null = null
+): Promise<RedirectView> {
   return {
     id: redirect.id,
     from: await servedOf(redirect.source, redirect.locale),
-    to: await servedOf(redirect.target, redirect.locale),
-    type: redirect.permanent ? "permanent" : "temporary",
+    to: redirect.gone ? "" : await servedOf(redirect.target, redirect.locale),
+    type: typeOf(redirect),
     origin: redirect.origin,
     addedBy: redirect.addedBy,
+    // Told by the name it was recorded under, the one `nameOf` records.
+    byYou:
+      redirect.origin === "person" &&
+      reader !== null &&
+      redirect.addedBy === reader,
     addedAt: redirect.createdAt,
-    editedAt: redirect.updatedAt,
+    hits: redirect.hits,
+    lastHit: redirect.lastHit,
   };
 }
 
@@ -162,11 +202,13 @@ function wholeList<T>(items: T[]): Response {
 
 /**
  * Every redirect, newest first: the list route's answer, the page size a
- * parameter so a test can cross a page.
+ * parameter so a test can cross a page, each marked as the `reader`'s where
+ * they added it.
  */
 export async function listRedirects(
   ctx: PluginContext,
-  pageSize: number = MOST_LISTED
+  pageSize: number = MOST_LISTED,
+  reader: string | null = null
 ): Promise<Response> {
   const entries = await everyRow(
     ctx,
@@ -175,7 +217,7 @@ export async function listRedirects(
     pageSize
   );
   return wholeList(
-    await Promise.all(entries.map(entry => viewOf(redirectOf(entry))))
+    await Promise.all(entries.map(entry => viewOf(redirectOf(entry), reader)))
   );
 }
 
@@ -186,18 +228,18 @@ async function addRedirect(
   const body = addBody.parse(await bodyOf(req));
   const origin = new URL(req.url).origin;
   const from = await keptFrom(ctx, body.from, origin);
+  const gone = body.type === "gone";
   // A To path is read on the From address's domain, so `/neu` beside
-  // `https://example.de/alt` is German whichever domain the admin is on.
-  const to = await keptFrom(
-    ctx,
-    body.to,
-    originBeside(body.from.trim(), origin)
-  );
+  // `https://example.de/alt` is German whichever domain the admin is on. A
+  // gone address has none.
+  const to = gone
+    ? undefined
+    : await keptFrom(ctx, body.to, originBeside(body.from.trim(), origin));
   const locale = from.locale ?? "";
   // A From address that is no path at all is refused for itself below.
   if (
     from.locale !== undefined &&
-    to.locale !== undefined &&
+    to?.locale !== undefined &&
     to.locale !== locale
   ) {
     throw NextlyError.invalidInput({
@@ -210,19 +252,17 @@ async function addRedirect(
     putRedirect(ctx, tx, {
       locale,
       source: from.path,
-      target: to.locale === undefined ? body.to : to.path,
-      permanent: body.type === "permanent",
+      ...storedAs(body, to),
       origin: "person",
       addedBy: nameOf(ctx),
     })
   );
   if ("refused" in outcome) throw refusal(outcome);
-  const view = await viewOf(outcome.saved);
-  return respondMutation(
-    `Added. It works from the next visit.${chainNote(body.to.trim(), outcome, view.to)}`,
-    view,
-    { status: 201 }
-  );
+  const view = await viewOf(outcome.saved, nameOf(ctx));
+  const said = gone
+    ? `Added. ${view.from} answers 410 Gone from the next visit.`
+    : `Added. It works from the next visit.${chainNote(body.to.trim(), outcome, view.to)}`;
+  return respondMutation(said, view, { status: 201 });
 }
 
 async function editRedirect(
@@ -234,16 +274,20 @@ async function editRedirect(
   const found = await ctx.services.ownCollections
     .findEntryById(redirectsSlug(ctx), id)
     .then(redirectOf);
-  // Read on the domain the redirect's From address is served on.
-  const to = await keptFrom(
-    ctx,
-    body.to,
-    originBeside(
-      await servedOf(found.source, found.locale),
-      new URL(req.url).origin
-    )
-  );
-  if (to.locale !== undefined && to.locale !== found.locale) {
+  const gone = body.type === "gone";
+  // Read on the domain the redirect's From address is served on. A gone
+  // address has no To address to read.
+  const to = gone
+    ? undefined
+    : await keptFrom(
+        ctx,
+        body.to,
+        originBeside(
+          await servedOf(found.source, found.locale),
+          new URL(req.url).origin
+        )
+      );
+  if (to?.locale !== undefined && to.locale !== found.locale) {
     throw NextlyError.invalidInput({
       message:
         "Send it to an address in the same language as the From address.",
@@ -257,18 +301,19 @@ async function editRedirect(
       {
         locale: found.locale,
         source: found.source,
-        target: to.locale === undefined ? body.to : to.path,
-        permanent: body.type === "permanent",
+        ...storedAs(body, to),
         origin: found.origin,
       },
       id
     )
   );
   if ("refused" in outcome) throw refusal(outcome);
-  const view = await viewOf(outcome.saved);
+  const saved = await viewOf(outcome.saved, nameOf(ctx));
   return respondMutation(
-    `Saved. ${view.from} now goes to ${view.to}, ${view.type}.${chainNote(body.to.trim(), outcome, view.to)}`,
-    view
+    gone
+      ? `Saved. ${saved.from} now answers 410 Gone.`
+      : `Saved. ${saved.from} now goes to ${saved.to}, ${saved.type}.${chainNote(body.to.trim(), outcome, saved.to)}`,
+    saved
   );
 }
 
@@ -284,18 +329,9 @@ async function deleteRedirect(ctx: PluginRouteContext): Promise<Response> {
 async function livePages(ctx: PluginContext): Promise<LivePage[]> {
   const redirects = redirectsSlug(ctx);
   const live: LivePage[] = [];
-  for (let page = 1; live.length < MOST_CANDIDATES; page++) {
-    const { data } = await ctx.services.ownCollections.listEntries(
-      recordSlug(ctx),
-      {
-        where: { kind: { equals: "address" } },
-        pagination: { limit: PAGE, page },
-        sort: { field: "claimKey", direction: "asc" },
-        depth: 0,
-      }
-    );
-    for (const entry of data as unknown[]) {
-      const row = rowOf(entry);
+  for (let offset = 0; live.length < MOST_CANDIDATES; offset += PAGE) {
+    const rows = await heldRows(ctx, ["address"], { limit: PAGE, offset });
+    for (const row of rows) {
       if (row.address === null || row.holder?.collection === redirects)
         continue;
       live.push({
@@ -303,40 +339,33 @@ async function livePages(ctx: PluginContext): Promise<LivePage[]> {
         path: await servedOf(row.address.path, row.address.locale),
       });
     }
-    if ((data as unknown[]).length < PAGE) break;
+    if (rows.length < PAGE) break;
   }
   return live;
 }
 
-/** A stored time as ISO text, whichever way the dialect hands it back. */
-function isoOf(seen: unknown): string {
-  if (seen instanceof Date) return seen.toISOString();
-  return typeof seen === "string" ? seen : "";
-}
-
 /** One logged address as the Not found tab shows it, with its suggestion. */
 async function notFoundViewOf(
-  row: Record<string, unknown>,
+  row: LoggedRow,
   live: readonly LivePage[]
 ): Promise<NotFoundView> {
-  const kept = typeof row.path === "string" ? row.path : "";
-  const locale = typeof row.locale === "string" ? row.locale : "";
   // Suggested for in the spelling live pages are listed in, and shown as the
   // visitor asked for it, where that is known.
-  const served = await servedOf(kept, locale);
-  const asked = typeof row.asked === "string" ? row.asked : "";
-  const path = asked === "" ? served : asked;
+  const served = await servedOf(row.path, row.locale);
+  const path = row.asked === null || row.asked === "" ? served : row.asked;
   return {
-    id: String(row.id),
+    id: row.id,
     path,
     // A full address where its language has a domain of its own.
     from: served.startsWith("/") ? path : served,
-    hits: Number(row.hits ?? 0),
-    lastSeen: isoOf(row.lastSeen),
-    kind: row.kind === "moved" ? "moved" : "missing",
+    hits: row.hits,
+    lastSeen: row.lastSeen,
+    kind: row.kind,
     // A page in the address's own language, the only one a redirect from it
     // may go to.
-    suggestion: closestPageIn(served, locale, live),
+    suggestion: closestPageIn(served, row.locale, live),
+    cameFrom: row.cameFrom,
+    ignored: row.ignored,
   };
 }
 
@@ -349,15 +378,12 @@ export async function listNotFound(
   ctx: PluginContext,
   pageSize: number = MOST_LISTED
 ): Promise<Response> {
-  const rows = await everyRow(
-    ctx,
-    notFoundSlug(ctx),
-    { field: "hits", direction: "desc" },
-    pageSize
-  );
+  const rows = await readNotFoundLog(ctx, pageSize);
   const live = await livePages(ctx);
   const items: NotFoundView[] = [];
-  for (const row of rows as Record<string, unknown>[]) {
+  for (const row of rows) {
+    // A bot's probe logged before probes were left out is left out here too.
+    if (isBotProbe(row.path)) continue;
     items.push(await notFoundViewOf(row, live));
   }
   // Most visited first, and of those visited as often, the most recent.
@@ -365,6 +391,29 @@ export async function listNotFound(
     (a, b) => b.hits - a.hits || Date.parse(b.lastSeen) - Date.parse(a.lastSeen)
   );
   return wholeList(items);
+}
+
+const ignoreBody = z.object({ ignored: z.boolean() });
+
+/** Ignore an address not found, or list it again. */
+async function ignoreNotFound(
+  req: Request,
+  ctx: PluginRouteContext
+): Promise<Response> {
+  const { ignored } = ignoreBody.parse(await bodyOf(req));
+  const row = await setNotFoundIgnored(ctx, ctx.params.id ?? "", ignored);
+  if (row === undefined) {
+    throw NextlyError.notFound({
+      logContext: { reason: "not-found-row-gone", id: ctx.params.id },
+    });
+  }
+  const view = await notFoundViewOf(row, []);
+  return respondMutation(
+    ignored
+      ? `Ignored ${view.path}. It's listed again under Show ignored.`
+      : `${view.path} is listed again.`,
+    view
+  );
 }
 
 const importBody = z.object({
@@ -412,7 +461,7 @@ export function redirectRoutes(): PluginRoute[] {
     {
       method: "GET",
       path: "/redirects",
-      handler: (_req, ctx) => listRedirects(ctx),
+      handler: (_req, ctx) => listRedirects(ctx, MOST_LISTED, nameOf(ctx)),
     },
     { method: "POST", path: "/redirects", handler: addRedirect },
     { method: "PATCH", path: "/redirects/:id", handler: editRedirect },
@@ -427,6 +476,7 @@ export function redirectRoutes(): PluginRoute[] {
       path: "/not-found",
       handler: (_req, ctx) => listNotFound(ctx),
     },
+    { method: "PATCH", path: "/not-found/:id", handler: ignoreNotFound },
     // Whether the site's Proxy runs, so the admin can say when redirects
     // are saved but not served.
     {

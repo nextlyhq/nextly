@@ -1,15 +1,16 @@
 /**
- * The routes behind "What search engines received": the pages the screen
- * offers, and the check itself, which fetches one of the site's pages as
- * Googlebot, LinkedIn, X and Slack and compares what each received with what
- * Nextly holds for that page.
+ * The route behind Inspect: the check, which fetches one of the site's pages
+ * as Google, Bing, Facebook, X, LinkedIn and an AI crawler and compares what
+ * each received with what Nextly holds for that page, its structured data
+ * included.
  *
  * The address is refused before anything is fetched unless it is one of the
  * site's own pages (`addresses`), and every fetch is held to the same rule
  * hop by hop (`fetch`). What Nextly holds is the page's head as the plugin
  * answers it, read from the published page the address record says holds
- * the address, and only for a caller who may read that page's type. Both
- * routes are for someone holding `check-seo`.
+ * the address, and only for a caller who may read that page's type. What
+ * Nextly holds is answered even where the address is not fetched, so the
+ * screen still shows it. The route is for someone holding `check-seo`.
  *
  * @module received/route
  */
@@ -30,22 +31,32 @@ import { z } from "nextly/zod";
 import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
 import { originOf } from "../origin";
-import { listPages } from "../outputs/listing";
 import { CHECK_SEO_PERMISSION } from "../permissions";
+import { isRecord, textOf } from "../plain-values";
+import { seoTabIdOf } from "../problems/contract";
 import { designLevelOf } from "../resolver/design-level";
 import type { SeoLevel, Sourced } from "../resolver/order";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
+import type { AiCrawlerChoice } from "../settings/contract";
 import { publishedWhere } from "../sitemap";
+import { STRUCTURED_DATA_TYPES } from "../structured-data/catalog";
+import {
+  structuredDataProblems,
+  type StructuredDataReaders,
+} from "../structured-data/provider";
 
 import { addressToCheck } from "./addresses";
 import { compareReceived, type StoredHead } from "./compare";
 import {
   CRAWLERS,
-  RECEIVED_PAGES_ROUTE_PATH,
   RECEIVED_ROUTE_PATH,
   type CrawlerKey,
+  type Held,
+  type HeldStructuredData,
   type ReceivedAnswer,
-  type ReceivedPagesBody,
+  type RowKey,
+  type StoredValues,
+  type ValueOrigin,
 } from "./contract";
 import { fetchAs, type FetchOptions, type Fetched } from "./fetch";
 
@@ -61,21 +72,19 @@ export interface ReceivedSetup {
   readRules: ReadRules;
   /** The page's head, as the plugin answers it to the site's routes. */
   pageMetadata: (ctx: PluginContext) => PageMetadataResolver;
+  /** What the problem list reads structured data with, for what a type is missing. */
+  structuredDataReaders?: StructuredDataReaders;
+  /** What robots.txt asks of AI crawlers until the settings choose: all allowed where unset. */
+  aiCrawlers?: AiCrawlerChoice | undefined;
   /** How pages are fetched; the network itself unless a test says else. */
   fetch?: Pick<FetchOptions, "resolve" | "transport" | "limits">;
 }
 
-/** The most pages the screen is offered to choose from. */
-const MAX_PAGES = 500;
-
-/** The most checks that may run at once, each fetching four times. */
+/** The most checks that may run at once, each fetching six times. */
 const MAX_RUNNING = 4;
 let running = 0;
 
 const CHECK_BODY = z.object({ address: z.string().min(1).max(2048) });
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** The site's production addresses, the only places a page may be fetched. */
 async function originsOf(
@@ -226,6 +235,13 @@ function storedHeadOf(answer: PageMetadataAnswer, origin: string): StoredHead {
       ? {}
       : { canonical: at(answer.canonical) }),
     listed: answer.robots?.index !== false,
+    followed: answer.robots?.follow !== false,
+    ...(answer.social?.locale === undefined
+      ? {}
+      : { locale: answer.social.locale }),
+    ...(answer.social?.siteName === undefined
+      ? {}
+      : { siteName: answer.social.siteName }),
   };
 }
 
@@ -259,18 +275,115 @@ async function sourceOf(
   return entry === undefined ? undefined : { kind: "entry", collection, entry };
 }
 
+/** Where a value came from, as the screen names it. */
+function valueOriginOf(
+  value: Sourced<unknown> | undefined
+): ValueOrigin | undefined {
+  if (value === undefined) return undefined;
+  return {
+    level: value.from,
+    ...(value.pattern === undefined ? {} : { pattern: value.pattern }),
+    ...(value.field === undefined ? {} : { field: value.field }),
+  };
+}
+
+/** What a page's head holds, as the screen shows it. */
+function storedValuesOf(
+  head: StoredHead,
+  from: Partial<Record<RowKey, ValueOrigin | undefined>>
+): StoredValues {
+  return {
+    ...(head.title === undefined ? {} : { title: head.title }),
+    ...(head.description === undefined
+      ? {}
+      : { description: head.description }),
+    ...(head.image === undefined ? {} : { image: head.image }),
+    ...(head.canonical === undefined ? {} : { canonical: head.canonical }),
+    listed: head.listed,
+    followed: head.followed !== false,
+    ...(head.locale === undefined ? {} : { locale: head.locale }),
+    ...(head.siteName === undefined ? {} : { siteName: head.siteName }),
+    from: Object.fromEntries(
+      Object.entries(from).filter(([, origin]) => origin !== undefined)
+    ),
+  };
+}
+
+/** The name a JSON-LD node goes by: its name, or an article's headline. */
+function nodeName(node: Record<string, unknown>): string | undefined {
+  return textOf(node.name) ?? textOf(node.headline);
+}
+
+/** A node's type, as JSON-LD writes one or several. */
+function nodeType(node: Record<string, unknown>): string {
+  const type = node["@type"];
+  const types = Array.isArray(type) ? type : [type];
+  return types.filter(each => typeof each === "string").join(", ");
+}
+
+/** The page's structured data, and each type left out with what it misses. */
+async function heldStructuredData(
+  ctx: PluginContext,
+  input: PageMetadataInput,
+  answer: PageMetadataAnswer,
+  readers: StructuredDataReaders | undefined
+): Promise<HeldStructuredData> {
+  const nodes = answer.structuredData ?? [];
+  const problems = await structuredDataProblems(ctx, input, readers);
+  return {
+    items: nodes.filter(isRecord).map(node => {
+      const name = nodeName(node);
+      return { type: nodeType(node), ...(name === undefined ? {} : { name }) };
+    }),
+    leftOut: problems.map(problem => ({
+      type: STRUCTURED_DATA_TYPES[problem.type].schemaType,
+      message: problem.message,
+    })),
+    json: JSON.stringify(
+      { "@context": "https://schema.org", "@graph": nodes },
+      null,
+      2
+    ),
+  };
+}
+
+/** Where the page `source` names has its SEO edited, in its language. */
+function editHrefOf(
+  source: PageMetadataInput["source"],
+  locale: string,
+  defaultLanguage: string
+): string {
+  const page =
+    source.kind === "single"
+      ? `/admin/singles/${encodeURIComponent(source.slug)}`
+      : `/admin/collections/${encodeURIComponent(source.collection)}/${encodeURIComponent(String(source.entry.id))}`;
+  const query = new URLSearchParams({
+    tab: seoTabIdOf(source.kind === "single" ? "single" : "collection"),
+  });
+  if (locale !== defaultLanguage) query.set("locale", locale);
+  return `${page}?${query.toString()}`;
+}
+
+/** The page's name, as its own title or name field gives it. */
+function nameOf(source: PageMetadataInput["source"]): string | undefined {
+  const document = source.kind === "single" ? source.document : source.entry;
+  return textOf(document.title) ?? textOf(document.name);
+}
+
 /**
  * What Nextly holds for the page at `url`: the head the plugin answers for
  * the published page the address record says holds it, where the caller may
- * read that page's type. Nothing where no such page holds it.
+ * read that page's type, with where each value comes from and the page's
+ * structured data; and the head again as the comparison reads it. Nothing
+ * where no such page holds it.
  */
-async function storedAt(
+async function heldAt(
   ctx: PluginRouteContext,
   url: URL,
   setup: ReceivedSetup
-): Promise<StoredHead | undefined> {
+): Promise<{ held: Held; head?: StoredHead }> {
   const kept = await addressOfRequest(url);
-  if (kept === undefined) return undefined;
+  if (kept === undefined) return { held: {} };
   const path =
     kept.path.length > 1 && kept.path.endsWith("/")
       ? kept.path.slice(0, -1)
@@ -291,36 +404,72 @@ async function storedAt(
     // Where each value came from, so one Nextly worked out automatically is
     // said to be one a design or the route may set instead.
     const sourced = await resolveSeo(ctx, input, setup.readRules);
-    return {
+    const head: StoredHead = {
       ...storedHeadOf(answer, url.origin),
       automatic: {
         title: isAutomatic(sourced.title),
         description: isAutomatic(sourced.description),
         image: isAutomatic(sourced.image),
+        // The card's text is its own where one was set, else the page's.
+        cardTitle: isAutomatic(sourced.socialTitle ?? sourced.title),
+        cardDescription: isAutomatic(
+          sourced.socialDescription ?? sourced.description
+        ),
+      },
+    };
+    const name = nameOf(source);
+    return {
+      head,
+      held: {
+        ...(name === undefined ? {} : { name }),
+        editHref: editHrefOf(
+          source,
+          kept.locale,
+          await ctx.publicAddresses.defaultLanguage()
+        ),
+        stored: storedValuesOf(head, {
+          title: valueOriginOf(sourced.title),
+          description: valueOriginOf(sourced.description),
+          image: valueOriginOf(sourced.image),
+          canonical: valueOriginOf(sourced.canonical),
+          robots: valueOriginOf(sourced.robots),
+        }),
+        structuredData: await heldStructuredData(
+          ctx,
+          input,
+          answer,
+          setup.structuredDataReaders
+        ),
       },
     };
   }
-  return undefined;
+  return { held: {} };
 }
 
-/**
- * The refusal every crawler met at the address itself, where they all met
- * the same one before any redirect: the address is refused as a whole.
- */
-function refusedForAll(
-  fetched: Record<CrawlerKey, Fetched>
-): string | undefined {
-  const all = Object.values(fetched);
-  const first = all[0];
-  if (first?.kind !== "failed") return undefined;
-  const refusal = ["private", "no-answer"].includes(first.reason);
-  const same = all.every(
-    each =>
-      each.kind === "failed" &&
-      each.message === first.message &&
-      each.redirects.length === 0
-  );
-  return refusal && same ? first.message : undefined;
+/** `value` as an address on one of the site's own hosts, where it is one. */
+function ownAddress(
+  value: string,
+  origins: readonly string[]
+): URL | undefined {
+  try {
+    const url = value.trim().startsWith("/")
+      ? new URL(value.trim(), origins[0])
+      : new URL(value.trim());
+    return origins.some(origin => new URL(origin).hostname === url.hostname)
+      ? url
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** What robots.txt asks of AI crawlers: the settings' choice, else the option's. */
+async function aiCrawlersOf(
+  ctx: PluginContext,
+  setup: ReceivedSetup
+): Promise<AiCrawlerChoice> {
+  const rules = await setup.readRules(ctx, undefined);
+  return rules.aiCrawlers ?? setup.aiCrawlers ?? "all";
 }
 
 /** Checks the page at `address` as each crawler. */
@@ -332,9 +481,22 @@ async function check(
   const origins = await originsOf(ctx, setup);
   const url = addressToCheck(address, origins);
   if (!(url instanceof URL)) {
-    return { kind: "refused", address, message: url.message };
+    // Not fetched, but what Nextly holds at an address on the site itself
+    // is still shown: one with a user name in it, or on another port.
+    const own = origins.length === 0 ? undefined : ownAddress(address, origins);
+    const { held } =
+      own === undefined ? { held: {} } : await heldAt(ctx, own, setup);
+    const first = origins[0];
+    return {
+      kind: "refused",
+      address: own?.href ?? address,
+      reason: url.reason,
+      message: url.message,
+      ...(first === undefined ? {} : { site: new URL(first).host }),
+      ...held,
+    };
   }
-  const stored = await storedAt(ctx, url, setup);
+  const { held, head } = await heldAt(ctx, url, setup);
   const fetched = Object.fromEntries(
     await Promise.all(
       CRAWLERS.map(async crawler => [
@@ -343,70 +505,28 @@ async function check(
       ])
     )
   ) as Record<CrawlerKey, Fetched>;
-  const refused = refusedForAll(fetched);
-  if (refused !== undefined) {
-    return { kind: "refused", address: url.href, message: refused };
-  }
   const compared = compareReceived({
     address: url.href,
-    ...(stored === undefined ? {} : { stored }),
+    ...(held.editHref === undefined ? {} : { editHref: held.editHref }),
+    ...(head === undefined ? {} : { stored: head }),
     fetched,
   });
   return {
     kind: "checked",
     address: url.href,
     fetchedAt: new Date().toISOString(),
-    ...(stored === undefined
-      ? {}
-      : {
-          stored: {
-            ...(stored.title === undefined ? {} : { title: stored.title }),
-            ...(stored.description === undefined
-              ? {}
-              : { description: stored.description }),
-            ...(stored.image === undefined ? {} : { image: stored.image }),
-            ...(stored.canonical === undefined
-              ? {}
-              : { canonical: stored.canonical }),
-            listed: stored.listed,
-          },
-        }),
+    aiCrawlers: await aiCrawlersOf(ctx, setup),
+    ...held,
     ...compared,
   };
 }
 
 /**
- * The screen's routes: the pages it offers, and the check. Both for someone
- * holding `check-seo`, since a check has the server fetch the site's pages.
+ * Inspect's route: the check, for someone holding `check-seo`, since a
+ * check has the server fetch the site's pages.
  */
 export function receivedRoutes(setup: ReceivedSetup): PluginRoute[] {
   return [
-    {
-      method: "GET",
-      path: RECEIVED_PAGES_ROUTE_PATH,
-      requiredPermission: CHECK_SEO_PERMISSION,
-      handler: async (_req, ctx) => {
-        signedIn(ctx);
-        const origins = await originsOf(ctx, setup);
-        const first = origins[0];
-        const listed =
-          first === undefined
-            ? []
-            : (
-                await listPages(ctx, {
-                  origin: first,
-                  readRules: setup.readRules,
-                  // The picker shows the first pages; the rest are not read.
-                  limit: MAX_PAGES,
-                })
-              ).pages;
-        const body: ReceivedPagesBody = {
-          origins,
-          pages: listed.slice(0, MAX_PAGES).map(page => page.loc),
-        };
-        return Response.json(body);
-      },
-    },
     {
       method: "POST",
       path: RECEIVED_ROUTE_PATH,
@@ -414,7 +534,7 @@ export function receivedRoutes(setup: ReceivedSetup): PluginRoute[] {
       handler: async (req, ctx) => {
         signedIn(ctx);
         const { address } = await checkBody(req);
-        // Each check fetches four times; a few at once is enough for a
+        // Each check fetches six times; a few at once is enough for a
         // screen a person opens, and keeps the server from being made to
         // fetch without end.
         if (running >= MAX_RUNNING) {

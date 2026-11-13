@@ -16,7 +16,9 @@ import {
 import {
   claimOrWait,
   claimSpaceOrWait,
+  committedHoldings,
   dropStaleClaims,
+  holdsExactly,
   lockHolder,
   reconcileHolder,
   type Claims,
@@ -26,7 +28,10 @@ import {
 vi.mock("./claim-store", () => ({
   claimOrWait: vi.fn(async () => "claimed"),
   claimSpaceOrWait: vi.fn(async () => "waiting"),
+  // No page holds anything as committed, unless a test says so.
+  committedHoldings: vi.fn(async () => new Map()),
   dropStaleClaims: vi.fn(async () => undefined),
+  holdsExactly: vi.fn(() => false),
   lockHolder: vi.fn(async () => undefined),
   reconcileHolder: vi.fn(async () => true),
 }));
@@ -40,6 +45,7 @@ function depsOver(
 ): BackfillDeps & {
   find: ReturnType<typeof vi.fn>;
   readPage: ReturnType<typeof vi.fn>;
+  readPages: ReturnType<typeof vi.fn>;
 } {
   const find = vi.fn(async (args: Record<string, unknown>) => {
     const where = args.where as { and?: unknown };
@@ -52,12 +58,16 @@ function depsOver(
     if (tx !== TX) throw new Error("page read off the pass's transaction");
     return now[id] ?? null;
   });
+  const readPages = vi.fn(async (ids: readonly string[]) =>
+    ids.flatMap(id => (now[id] === undefined ? [] : [now[id]]))
+  );
   return {
     pages: "pages",
     claims: {} as Claims,
     locales: ["en"],
     nextly: { find },
     readPage,
+    readPages,
     withTransaction: async work => work(TX),
     warn: () => undefined,
     find,
@@ -75,6 +85,7 @@ function reconciledPaths(): string[][] {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(holdsExactly).mockImplementation(() => false);
 });
 
 describe("backfillPageClaims", () => {
@@ -94,6 +105,27 @@ describe("backfillPageClaims", () => {
       collection: "pages",
       id: "p",
     });
+  });
+
+  it("reads a batch's pages and claims once, and leaves a page holding what it should alone, taking no lock", async () => {
+    const settled = { id: "s", slug: "settled", status: "published" };
+    const moved = { id: "m", slug: "moved", status: "published" };
+    const deps = depsOver([settled, moved], { s: settled, m: moved });
+    vi.mocked(holdsExactly).mockImplementation(
+      (_held, desired) => desired.addresses[0]?.segments.join("/") === "settled"
+    );
+    expect(await backfillPageClaims(deps)).toBe(true);
+    expect(deps.readPages).toHaveBeenCalledTimes(1);
+    expect(deps.readPages.mock.calls[0]?.[0]).toEqual(["s", "m"]);
+    expect(vi.mocked(committedHoldings)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(committedHoldings).mock.calls[0]?.slice(1)).toEqual([
+      "pages",
+      ["s", "m"],
+    ]);
+    expect(reconciledPaths()).toEqual([["/moved"]]);
+    expect(vi.mocked(lockHolder).mock.calls.map(call => call[2])).toEqual([
+      { collection: "pages", id: "m" },
+    ]);
   });
 
   it("leaves a page deleted since the walk read it alone", async () => {

@@ -834,7 +834,13 @@ describe.each(getConfiguredTestDialects())(
       expect(again.pages).toEqual([]);
       expect(
         again.body.documents.find(entry => entry.label === "Welcome")
-      ).toMatchObject({ outcome: "kept", set: [], same: ["title"] });
+        // The title it set is typed now: kept as typed, never automatic.
+      ).toMatchObject({
+        outcome: "kept",
+        set: [],
+        same: [],
+        kept: ["title", "description"],
+      });
       expect(await applyImport(again)).toEqual({ pages: 0, redirects: 0 });
       expect((await home(t)).seo).toMatchObject({
         metaTitle: "AI article writer for SEO | Rext AI",

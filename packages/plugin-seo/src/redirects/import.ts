@@ -1,6 +1,7 @@
 /**
  * Redirects from a file: a CSV of From and To addresses (and, optionally, a
- * type) read row by row, as if each were added in turn, through the same
+ * type: `temporary`, `302` or `307` for one for now, `gone` or `410` for an
+ * address gone for good, whose To cell is left empty) read row by row, as if each were added in turn, through the same
  * rules a person's redirect follows. A dry run shows what every row would do
  * and changes nothing; an import applies the whole file on one transaction,
  * so it lands in full or not at all, and never while any row is refused.
@@ -59,12 +60,19 @@ function cellsOf(line: string): string[] {
   return cells;
 }
 
-/** A type cell read: temporary where it says so, permanent otherwise. */
+/**
+ * A type cell read: temporary or gone where it says so, permanent otherwise.
+ * `410 Gone`, as some tools write it, is gone too.
+ */
 function typeOf(cell: string | undefined): RedirectType {
-  const value = (cell ?? "").toLowerCase();
-  return value === "temporary" || value === "302" || value === "307"
-    ? "temporary"
-    : "permanent";
+  const value = (cell ?? "").trim().toLowerCase();
+  if (value === "temporary" || value === "302" || value === "307") {
+    return "temporary";
+  }
+  if (value === "gone" || value === "410" || value === "410 gone") {
+    return "gone";
+  }
+  return "permanent";
 }
 
 /**
@@ -124,6 +132,10 @@ async function placeOf(
   origin: string
 ): Promise<{ locale: string; source: string; target: string } | string> {
   const from = await keptFrom(ctx, row.from, origin);
+  // A gone address sends no one anywhere, so a To cell is not read.
+  if (row.type === "gone") {
+    return { locale: from.locale ?? "", source: from.path, target: "" };
+  }
   const to = await keptFrom(ctx, row.to, originBeside(row.from.trim(), origin));
   const locale = from.locale ?? "";
   if (
@@ -149,9 +161,16 @@ async function savedRow(
 ): Promise<ImportRowView> {
   const { locale } = outcome.saved;
   if (replaced !== undefined) {
+    if (replaced.gone) {
+      return {
+        ...view,
+        kind: "replaced",
+        says: `Replaces ${view.from}, gone.`,
+      };
+    }
     // The old type is named where only the type changes, so the row says why.
     const type =
-      replaced.permanent === outcome.saved.permanent
+      replaced.permanent === outcome.saved.permanent && !outcome.saved.gone
         ? ""
         : `, ${replaced.permanent ? "permanent" : "temporary"}`;
     return {
@@ -159,6 +178,9 @@ async function savedRow(
       kind: "replaced",
       says: `Replaces ${view.from} → ${await servedOf(replaced.target, locale)}${type}.`,
     };
+  }
+  if (outcome.saved.gone) {
+    return { ...view, kind: "new", says: "New: answers 410 Gone." };
   }
   if (outcome.chain.length > 1) {
     const final = await servedOf(outcome.saved.target, locale);
@@ -191,11 +213,16 @@ async function importRow(
   const existing = parsed.ok
     ? await redirectFrom(ctx, transaction, place.locale, parsed.source)
     : undefined;
-  const permanent = row.type === "permanent";
-  if (
-    existing?.target === storedTarget(place.target) &&
-    existing.permanent === permanent
-  ) {
+  const permanent = row.type !== "temporary";
+  const gone = row.type === "gone";
+  const unchanged =
+    existing !== undefined &&
+    (gone
+      ? existing.gone
+      : !existing.gone &&
+        existing.target === storedTarget(place.target) &&
+        existing.permanent === permanent);
+  if (unchanged) {
     return { ...view, kind: "same", says: "Already there, no change." };
   }
   if (existing !== undefined && !options.mayReplace) {
@@ -207,7 +234,7 @@ async function importRow(
   const outcome = await putRedirect(
     ctx,
     transaction,
-    { ...place, permanent, origin: "import", addedBy: options.addedBy },
+    { ...place, permanent, gone, origin: "import", addedBy: options.addedBy },
     existing?.id
   );
   if ("refused" in outcome) {

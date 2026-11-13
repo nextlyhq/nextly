@@ -17,6 +17,7 @@
  * use for a DOM.
  */
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -557,22 +558,36 @@ describe("ticked rows", () => {
   });
 
   it("offer only what the person's role allows", async () => {
-    serveJob({ permissions: ["read-form-submissions", "read-forms"] });
+    serveJob({
+      permissions: [
+        "read-form-submissions",
+        "read-forms",
+        "update-form-submissions",
+      ],
+    });
     const user = userEvent.setup();
     renderList({ formId: "job" });
     await tick(user, ["Hina Rossi"]);
     const bar = await screen.findByRole("region", {
       name: "Selected submissions",
     });
-    for (const name of [
-      "Mark as read",
-      "Archive",
-      "Spam",
-      "Export",
-      "Delete",
-    ]) {
+    for (const name of ["Mark as read", "Archive", "Spam"]) {
+      expect(within(bar).getByRole("button", { name })).toBeInTheDocument();
+    }
+    for (const name of ["Export", "Delete"]) {
       expect(within(bar).queryByRole("button", { name })).toBeNull();
     }
+  });
+
+  it("cannot be ticked by someone who can act on none of them", async () => {
+    // Read access alone: a ticked row would open a bar with nothing in it,
+    // so the list offers no tick boxes at all.
+    serveJob({ permissions: ["read-form-submissions", "read-forms"] });
+    renderList({ formId: "job" });
+    const table = await screen.findByRole("table", { name: "Submissions" });
+    await within(table).findByText("Hina Rossi");
+    expect(screen.queryAllByRole("checkbox")).toEqual([]);
+    expect(screen.queryByText(/Tick rows for bulk actions/)).toBeNull();
   });
 
   it("delete only once the person confirms", async () => {
@@ -587,12 +602,276 @@ describe("ticked rows", () => {
         String(input).includes("bulk-delete")
       )
     ).toBe(false);
-    await user.click(within(dialog).getByRole("button", { name: "Keep them" }));
+    await user.click(within(dialog).getByRole("button", { name: "Keep it" }));
     expect(
       fetched.mock.calls.some(([input]) =>
         String(input).includes("bulk-delete")
       )
     ).toBe(false);
+  });
+
+  it("are kept as 'them' when more than one is ticked", async () => {
+    serveJob();
+    const user = userEvent.setup();
+    renderList({ formId: "job" });
+    await tick(user, ["Ali Shah", "Hina Rossi"]);
+    await user.click(screen.getByRole("button", { name: "Delete" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(
+      within(dialog).getByRole("button", { name: "Keep them" })
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("button", { name: "Keep it" })
+    ).toBeNull();
+  });
+});
+
+// The rows can arrive before the form does. A list that drew them at once
+// would show every form's columns (From, Form, Summary) for a moment on a
+// form's own tab, then swap them for the form's.
+describe("a form's tab while its form loads", () => {
+  it("draws no other form's columns before its own", async () => {
+    let release: () => void = () => undefined;
+    const formRead = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const fetched = serveJob();
+    const answer = fetched.getMockImplementation();
+    if (answer === undefined) throw new Error("serveJob answers nothing");
+    fetched.mockImplementation(async (input, init) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/admin/api/collections/forms/entries/job") {
+        await formRead;
+      }
+      return answer(input, init);
+    });
+    renderList({ formId: "job" });
+
+    // The rows have been answered while the form has not.
+    await waitFor(() =>
+      expect(
+        fetched.mock.calls.some(
+          ([input]) =>
+            new URL(String(input), "http://localhost").pathname ===
+            "/admin/api/collections/form-submissions/entries"
+        )
+      ).toBe(true)
+    );
+    await new Promise(resolve => setTimeout(resolve, 50));
+    for (const name of ["From", "Form", "Summary"]) {
+      expect(screen.queryByRole("columnheader", { name })).toBeNull();
+    }
+    expect(screen.queryByText("Hina Rossi")).toBeNull();
+
+    release();
+    expect(
+      await screen.findByRole("columnheader", { name: "Full name" })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "From" })).toBeNull();
+  });
+});
+
+/** The box width `layOut` lays the list out in; a test may change it. */
+let laidOut = 0;
+/** Text whose row widens the table by 400 pixels, as a long answer does. */
+let wideWith: string | undefined;
+
+/**
+ * Lays out every table at `perColumn` pixels a header cell, in a box `box`
+ * pixels wide. jsdom lays nothing out, so the scroll box's widths stand in
+ * for what a browser would measure: its content is as wide as its columns.
+ */
+function layOut(box: number, perColumn = 110): () => void {
+  laidOut = box;
+  wideWith = undefined;
+  const proto = HTMLElement.prototype;
+  const saved = {
+    clientWidth: Object.getOwnPropertyDescriptor(proto, "clientWidth"),
+    scrollWidth: Object.getOwnPropertyDescriptor(proto, "scrollWidth"),
+  };
+  const table = (element: HTMLElement) =>
+    Array.from(element.children).find(child => child.tagName === "TABLE");
+  Object.defineProperty(proto, "clientWidth", {
+    configurable: true,
+    // Every box is as wide as the list's, so a resize is seen by its box too.
+    get() {
+      return laidOut;
+    },
+  });
+  Object.defineProperty(proto, "scrollWidth", {
+    configurable: true,
+    get(this: HTMLElement) {
+      const inner = table(this);
+      if (!inner) return 0;
+      const columns = inner.querySelectorAll("thead th").length;
+      const wide =
+        wideWith !== undefined &&
+        (inner.querySelector("tbody")?.textContent ?? "").includes(wideWith);
+      return Math.max(laidOut, columns * perColumn + (wide ? 400 : 0));
+    },
+  });
+  return () => {
+    for (const [name, descriptor] of Object.entries(saved)) {
+      if (descriptor) Object.defineProperty(proto, name, descriptor);
+      else Reflect.deleteProperty(proto, name);
+    }
+  };
+}
+
+describe("a list in a narrow box", () => {
+  let restore: () => void = () => undefined;
+  afterEach(() => restore());
+
+  const headers = () =>
+    within(screen.getByRole("table", { name: "Submissions" }))
+      .getAllByRole("columnheader")
+      .map(header => header.textContent ?? "")
+      .filter(Boolean);
+
+  it("keeps every form's columns when they fit", async () => {
+    // The control for the cases below: a wide box leaves nothing out.
+    restore = layOut(2000);
+    serveJob();
+    renderList();
+    await screen.findAllByText("Hina Rossi");
+    expect(headers()).toEqual([
+      "From",
+      "Form",
+      "Summary",
+      "Status",
+      "Submitted",
+    ]);
+  });
+
+  it("measures again when its box narrows, as when a side panel opens", async () => {
+    // Loaded wide, every column fits; the box then narrows to 600, and the
+    // browser says so. A list that measured only on growth would keep them.
+    const resized: Array<() => void> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(notify: () => void) {
+          resized.push(notify);
+        }
+        observe(): void {}
+        disconnect(): void {}
+      }
+    );
+    restore = layOut(2000);
+    serveJob();
+    renderList();
+    await screen.findAllByText("Hina Rossi");
+    await waitFor(() =>
+      expect(headers()).toEqual([
+        "From",
+        "Form",
+        "Summary",
+        "Status",
+        "Submitted",
+      ])
+    );
+
+    laidOut = 600;
+    act(() => {
+      for (const notify of resized) notify();
+    });
+    await waitFor(() =>
+      expect(headers()).toEqual(["From", "Status", "Submitted"])
+    );
+  });
+
+  it("tries every column again when the rows change", async () => {
+    // Ali Shah's row is wide: with it, the seven columns (770) and its 400
+    // need the Summary and the Form column out to fit 1000. The New filter
+    // leaves Ali out, and every column fits again.
+    restore = layOut(1000);
+    wideWith = "Ali Shah";
+    // This server answers the status filter, so the New filter's rows differ.
+    const fetched = serveJob();
+    const answer = fetched.getMockImplementation();
+    if (answer === undefined) throw new Error("serveJob answers nothing");
+    fetched.mockImplementation(async (input, init) => {
+      const url = new URL(String(input), "http://localhost");
+      const where = JSON.parse(url.searchParams.get("where") ?? "{}") as {
+        status?: { equals?: string };
+      };
+      const status = where.status?.equals;
+      if (
+        url.pathname === "/admin/api/collections/form-submissions/entries" &&
+        status !== undefined
+      ) {
+        return entriesPage(
+          APPLICATIONS.filter(row => row.status === status),
+          url
+        );
+      }
+      return answer(input, init);
+    });
+    const user = userEvent.setup();
+    renderList();
+    await screen.findAllByText("Ali Shah");
+    await waitFor(() =>
+      expect(headers()).toEqual(["From", "Status", "Submitted"])
+    );
+
+    await user.click(
+      within(screen.getByRole("group", { name: "Status" })).getByRole(
+        "button",
+        { name: /^New/ }
+      )
+    );
+    await waitFor(() => expect(screen.queryAllByText("Ali Shah")).toEqual([]));
+    await waitFor(() =>
+      expect(headers()).toEqual([
+        "From",
+        "Form",
+        "Summary",
+        "Status",
+        "Submitted",
+      ])
+    );
+  });
+
+  it("gives up the Summary, then the Form column, naming the form under the sender", async () => {
+    // Seven header cells (the tick box and the row menu among them) at 110
+    // pixels are 770, in a box of 600: out go the Summary (660), then the
+    // Form column (550), which fits.
+    restore = layOut(600);
+    serveJob();
+    renderList();
+    await screen.findAllByText("Hina Rossi");
+    await waitFor(() =>
+      expect(headers()).toEqual(["From", "Status", "Submitted"])
+    );
+    expect(
+      screen.getAllByText("Job application · hina@example.com").length
+    ).toBeGreaterThan(0);
+  });
+
+  it("shows fewer of a form's fields, the first always, until the person picks columns", async () => {
+    // Eight header cells at 110 are 880 in 600: the fields after the first
+    // go, last first, until the table fits at five (550).
+    restore = layOut(600);
+    serveJob();
+    const user = userEvent.setup();
+    renderList({ formId: "job" });
+    await screen.findAllByText("Hina Rossi");
+    await waitFor(() =>
+      expect(headers()).toEqual(["Full name", "Status", "Submitted"])
+    );
+
+    // Columns says what is shown, and a field ticked there is drawn even
+    // though the table then scrolls: the person asked for it.
+    await user.click(screen.getByRole("button", { name: "Columns" }));
+    expect(
+      screen.getByRole("menuitemcheckbox", { name: "Role" })
+    ).not.toBeChecked();
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Role" }));
+    // A ticked item keeps the menu open, hiding the page from the reader.
+    await user.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(headers()).toEqual(["Full name", "Role", "Status", "Submitted"])
+    );
   });
 });
 

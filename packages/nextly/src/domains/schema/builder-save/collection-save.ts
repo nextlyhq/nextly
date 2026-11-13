@@ -1315,7 +1315,11 @@ function renamesOf(
   );
   return candidates.map(candidate => ({
     candidate,
-    accepted: pairs.has(`${candidate.fromColumn}\u0000${candidate.toColumn}`),
+    // A renamed field group's rows are moved by the save's own statements (`writerRelations`,
+    // from the detector the push runs too), so the generator is told not to move them again.
+    accepted:
+      candidate.fieldGroupTables === undefined &&
+      pairs.has(`${candidate.fromColumn}\u0000${candidate.toColumn}`),
   }));
 }
 
