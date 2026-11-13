@@ -173,6 +173,7 @@ import type {
   SingleSlug,
   UpdateArgs,
   RewriteFieldArgs,
+  RewriteSingleFieldArgs,
   PublishArgs,
   PublishResult,
   UpdateSingleArgs,
@@ -614,12 +615,12 @@ export class Nextly implements NextlyContext {
   }
 
   /**
-   * @experimental Rewrite one field of an entry on its live copy and on every
-   * pending draft that holds it, without publishing, from the version the
-   * caller read. See `RewriteFieldArgs`.
+   * @experimental Rewrite one field of an entry or a Single on its live copy
+   * and on every pending draft that holds it, without publishing, from the
+   * version the caller read. See `RewriteFieldArgs`.
    */
   rewriteField(
-    args: RewriteFieldArgs
+    args: RewriteFieldArgs | RewriteSingleFieldArgs
   ): Promise<MutationResult<FieldRewriteResult>> {
     return runAsCaller(this.defaultConfig, args, callArgs =>
       collectionsNs.rewriteField(this, callArgs)
@@ -1031,8 +1032,8 @@ export const nextly = {
     (await requireNextlyOnceStarted()).create(args),
   update: async <TSlug extends CollectionSlug>(args: UpdateArgs<TSlug>) =>
     (await requireNextlyOnceStarted()).update(args),
-  /** Rewrite one field on an entry's live copy and drafts. @experimental */
-  rewriteField: async (args: RewriteFieldArgs) =>
+  /** Rewrite one field on an entry's or a Single's live copy and drafts. @experimental */
+  rewriteField: async (args: RewriteFieldArgs | RewriteSingleFieldArgs) =>
     (await requireNextlyOnceStarted()).rewriteField(args),
   /** Publish the chosen parts of one entry. @experimental */
   publish: async (args: PublishArgs) =>

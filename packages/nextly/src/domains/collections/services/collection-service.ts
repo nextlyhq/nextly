@@ -74,6 +74,8 @@ import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   parseFieldRewrite,
+  rewriteCallerOf,
+  rewritesSingle,
   type FieldRewriteResult,
 } from "../../versions/field-rewrite";
 import type { WhereFilter } from "../query/query-operators";
@@ -1084,36 +1086,29 @@ export class CollectionService extends BaseService {
    * pending draft that holds it, in one transaction, without publishing, from
    * the version the caller read. See `domains/versions/field-rewrite`.
    *
-   * @param input - The rewrite, parsed here (`FieldRewriteRequest`)
+   * @param input - The rewrite of an entry, parsed here (`FieldRewriteRequest`)
    * @param context - Who it is made as
    * @param plugin - The plugin making it, by the name it booted under, for
    *   history. Passed only by a plugin's own services, from its identity.
    * @throws NextlyError if it is refused
    */
-  // Reached only through a plugin's services, by name (`PLUGIN_COLLECTION_METHODS`),
-  // which the dead-code gate cannot trace.
-  // fallow-ignore-next-line unused-class-member
   async rewriteField(
     input: unknown,
     context: RequestContext,
     plugin?: string
   ): Promise<FieldRewriteResult> {
     const request = parseFieldRewrite(input);
-    // The language is the request's own: a context naming another one would
-    // leave two answers to which language is rewritten.
-    if (context.locale !== undefined) {
+    // A Single's rewrite reaches the Single's own write path, which a
+    // plugin's services route it to before this one.
+    if (rewritesSingle(request)) {
       throw NextlyError.invalidInput({
         message:
-          "A field rewrite names its language as the request's `locale`, not in the call's options.",
+          "A collection entry's rewrite names `collection` and `id`; this service rewrites no Single.",
       });
     }
     const result = await this.entryService.rewriteField({
       request,
-      user: context.user,
-      overrideAccess: context.overrideAccess,
-      authenticatedScope: context.authenticatedScope,
-      ...(context.actor === undefined ? {} : { actor: context.actor }),
-      ...(plugin === undefined ? {} : { plugin }),
+      ...rewriteCallerOf(context, plugin),
     });
     if (!result.success) {
       throw this.mapLegacyErrorToNextlyError(result, {

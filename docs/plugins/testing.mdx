@@ -20,8 +20,8 @@ const t = await createTestNextly({
 
 // drive the instance:
 await t.nextly /* CRUD facade */;
-t.hooks;   // assert hook registration/execution
-t.events;  // assert emissions (call settle() to flush best-effort events)
+t.hooks; // assert hook registration/execution
+t.events; // assert emissions (call settle() to flush best-effort events)
 t.adapter; // raw DB inspection
 
 await t.destroy(); // runs your plugin's destroy() + resets singletons
@@ -31,7 +31,8 @@ Always `await t.destroy()` in teardown — it exercises your `destroy()` (catchi
 leaked subscriptions) and resets the global registries so tests don't bleed into each
 other.
 
-Files the instance generates, such as the migration a Builder save writes, go into a
+Files the instance generates, such as the migration a Builder save writes, a file
+uploaded to local disk (with its `.gitignore` entry) and the migration log, go into a
 temporary folder of its own (`t.basePath`), which `destroy()` removes, so a test run
 leaves nothing in your package. Pass `basePath` to choose the folder instead; the
 instance then writes there and leaves it in place.

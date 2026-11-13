@@ -18,7 +18,11 @@
  *   moves the row into or out of published, asked of core's own gates
  *   (`mayWriteEntry`), so the check asks what the write asks, no more. The conversion names the
  *   state it read the live row in, so it never moves one. A document whose
- *   gates cannot be asked counts as one they may not write.
+ *   gates cannot be asked counts as one they may not write. A collection
+ *   entry with a pending draft is converted by one field rewrite of its live
+ *   row and drafts, which also needs the right to publish it; it is asked
+ *   here as its draft's save, which is what the conversion falls back to
+ *   where that right is missing, leaving the entry for its pending draft.
  *
  * @module component-delete/judge
  */

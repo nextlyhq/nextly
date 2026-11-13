@@ -26,6 +26,10 @@ Beside those counts it reports, for each screen and never against a pin, how
 many milliseconds after the load began the startup request was sent
 (`timings`, the middle of the five loads): the admin sends it as the browser
 reads the page, so a later start is a slower screen even when no count moves.
+`timings` also carries the most statements any of the five loads sent
+(`mostStatements`). The pins hold the fewest, which a burst in one load does
+not move, so the most is what shows one: requests arriving together each
+reading what one read would have answered.
 
 On PostgreSQL it also starts the server with every round trip held 100 ms, and
 with 45 more collections, and pins how many statements each adds to the start
