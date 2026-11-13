@@ -30,6 +30,7 @@ const DEMONSTRATED_RULES = [
   "no-palette-classes",
   "no-hardcoded-colors",
   "no-static-inline-style",
+  "no-experimental-sdk",
 ];
 
 // Asserted on its own: zero cases is the same output as a conforming template,
