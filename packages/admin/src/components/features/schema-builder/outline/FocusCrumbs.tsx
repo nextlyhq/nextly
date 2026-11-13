@@ -17,7 +17,7 @@ const CRUMB_PREFIX = "focus-crumb:";
 const TOP_LEVEL = "top";
 
 /** The drop id of a crumb: a container's, or the top level's for null. */
-export function crumbDropId(containerId: string | null): string {
+function crumbDropId(containerId: string | null): string {
   return `${CRUMB_PREFIX}${containerId ?? TOP_LEVEL}`;
 }
 
