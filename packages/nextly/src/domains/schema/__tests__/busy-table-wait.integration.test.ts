@@ -418,6 +418,38 @@ describe.each(DIALECTS)(
     );
 
     it.runIf(dialect === "mysql")(
+      "puts the pooled connection's own lock-wait timeouts back after a bounded migration",
+      async () => {
+        const single = await world.connect({ poolMax: 1 });
+        try {
+          // The pool's one connection carries timeouts of its own, not the server's defaults.
+          await single.executeQuery("SET SESSION lock_wait_timeout = 77");
+          await single.executeQuery(
+            "SET SESSION innodb_lock_wait_timeout = 33"
+          );
+
+          await runMigrationStatements(
+            single,
+            [`CREATE TABLE ${FIRST} (id integer)`],
+            { source: "0001_bounded.sql", transaction: true },
+            undefined,
+            { tryMs: 1_000 }
+          );
+
+          const [row] = await single.executeQuery<{
+            l: unknown;
+            i: unknown;
+          }>(
+            "SELECT @@SESSION.lock_wait_timeout AS l, @@SESSION.innodb_lock_wait_timeout AS i"
+          );
+          expect([Number(row?.l), Number(row?.i)]).toEqual([77, 33]);
+        } finally {
+          await single.disconnect();
+        }
+      }
+    );
+
+    it.runIf(dialect === "mysql")(
       "reports nothing changed where only a setting ran before the wait outside a transaction",
       async () => {
         writeFile(

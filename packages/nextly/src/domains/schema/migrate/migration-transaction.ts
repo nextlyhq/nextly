@@ -30,6 +30,8 @@ import {
   markedForSchemaLock,
 } from "../pipeline/schema-lock";
 
+import { querySqlRows } from "../pipeline/classifier/count-helpers";
+
 import { commitsOnMysql } from "./mysql-implicit-commit";
 import { requiredColumnCheckpoint } from "./required-column-guard";
 import { leadingWords } from "./split-sql";
@@ -437,18 +439,47 @@ function mysqlTryBounds(tryMs: number): string[] {
   ];
 }
 
-/** What sets MySQL's per-try bounds back to the server's own defaults. */
-const MYSQL_TRY_BOUNDS_RESET = [
-  "SET SESSION lock_wait_timeout = DEFAULT",
-  "SET SESSION innodb_lock_wait_timeout = DEFAULT",
-];
+/** MySQL's two lock-wait timeouts as the session has them now, read before a try changes them. */
+const MYSQL_WAITS_NOW =
+  "SELECT @@SESSION.lock_wait_timeout AS lock_wait, @@SESSION.innodb_lock_wait_timeout AS innodb";
+
+/**
+ * Sets MySQL's per-try bounds on a session (`mysqlTryBounds`) and returns what puts back the values
+ * the session had before, its own where it carries some (a pool's connection set up with its own
+ * timeouts), not the server's defaults; `DEFAULT` only for a value that could not be read. Putting
+ * them back is best effort: the try has already ended, and a failure here must not change how.
+ */
+async function boundMysqlTryWaits(
+  read: () => Promise<readonly Record<string, unknown>[]>,
+  execute: (statement: string) => Promise<unknown>,
+  tryMs: number
+): Promise<() => Promise<void>> {
+  const [row] = await read();
+  // A whole number of seconds read from the server, never caller input.
+  const own = (value: unknown): string => {
+    const seconds = Number(value);
+    return Number.isInteger(seconds) && seconds > 0
+      ? String(seconds)
+      : "DEFAULT";
+  };
+  const previous = [
+    `SET SESSION lock_wait_timeout = ${own(row?.lock_wait)}`,
+    `SET SESSION innodb_lock_wait_timeout = ${own(row?.innodb)}`,
+  ];
+  for (const statement of mysqlTryBounds(tryMs)) await execute(statement);
+  return async () => {
+    for (const statement of previous) {
+      await Promise.resolve(execute(statement)).catch(() => undefined);
+    }
+  };
+}
 
 /**
  * Runs `work` in a MySQL transaction with each wait for a lock, a table's metadata lock or a
  * row's, bounded half a second past the try, as a backstop for a watch that could not ask (a pool
  * with no connection to spare). A session setting outlives the transaction on its pooled
- * connection, so both are set back to the server's defaults before the transaction ends,
- * whatever its outcome. Anywhere else, `work` runs as it is.
+ * connection, so both are set back to what the connection had before the transaction ends,
+ * whatever its outcome (`boundMysqlTryWaits`). Anywhere else, `work` runs as it is.
  */
 async function withMysqlTryBackstop<T>(
   tx: MigrationTransaction,
@@ -457,14 +488,20 @@ async function withMysqlTryBackstop<T>(
   work: () => Promise<T>
 ): Promise<T> {
   if (bound === undefined || dialect !== "mysql") return work();
-  for (const statement of mysqlTryBounds(bound.tryMs))
-    await tx.execute(statement);
+  const restore = await boundMysqlTryWaits(
+    () =>
+      querySqlRows<Record<string, unknown>>(
+        tx.db,
+        "mysql",
+        sql.raw(MYSQL_WAITS_NOW)
+      ),
+    statement => tx.execute(statement),
+    bound.tryMs
+  );
   try {
     return await work();
   } finally {
-    for (const statement of MYSQL_TRY_BOUNDS_RESET) {
-      await tx.execute(statement).catch(() => undefined);
-    }
+    await restore();
   }
 }
 
@@ -558,11 +595,19 @@ export async function boundSessionTry<T>(
   work: () => Promise<T>
 ): Promise<T> {
   // Fixed text with a whole number of milliseconds or seconds, never caller input.
-  const setting =
-    dialect === "postgresql"
-      ? [`SET lock_timeout = '${String(Math.round(bound.tryMs) + 500)}ms'`]
-      : mysqlTryBounds(bound.tryMs);
-  for (const statement of setting) await session.execute(statement);
+  const restoreMysql =
+    dialect === "mysql"
+      ? await boundMysqlTryWaits(
+          () => session.execute<Record<string, unknown>>(MYSQL_WAITS_NOW),
+          statement => session.execute(statement),
+          bound.tryMs
+        )
+      : undefined;
+  if (dialect === "postgresql") {
+    await session.execute(
+      `SET lock_timeout = '${String(Math.round(bound.tryMs) + 500)}ms'`
+    );
+  }
   const query = ownSessionIdText(dialect);
   const id =
     query === undefined
@@ -572,12 +617,10 @@ export async function boundSessionTry<T>(
   try {
     return await work();
   } finally {
-    const reset =
-      dialect === "postgresql"
-        ? ["RESET lock_timeout"]
-        : MYSQL_TRY_BOUNDS_RESET;
-    for (const statement of reset) {
-      await session.execute(statement).then(
+    if (restoreMysql !== undefined) {
+      await restoreMysql();
+    } else {
+      await session.execute("RESET lock_timeout").then(
         () => undefined,
         () => undefined
       );
