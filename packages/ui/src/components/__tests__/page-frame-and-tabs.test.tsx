@@ -162,6 +162,23 @@ describe("a page header's tabs", () => {
     render(<PageHeader title="Users" />);
     expect(screen.queryByRole("navigation")).toBeNull();
   });
+
+  it("runs the cleanup a callback ref returns when the row goes away", () => {
+    // A callback ref may return its own cleanup, which React runs in place
+    // of calling the ref again with null; an observer's disconnect is one.
+    const release = vi.fn();
+    const ref = vi.fn((_node: HTMLElement | null) => release);
+    const { unmount } = render(
+      <PageTabs label="Sections" ref={ref}>
+        <PageTab href="/general" current>
+          General
+        </PageTab>
+      </PageTabs>
+    );
+    expect(ref).toHaveBeenCalledWith(screen.getByRole("navigation"));
+    unmount();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("a tab row wider than its screen", () => {
