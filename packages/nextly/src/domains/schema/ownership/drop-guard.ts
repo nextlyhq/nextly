@@ -3321,6 +3321,12 @@ function modelsStatement(
     prefix.every((word, at) => words[at] === word)
   );
   if (!begins) return false;
+  // A SQLite rebuild's guard row is inserted into a table the same list
+  // creates and drops (`sqliteTableRebuildStatements`), from a query over
+  // the schema catalogue whose `il.name` and `ix.key` are column
+  // references, not qualified tables. It writes nothing a followed table
+  // holds, so a DOWN that rebuilds a table is followed like any other.
+  if (dialect !== "postgresql" && insertsIntoRebuildGuard(tokens)) return true;
   return !tokens.some(
     (token, at) =>
       token.kind === "punct" &&
@@ -3328,6 +3334,28 @@ function modelsStatement(
       isNameToken(tokens[at - 1]) &&
       isNameToken(tokens[at + 1])
   );
+}
+
+/** The guard table a SQLite rebuild or swap creates for itself and drops. */
+const REBUILD_GUARD_NAME = /^__nextly_(?:rebuild|swap)_.+_guard$/;
+
+/**
+ * Whether a statement is `INSERT INTO <guard> ...` for a rebuild's or a
+ * swap's own guard table, named as the SQL templates name it.
+ */
+function insertsIntoRebuildGuard(tokens: readonly Token[]): boolean {
+  const [insert, into, target] = tokens;
+  return (
+    isWord(insert, "INSERT") &&
+    isWord(into, "INTO") &&
+    REBUILD_GUARD_NAME.test(plainName(target) ?? "")
+  );
+}
+
+/** A bare or quoted name's text, or undefined for any other token. */
+function plainName(token: Token | undefined): string | undefined {
+  if (token?.kind === "name") return token.name;
+  return token?.kind === "word" ? token.text : undefined;
 }
 
 /**
@@ -5115,11 +5143,18 @@ function shapeKept(
       twin.unique.has(set) ||
       set.split(",").some(column => !twin.columns.has(column))
   );
+  // Only the columns the table has can be stripped. A twin column the live
+  // table lacks is one an earlier statement of the list adds (an `ADD
+  // COLUMN` before the rebuild that puts a contributed key on it), which
+  // takes nothing from the table: the live columns the twin leaves out are
+  // judged as drops on their own, and a copy naming a column that exists
+  // nowhere fails before a row moves.
   return (
     keptUnique &&
-    [...twin.columns].every(([name, column]) =>
-      columnKept(live.columns.get(name), column)
-    )
+    [...twin.columns].every(([name, column]) => {
+      const before = live.columns.get(name);
+      return before === undefined || columnKept(before, column);
+    })
   );
 }
 

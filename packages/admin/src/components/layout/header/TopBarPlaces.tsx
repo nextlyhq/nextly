@@ -88,6 +88,28 @@ export function TopBarPlace({
   return target === null ? null : createPortal(children, target);
 }
 
+/**
+ * Marks what a page draws in a place while the page itself is still on its way
+ * (an editor's outline), on the stand-in's own root element.
+ *
+ * The bar's `end` place takes its width from what is left of the bar after the
+ * `start` part, so its box begins where the page's trail ends, and a trail that
+ * arrives with the page would move it. While a place holds only a stand-in it
+ * draws no box of its own (`STAND_IN_PLACE`), and the stand-in lays itself out
+ * in the bar directly, from the bar's right end: the place's box first appears
+ * with the page, beside the trail that came with it, and nothing on screen is
+ * pushed along.
+ */
+export const STAND_IN_ATTRIBUTE = "data-top-bar-stand-in";
+
+/**
+ * The classes a place's element takes so that, holding a stand-in, it has no
+ * box (`display: contents`). Written out in full, as Tailwind reads class names
+ * from the source text, and kept beside {@link STAND_IN_ATTRIBUTE}, which it
+ * names.
+ */
+export const STAND_IN_PLACE = "has-[>[data-top-bar-stand-in]]:contents";
+
 /** The element a place is drawn into, rendered by the bar. */
 export function TopBarPlaceTarget({
   name,

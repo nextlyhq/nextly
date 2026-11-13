@@ -4954,10 +4954,12 @@ export class CollectionRelationshipService extends BaseService {
           ) as table_exists
         `;
       } else {
+        // `current_schema()`, not `public`: the connection's `search_path` is
+        // the installation's configured schema, where the junction table is.
         checkQuery = sql`
           SELECT EXISTS (
             SELECT 1 FROM information_schema.tables
-            WHERE table_schema = 'public'
+            WHERE table_schema = current_schema()
             AND table_name = ${junctionTableName}
           ) as table_exists
         `;

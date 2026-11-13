@@ -31,7 +31,6 @@ import {
   SchemaBuilderSlots,
   type ActiveOverlay,
   type BuilderSettingsValues,
-  type EnabledHook,
 } from "@admin/components/features/schema-builder";
 import { toast } from "@admin/components/ui";
 import { useCollection, useUpdateCollection } from "@admin/hooks/queries";
@@ -45,7 +44,6 @@ import {
   mirrorSchemaFile,
   useSchemaSave,
 } from "@admin/hooks/useSchemaSave";
-import { convertHooksToStoredFormat } from "@admin/lib/builder";
 import { settingsAreDirty } from "@admin/lib/builder/settings-dirty";
 import { collectionEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import { COLLECTION_BUILDER_CONFIG } from "@admin/pages/dashboard/collections/builder/builder-config";
@@ -125,20 +123,6 @@ function collectionSettings(
   };
 }
 
-/**
- * A stored hook becomes an editor row. The id is the editor's own handle for
- * the row — the server identifies a hook by `hookId`, so this one only has to
- * be unique within the list.
- */
-function toEnabledHook(hook: Omit<EnabledHook, "id">): EnabledHook {
-  return {
-    id: `hook_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
-    hookId: hook.hookId,
-    enabled: hook.enabled,
-    config: hook.config,
-  };
-}
-
 interface CollectionBuilderEditPageProps {
   params?: { slug?: string };
 }
@@ -163,7 +147,6 @@ export default function CollectionBuilderEditPage({
   const { handleDuplicateField, handleRowDragEnd, getValidatedFields } =
     useBuilderFieldActions(builder);
 
-  const [hooks, setHooks] = useState<EnabledHook[]>([]);
   const [active, setActive] = useState<ActiveOverlay>({ kind: "none" });
   const confirmation = useSchemaChangeConfirmation();
 
@@ -187,8 +170,6 @@ export default function CollectionBuilderEditPage({
     onLoad: loaded => {
       const { singular, plural } = collectionLabels(loaded);
       builder.form.reset({ singularName: singular, pluralName: plural });
-      if (Array.isArray(loaded.hooks))
-        setHooks(loaded.hooks.map(toEnabledHook));
     },
     // `id` rather than `slug`, which is optional on a collection; the two are
     // equally stable and only one is guaranteed present.
@@ -257,11 +238,13 @@ export default function CollectionBuilderEditPage({
     [slug, settings, updateCollection, pinFields, pinSettings]
   );
 
-  // Save settings/labels/hooks (no schema changes path).
+  // Save settings and labels (no schema changes path). Stored hooks are not
+  // sent: the Builder shows them read-only, and an update without `hooks`
+  // leaves the stored list exactly as it is, where re-sending what was loaded
+  // could drop a hook this admin does not know or renumber their run order.
   const saveSettingsOnly = useCallback(
     (fieldDefinitions: FieldDefinition[]) => {
       if (!slug || !settings) return;
-      const storedHooks = convertHooksToStoredFormat(hooks);
       updateCollection(
         {
           collectionName: slug,
@@ -293,7 +276,6 @@ export default function CollectionBuilderEditPage({
             // emitted). Backend defaults take over -- code-first config can
             // still override.
             fields: fieldDefinitions,
-            hooks: storedHooks.length > 0 ? storedHooks : undefined,
           },
         },
         {
@@ -324,7 +306,7 @@ export default function CollectionBuilderEditPage({
         }
       );
     },
-    [slug, settings, hooks, updateCollection, pinFields, pinSettings]
+    [slug, settings, updateCollection, pinFields, pinSettings]
   );
 
   // i18n: preview and apply carry the same toggle, so the resolutions the user
@@ -387,6 +369,7 @@ export default function CollectionBuilderEditPage({
       onSave={handleSave}
       settings={settings}
       onSettingsChange={setSettings}
+      storedHooks={collection.hooks}
       active={active}
       onActiveChange={setActive}
       onDuplicateField={handleDuplicateField}

@@ -124,20 +124,32 @@ describe("createAdapter — a PostgreSQL schema other than public", () => {
     return { createPostgresAdapter, connect };
   }
 
-  it("is refused before an adapter is built or connected", async () => {
+  it("builds the adapter in a named schema", async () => {
+    // The schema is honoured: the adapter is built with it, which sets it as
+    // every connection's `search_path` and creates it when it is missing.
+    const { createPostgresAdapter, connect } = mockPostgres();
+    const { createAdapterFromEnv } = await import("../factory");
+
+    await createAdapterFromEnv({ schema: "cms" });
+
+    expect(createPostgresAdapter).toHaveBeenCalledWith(
+      expect.objectContaining({ schema: "cms" })
+    );
+    expect(connect).toHaveBeenCalled();
+  });
+
+  it("refuses an unusable name before an adapter is built or connected", async () => {
     // Connecting with a schema runs CREATE SCHEMA, so a refusal after connect
     // would already have changed the database it is refusing to use.
     const { createPostgresAdapter, connect } = mockPostgres();
     const { createAdapterFromEnv } = await import("../factory");
     const { NextlyError } = await import("../../errors/nextly-error");
 
-    const error = await createAdapterFromEnv({ schema: "cms" }).catch(
+    const error = await createAdapterFromEnv({ schema: "Tenant-A" }).catch(
       (caught: unknown) => caught
     );
 
-    expect(
-      NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED")
-    ).toBe(true);
+    expect(NextlyError.isCode(error, "VALIDATION_ERROR")).toBe(true);
     expect(createPostgresAdapter).not.toHaveBeenCalled();
     expect(connect).not.toHaveBeenCalled();
   });

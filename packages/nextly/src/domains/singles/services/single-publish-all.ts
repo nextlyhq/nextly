@@ -87,6 +87,10 @@ import {
   reachesLocalizedFieldGroup,
 } from "../../i18n/per-language-fields";
 import {
+  publishesPerLanguage,
+  storesPerLanguage,
+} from "../../i18n/per-language-storage";
+import {
   buildCompanionSchema,
   type CompanionSchema,
 } from "../../i18n/runtime/companion-io";
@@ -869,14 +873,18 @@ export class SinglePublishAllService extends BaseService {
     companionReady: boolean;
   }> {
     const hasMainStatus = singleMeta.status === true;
+    // Where the Single's translatable values live, as its reads and writes
+    // find them: under per-language storage a Single keeps them per language
+    // whether or not it is translated, and has a per-language status only
+    // when it publishes each language on its own.
     const companion =
-      this.localization && singleMeta.localized === true
+      this.localization && storesPerLanguage(singleMeta)
         ? buildCompanionSchema({
             slug,
             tableName: singleMeta.tableName,
             fields: singleMeta.fields as { name: string; type: string }[],
             dialect: this.adapter.dialect,
-            status: hasMainStatus,
+            status: publishesPerLanguage(singleMeta),
           })
         : null;
     // Only `ready` matters here: a companion that is not there has no

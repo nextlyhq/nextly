@@ -133,7 +133,9 @@ import type {
 } from "../domains/schema/pipeline/types";
 import type { ColumnOrigin } from "../domains/schema/services/field-column-descriptor";
 import {
+  activePostgresSchema,
   assertAdapterPostgresSchema,
+  assertInstallationInConfiguredSchema,
   resolvePostgresSchema,
   setActivePostgresSchema,
 } from "../domains/schema/services/postgres-schema";
@@ -1853,6 +1855,14 @@ async function prepareBootSchema(
   if (bootDialect === undefined) return undefined;
 
   publishBootPostgresSchema(adapter, bootDialect, transformedConfig, logger);
+  // Before first-run setup and the development push, either of which would
+  // build a second, empty installation in a schema the setting was moved to.
+  if (bootDialect === "postgresql") {
+    await assertInstallationInConfiguredSchema(
+      adapter.getDrizzle(),
+      activePostgresSchema()
+    );
+  }
 
   // Held rather than only published: first-run is reached through a dynamic
   // import, which a bundler may resolve to a second instance of the module

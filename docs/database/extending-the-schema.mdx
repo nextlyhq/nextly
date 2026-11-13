@@ -11,11 +11,11 @@ thought to create.
 
 ## Three ways in
 
-| You want | Use |
-| --- | --- |
+| You want                                                       | Use                                                             |
+| -------------------------------------------------------------- | --------------------------------------------------------------- |
 | A field on an existing entity, with REST, admin and validation | `contributes.extend` (plugins) or the collection's own `fields` |
-| A table of your own, portable across all three dialects | `db.schema.extend` with the DSL |
-| A column or type only one dialect has | `db.schema.afterDrizzle` |
+| A table of your own, portable across all three dialects        | `db.schema.extend` with the DSL                                 |
+| A column or type only one dialect has                          | `db.schema.afterDrizzle`                                        |
 
 ## A table of your own
 
@@ -218,12 +218,23 @@ keys, so a declared relation may not reuse a column's name, and each relation
 on a table needs a name of its own. Any table can declare more relations:
 
 ```ts
-const linked = defineTable("linked", {
-  id: col.id(),
-  orderId: col.shortText(),
-}, {
-  relations: [{ name: "order", kind: "one", targetTable: "app__orders", fromColumn: "orderId" }],
-});
+const linked = defineTable(
+  "linked",
+  {
+    id: col.id(),
+    orderId: col.shortText(),
+  },
+  {
+    relations: [
+      {
+        name: "order",
+        kind: "one",
+        targetTable: "app__orders",
+        fromColumn: "orderId",
+      },
+    ],
+  }
+);
 ```
 
 A `one` edge joins its `fromColumn` to the target's `toColumn` (its `id` when
@@ -275,6 +286,7 @@ FROM dc_places
 GROUP BY country, city
 HAVING COUNT(*) > 1;
 ```
+
 </Callout>
 
 Column order matters. Only `(country, city)` serves a lookup on `country`
@@ -374,23 +386,23 @@ Payload below, whose `afterSchemaInit` keeps them on your machine only.
 
 ## Coming from Payload
 
-| Payload | Nextly |
-| --- | --- |
-| `beforeSchemaInit` | `db.schema.extend`, which also runs for plugins |
-| `afterSchemaInit` | `db.schema.afterDrizzle`, refusing what migrations cannot carry (listed under the escape hatch) |
-| `extendTable` | `schema.extendTable`, with ownership rules |
-| `rawTables` | `defineTable` + `col.*`, the primary path rather than an escape |
-| Collection `indexes` | Collection `indexes`, now actually emitted |
-| `.references()` / `RawForeignKey` | `foreignKeys` on `defineTable` |
-| `check()` | `checks` on `defineTable` |
-| A plugin's `(config) => config` over other plugins' collections | `contributes.transforms` (and `contributes.extend` for added fields) |
-| `idType` (`serial`, `uuid` or `uuidv7`) | `db.idType` per collection, `uuid` or `uuidv7`; `serial` is refused (see [Generated integer keys](#generated-integer-keys)) |
-| A client-supplied `id` on create | `db.allowIdOnCreate` per collection |
-| `.where()` partial index | not supported: refused on every dialect, because MySQL has none |
-| `relations()` | `relations` on `defineTable` + `ref()` auto-edges |
-| `pgEnum` | `col.enum([...])` — stored as text (`varchar(255)` on MySQL), values enforced by a CHECK on every dialect |
-| `schemaName` | not yet — `db.postgres.schema` accepts only `"public"` |
-| `generate:db-schema` | not needed — types come from the declaration |
+| Payload                                                         | Nextly                                                                                                                      |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `beforeSchemaInit`                                              | `db.schema.extend`, which also runs for plugins                                                                             |
+| `afterSchemaInit`                                               | `db.schema.afterDrizzle`, refusing what migrations cannot carry (listed under the escape hatch)                             |
+| `extendTable`                                                   | `schema.extendTable`, with ownership rules                                                                                  |
+| `rawTables`                                                     | `defineTable` + `col.*`, the primary path rather than an escape                                                             |
+| Collection `indexes`                                            | Collection `indexes`, now actually emitted                                                                                  |
+| `.references()` / `RawForeignKey`                               | `foreignKeys` on `defineTable`                                                                                              |
+| `check()`                                                       | `checks` on `defineTable`                                                                                                   |
+| A plugin's `(config) => config` over other plugins' collections | `contributes.transforms` (and `contributes.extend` for added fields)                                                        |
+| `idType` (`serial`, `uuid` or `uuidv7`)                         | `db.idType` per collection, `uuid` or `uuidv7`; `serial` is refused (see [Generated integer keys](#generated-integer-keys)) |
+| A client-supplied `id` on create                                | `db.allowIdOnCreate` per collection                                                                                         |
+| `.where()` partial index                                        | not supported: refused on every dialect, because MySQL has none                                                             |
+| `relations()`                                                   | `relations` on `defineTable` + `ref()` auto-edges                                                                           |
+| `pgEnum`                                                        | `col.enum([...])` — stored as text (`varchar(255)` on MySQL), values enforced by a CHECK on every dialect                   |
+| `schemaName`                                                    | `db.postgres.schema` (see [The PostgreSQL schema](#the-postgresql-schema))                                                  |
+| `generate:db-schema`                                            | not needed — types come from the declaration                                                                                |
 
 Two differences worth knowing:
 
@@ -404,25 +416,38 @@ type them from the declaration, so `ctx.db` is checked without a codegen step.
 
 ## The PostgreSQL schema
 
-On PostgreSQL every managed table, index and constraint lives in `public`.
-`db.postgres.schema` is reserved for choosing another schema, but only
-`"public"` is supported today:
+On PostgreSQL an installation keeps every managed table, index and constraint
+in one schema: `public` unless `db.postgres.schema` names another. Core tables,
+collections, Singles, components, plugin tables and the migration history all
+live there, so several installations can share one database, each in a schema
+of its own.
 
 ```ts
 import { defineConfig } from "nextly";
 
 export default defineConfig({
-  // The only accepted value for now; leaving it out means the same thing.
-  db: { postgres: { schema: "public" } },
+  db: { postgres: { schema: "cms" } },
 });
 ```
 
-Any other value is refused when the server boots and by every `nextly`
-command, with an error naming the value. The schema push cannot yet create
-tables outside `public`, so an installation pointed at another schema would
-start with none of its core tables. Remove the option, or set it to
-`"public"`. A database adapter you construct yourself must not set a schema of
-its own either; one that disagrees with the config is refused at boot.
+The schema is created when the first start or `nextly migrate` connects, if
+the database user may create schemas; otherwise create it first and grant that
+user `USAGE` and `CREATE` on it. Every connection uses it as its
+`search_path`, so code that queries Nextly's tables directly reaches them
+without a schema prefix.
+
+Choose the schema before the first start and keep it. A start whose configured
+schema holds no installation, while another schema of the same database does,
+is refused with
+[`POSTGRES_SCHEMA_MOVED`](/docs/cli/errors/postgres-schema-moved), naming both:
+starting would otherwise create a second, empty installation and serve it
+instead of the existing one. To start a second, separate installation in a new
+schema on purpose, set `NEXTLY_POSTGRES_SCHEMA_NEW_INSTALL=1` for its first
+start or first `nextly migrate`.
+
+A database adapter you construct yourself must use the same schema, or none
+when the config names none; one that disagrees with the config is refused at
+boot.
 
 MySQL and SQLite have no equivalent (MySQL's schema IS its database, SQLite is
 one file). They ignore the setting and warn, so a config shared across
@@ -504,6 +529,20 @@ PostgreSQL enum type.
 entity tables, on the extendable core tables, and — for the app, or for a
 plugin naming the owner in `dependsOn` — on another owner's tables.
 
+Two more dependencies are asked of a plugin, and the app is never asked for
+either: its schema runs after every plugin's.
+
+- **A collection, Single or field group another plugin declared** takes a
+  plugin's column or index only when the plugin names that owner in
+  `dependsOn` (or `optionalDependsOn`). The app's own entities need none.
+- **An index over a column a third owner contributed** needs that contributor
+  in `dependsOn` too. The column only exists while its contributor is
+  installed, and arrives in the contributor's migrations, so the dependency is
+  what runs those first and keeps the contributor from being uninstalled from
+  under the index.
+
+Either one missing stops the app at startup, naming both plugins.
+
 A column added this way is **hidden from the entry API**: it is on the table,
 so migrations and SQLite rebuilds keep it, and it is stripped from every REST
 response, Direct API read, version snapshot and webhook payload, while a value
@@ -555,6 +594,63 @@ app's `ctx.db` otherwise cannot reach. A plugin that contributed to a
 dependency's table reads that table through the ordinary `ctx.db` methods, and
 writes its own column there through `ctx.db.contributed`: the ordinary methods
 write through the dependency's definition, which does not declare it.
+
+## Keys, checks and relations on a table you do not own
+
+`extendTable` also takes `foreignKeys`, `checks` and `relations`, in the same
+shape `defineTable` takes them, on a plugin's or the app's own table: the
+app on any plugin's table, and a plugin on the tables of a plugin it names in
+`dependsOn`. A collection's, Single's, field group's or core table takes a
+hidden column and an index, never a key, check or relation.
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+import { col, defineTable } from "@nextlyhq/plugin-sdk/schema";
+
+export default definePlugin({
+  name: "@acme/ratings",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.75",
+  dependsOn: { "@acme/shop": "^1.0.0" },
+  contributes: {
+    schema: {
+      tables: [defineTable("scales", { id: col.id() })],
+      extend: [
+        ({ schema }) =>
+          schema.extendTable("shop__products", {
+            columns: { scaleId: col.varchar(36, { nullable: true }) },
+            foreignKeys: [
+              {
+                columns: ["scaleId"],
+                references: { table: "ratings__scales", columns: ["id"] },
+                onDelete: "set null",
+              },
+            ],
+            checks: [{ name: "price_positive", sql: "price >= 0" }],
+            relations: [
+              {
+                name: "scale",
+                kind: "one",
+                targetTable: "ratings__scales",
+                fromColumn: "scale_id",
+              },
+            ],
+          }),
+      ],
+    },
+  },
+});
+```
+
+Each key and check is the contributor's element. It ships in the
+contributor's migrations, the table's owner never reads it as drift when its
+own modules run, and uninstalling the contributor without keeping its data
+removes it and leaves the owner's table and rows. A key may stand on a column
+added in the same call. A plugin's key or relation may point at its own
+tables, a core table, or the tables of a plugin it depends on, but not at an
+app table, whose schema runs after every plugin's. As with an index, a key or
+relation on a column a third plugin contributed needs that plugin in
+`dependsOn` too.
 
 ## What is not supported
 

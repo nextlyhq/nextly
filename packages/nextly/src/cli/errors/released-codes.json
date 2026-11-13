@@ -156,6 +156,7 @@
   "PLUGIN_WIDGET_SOURCE_RESERVED": "A plugin contributes a widget source in a namespace Nextly reserves.",
   "POSTGRES_SCHEMA_INVALID": "`db.postgres.schema` is not a name PostgreSQL can use for a schema.",
   "POSTGRES_SCHEMA_MISMATCH": "`db.postgres.schema` and the database adapter's schema option name different PostgreSQL schemas.",
+  "POSTGRES_SCHEMA_MOVED": "`db.postgres.schema` names a PostgreSQL schema holding no Nextly installation, while another schema of the same database holds one.",
   "POSTGRES_SCHEMA_UNSUPPORTED": "`db.postgres.schema` names a PostgreSQL schema other than `public`, which Nextly cannot create its tables in yet.",
   "PRODUCTION_ROLLBACK_UNCONFIRMED": "`nextly migrate:down` was run with `NODE_ENV=production` and without `--yes`.",
   "PROJECT_ALREADY_INITIALIZED": "The folder already has a `nextly.config.ts`, so `nextly init` did not overwrite it.",

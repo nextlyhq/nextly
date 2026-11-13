@@ -50,7 +50,6 @@ import {
   dropsPluginMigratedTable,
   pluginMigratedTableSet,
 } from "../ownership/drop-guard";
-import { activePostgresSchema } from "../services/postgres-schema";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 
 import { withoutKeysOnKeylessRenames } from "./builder-foreign-keys";
@@ -95,6 +94,7 @@ import {
   companionsHoldingBack,
   withKeptScopeFieldsIn,
 } from "./kept-scope-fields";
+import { refuseKeysRowsWouldBreak } from "./key-move-refusal";
 import { kitRouteConstraintStatements } from "./kit-route-constraints";
 import {
   desiredUniqueColumns,
@@ -110,6 +110,7 @@ import {
   operationsToJudge,
   planCompanionMoves,
 } from "./moved-to-companion";
+import { pushInActiveSchema } from "./pg-active-schema-push";
 import {
   assertLiveCounts,
   assertPreCleanupAccepted,
@@ -1042,6 +1043,16 @@ export class PushSchemaPipeline {
         live: { tables: [...liveSnapshot.tables, ...switches.tables] },
         operations: resolvedOps,
       });
+      // A key added over a column that already holds values (a relationship pointed at another
+      // collection, or one an earlier apply left without its key), while a row holds a value its
+      // new target does not have: refused before anything runs, naming the field and its rows.
+      await refuseKeysRowsWouldBreak({
+        db: args.db,
+        dialect: args.dialect,
+        desired: args.desired,
+        live: liveSnapshot,
+        operations: resolvedOps,
+      });
 
       // Phase C+D: execute pre-resolution ops, then pushSchema for the rest.
       //
@@ -1467,9 +1478,20 @@ export class PushSchemaPipeline {
           );
           // Likewise the declared checks and foreign keys, which the kit's
           // runtime tables do not carry on PostgreSQL and MySQL either.
+          // And a key this apply drops itself once its replacement is added (`afterReplacement`):
+          // the kit, reading it live and undeclared, would drop it ahead of that replacement.
           const keptConstraints = stripKitDropsOfDeclaredConstraints(
             stripped.kept,
-            desiredSnapshot
+            {
+              tables: [
+                ...desiredSnapshot.tables,
+                ...resolvedOps.flatMap(op =>
+                  op.type === "drop_foreign_key" && op.afterReplacement === true
+                    ? [{ name: op.tableName, foreignKeys: [op.foreignKey] }]
+                    : []
+                ),
+              ],
+            }
           );
           // And the live UNIQUE constraints no spec describes, which only
           // this apply's own drop_index removes (a Builder one-to-one's).
@@ -2020,15 +2042,19 @@ export class PushSchemaPipeline {
           // introspection to the desired tables prevents the kit's differ
           // from pairing out-of-scope live tables as phantom renames —
           // which on v1 throws its resolver's HintsHandler internal error.
+          // The CONFIGURED schema, not a hard-coded "public". The adapter
+          // puts every table in it through `search_path`, so a kit still
+          // introspecting `public` compared an empty namespace against a full
+          // desired set and proposed creating everything, forever; and the
+          // desired tables are placed in it for the push, or the kit reads
+          // them as `public`'s and proposes moving every one.
           pushSchema: (schema, db, tablesFilter) =>
-            kit.pushSchema(schema, db, {
-              // The CONFIGURED schema, not a hard-coded "public". The adapter
-              // puts every table in it through `search_path`, so a kit still
-              // introspecting `public` compared an empty namespace against a
-              // full desired set and proposed creating everything, forever.
-              schemas: [activePostgresSchema()],
-              tables: tablesFilter,
-            }),
+            pushInActiveSchema(schema, (active, desired) =>
+              kit.pushSchema(desired, db, {
+                schemas: [active],
+                tables: tablesFilter,
+              })
+            ),
         };
       }
       case "mysql": {

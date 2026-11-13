@@ -19,6 +19,7 @@ import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { pluginAdminSlug } from "../../../plugins/plugin-slug";
+import { renamePluginContributes } from "../../../plugins/schema/apply-contributions";
 import { CORE_TABLE_NAMES } from "../../../schemas/core-schema";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
 import {
@@ -170,6 +171,47 @@ export async function compileAndPublishExtensionSchema(
   return schema;
 }
 
+/** `<entity kind>\u0000<slug>` → the plugin whose `contributes` declared it. */
+type EntityOwners = ReadonlyMap<string, string>;
+
+/**
+ * Every entity a plugin declared, keyed by kind and slug. A slug two sources
+ * claim is refused by the config merge before this runs, so each key has one
+ * owner. Read through `renamePluginContributes`, the one rename the config
+ * merge applies, so a plugin's renamed entity is found under the slug it
+ * carries in the config, and an app entity on the slug it vacated stays the
+ * app's.
+ */
+function entityOwnersOf(plugins: readonly PluginDefinition[]): EntityOwners {
+  const owners = new Map<string, string>();
+  const record = (
+    kind: SeedEntityTable["entityKind"],
+    entities: readonly { slug: string }[] | undefined,
+    plugin: string
+  ): void => {
+    for (const entity of entities ?? []) {
+      owners.set(`${kind}\u0000${entity.slug}`, plugin);
+    }
+  };
+  for (const plugin of plugins) {
+    const contributes = renamePluginContributes(plugin);
+    record("collection", contributes.collections, plugin.name);
+    record("single", contributes.singles, plugin.name);
+    record("component", contributes.fieldGroups, plugin.name);
+  }
+  return owners;
+}
+
+/** The seed's `ownerPlugin`, present only for an entity a plugin declared. */
+function ownerPluginOf(
+  owners: EntityOwners,
+  kind: SeedEntityTable["entityKind"],
+  slug: string
+): { ownerPlugin?: string } {
+  const plugin = owners.get(`${kind}\u0000${slug}`);
+  return plugin === undefined ? {} : { ownerPlugin: plugin };
+}
+
 /** What an entity's seed columns depend on, as the config carries it. */
 interface SeedFields {
   fields?: { name: string; type: string }[];
@@ -238,6 +280,11 @@ export async function compileExtensionSchema(
   // name the table already has is refused, and so is an index over a column
   // the table does not have or cannot index. Seeded empty, both passed, and a
   // contributed `slug` silently displaced the real one.
+  // Which plugin declared each entity, so the draft can require a plugin
+  // building on another plugin's entity to depend on it. Read from the same
+  // `contributes` lists the config merge folds in, disabled plugins included
+  // as everywhere else here: turning a plugin off keeps its storage.
+  const declaredBy = entityOwnersOf(input.plugins);
   const seed = (
     entityKind: SeedEntityTable["entityKind"],
     name: string,
@@ -246,6 +293,7 @@ export async function compileExtensionSchema(
     name,
     slug: entity.slug,
     entityKind,
+    ...ownerPluginOf(declaredBy, entityKind, entity.slug),
     columns: entitySeedColumns(
       {
         entityKind,

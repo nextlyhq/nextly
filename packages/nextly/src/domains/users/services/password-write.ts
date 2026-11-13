@@ -83,7 +83,8 @@ export interface PasswordRemoval {
  * at, and every place a session is read refuses one signed before this write
  * (`auth/session/session-standing`). Deleting the refresh rows alone stops a
  * session from renewing, and leaves each access token working until it
- * expires, which for the Direct API's is thirty days.
+ * expires, which for the Direct API's is a day (thirty for one signed before
+ * that lifetime was shortened).
  *
  * Returns the number of user rows the update changed. With `unlessDeactivated`
  * the update is conditional on the account not being deactivated, and `when`

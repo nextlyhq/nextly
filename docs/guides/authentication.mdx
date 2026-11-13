@@ -123,7 +123,8 @@ sessions it already holds within ten seconds. Every access token issued to it
 before the change is refused wherever a session is read: `getSession` and
 `requireAuth`, `GET /auth/session`, a plugin's `ctx.auth.currentUser`, and the
 admin API. That includes a token from the Direct API's `nextly.login()`,
-which is otherwise valid for 30 days. The account's refresh tokens are
+which is otherwise valid for 24 hours, and one whose login the change
+landed in the middle of. The account's refresh tokens are
 deleted in the same change, so its next refresh is refused with
 `REFRESH_FAILED`. That answer clears no cookies: a missing refresh row is
 answered the same way as one another tab has just rotated, whose fresh

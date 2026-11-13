@@ -251,10 +251,15 @@ export interface PluginLifecycleDeps {
    * Records a plugin's new lifecycle state (`recordPluginLifecycle`), with the
    * access that state brings written in the same transaction: an install's
    * permissions, roles and preset grants, an uninstall's orphan marks.
+   *
+   * `recordEvent: false` writes the access and nothing else: what a repeat
+   * install of a plugin already recorded installed needs, since its state
+   * does not change and a second identical event would only repeat the first.
    */
   recordLifecycle: (
     plugin: LifecyclePlugin,
-    record: PluginLifecycleRecord
+    record: PluginLifecycleRecord,
+    options?: { recordEvent?: boolean }
   ) => Promise<void>;
   /**
    * Whether a person is at a terminal to be asked before data is deleted.
@@ -325,9 +330,14 @@ function find(plugins: LifecyclePlugin[], name: string): LifecyclePlugin {
 /**
  * Install: apply the plugin's pending migrations, then run `onInstall`.
  *
- * A second install re-runs `onInstall` alone, which is why that hook is
- * documented as idempotent — an operator repairing a half-finished install
- * should not have to reason about whether it is safe to repeat.
+ * An install of a plugin whose recorded state is already `installed` changes
+ * no state: it applies the modules its package added since, adds the
+ * permissions and roles it newly declares (with every preset role's grants
+ * and the release record, in one transaction), and records no lifecycle event
+ * and runs no `onInstall`. A deploy script that runs `plugins install --all`
+ * on every release then leaves the ledger as one install wrote it. An install
+ * that did not finish recorded nothing, so running it again still runs
+ * `onInstall`, which is why that hook is documented as idempotent.
  *
  * The whole state change runs under one migrate lock, as an uninstall does:
  * the modules, the owner rows going back to `active`, and `onInstall`. With
@@ -348,16 +358,33 @@ export async function runPluginInstallCommand(
   // person is asked about the data its modules delete before the lock too.
   await assertInstallable(plugin, deps);
   const agreed = await judgeInstallDeletions(plugin, deps, options);
-  const owned = await deps.underMigrateLock(async () => {
+  const outcome = await deps.underMigrateLock(async () => {
     await assertInstallable(plugin, deps);
     await judgeInstallDeletions(plugin, deps, options, agreed);
+    // Read under the lock, where no uninstall can change it before the
+    // writes below.
+    const repeat = await isRecordedInstalled(plugin, deps);
 
     // BEFORE the hook, because `onInstall` is documented as running against
     // the plugin's own tables: a hook that seeds a row cannot do it into a
     // table no migration has created yet. The phase reports its own
     // applied/adopted counts — this command does not restate them, because a
-    // second count is a second thing that can be wrong.
+    // second count is a second thing that can be wrong. A repeat install
+    // applies them too: a package upgraded since the first install brings
+    // its new modules this way.
     await deps.applyMigrations(plugin);
+
+    if (repeat) {
+      // No owner rows to reactivate (an installed plugin's are active) and
+      // no hook: the state is not changing. The access an upgraded package
+      // declares, and the release record, still land in one transaction.
+      await deps.recordLifecycle(
+        plugin,
+        { state: "installed" },
+        { recordEvent: false }
+      );
+      return { repeat, rows: [] as OwnerRecord[] };
+    }
 
     // The owner rows go back to `active` BEFORE the hook, not after.
     //
@@ -382,19 +409,39 @@ export async function runPluginInstallCommand(
     // dependent's install read as "installed", and an install that failed
     // before here has not set up what they rely on.
     await deps.recordLifecycle(plugin, { state: "installed" });
-    return rows;
+    return { repeat, rows };
   });
 
+  if (outcome.repeat) {
+    deps.logger.success(
+      `${plugin.name} is already installed: its pending modules and newly declared access are applied, and onInstall did not run again.`
+    );
+    return;
+  }
   // Tables, not owner rows: a plugin's element rows (a column or index on
   // another owner's table) and its tables' own element rows are rows too.
   const tables = new Set(
-    owned
+    outcome.rows
       .filter(row => (row.elementKind ?? "table") === "table")
       .map(row => row.tableName)
   );
   deps.logger.success(
     `${plugin.name} installed (${String(tables.size)} table(s) recorded).`
   );
+}
+
+/**
+ * Whether the plugin's recorded lifecycle state is `installed`, which makes
+ * an install a repeat: one that changes no state. An interrupted install
+ * recorded nothing, and an uninstall replaced the record, so either reads as
+ * not installed and runs the full install.
+ */
+async function isRecordedInstalled(
+  plugin: LifecyclePlugin,
+  deps: Pick<PluginLifecycleDeps, "readLifecycle">
+): Promise<boolean> {
+  const record = (await deps.readLifecycle()).get(plugin.name);
+  return record?.state === "installed";
 }
 
 /**
@@ -473,6 +520,20 @@ export function previewPluginInstall(
     const plugin = find(deps.plugins, name);
     await assertInstallable(plugin, withInstalled(deps, installedEarlier));
     const units = await deps.installDeletions(plugin);
+    // A repeat install changes no state (`runPluginInstallCommand`), so its
+    // plan is the modules alone, and it says why nothing else is listed.
+    if (await isRecordedInstalled(plugin, deps)) {
+      return {
+        changes: units.flatMap(unit => [
+          { action: "run", target: `plugin module ${unit.label}` },
+          ...deletionChanges(unit.deletions),
+        ]),
+        notes: [
+          ...consentNote(units.flatMap(unit => unit.deletions)),
+          `${plugin.name} is already recorded installed: a real install applies its pending modules and any permission or role it newly declares, records no new lifecycle event, and does not run onInstall again.`,
+        ],
+      };
+    }
     const rows = await createOwnerRegistry(
       new SchemaOwnersRepository(deps.db, deps.dialect)
     ).listByOwner(plugin.name);

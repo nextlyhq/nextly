@@ -282,10 +282,11 @@ export const NEXTLY_ERROR_STATUS = {
   // implicit English alone, and its translations in other languages would read as gone. 500 for the
   // same reason: the remedy is the server's configuration.
   NEXTLY_PER_LANGUAGE_STORAGE_LANGUAGES_UNDECLARED: 500,
-  // `db.postgres.schema` names a schema other than `public`, which the schema
-  // push cannot yet create tables in. 500 for the same reason as the mismatch
-  // above: a boot-time refusal of the server's own configuration.
-  NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED: 500,
+  // `db.postgres.schema` names a schema holding no installation while another
+  // schema of the database holds one: the setting moved on an existing site.
+  // 500 for the same reason as the mismatch above: a boot-time refusal of the
+  // server's own configuration.
+  NEXTLY_POSTGRES_SCHEMA_MOVED: 500,
 } as const;
 
 export type NextlyErrorCode = keyof typeof NEXTLY_ERROR_STATUS;

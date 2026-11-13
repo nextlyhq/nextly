@@ -14,7 +14,12 @@ import {
 import React from "react";
 
 import * as Icons from "@admin/components/icons";
-import { ChevronDown, Package, Loader2 } from "@admin/components/icons";
+import {
+  ChevronDown,
+  Package,
+  Loader2,
+  Settings,
+} from "@admin/components/icons";
 import {
   SidebarMenuButton,
   SidebarMenuItem,
@@ -34,6 +39,10 @@ import {
   menuDestinations,
   resolveVisibleMenuItems,
 } from "@admin/lib/plugins/menu";
+import {
+  type PluginSettingsLink,
+  pluginSettingsLinks,
+} from "@admin/lib/plugins/plugin-settings-permission";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { cn } from "@admin/lib/utils";
 import type { ApiCollection } from "@admin/types/entities";
@@ -76,6 +85,40 @@ function PluginOverviewLink({
         </Link>
       </SidebarMenuButton>
     </SidebarMenuItem>
+  );
+}
+
+/**
+ * Links straight to the settings pages this reader may open but cannot reach
+ * through the overview (`pluginSettingsLinks`): a role a plugin keeps its
+ * settings to, holding nothing else. Drawn like the overview link, from
+ * admin-meta alone, so it is there while collections load or after they fail.
+ */
+function PluginSettingsLinks({
+  links,
+  isActive,
+}: {
+  links: readonly PluginSettingsLink[];
+  isActive: (href?: string) => boolean;
+}) {
+  return (
+    <>
+      {links.map(link => {
+        const active = isActive(link.href);
+        return (
+          <SidebarMenuItem key={link.slug}>
+            <SidebarMenuButton asChild isActive={active} tooltip={link.label}>
+              <Link href={link.href}>
+                <Settings
+                  className={cn("shrink-0", !active && "text-muted-foreground")}
+                />
+                <span>{link.label}</span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        );
+      })}
+    </>
   );
 }
 
@@ -236,6 +279,12 @@ export function DynamicPluginNav({
   // opens this panel to reach their plugin's collections. Linking them to a
   // route that redirects would replace working navigation with a bounce.
   const canOpenOverview = capabilities.canManageSettings;
+  // The settings pages a role of a plugin's own can open, which the overview
+  // would otherwise be the only way to (and that role cannot open it).
+  const settingsLinks = pluginSettingsLinks(pluginMetadata, {
+    canManageSettings: capabilities.canManageSettings,
+    hasPermission,
+  });
 
   if (isLoading) {
     if (isCollapsed) return null;
@@ -247,6 +296,7 @@ export function DynamicPluginNav({
     return (
       <>
         {canOpenOverview && <PluginOverviewLink isActive={isActive} />}
+        <PluginSettingsLinks links={settingsLinks} isActive={isActive} />
         <PluginSkeleton />
       </>
     );
@@ -260,7 +310,7 @@ export function DynamicPluginNav({
   // the page during an unrelated API failure.
   //
   // Nothing to offer at all is the one case that renders nothing.
-  if (!canOpenOverview && plugins.length === 0) {
+  if (!canOpenOverview && plugins.length === 0 && settingsLinks.length === 0) {
     return null;
   }
 
@@ -272,6 +322,7 @@ export function DynamicPluginNav({
 
   const isAnyPluginActive =
     isActive("/admin/plugins") ||
+    settingsLinks.some(link => isActive(link.href)) ||
     plugins.some(p => {
       if (isActive(getPluginUrl(p.slug))) return true;
       return p.collections.some(c => isActive(getCollectionUrl(c)));
@@ -287,6 +338,7 @@ export function DynamicPluginNav({
         getPluginUrl={getPluginUrl}
         getCollectionUrl={getCollectionUrl}
         canOpenPluginPages={canOpenOverview}
+        settingsLinks={settingsLinks}
       />
     );
   }
@@ -302,6 +354,7 @@ export function DynamicPluginNav({
     <>
       {/* Installed Plugins overview link, for users who can open that page */}
       {canOpenOverview && <PluginOverviewLink isActive={isActive} />}
+      <PluginSettingsLinks links={settingsLinks} isActive={isActive} />
 
       {/* Plugin collections (only for plugins not placed elsewhere) */}
       {pluginsWithCollections.map(plugin => {
@@ -373,6 +426,7 @@ function CollapsedPluginDropdown({
   getPluginUrl,
   getCollectionUrl,
   canOpenPluginPages,
+  settingsLinks,
 }: {
   plugins: PluginEntry[];
   isActive: (href?: string) => boolean;
@@ -386,6 +440,8 @@ function CollapsedPluginDropdown({
    * reach; listing the guarded pages would make every item a redirect.
    */
   canOpenPluginPages: boolean;
+  /** Settings pages reachable only straight, listed as the expanded panel lists them. */
+  settingsLinks: readonly PluginSettingsLink[];
 }) {
   const [isOpen, setIsOpen] = React.useState(false);
   const timeoutRef = React.useRef<NodeJS.Timeout | null>(null);
@@ -451,6 +507,24 @@ function CollapsedPluginDropdown({
               </Link>
             </DropdownMenuItem>
           )}
+          {settingsLinks.map(link => {
+            const active = isActive(link.href);
+            return (
+              <DropdownMenuItem key={link.slug} asChild>
+                <Link
+                  href={link.href}
+                  data-active={active ? "true" : undefined}
+                  className={cn(
+                    "flex w-full cursor-pointer items-center gap-2 transition-none admin-dropdown-item",
+                    active && "font-bold!"
+                  )}
+                >
+                  <Settings className="h-4 w-4" />
+                  <span>{link.label}</span>
+                </Link>
+              </DropdownMenuItem>
+            );
+          })}
           {plugins.flatMap(plugin => {
             // A user who can open plugin pages navigates by plugin. One who
             // cannot navigates to the collections themselves, which are the

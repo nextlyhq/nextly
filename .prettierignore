@@ -28,6 +28,9 @@ coverage/
 # The vendored icon set, written by packages/blocks-react/scripts/update-lucide.mjs:
 # kept as the script writes it, so regenerating it is a diff of data alone.
 packages/blocks-react/src/icons/lucide-data.ts
+# The experimental SDK surfaces, written by packages/eslint-plugin/scripts/sdk-stability.mjs:
+# a test compares it with the script's output byte for byte, so it stays as written.
+packages/eslint-plugin/src/sdk-stability.json
 
 # Template files (contain {{placeholder}} markers that aren't valid syntax)
 packages/create-nextly-app/templates/

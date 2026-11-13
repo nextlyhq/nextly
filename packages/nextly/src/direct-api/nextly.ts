@@ -51,8 +51,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { passwordCredentialDeps } from "../auth/credentials/credential-deps";
 import type { CredentialDeps } from "../auth/credentials/verify-credentials";
+import { readSessionRoles } from "../auth/session/read-session-roles";
 import { container } from "../di/container";
 import { isServicesRegistered } from "../di/service-access";
+import { buildAuditLogWriter } from "../domains/audit/audit-log-writer";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import { AuthService } from "../domains/auth/services/auth-service";
 import { PermissionService } from "../domains/auth/services/permission-service";
@@ -60,6 +62,7 @@ import type { RBACAccessControlService } from "../domains/auth/services/rbac-acc
 import { RolePermissionService } from "../domains/auth/services/role-permission-service";
 import { RoleService } from "../domains/auth/services/role-service";
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
+import type { FieldRewriteResult } from "../domains/versions/field-rewrite";
 import { NextlyError } from "../errors/nextly-error";
 import { assertBootMigrationsSettled } from "../init/boot-migrations-gate";
 import { startInFlight } from "../init/start-in-flight";
@@ -88,7 +91,7 @@ import { consoleLogger } from "../shared/types";
 import { installLegacyFieldGroupsNamespaceGuard } from "./legacy-field-groups-namespace";
 import * as authNs from "./namespaces/auth";
 import * as collectionsNs from "./namespaces/collections";
-import type { NextlyContext } from "./namespaces/context";
+import type { DirectLoginDeps, NextlyContext } from "./namespaces/context";
 import { runAsCaller, withLanguagesPinned } from "./namespaces/helpers";
 import {
   createAccessNamespace,
@@ -169,6 +172,7 @@ import type {
   SingleListResult,
   SingleSlug,
   UpdateArgs,
+  RewriteFieldArgs,
   PublishArgs,
   PublishResult,
   UpdateSingleArgs,
@@ -420,6 +424,22 @@ export class Nextly implements NextlyContext {
     return this._passwordCredentialDeps;
   }
 
+  /** Cached Direct API login dependencies, read through the container. */
+  private _directLoginDeps: DirectLoginDeps | null = null;
+
+  /** @internal */
+  public get directLoginDeps(): DirectLoginDeps {
+    // Resolved per call through the container, as the auth router resolves
+    // them, so a login made before the services finish registering reads the
+    // adapter that is registered when it runs, not one captured here.
+    this._directLoginDeps ??= {
+      fetchSessionRoles: userId =>
+        readSessionRoles(container.get<DrizzleAdapter>("adapter"), userId),
+      auditLog: buildAuditLogWriter(name => container.get(name)),
+    };
+    return this._directLoginDeps;
+  }
+
   /** Cached UserAccountService — not registered in the DI container. */
   private _userAccountService: UserAccountService | null = null;
 
@@ -590,6 +610,19 @@ export class Nextly implements NextlyContext {
   ): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
     return runAsCaller(this.defaultConfig, args, callArgs =>
       collectionsNs.update(this, callArgs)
+    );
+  }
+
+  /**
+   * @experimental Rewrite one field of an entry on its live copy and on every
+   * pending draft that holds it, without publishing, from the version the
+   * caller read. See `RewriteFieldArgs`.
+   */
+  rewriteField(
+    args: RewriteFieldArgs
+  ): Promise<MutationResult<FieldRewriteResult>> {
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.rewriteField(this, callArgs)
     );
   }
 
@@ -991,6 +1024,9 @@ export const nextly = {
     (await requireNextlyOnceStarted()).create(args),
   update: async <TSlug extends CollectionSlug>(args: UpdateArgs<TSlug>) =>
     (await requireNextlyOnceStarted()).update(args),
+  /** Rewrite one field on an entry's live copy and drafts. @experimental */
+  rewriteField: async (args: RewriteFieldArgs) =>
+    (await requireNextlyOnceStarted()).rewriteField(args),
   /** Publish the chosen parts of one entry. @experimental */
   publish: async (args: PublishArgs) =>
     (await requireNextlyOnceStarted()).publish(args),

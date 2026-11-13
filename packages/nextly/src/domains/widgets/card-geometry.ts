@@ -93,26 +93,46 @@ export function cardHeightPx(h: number): number {
 }
 
 /**
- * The height a card's body has, in pixels, when the card spans `h` rows.
- *
- * The card's height less what the frame draws around the body
+ * What a card's frame draws around its body, in pixels, top to bottom together
  * ({@link CARD_FRAME_PX}): its border and padding top and bottom, the header,
  * the gap under it, and the footer's height. The footer is counted whether or
  * not it shows a link, so the rows a list draws do not change when "View all"
- * appears. The same at every dashboard width: a card keeps its `h` in every
- * band, and the gap down the grid does not widen as the gap across does.
+ * appears.
+ */
+function frameAroundBodyPx(): number {
+  const frame = CARD_FRAME_PX;
+  return (
+    2 * (frame.border + frame.padding) +
+    frame.header +
+    frame.bodyGap +
+    (frame.footerGap + frame.footerLine)
+  );
+}
+
+/**
+ * The height a card's body has, in pixels, when the card spans `h` rows.
+ *
+ * The card's height less what the frame draws around the body
+ * ({@link frameAroundBodyPx}). The same at every dashboard width: a card keeps
+ * its `h` in every band, and the gap down the grid does not widen as the gap
+ * across does.
  *
  * @internal
  */
 export function cardBodyHeightPx(h: number): number {
-  const frame = CARD_FRAME_PX;
-  return (
-    cardHeightPx(h) -
-    2 * (frame.border + frame.padding) -
-    frame.header -
-    frame.bodyGap -
-    (frame.footerGap + frame.footerLine)
-  );
+  return cardHeightPx(h) - frameAroundBodyPx();
+}
+
+/**
+ * How tall a card is, in pixels, whose body is `rows` list rows at `density`:
+ * the rows and the frame around them. What a list card's loading skeleton
+ * holds, so the height every card of the default dashboard is first drawn at,
+ * and the one the dashboard's outline draws its cards at.
+ *
+ * @internal
+ */
+export function listCardHeightPx(rows: number, density: ListDensity): number {
+  return frameAroundBodyPx() + rows * LIST_ROW_HEIGHT_PX[density];
 }
 
 /**

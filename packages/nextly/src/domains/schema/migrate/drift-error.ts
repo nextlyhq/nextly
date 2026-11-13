@@ -193,6 +193,7 @@ export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
           `          pnpm nextly migrate:create --name ${migrationNameWithoutTimestamp(args.migration)}`,
         ]
       : [
+          ...builderRecovery(args.driftItems),
           "  Recovery (pick one):",
           "    [A] Sync the DB to your config, then re-run migrate:",
           "          pnpm nextly db:sync && pnpm nextly migrate",
@@ -233,4 +234,34 @@ export function migrationDriftError(args: MigrationDriftArgs): NextlyError {
       unadoptedDatabase: args.unadoptedDatabase === true,
     },
   });
+}
+
+/** A drift item naming a field group's or a Single's table no snapshot records. */
+const UNRECORDED_BUILDER_TABLE =
+  /^table '((?:comp|single)_[^']+)' present in DB$/;
+
+/**
+ * The one step that records a field group's or a Single's table made by the
+ * Schema Builder before its saves wrote migrations: saving it once, which
+ * writes a migration describing the table as it stands. Named first, since
+ * the generic recoveries would hide the table rather than record it. Nothing
+ * when no such table is among the differences.
+ */
+function builderRecovery(items: readonly DriftItem[]): string[] {
+  const tables = items.flatMap(item => {
+    const match = UNRECORDED_BUILDER_TABLE.exec(item.detail);
+    return match?.[1] === undefined ? [] : [match[1]];
+  });
+  if (tables.length === 0) return [];
+  return [
+    `  No migration records ${tables.map(t => `'${t}'`).join(", ")}. If it is a field group or`,
+    "  a Single made in the Schema Builder before its saves wrote migrations,",
+    "  open it there and save it once: the save writes the migration that",
+    "  records its table. Then run migrate again.",
+    "  If it is translated, its values also stand in a second table that one",
+    "  save cannot record. Record both first: run `nextly migrate:create`, then",
+    "  `nextly migrate:resolve --applied <file>` for each file it writes, and",
+    "  save it again in the Builder.",
+    "",
+  ];
 }

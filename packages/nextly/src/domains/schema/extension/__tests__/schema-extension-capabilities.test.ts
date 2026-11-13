@@ -913,22 +913,30 @@ describe("client-supplied id on create", () => {
 });
 
 describe("a Postgres schema other than public", () => {
-  it("is a gap for now: any schema but public is refused, not half-honoured", async () => {
+  it("is supported: the setting resolves as given, and the push reconciles that schema", async () => {
     const {
       resolvePostgresSchema,
-      activePostgresSchema,
+      setActivePostgresSchema,
       clearActivePostgresSchema,
     } = await import("../../services/postgres-schema");
+    const { pushInActiveSchema } = await import(
+      "../../pipeline/pg-active-schema-push"
+    );
+    const { pgTable, text, getTableConfig } = await import(
+      "drizzle-orm/pg-core"
+    );
 
-    // The setting is resolved and refused: the schema push cannot yet create
-    // tables outside `public`, and an installation pointed elsewhere would
-    // boot with none of its core tables.
     try {
-      expect(() => resolvePostgresSchema("cms", "postgresql")).toThrow(
-        expect.objectContaining({ code: "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED" })
-      );
-      expect(resolvePostgresSchema("public", "postgresql")).toBe("public");
-      expect(activePostgresSchema()).toBe("public");
+      expect(resolvePostgresSchema("cms", "postgresql")).toBe("cms");
+      setActivePostgresSchema("cms");
+      const posts = pgTable("posts", { id: text("id").primaryKey() });
+      const seen: Array<{ schema: string; table: string | undefined }> = [];
+      await pushInActiveSchema({ posts }, schema => {
+        seen.push({ schema, table: getTableConfig(posts).schema });
+        return Promise.resolve({ sqlStatements: [], hints: [] });
+      });
+      // drizzle-kit is asked about `cms`, with the desired table placed there.
+      expect(seen).toEqual([{ schema: "cms", table: "cms" }]);
     } finally {
       clearActivePostgresSchema();
     }

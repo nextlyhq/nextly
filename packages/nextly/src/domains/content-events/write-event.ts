@@ -55,6 +55,15 @@ export interface WriteEventInput {
   /** Who made the write, as the write path resolved it. */
   actor: RequestActor;
   /**
+   * The plugin a write made as the system was made by, by the name it booted
+   * under: the event names the plugin rather than a nameless system. Taken
+   * from the plugin's own identity by the write path, never from a request.
+   * Ignored for any other actor, who is named as they are.
+   */
+  plugin?: string;
+  /** Why the change was made, in the caller's words, where it gave a reason. */
+  note?: string | null;
+  /**
    * The person's display name, when the write path has it. An API key is
    * named by its own name, read here; the system is named by nothing.
    */
@@ -133,7 +142,10 @@ export async function recordWriteEvent(
   input: WriteEventInput
 ): Promise<{ id: string }> {
   ensureCoreContentEventKinds();
-  const actor = contentEventActor(input.actor, await actorName(tx, input));
+  const actor =
+    input.plugin !== undefined && input.actor.type === "system"
+      ? { kind: "plugin" as const, id: input.plugin, name: input.plugin }
+      : contentEventActor(input.actor, await actorName(tx, input));
   const dialect = deps.adapter.getCapabilities().dialect;
   // Read under the shared deleted-people lock only for a plugin-defined
   // person: no other actor can have been reported deleted.
@@ -161,6 +173,7 @@ export async function recordWriteEvent(
       toState: input.toState ?? null,
       versionNo: input.versionNo ?? null,
       payload: input.payload ?? null,
+      note: input.note ?? null,
       // Passed through as given: only a feature with a definition names one.
       definitionHash: input.definitionHash ?? null,
     },

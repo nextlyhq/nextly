@@ -145,6 +145,10 @@ export const GET = withErrorHandler(
       versions: collection.versions,
       fields: collection.fields,
       slug: (collection as { slug?: string }).slug,
+      // The stored record is authoritative: no `localized` there means the
+      // collection is untranslated, so the rule is asked with an explicit
+      // answer rather than the absent one kept for older plugin callers.
+      localized: (collection as { localized?: boolean }).localized === true,
     });
 
     return respondDoc({

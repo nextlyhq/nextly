@@ -292,7 +292,8 @@ async function getExistingColumns(
 
   switch (dialect) {
     case "postgresql":
-      sql = `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1`;
+      // The installation's schema, which `search_path` makes current.
+      sql = `SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1`;
       params.push(tableName);
       break;
     case "mysql":

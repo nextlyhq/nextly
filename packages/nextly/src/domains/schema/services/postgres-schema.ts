@@ -14,6 +14,7 @@
  * @since 1.0.0
  */
 import { isValidSchemaName } from "@nextlyhq/adapter-drizzle/schema-name";
+import { sql, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 
@@ -60,31 +61,6 @@ export function validatePostgresSchema(name: string): string {
 }
 
 /**
- * Refuse any schema but `public`, until the push can create tables elsewhere.
- *
- * Everything else about the setting works — the adapter's `search_path`, the
- * publication, the CLI agreeing with the server — but drizzle-kit reads the
- * desired tables as belonging to `public`. Asked to reconcile any other
- * schema, it finds none of them wanted there, creates nothing, and proposes
- * dropping the schema itself. A first boot would then run with no core tables
- * at all, so the option is refused outright rather than half-honoured.
- *
- * The one check for every path that reads the option or builds an adapter
- * from it, so the server and each CLI command refuse identically.
- */
-export function assertSupportedPostgresSchema(name: string): string {
-  if (name === DEFAULT_POSTGRES_SCHEMA) return name;
-  throw new NextlyError({
-    code: "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED",
-    publicMessage:
-      `db.postgres.schema is "${name}", but a PostgreSQL schema other than "${DEFAULT_POSTGRES_SCHEMA}" is not supported yet: ` +
-      `Nextly can only create and migrate its tables in "${DEFAULT_POSTGRES_SCHEMA}". ` +
-      `Remove db.postgres.schema (and any schema option on the database adapter), or set it to "${DEFAULT_POSTGRES_SCHEMA}".`,
-    logContext: { reason: "postgres-schema-unsupported", name },
-  });
-}
-
-/**
  * Resolve the configured schema for this dialect, warning where it cannot apply.
  *
  * MySQL and SQLite have no equivalent — MySQL's "schema" IS its database, and
@@ -106,9 +82,120 @@ export function resolvePostgresSchema(
     );
     return DEFAULT_POSTGRES_SCHEMA;
   }
-  // PostgreSQL only: on the other dialects the value is ignored above, so
-  // refusing it there would stop an app over a setting that changes nothing.
-  return assertSupportedPostgresSchema(name);
+  // PostgreSQL honours the name: the adapter sets it as `search_path`, and the
+  // push reconciles that namespace (`pushInActiveSchema`), so every managed and
+  // extension table is created and migrated there.
+  return name;
+}
+
+/**
+ * The environment flag that lets a first start create an installation in a
+ * schema while another schema of the same database already holds one.
+ *
+ * Read only by {@link refuseMovedInstallation}. Once the new schema holds its
+ * own history the flag is no longer consulted, so it never needs removing.
+ */
+const NEW_SCHEMA_INSTALL_ENV = "NEXTLY_POSTGRES_SCHEMA_NEW_INSTALL";
+
+/** The table whose presence marks a schema as holding a Nextly installation. */
+const INSTALLATION_MARKER_TABLE = "nextly_schema_events";
+
+/**
+ * The schemas of this database that hold a Nextly installation, by the
+ * migration history (`nextly_schema_events`) each keeps.
+ *
+ * Read from the catalogue rather than through `search_path`: the question is
+ * where an installation is OTHER than the configured schema, which a query
+ * resolved through the path cannot see.
+ */
+async function schemasHoldingAnInstallation(db: {
+  execute(query: SQL): Promise<unknown>;
+}): Promise<string[]> {
+  const result = await db.execute(
+    sql`SELECT n.nspname AS schema
+          FROM pg_catalog.pg_class c
+          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+         WHERE c.relname = ${INSTALLATION_MARKER_TABLE}
+           AND c.relkind IN ('r', 'p')
+         ORDER BY n.nspname`
+  );
+  const rows = Array.isArray(result)
+    ? result
+    : ((result as { rows?: unknown[] }).rows ?? []);
+  return rows
+    .map(row => (row as { schema?: unknown }).schema)
+    .filter((schema): schema is string => typeof schema === "string");
+}
+
+/**
+ * Refuse a start whose configured schema holds no installation while another
+ * schema of the database does.
+ *
+ * The case this exists for is `db.postgres.schema` changed, or removed, on an
+ * existing site: the start would otherwise create a second, empty
+ * installation in the newly named schema and serve it, so the site looks as if
+ * its content had been deleted. A database with no installation anywhere is a
+ * first install, and one whose configured schema already holds its history is
+ * the ordinary start; both pass.
+ *
+ * A second, separate installation sharing the database is legitimate, and
+ * indistinguishable from a moved setting until its first start has run. So
+ * the refusal is lifted by {@link NEW_SCHEMA_INSTALL_ENV} for that first
+ * start, and the message says so.
+ *
+ * @param configured - The schema the configuration resolved to
+ * @param holding - {@link schemasHoldingAnInstallation}'s answer
+ * @param allowNewInstallation - Whether the flag is set
+ */
+export function refuseMovedInstallation(
+  configured: string,
+  holding: readonly string[],
+  allowNewInstallation: boolean
+): void {
+  if (holding.length === 0 || holding.includes(configured)) return;
+  if (allowNewInstallation) return;
+  const where = holding.map(name => `"${name}"`).join(", ");
+  const setting =
+    configured === DEFAULT_POSTGRES_SCHEMA
+      ? `db.postgres.schema is not set (so "${DEFAULT_POSTGRES_SCHEMA}")`
+      : `db.postgres.schema is "${configured}"`;
+  const backTo =
+    holding.length === 1 && holding[0] === DEFAULT_POSTGRES_SCHEMA
+      ? "remove db.postgres.schema"
+      : `set db.postgres.schema to ${holding.length === 1 ? where : `the one it uses (${where})`}`;
+  throw new NextlyError({
+    code: "NEXTLY_POSTGRES_SCHEMA_MOVED",
+    publicMessage:
+      `${setting}, but this database's Nextly installation is in ${where}. ` +
+      `Starting would create a second, empty installation in "${configured}" and serve it instead of the existing one. ` +
+      `To keep using the existing installation, ${backTo}. ` +
+      `To start a separate installation in "${configured}" on purpose, set ${NEW_SCHEMA_INSTALL_ENV}=1 for its first start.`,
+    logContext: {
+      reason: "postgres-schema-moved",
+      configured,
+      holding: [...holding],
+    },
+  });
+}
+
+/**
+ * Read where this database's installations are, and refuse a start that would
+ * set up a second one by accident ({@link refuseMovedInstallation}).
+ *
+ * Run once the adapter is connected and before anything creates or migrates a
+ * table: first-run setup, the development push and `nextly migrate` would
+ * otherwise build the new, empty installation this refuses.
+ */
+export async function assertInstallationInConfiguredSchema(
+  db: { execute(query: SQL): Promise<unknown> },
+  configured: string,
+  env: Record<string, string | undefined> = process.env
+): Promise<void> {
+  refuseMovedInstallation(
+    configured,
+    await schemasHoldingAnInstallation(db),
+    env[NEW_SCHEMA_INSTALL_ENV] === "1"
+  );
 }
 
 /**

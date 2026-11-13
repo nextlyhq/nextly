@@ -30,7 +30,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { BaseAdapterConfig } from "@nextlyhq/adapter-drizzle/types";
 
-import { assertSupportedPostgresSchema } from "../domains/schema/services/postgres-schema";
+import { validatePostgresSchema } from "../domains/schema/services/postgres-schema";
 import { env } from "../lib/env";
 
 import { loadDialectTables } from "./dialect-tables";
@@ -240,11 +240,12 @@ export async function createAdapter(
     throw new Error(`Unsupported database type: ${unknownType}`);
   }
   // Before the adapter exists: connecting one with a schema runs
-  // `CREATE SCHEMA`, so refusing afterwards would already have changed the
-  // database. Every adapter built from config comes through here — the
-  // server's and each CLI command's — so this is where they all refuse.
+  // `CREATE SCHEMA`, so an unusable name refused afterwards would already have
+  // changed the database. Every adapter built from config comes through here
+  // — the server's and each CLI command's — so this is where they all refuse,
+  // naming the config setting rather than the adapter option.
   if (type === "postgresql" && config?.schema) {
-    assertSupportedPostgresSchema(config.schema);
+    validatePostgresSchema(config.schema);
   }
   // The dialect's own tables load beside its adapter, so every adapter this
   // returns can have its tables read synchronously, and no other dialect's
