@@ -606,6 +606,24 @@ describe("a draft moved onto newer settings", () => {
     ]);
   });
 
+  it("keeps a new order made here where the list wasn't changed elsewhere", () => {
+    const listed = draftOf({
+      id: "s1",
+      siteName: "Acme",
+      productionAddresses: ["https://a.example", "https://b.example"],
+    });
+    // Here, the second address made the main one.
+    const draft = {
+      ...listed,
+      productionAddresses: ["https://b.example", "https://a.example"],
+    };
+    const after = { ...listed, siteName: "Acme Ltd" };
+    expect(rebasedDraft(draft, listed, after).productionAddresses).toEqual([
+      "https://b.example",
+      "https://a.example",
+    ]);
+  });
+
   it("takes the newer list as it is, in its order, where it wasn't edited here", () => {
     const listed = draftOf({
       id: "s1",

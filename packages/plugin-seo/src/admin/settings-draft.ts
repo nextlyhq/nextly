@@ -489,9 +489,10 @@ function rebasedEntries<T>(
 }
 
 /**
- * A list moved item by item, items told apart by value: the newer list, in
- * its order, with what was taken out here taken out and what was added here
- * put in at the place it holds here. Order matters (the first production
+ * A list moved item by item, items told apart by value. Changed on one side
+ * only, it is that side's list as it is. Changed on both, it is the newer
+ * list, in its order, with what was taken out here taken out and what was
+ * added here put in at the place it holds here. Order matters (the first production
  * address is the main one), so a main address changed elsewhere stays first
  * unless one was put first here.
  */
@@ -500,6 +501,9 @@ function rebasedSet<T>(
   before: readonly T[],
   after: readonly T[]
 ): T[] {
+  // Changed on one side only, the list is that side's, order and all.
+  if (same(after, before)) return [...draft];
+  if (same(draft, before)) return [...after];
   const has = (list: readonly T[], item: T) =>
     list.some(each => same(each, item));
   const next = after.filter(item => !has(before, item) || has(draft, item));
