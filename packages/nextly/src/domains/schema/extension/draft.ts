@@ -230,6 +230,16 @@ function pluginOf(owner: DraftOwner): string | undefined {
   return undefined;
 }
 
+/**
+ * A table name as a refusal shows it: the name asked for, and the existing
+ * spelling too when the two differ only in case.
+ */
+function spelledAs(asked: string, existing: string): string {
+  return asked === existing
+    ? `"${asked}"`
+    : `"${asked}" (the same table as "${existing}" once case is ignored)`;
+}
+
 function sameOwner(a: DraftOwner, b: DraftOwner): boolean {
   if (a.kind === "plugin" && b.kind === "plugin") return a.id === b.id;
   return a.kind === "app" && b.kind === "app";
@@ -362,16 +372,17 @@ export class SchemaDraftStore {
         "Only the app may adopt an existing table; a plugin's tables are created and owned by the plugin."
       );
     }
-    if (this.tables.has(def.name)) {
+    const same = this.sameNameAs(def.name);
+    if (same !== undefined && !same.adopted) {
       refuse(
         `app.db.schema.adoptTable.${def.name}`,
-        `"${def.name}" is a managed table and cannot be adopted; adoptTable is for tables Nextly does not own.`
+        `${spelledAs(def.name, same.table.name)} is a managed table and cannot be adopted; adoptTable is for tables Nextly does not own.`
       );
     }
-    if (this.adopted.has(def.name)) {
+    if (same !== undefined) {
       refuse(
         `app.db.schema.adoptTable.${def.name}`,
-        `"${def.name}" is already adopted.`
+        `${spelledAs(def.name, same.table.name)} is already adopted.`
       );
     }
     this.adopted.set(def.name, {
@@ -394,6 +405,30 @@ export class SchemaDraftStore {
 
   get(name: string): DraftTable | undefined {
     return this.tables.get(name);
+  }
+
+  /**
+   * The table, managed or adopted, whose name is `name` once case is ignored.
+   *
+   * SQLite resolves table names without regard to case, and so does MySQL
+   * wherever `lower_case_table_names` is set (the default on Windows and
+   * macOS), so `Notes` and `notes` are one table there however each
+   * declaration spells it. A declaration has to be valid on every dialect, so
+   * two names that differ only in case collide everywhere. `get` stays exact:
+   * it finds the table a caller names, and the name it carries is the one the
+   * DDL uses.
+   */
+  sameNameAs(
+    name: string
+  ): { table: DraftTable; adopted: boolean } | undefined {
+    const folded = name.toLowerCase();
+    for (const table of this.tables.values()) {
+      if (table.name.toLowerCase() === folded) return { table, adopted: false };
+    }
+    for (const table of this.adopted.values()) {
+      if (table.name.toLowerCase() === folded) return { table, adopted: true };
+    }
+    return undefined;
   }
 
   /**
@@ -1068,14 +1103,22 @@ export function createOwnerDraft(
     },
 
     addTable(def: TableDefinition): void {
-      const name = resolveOwnName(def.name);
-      const existing = store.get(name);
-      if (existing) {
+      // Judged before the app's naming rules, so an app table named like a
+      // collection's or a core table is refused naming that owner, rather
+      // than by a rule about the name's shape that leaves the operator
+      // guessing whose it is.
+      const name = owner.kind === "app" ? def.name : resolveOwnName(def.name);
+      const same = store.sameNameAs(name);
+      if (same !== undefined) {
+        const holder = same.adopted
+          ? "adopted by the app"
+          : `already declared by ${describeOwner(same.table.owner)}`;
         refuse(
           `${ownerPath}.${def.name}`,
-          `Table "${name}" is already declared by ${describeOwner(existing.owner)}; ${describeOwner(owner)} cannot declare it again.`
+          `Table ${spelledAs(name, same.table.name)} is ${holder}; ${describeOwner(owner)} cannot declare it again.`
         );
       }
+      if (owner.kind === "app") resolveOwnName(def.name);
 
       const columns: ExtensionColumn[] = def.columns.map(column => ({
         ...column,

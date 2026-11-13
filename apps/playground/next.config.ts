@@ -185,6 +185,9 @@ const nextConfig: NextConfig = {
       // identity mismatch" that broke FormBuilder custom view registration.
       "@nextlyhq/ui": ["../../packages/ui/src/index.ts"],
       "@nextlyhq/admin": ["../../packages/admin/src/index.ts"],
+      // The SDK's admin entry re-exports this one. Aliased with the root, so
+      // a plugin page and the admin share one instance of every module.
+      "@nextlyhq/admin/kit": ["../../packages/admin/src/kit.ts"],
       "@nextlyhq/admin/lib/component-registry": [
         "../../packages/admin/src/lib/plugins/component-registry.ts",
       ],
