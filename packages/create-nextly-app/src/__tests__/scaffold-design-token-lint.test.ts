@@ -16,6 +16,7 @@
  * not Nextly's.
  */
 import { execFileSync, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -37,6 +38,10 @@ import { copyTemplate } from "../utils/template";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const templatesRoot = path.resolve(here, "../../../../templates");
 const eslintPluginDir = path.resolve(here, "../../../eslint-plugin");
+/** The SDK surfaces the packed rule treats as experimental, as it ships them. */
+const sdkStability = JSON.parse(
+  readFileSync(path.join(eslintPluginDir, "src/sdk-stability.json"), "utf8")
+) as { imports: Record<string, string[]> };
 
 /** The lint packages the scaffold declares; `@nextlyhq/eslint-plugin` comes from the workspace instead. */
 const LINT_PACKAGES = [
@@ -189,6 +194,9 @@ describe("a scaffolded plugin enforces the design-token rules", () => {
       ]) {
         expect(rules[rule], rule).toEqual([2]);
       }
+      // A warning, not an error: an experimental surface is a choice the
+      // author may make, and the warning makes sure it is made knowingly.
+      expect(rules["@nextlyhq/no-experimental-sdk"]).toEqual([1]);
     },
     ESLINT_TIMEOUT_MS
   );
@@ -234,6 +242,28 @@ describe("a scaffolded plugin enforces the design-token rules", () => {
         r.messages.map(m => m.ruleId)
       );
       expect(ruleIds).toContain("@nextlyhq/no-static-inline-style");
+    },
+    ESLINT_TIMEOUT_MS
+  );
+
+  it(
+    "WARNS when the author imports an experimental SDK surface",
+    async () => {
+      // Taken from the manifest the rule ships, so a surface graduating
+      // changes which name this uses rather than breaking it.
+      const [name] = sdkStability.imports["@nextlyhq/plugin-sdk"];
+      await writeFile(
+        page(),
+        `import { ${name} } from "@nextlyhq/plugin-sdk";\nvoid ${name};\n${pageSource}`
+      );
+      const messages = lintScaffold().flatMap(r => r.messages);
+      expect(messages.map(m => m.ruleId)).toContain(
+        "@nextlyhq/no-experimental-sdk"
+      );
+      expect(
+        messages.find(m => m.ruleId === "@nextlyhq/no-experimental-sdk")
+          ?.message
+      ).toContain(`\`${name}\``);
     },
     ESLINT_TIMEOUT_MS
   );

@@ -45,6 +45,7 @@ import { planFieldAddedToTranslationMigration } from "../../i18n/migration/field
 import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
 import {
   type LeavingTranslationRefusal,
+  moveKeepsEveryValue,
   refusalsForFieldsJoiningTranslation,
   refusalsForFieldsLeavingTranslation,
   refusalsForMovedJoinsNarrowed,
@@ -364,6 +365,22 @@ export interface GenerateArgs {
    * keys stay untracked. A table that already exists is left alone.
    */
   foreignKeysOfNewTables?: ReadonlyMap<string, readonly ForeignKeySpec[]>;
+  /**
+   * The relationship keys a table that already exists holds before this file and after it, by
+   * table: every Schema Builder save of an existing table. Read on SQLite only, which changes a key
+   * by rebuilding its table: the two sides are set on the previous and desired snapshots, so the
+   * diff plans any key change, and a rebuild of the table, for that or for a column change, keeps
+   * every key the table keeps. PostgreSQL and
+   * MySQL alter a key in place, through the statements the caller appends. Left out of the
+   * snapshot, as the keys of a new table are.
+   */
+  foreignKeysOfExistingTables?: ReadonlyMap<
+    string,
+    {
+      before: readonly ForeignKeySpec[];
+      after: readonly ForeignKeySpec[];
+    }
+  >;
   /**
    * The person's answer to rows that do not fit a column this migration makes
    * required: fill them, or delete them (`resolution-statements`). The column
@@ -709,6 +726,29 @@ function withKeysOfNewTables(
   };
 }
 
+/**
+ * `snapshot` with the keys `keys` gives each table on one side (`foreignKeysOfExistingTables`).
+ * Set even where both sides hold the same keys: they plan no key change then, but a rebuild of the
+ * table for another change (a column's type or nullability) is made from these specs, and must
+ * carry the keys the table keeps rather than be refused for dropping them.
+ */
+function withKeysOfExistingTables(
+  snapshot: NextlySchemaSnapshot,
+  keys: GenerateArgs["foreignKeysOfExistingTables"],
+  side: "before" | "after"
+): NextlySchemaSnapshot {
+  if (keys === undefined || keys.size === 0) return snapshot;
+  return {
+    ...snapshot,
+    tables: snapshot.tables.map(table => {
+      const change = keys.get(table.name);
+      return change === undefined
+        ? table
+        : { ...table, foreignKeys: [...change[side]] };
+    }),
+  };
+}
+
 /** Statements a caller adds to one side of a file, before and after the generated ones. */
 export interface AddedStatements {
   first: readonly string[];
@@ -804,11 +844,21 @@ export async function generateMigration(
   });
   // Scoped, every table outside the scope stays as the latest snapshot has it.
   const stream = streamInScope(args.scope, unscoped, previous?.data ?? null);
-  const previousSnapshot = stream.previous;
-  const desiredSnapshot = withKeysOfNewTables(
-    stream.desired,
-    previousSnapshot,
-    args.foreignKeysOfNewTables
+  const existingKeys =
+    args.dialect === "sqlite" ? args.foreignKeysOfExistingTables : undefined;
+  const previousSnapshot = withKeysOfExistingTables(
+    stream.previous,
+    existingKeys,
+    "before"
+  );
+  const desiredSnapshot = withKeysOfExistingTables(
+    withKeysOfNewTables(
+      stream.desired,
+      previousSnapshot,
+      args.foreignKeysOfNewTables
+    ),
+    existingKeys,
+    "after"
   );
 
   // 2a. Plan companion `_locales` migrations for localized collections, singles, AND
@@ -3044,13 +3094,18 @@ function assertFieldsMayJoinTranslation(
     moved: new Set<string>(),
     narrowed: new Set<string>(),
   };
+  // Reshaped only where the column it would have cannot hold every value the column it has holds,
+  // by the one rule every judge of a move asks, with the snapshots' types alone.
   const reshaped = joining
     .filter(({ field, column }) => {
       const before = typeIn(prevMain, column.name);
+      const after = typeIn(sharedMain, column.name);
       return (
         !moved.has(field.name) &&
         before !== undefined &&
-        before !== typeIn(sharedMain, column.name)
+        before !== after &&
+        (after === undefined ||
+          !moveKeepsEveryValue({ type: before }, { type: after }, dialect))
       );
     })
     .map(({ field }) => field.name);

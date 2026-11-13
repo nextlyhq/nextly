@@ -21,7 +21,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { ADMIN } from "./support/admin";
 import { mainColumnBox } from "./support/shell-geometry";
-import { includingHidden, test } from "./support/test";
+import { freeDocumentAt, includingHidden, test } from "./support/test";
 
 /** The admin's record that this browser has signed in here before. */
 const SIGNED_IN_HERE_KEY = "nextly:admin:signed-in-here";
@@ -271,12 +271,39 @@ test.describe("the admin's frame while the server has not answered", () => {
   });
 });
 
-/** Every layout shift after `startAt`, and the elements each one moved. */
+/**
+ * How long a screen stays still, with nothing it asked for in flight, before
+ * it counts as settled; and the longest it may take to get there once its data
+ * is in. A part drawn from a later answer (the editor's trail, a list's rows)
+ * lands well inside the window, so a move it makes is recorded.
+ */
+const SETTLE_QUIET_MS = 750;
+const SETTLE_TIMEOUT_MS = 15_000;
+
+/**
+ * Every layout shift, and the elements each one moved; and when the page last
+ * changed at all (a node, an attribute, a text, a shift), so a test can wait
+ * until it has stopped.
+ */
 async function recordShifts(page: Page): Promise<void> {
   await page.addInitScript(() => {
     const shifts: { value: number; at: number; sources: string[] }[] = [];
-    (window as unknown as { __shifts: typeof shifts }).__shifts = shifts;
+    const record = window as unknown as {
+      __shifts: typeof shifts;
+      __lastChange: number;
+    };
+    record.__shifts = shifts;
+    record.__lastChange = performance.now();
+    new MutationObserver(() => {
+      record.__lastChange = performance.now();
+    }).observe(document, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      characterData: true,
+    });
     new PerformanceObserver(list => {
+      record.__lastChange = performance.now();
       for (const entry of list.getEntries() as (PerformanceEntry & {
         value: number;
         hadRecentInput: boolean;
@@ -309,6 +336,74 @@ async function recordShifts(page: Page): Promise<void> {
   });
 }
 
+/**
+ * Counts, in the page, the requests it has asked for and not had answered, by
+ * wrapping its `fetch`, which every admin read goes through. Counted where
+ * they are made rather than from the browser's request events: a read the page
+ * gives up on while it is held reports no failure there, and would read as in
+ * flight for ever.
+ */
+async function countFetches(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const record = window as unknown as {
+      __fetching: Map<number, string>;
+      __lastChange: number;
+    };
+    const fetching = new Map<number, string>();
+    record.__fetching = fetching;
+    let next = 0;
+    const original = window.fetch.bind(window);
+    window.fetch = (input, init) => {
+      const id = next++;
+      const url = new URL(
+        input instanceof Request ? input.url : String(input),
+        window.location.href
+      );
+      fetching.set(id, url.pathname);
+      return original(input, init).finally(() => {
+        fetching.delete(id);
+        record.__lastChange = performance.now();
+      });
+    };
+  });
+}
+
+/**
+ * Until the screen has settled: nothing it asked for in flight, and nothing on
+ * the page changed for `SETTLE_QUIET_MS`, measured on the page's own clock.
+ * The shell settling is not enough: the editor's trail, for one, is drawn
+ * from an answer that arrives after the shell's.
+ */
+async function screenSettled(page: Page): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(quietMs => {
+          const record = window as unknown as {
+            __fetching: Map<number, string>;
+            __lastChange: number;
+          };
+          if (record.__fetching.size > 0) {
+            return `waiting on ${[...record.__fetching.values()].join(", ")}`;
+          }
+          const since = performance.now() - record.__lastChange;
+          return since >= quietMs
+            ? "settled"
+            : `changed ${Math.round(since)} ms ago`;
+        }, SETTLE_QUIET_MS),
+      {
+        message: "the screen never settled",
+        timeout: SETTLE_TIMEOUT_MS,
+        intervals: [100],
+      }
+    )
+    .toBe("settled");
+}
+
+/** Whether `url` is the admin's address for claiming a document. */
+const isDocumentLock = (url: string): boolean =>
+  new URL(url).pathname === "/admin/api/document-lock";
+
 /** The shell's own boxes: the rail, the bar and the main column. */
 async function shellBoxes(page: Page) {
   const box = async (selector: string) => {
@@ -323,8 +418,20 @@ async function shellBoxes(page: Page) {
   };
 }
 
+/** Where the playground's posts are written. */
+const POSTS = "/admin/api/collections/posts/entries";
+/** The posts the edit test made, deleted after it, so no list counts them. */
+const ownPosts: string[] = [];
+
 test.describe("the screen replacing its outline", () => {
   test.use({ viewport: { width: 1440, height: 900 } });
+
+  test.afterEach(async ({ page }) => {
+    for (const id of ownPosts.splice(0)) {
+      const removed = await page.request.delete(`${POSTS}/${id}`);
+      expect(removed.ok(), await removed.text()).toBe(true);
+    }
+  });
 
   for (const screenName of ["dashboard", "list", "edit"] as const) {
     test(`moves no part of the ${screenName} as its data arrives`, async ({
@@ -334,16 +441,39 @@ test.describe("the screen replacing its outline", () => {
       let path = "";
       if (screenName === "list") path = "/collections/posts";
       if (screenName === "edit") {
-        const read = await page.request.get(
-          "/admin/api/collections/posts/entries?limit=1"
+        // A post of the test's own, which no other test opens: an editor
+        // open on a post elsewhere (another spec, a repeat on another worker)
+        // holds it, and the banner saying so would land above the fields.
+        const stamp = `${Date.now()}-${test.info().repeatEachIndex}`;
+        const created = await page.request.post(POSTS, {
+          data: {
+            title: `Loading frame ${stamp}`,
+            slug: `loading-frame-${stamp}`,
+            excerpt: "Opened while every request is held.",
+          },
+        });
+        expect(created.ok(), await created.text()).toBe(true);
+        const { item } = (await created.json()) as { item: { id: string } };
+        ownPosts.push(item.id);
+        path = `/collections/posts/${item.id}`;
+        // The edit route's code, compiled before the measured visit. The
+        // editor claims the document it opens, and the claim outlives a page
+        // left while every request is held, so the measured visit would open
+        // a document its own warm-up still holds, with the banner saying so.
+        // Freed here, as a reader's closed tab frees it.
+        const claimed = page.waitForResponse(
+          response =>
+            isDocumentLock(response.url()) &&
+            response.request().method() === "POST"
         );
-        expect(read.ok(), await read.text()).toBe(true);
-        const { items } = (await read.json()) as { items: { id: string }[] };
-        expect(items.length, "no post to open").toBeGreaterThan(0);
-        path = `/collections/posts/${items[0]!.id}`;
-        // The edit route's code, compiled before the measured visit.
         await page.goto(`${ADMIN}${path}`);
-        await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+        await claimed;
+        await page.goto("about:blank");
+        await freeDocumentAt(
+          page.request,
+          { scopeKind: "collection", slug: "posts", entryId: item.id },
+          "post"
+        );
       } else if (screenName === "list") {
         await page.goto(`${ADMIN}${path}`);
         await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
@@ -352,6 +482,7 @@ test.describe("the screen replacing its outline", () => {
       await recordShifts(page);
       await recordParts(page);
       const held = await holdAdminRequests(page);
+      await countFetches(page);
       await openHeld(page, path);
 
       // The outline is on screen, so there is something for the data to replace.
@@ -366,6 +497,9 @@ test.describe("the screen replacing its outline", () => {
         0,
         { timeout: 60_000 }
       );
+      // And every part drawn from a later answer: a move that lands after the
+      // shell settled is still a move the reader sees.
+      await screenSettled(page);
       const after = await shellBoxes(page);
 
       // The frame did not move: the rail, the bar and the main column.
@@ -392,7 +526,7 @@ test.describe("the screen replacing its outline", () => {
         type: "layout-shift",
         description: `${screenName}: ${total.toFixed(4)} after the release`,
       });
-      expect(total).toBeLessThanOrEqual(0.05);
+      expect(total, JSON.stringify(shifts)).toBeLessThanOrEqual(0.05);
     });
   }
 });

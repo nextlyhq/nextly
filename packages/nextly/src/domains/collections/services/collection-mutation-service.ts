@@ -310,7 +310,12 @@ import {
 } from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
 import { storeDraftSave } from "../../versions/draft-save";
-import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
+import {
+  evaluateDraftSplitEligibility,
+  heldBeforeTheRule,
+  heldBeforeTheRuleRefusal,
+  isDraftSplitEligible,
+} from "../../versions/draft-split-eligibility";
 import {
   mediaUsageTablePresent,
   sweepDeletedDocument,
@@ -407,6 +412,7 @@ import {
   VersionCaptureService,
 } from "../../versions/version-capture-service";
 import { versionConflictRetries } from "../../versions/version-conflict";
+import { carriesComponentValues } from "../../versions/version-language";
 import {
   type VersionRef,
   VersionsRepository,
@@ -470,6 +476,10 @@ import {
   generateSlug,
   normalizeSlugPath,
 } from "./collection-utils";
+import {
+  entryStillReferenced,
+  referrersHolding,
+} from "./entry-still-referenced";
 import { type PartsState, publishValueIssues } from "./publish-parts";
 import { requiresEveryLanguage } from "./require-every-language";
 import {
@@ -1773,8 +1783,7 @@ interface WorkingDraftWriteContext {
   updateFilters?: readonly FilteredWriteCheck[];
   /**
    * The translatable fields this save wrote, which the locale split moved
-   * out of `updatePayload`. Kept by part (`part-drafts`), they are what makes
-   * a save touch its language's draft.
+   * out of `updatePayload`: what makes a save touch its language's draft.
    */
   translatedKeys?: readonly string[];
 }
@@ -2692,7 +2701,7 @@ export class CollectionMutationService extends BaseService {
         // and nothing to disambiguate.
         locale:
           args.localeTag ??
-          (Object.keys(args.documentParts.components ?? {}).length > 0
+          (carriesComponentValues(args.fields)
             ? this.componentSnapshotLocale(undefined)
             : null),
         maxPerDoc: args.versionsConfig.maxPerDoc,
@@ -4568,6 +4577,7 @@ export class CollectionMutationService extends BaseService {
       draftsVersioningEnabled: versionsConfig?.drafts?.enabled === true,
       fields: fields as unknown as FieldConfig[],
       componentSchemas: splitComponentSchemas,
+      documentLocalized,
     });
     return {
       // Every language: the wildcard resolves to the unlocalized write.
@@ -8147,7 +8157,7 @@ export class CollectionMutationService extends BaseService {
             // them the version would be unlabelled and unrestorable.
             locale:
               localizedWrite?.writeLocale ??
-              (Object.keys(snapshotComponents ?? {}).length > 0
+              (carriesComponentValues(fields)
                 ? this.componentSnapshotLocale(params.locale)
                 : null),
             maxPerDoc: versionsConfig.maxPerDoc,
@@ -9305,6 +9315,23 @@ export class CollectionMutationService extends BaseService {
         : null;
     const documentLocalized =
       (publishCollection as { localized?: boolean }).localized === true;
+    // A collection the `localized-component` rule now refuses may hold a
+    // draft saved before the rule. Such a draft is never promoted: its one
+    // slot names no language, so a publish could not tell which language's
+    // row its component values belong to. Judged by the shared predicate on
+    // what the promotion context already resolved.
+    const refusesEarlierDraft =
+      promotionContext !== null &&
+      promotionContext.promoteRestoreCtx === null &&
+      heldBeforeTheRule(
+        evaluateDraftSplitEligibility({
+          collectionHasStatus: true,
+          draftsVersioningEnabled: true,
+          fields: promotionContext.fields as unknown as FieldConfig[],
+          componentSchemas: promotionContext.splitComponentSchemas,
+          documentLocalized,
+        })
+      );
     const draftRef: VersionRef = {
       scopeKind: "collection",
       scopeSlug: params.collectionName,
@@ -9327,6 +9354,7 @@ export class CollectionMutationService extends BaseService {
         promotion,
         documentLocalized,
         draftRef,
+        refusesEarlierDraft,
       },
     };
   }
@@ -9589,6 +9617,7 @@ export class CollectionMutationService extends BaseService {
         promotion,
         documentLocalized,
         draftRef,
+        refusesEarlierDraft,
       } = preconditions.ready;
       // Every language this moves is judged, so the version must name each
       // one: a read of one language cannot say whether another changed since.
@@ -9772,6 +9801,18 @@ export class CollectionMutationService extends BaseService {
         const lockedStatusRaw = (lockedRow as { status?: unknown }).status;
         lockedPreviousStatus =
           typeof lockedStatusRaw === "string" ? lockedStatusRaw : null;
+
+        // A draft held before the `localized-component` rule is read-only:
+        // never promoted, and never consumed unwritten by the cleanup below.
+        // The publish is refused under the lock, before anything is written,
+        // while one is there; it stays to be copied from and discarded.
+        if (
+          refusesEarlierDraft &&
+          (await new VersionsRepository(tx).listWorkingDraftLocales(draftRef))
+            .length > 0
+        ) {
+          throw heldBeforeTheRuleRefusal(params.collectionName, params.entryId);
+        }
 
         // The committed pre-publish row in the main-table schema shape, read on
         // the TRANSACTION connection (never the pool: the transaction already
@@ -13902,14 +13943,12 @@ export class CollectionMutationService extends BaseService {
       // from `workingDraftLocale`.
       locale: draftLocale,
       // The version is keyed the same way, except where the document has no
-      // languages and the snapshot carries a component: that was read in the
-      // language the write named, and is recorded under it as every other
-      // save is.
+      // languages and carries a component: that was read in the language the
+      // write named, empty or not, and is recorded under it as every other
+      // save is (`carriesComponentValues`).
       versionLocale:
         draftLocale ??
-        ((fields as unknown as FieldConfig[]).some(
-          field => isFieldGroupField(field) && draftDocument[field.name] != null
-        )
+        (carriesComponentValues(fields)
           ? this.componentSnapshotLocale(params.locale)
           : null),
       snapshot: draftDocument,
@@ -15322,12 +15361,18 @@ export class CollectionMutationService extends BaseService {
       // misfile a promoted draft into the wrong companion, an unresolved one
       // drops its subtree on promote, and a password cannot ride a draft
       // snapshot. See isDraftSplitEligible.
-      const splitEnabled = isDraftSplitEligible({
+      const splitVerdict = evaluateDraftSplitEligibility({
         collectionHasStatus,
         draftsVersioningEnabled: versionsConfig?.drafts?.enabled === true,
         fields: fields as unknown as FieldConfig[],
         componentSchemas: splitComponentSchemas,
+        documentLocalized,
       });
+      const splitEnabled = splitVerdict.eligible;
+      // A document the `localized-component` rule now refuses may still hold
+      // a draft saved before the rule. It is read-only: shown, discardable,
+      // never promoted, and every live write is refused while it is there.
+      const mayHoldEarlierDraft = heldBeforeTheRule(splitVerdict);
       // No status named ⇒ neither the main row nor the write-locale companion
       // `_status` is being set (matches the transition guard's own build gate at
       // `transitionNextStatus !== undefined`).
@@ -15639,7 +15684,7 @@ export class CollectionMutationService extends BaseService {
             captureBeforeRestore = async () => {
               const previousHoldsLocaleState =
                 Object.keys(previousLocalizedValues).length > 0 ||
-                Object.keys(previousComponents ?? {}).length > 0 ||
+                carriesComponentValues(fields) ||
                 previousCompanionStatus !== null;
               // For a per-locale restore into a locale whose companion row is
               // absent (a locale disabled then re-enabled), the prior per-locale
@@ -15716,6 +15761,25 @@ export class CollectionMutationService extends BaseService {
           requestLocale: params.locale ?? null,
           defaultLocale: this.localization?.defaultLocale ?? null,
         }).hold;
+
+        // A draft held before the `localized-component` rule names no
+        // language, so neither a save beside it nor a publish of it can say
+        // which language's row its component values belong to: every live
+        // write is refused while it is there, until it is discarded.
+        if (
+          mayHoldEarlierDraft &&
+          !isRestoreWrite &&
+          (await new VersionsRepository(tx).findWorkingDraft(
+            {
+              scopeKind: "collection",
+              scopeSlug: params.collectionName,
+              entryId: params.entryId,
+            },
+            draftLocaleKey
+          ))
+        ) {
+          throw heldBeforeTheRuleRefusal(params.collectionName, params.entryId);
+        }
 
         // A recorded draft save restored onto a published document must stay
         // pending. A document that can no longer hold a draft would take it
@@ -16446,7 +16510,7 @@ export class CollectionMutationService extends BaseService {
               // Components were read as the write locale just above, so a
               // translation edit touching only embedded component content is
               // locale-specific too — the singles path counts it the same way.
-              Object.keys(snapshotComponents ?? {}).length > 0;
+              carriesComponentValues(fields);
 
             // Which media items the entry uses now, from what this update
             // stored; a held working draft's media count once it is
@@ -16619,7 +16683,7 @@ export class CollectionMutationService extends BaseService {
             // leave the sidecar to resurface if the split were re-enabled. The
             // delete is a cheap indexed no-op when none exists, and it never hits
             // a just-stored draft: that path keeps `splitEnabled` true.
-            if (!splitEnabled) {
+            if (!splitEnabled && !mayHoldEarlierDraft) {
               await this.consumeWorkingDraft(
                 tx,
                 {
@@ -18937,6 +19001,9 @@ export class CollectionMutationService extends BaseService {
     // The tags this delete invalidates, computed post-commit and flushed with the
     // result. Hoisted so the catch return carries it too.
     let revalidationIntent: RevalidationIntent | undefined;
+    // The entry's table, once known, so a delete the database refuses over a key still pointing
+    // at the entry can say what points at it (`entryStillReferenced`).
+    let entryTable: string | undefined;
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
 
@@ -18972,6 +19039,7 @@ export class CollectionMutationService extends BaseService {
       const { languages: askedLanguages, filters: deleteFilters } = gate.asked;
       const { storedHooks, tableName, sharedContext, requestFacts } =
         this.operationSetup(collection, params);
+      entryTable = tableName;
 
       // Execute beforeOperation hooks FIRST (before operation-specific hooks)
       // Can modify operation arguments (id) or throw to abort
@@ -19342,9 +19410,16 @@ export class CollectionMutationService extends BaseService {
         committed: committedWrite,
       };
     } catch (caught: unknown) {
+      // A delete the database refused over a relationship still pointing at the entry answers
+      // with what points at it; the transaction has rolled back, so nothing of the entry changed.
+      const referenced = await this.stillReferencedRefusal(
+        caught,
+        entryTable,
+        params
+      );
       // A delete the database is not migrated for answers as such, not as a 500.
       const error = await asNotMigrated(
-        caught,
+        referenced ?? caught,
         collectionNotMigrated(this.collectionService, params.collectionName, {
           trusted: fieldTrustOf(params),
         }),
@@ -19365,6 +19440,39 @@ export class CollectionMutationService extends BaseService {
         committed: committedWrite,
       };
     }
+  }
+
+  /**
+   * The refusal naming what still points at an entry, for a delete the database refused with a
+   * foreign-key violation; undefined for any other failure, or where nothing it can name points
+   * at the entry, so the original error stands.
+   */
+  private async stillReferencedRefusal(
+    caught: unknown,
+    entryTable: string | undefined,
+    params: { collectionName: string; entryId: string }
+  ): Promise<NextlyError | undefined> {
+    if (entryTable === undefined) return undefined;
+    // The driver's error may arrive wrapped (by the query builder, or as a mapped database
+    // error), so its cause chain is read, a few links deep.
+    let link: unknown = caught;
+    let foreignKey = false;
+    for (let depth = 0; depth < 5 && link != null && !foreignKey; depth++) {
+      foreignKey = toDbError(this.dialect, link).kind === "fk-violation";
+      link = (link as { cause?: unknown }).cause;
+    }
+    if (!foreignKey) return undefined;
+    const referrers = await referrersHolding(
+      this.adapter,
+      this.dialect,
+      entryTable,
+      params.entryId
+    );
+    if (referrers.length === 0) return undefined;
+    return entryStillReferenced(referrers, {
+      collectionName: params.collectionName,
+      entryId: params.entryId,
+    });
   }
 
   // ============================================================

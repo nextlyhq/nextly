@@ -18,8 +18,6 @@ export type { FieldBuilderValidationResult } from "./field-validators";
 
 export { nestedFieldPriorityCollision } from "./dnd-collision";
 
-export { convertHooksToStoredFormat } from "./hook-converters";
-
 export { DEFAULT_SYSTEM_FIELDS, SYSTEM_FIELD_NAMES } from "./constants";
 
 // Projects plugin-contributed field types into catalog rows the admin field

@@ -504,6 +504,20 @@ PostgreSQL enum type.
 entity tables, on the extendable core tables, and — for the app, or for a
 plugin naming the owner in `dependsOn` — on another owner's tables.
 
+Two more dependencies are asked of a plugin, and the app is never asked for
+either: its schema runs after every plugin's.
+
+- **A collection, Single or field group another plugin declared** takes a
+  plugin's column or index only when the plugin names that owner in
+  `dependsOn` (or `optionalDependsOn`). The app's own entities need none.
+- **An index over a column a third owner contributed** needs that contributor
+  in `dependsOn` too. The column only exists while its contributor is
+  installed, and arrives in the contributor's migrations, so the dependency is
+  what runs those first and keeps the contributor from being uninstalled from
+  under the index.
+
+Either one missing stops the app at startup, naming both plugins.
+
 A column added this way is **hidden from the entry API**: it is on the table,
 so migrations and SQLite rebuilds keep it, and it is stripped from every REST
 response, Direct API read, version snapshot and webhook payload, while a value

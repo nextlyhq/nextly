@@ -232,6 +232,24 @@ describe("scheduling from the Publishing section", () => {
     );
   });
 
+  it("holds the offer's place, unseen, while the schedule is checked, so the sections under it stay put", async () => {
+    // The releases read never answers: the section stays on its check.
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(() => {}));
+    showEditor();
+    const checking = await screen.findByText("Checking releases");
+    const body = checking.parentElement!;
+    expect(body.getAttribute("aria-busy")).toBe("true");
+    // The same button "Not scheduled." is drawn over, at its own size (its
+    // height is its size's, whatever it says), but neither seen, reached nor
+    // read while it only holds the place.
+    const held = within(body).getByRole("button", { hidden: true });
+    expect(held.getAttribute("data-slot")).toBe("button.outline");
+    expect(held.className.split(/\s+/)).toContain("invisible");
+    expect(held.getAttribute("tabindex")).toBe("-1");
+    expect(held.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.queryByRole("button", { name: "Schedule…" })).toBeNull();
+  });
+
   it("offers nothing to a person who may not create releases, since every way makes or joins one", async () => {
     grants.missing = ["create-content-releases"];
     showEditor();
