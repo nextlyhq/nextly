@@ -475,6 +475,25 @@ describe.each(getConfiguredTestDialects())(
           referencesTable: fk.referencesTable,
         }))
       ).toEqual([{ columns: ["author"], referencesTable: "dc_authors" }]);
+
+      // A later save that rebuilds the table for another change (SQLite makes a column required by
+      // rebuilding it) keeps the key: the file's rebuild carries it.
+      const later = await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: posts([text("title"), author]),
+        entity: posts([text("title", { required: true }), author]),
+        change: "update",
+        keys: { before: [authorKey], after: [authorKey] },
+      });
+      expect(later.applied).toBe(true);
+      const kept = await introspectLiveSnapshot(
+        adapter.getDrizzle(),
+        dialect === "postgresql" ? "postgresql" : dialect,
+        ["dc_posts"]
+      );
+      expect(
+        kept.tables[0]?.foreignKeys?.map(fk => fk.referencesTable)
+      ).toEqual(["dc_authors"]);
     });
 
     it("writes a many-to-many field's join table into the file: made here, replayed on an empty database, dropped with the collection", async () => {

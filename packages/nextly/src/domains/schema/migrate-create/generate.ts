@@ -367,9 +367,10 @@ export interface GenerateArgs {
   foreignKeysOfNewTables?: ReadonlyMap<string, readonly ForeignKeySpec[]>;
   /**
    * The relationship keys a table that already exists holds before this file and after it, by
-   * table: a Schema Builder save that adds, moves or drops one. Read on SQLite only, which changes
-   * a key by rebuilding its table: the two sides are set on the previous and desired snapshots, so
-   * the diff plans the change and the table is rebuilt with every key it keeps. PostgreSQL and
+   * table: every Schema Builder save of an existing table. Read on SQLite only, which changes a key
+   * by rebuilding its table: the two sides are set on the previous and desired snapshots, so the
+   * diff plans any key change, and a rebuild of the table, for that or for a column change, keeps
+   * every key the table keeps. PostgreSQL and
    * MySQL alter a key in place, through the statements the caller appends. Left out of the
    * snapshot, as the keys of a new table are.
    */
@@ -726,9 +727,10 @@ function withKeysOfNewTables(
 }
 
 /**
- * `snapshot` with the keys `keys` gives each table on one side, for a table whose keys change
- * (`foreignKeysOfExistingTables`). A table whose keys are the same on both sides is left as it is,
- * so nothing is planned for it.
+ * `snapshot` with the keys `keys` gives each table on one side (`foreignKeysOfExistingTables`).
+ * Set even where both sides hold the same keys: they plan no key change then, but a rebuild of the
+ * table for another change (a column's type or nullability) is made from these specs, and must
+ * carry the keys the table keeps rather than be refused for dropping them.
  */
 function withKeysOfExistingTables(
   snapshot: NextlySchemaSnapshot,
@@ -740,13 +742,9 @@ function withKeysOfExistingTables(
     ...snapshot,
     tables: snapshot.tables.map(table => {
       const change = keys.get(table.name);
-      if (
-        change === undefined ||
-        JSON.stringify(change.before) === JSON.stringify(change.after)
-      ) {
-        return table;
-      }
-      return { ...table, foreignKeys: [...change[side]] };
+      return change === undefined
+        ? table
+        : { ...table, foreignKeys: [...change[side]] };
     }),
   };
 }
