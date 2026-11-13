@@ -201,7 +201,7 @@ function elementsOf(
   table: TableSpec | undefined,
   kind: ElementKind
 ): readonly { name: string }[] | undefined {
-  return table?.[DIMENSION[kind]] as readonly { name: string }[] | undefined;
+  return table?.[DIMENSION[kind]];
 }
 
 /** Tables by lower-cased name. */
@@ -398,11 +398,11 @@ export function refuseChangesToKeptElements(input: {
     const columns = new Set(
       desired.get(element.table.toLowerCase())?.columns.map(c => c.name) ?? []
     );
-    const spec = (
-      elementsOf(live.get(element.table.toLowerCase()), element.kind) as
-        | readonly { name: string; columns?: readonly string[] }[]
-        | undefined
-    )?.find(e => e.name === element.name);
+    const liveTable = live.get(element.table.toLowerCase());
+    const spec =
+      element.kind === "index"
+        ? liveTable?.indexes?.find(e => e.name === element.name)
+        : liveTable?.foreignKeys?.find(e => e.name === element.name);
     const gone = (spec?.columns ?? []).find(column => !columns.has(column));
     if (gone === undefined) continue;
     throw keptElementRefusal(
