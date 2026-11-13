@@ -23,6 +23,7 @@ import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
 import type { CodeRoute } from "../code-pages/routes";
 import { readConnections } from "../connections/store";
+import { refreshContentDates } from "../content-dates/hooks";
 import { pruneContentDates } from "../content-dates/store";
 import { pageLanguageLinks } from "../languages/head";
 import {
@@ -60,7 +61,7 @@ import {
   type Problem,
   type ProblemListBody,
 } from "./contract";
-import { datesTodayProblems } from "./dates-check";
+import { datesCheckScope, datesTodayProblems } from "./dates-check";
 import { addressShapes, brokenLinks } from "./links";
 import { canonicalIsOwn, pageProblems } from "./page-checks";
 import { pageTypeOf, singleKey } from "./page-types";
@@ -107,6 +108,11 @@ export interface ProblemChecks {
    * sitemap lists beside the entries, where the site has any.
    */
   codeRoutes?: () => readonly CodeRoute[];
+  /**
+   * What the sitemap lists, where the site serves one: its collections
+   * where it names only some.
+   */
+  sitemap?: { collections?: readonly string[] };
 }
 
 /** Every type the checks read pages of, by its kept key. */
@@ -590,9 +596,11 @@ async function runSiteCheck(
   // The content dates of pages no longer listed in a language go, so the
   // table holds rows only for pages the sitemap may still list.
   await pruneContentDates(ctx);
-  // The listing the sitemap is made from, read once for what it leaves out
-  // and for its dates.
-  const listing = await siteListing(ctx, checks);
+  // The listing of the types SEO is added to, read once for what it leaves
+  // out, and its pages' content dates caught up where a publish reached no
+  // save hook.
+  const listing = await siteListing(ctx, checks, checks.targets);
+  await refreshContentDates(ctx, listing.pages);
   await saveSiteCheck(ctx, {
     startedAt,
     checkedAt: new Date().toISOString(),
@@ -600,10 +608,7 @@ async function runSiteCheck(
     pagesChecked: seen.size,
     problems: [
       ...(await leftOutOfListing(ctx, listing.problems)),
-      ...(await datesTodayProblems(
-        ctx,
-        listing.pages.map(page => page.lastModified)
-      )),
+      ...(await sitemapDateProblems(ctx, checks)),
       ...redirectChainProblems(await redirectChains(ctx)),
     ],
   });
@@ -612,10 +617,14 @@ async function runSiteCheck(
 /** The origin pages are listed on where the site names none: only paths are kept. */
 const NO_ORIGIN = "https://site.invalid";
 
-/** The site's listing, as the sitemap is made from it. */
+/**
+ * The site's listing of `collections` (every public type where none are
+ * named), with the pages built in code, as the sitemap is made.
+ */
 async function siteListing(
   ctx: PluginContext,
-  checks: ProblemChecks
+  checks: ProblemChecks,
+  collections: readonly string[] | undefined
 ): Promise<{ pages: ListedPage[]; problems: ListingProblem[] }> {
   const rules = await checks.readers.readRules(ctx, undefined);
   const origin =
@@ -623,11 +632,28 @@ async function siteListing(
   return listPages(ctx, {
     origin,
     readRules: checks.readers.readRules,
-    collections: checks.targets,
+    ...(collections === undefined ? {} : { collections }),
     ...(checks.codeRoutes === undefined
       ? {}
       : { codeRoutes: checks.codeRoutes }),
   });
+}
+
+/**
+ * The dates problem of the addresses the sitemap itself lists, read after
+ * the content dates are caught up; none where the site serves no sitemap.
+ */
+async function sitemapDateProblems(
+  ctx: PluginContext,
+  checks: ProblemChecks
+): Promise<Problem[]> {
+  const scope = datesCheckScope(checks);
+  if (scope === undefined) return [];
+  const { pages } = await siteListing(ctx, checks, scope.collections);
+  return datesTodayProblems(
+    ctx,
+    pages.map(page => page.lastModified)
+  );
 }
 
 /**

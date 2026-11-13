@@ -679,8 +679,15 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const problemChecks = {
     targets,
     singles: singleTargets,
-    // The pages built in code the sitemap lists, for the check of its dates.
+    // The pages built in code the sitemap lists, and what it lists, for the
+    // check of its dates.
     codeRoutes,
+    ...(options.sitemap === false
+      ? {}
+      : {
+          sitemap:
+            sitemapSubset === undefined ? {} : { collections: sitemapSubset },
+        }),
     readers: {
       readRules,
       readStructuredDataRules: structuredDataFromSettings(

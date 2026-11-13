@@ -8,7 +8,9 @@
  * at least 20, carry the day of the check, on two full checks made on
  * different days. One day alone is not enough, since a site that moved all
  * its content in today shows the same; a check that does not match starts
- * the count again. What the last matching check found is kept as a note.
+ * the count again. The first day of the run of matching checks is kept as a
+ * note. Only the addresses the sitemap itself lists are read, and none
+ * where the site serves no sitemap.
  *
  * @module problems/dates-check
  */
@@ -26,6 +28,25 @@ const MATCHED_KEY = noteKey("sitemap-dates-matched-on");
 
 /** The UTC day of an ISO date. */
 const dayOf = (iso: string) => iso.slice(0, 10);
+
+/** What the sitemap lists, as the problem checks are told it. */
+interface SitemapScope {
+  /** The collections it lists, where it names only some. */
+  collections?: readonly string[];
+}
+
+/**
+ * The listing the dates check reads: the sitemap's own, or none where the
+ * site serves no sitemap.
+ */
+export function datesCheckScope(checks: {
+  sitemap?: SitemapScope;
+}): SitemapScope | undefined {
+  if (checks.sitemap === undefined) return undefined;
+  return checks.sitemap.collections === undefined
+    ? {}
+    : { collections: checks.sitemap.collections };
+}
 
 /** Whether `lastmods` carry `day` as a date set to "now" would. */
 export function datesMatchDay(
@@ -49,9 +70,12 @@ export function datesCheckOutcome(
   day: string
 ): { problem: boolean; matchedOn: string | undefined } {
   if (!matched) return { problem: false, matchedOn: undefined };
+  // The earliest day of the run of matching checks is kept, so a check
+  // repeated on a later day still finds the earlier one and keeps the
+  // problem until a check does not match.
   return {
     problem: matchedOn !== undefined && matchedOn !== day,
-    matchedOn: day,
+    matchedOn: matchedOn ?? day,
   };
 }
 

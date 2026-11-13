@@ -27,7 +27,11 @@ import { lastCatchUp } from "../../address-record/catch-up";
 import { seoContext } from "../../address-record/__tests__/record-tables";
 import { seoPlugin } from "../../plugin";
 import { contentDates } from "../../schema/tables";
-import { contentDatesSettled, recordSaved } from "../hooks";
+import {
+  contentDatesSettled,
+  recordSaved,
+  refreshContentDates,
+} from "../hooks";
 import { pageDateKey, pruneContentDates } from "../store";
 
 const SITE = "https://acme.example";
@@ -342,6 +346,64 @@ describe.each(getConfiguredTestDialects())(
       const kept = await rows(ctx);
       expect(kept).toHaveLength(1);
       expect(second(kept[0]?.changedAt)).toBe(second(post.updatedAt));
+    });
+
+    it("keeps the date it already had only for the version the save left unchanged", async () => {
+      const { t, ctx } = await boot(dialect);
+      const post = await create(t, POSTS, {
+        title: "Hello",
+        slug: "hello",
+        status: "published",
+      });
+      await contentDatesSettled();
+      await clearDates(ctx);
+      const holder = { collection: POSTS, id: post.id };
+      const earlier = new Date("2026-01-01T00:00:00.000Z");
+
+      // A later save committed before this recording read the page: the
+      // date kept is the one the page has now, not the earlier one.
+      await recordSaved(ctx, holder, {
+        date: earlier,
+        version: new Date("2026-01-02T00:00:00.000Z"),
+      });
+      expect(second((await rows(ctx))[0]?.changedAt)).toBe(
+        second(post.updatedAt)
+      );
+
+      await clearDates(ctx);
+      // The version the save left unchanged keeps the date it had.
+      await recordSaved(ctx, holder, {
+        date: earlier,
+        version: new Date(post.updatedAt),
+      });
+      expect(second((await rows(ctx))[0]?.changedAt)).toBe(second(earlier));
+    });
+
+    it("catches up a page whose save no hook recorded, at the full check", async () => {
+      const { t, ctx } = await boot(dialect);
+      const post = await create(t, POSTS, {
+        title: "Hello",
+        slug: "hello",
+        status: "published",
+      });
+      await contentDatesSettled();
+      // As a publish no save hook was told of: the kept fingerprint is not
+      // the content the page shows.
+      const columns = ctx.db.table(contentDates);
+      await ctx.db
+        .update(contentDates, {
+          fingerprint: "0".repeat(64),
+          changedAt: new Date("2026-01-01T00:00:00.000Z"),
+        })
+        .where(ne(columns.holderId, ""));
+
+      await refreshContentDates(ctx, [
+        { holder: { collection: POSTS, id: post.id }, language: "en" },
+      ]);
+
+      expect(second(await lastmodOf(`${SITE}/blog/hello`))).toBe(
+        second(post.updatedAt)
+      );
     });
   }
 );

@@ -6,7 +6,11 @@
 import { describe, expect, it } from "vitest";
 
 import { KIND_SEVERITY, KIND_TEXT } from "../contract";
-import { datesCheckOutcome, datesMatchDay } from "../dates-check";
+import {
+  datesCheckOutcome,
+  datesCheckScope,
+  datesMatchDay,
+} from "../dates-check";
 
 const DAY = "2026-11-13";
 const dated = (count: number, day: string) =>
@@ -41,8 +45,19 @@ describe("sitemap dates that match the day they are checked", () => {
     });
     expect(datesCheckOutcome(true, "2026-11-12", DAY)).toEqual({
       problem: true,
-      matchedOn: DAY,
+      matchedOn: "2026-11-12",
     });
+    // Checked again on the same later day, the earlier day still stands, so
+    // the problem stays until a check does not match.
+    expect(datesCheckOutcome(true, "2026-11-12", DAY).matchedOn).toBe(
+      "2026-11-12"
+    );
+    const again = datesCheckOutcome(
+      true,
+      datesCheckOutcome(true, "2026-11-12", DAY).matchedOn,
+      DAY
+    );
+    expect(again.problem).toBe(true);
     // A check that does not match starts the count again.
     expect(datesCheckOutcome(false, "2026-11-12", DAY)).toEqual({
       problem: false,
@@ -59,5 +74,16 @@ describe("sitemap dates that match the day they are checked", () => {
   it("is a site-wide warning, as the problem table gives it", () => {
     expect(KIND_SEVERITY.datesToday).toBe("warning");
     expect(KIND_TEXT.datesToday.siteWide).toBe(true);
+  });
+});
+
+describe("the addresses the dates check reads", () => {
+  it("is the sitemap's own: none where it is off, and its collections where it names some", () => {
+    const base = { targets: ["posts", "pages"], singles: [] };
+    expect(datesCheckScope(base)).toBeUndefined();
+    expect(datesCheckScope({ ...base, sitemap: {} })).toEqual({});
+    expect(
+      datesCheckScope({ ...base, sitemap: { collections: ["posts"] } })
+    ).toEqual({ collections: ["posts"] });
   });
 });
