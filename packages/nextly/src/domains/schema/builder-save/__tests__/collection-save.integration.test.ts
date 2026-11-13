@@ -417,6 +417,167 @@ describe.each(getConfiguredTestDialects())(
       expect(await columns()).toContain("subtitle");
     });
 
+    it("writes a relationship key an update adds into its file, and the table holds it", async () => {
+      // The relationship as the admin writes it, added to a table that already exists: its key
+      // reaches the file on every dialect, SQLite's as a rebuild of the table carrying the key.
+      const authorKey = {
+        name: "fk_dc_posts_author",
+        columns: ["author"],
+        referencesTable: "dc_authors",
+        referencesColumns: ["id"],
+        onDelete: "set null" as const,
+        onUpdate: "no action" as const,
+      };
+      await writeCollectionSave(deps(), {
+        slug: "authors",
+        previous: null,
+        entity: {
+          slug: "authors",
+          labels: { singular: "Author", plural: "Authors" },
+          fields: [text("name")],
+        } as UiSchemaEntity,
+        change: "create",
+      });
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("title")]),
+        change: "create",
+      });
+      const author = {
+        name: "author",
+        type: "relationship",
+        relationTo: "authors",
+      } as UiSchemaEntity["fields"][number];
+
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: posts([text("title")]),
+        entity: posts([text("title"), author]),
+        change: "update",
+        keys: { before: [], after: [authorKey] },
+      });
+
+      const files = migrationFiles();
+      const up = readFileSync(
+        join(dir, "migrations", files[files.length - 1]!),
+        "utf-8"
+      );
+      expect(up, up).toMatch(/REFERENCES\s+[`"]?dc_authors/);
+      const live = await introspectLiveSnapshot(
+        adapter.getDrizzle(),
+        dialect === "postgresql" ? "postgresql" : dialect,
+        ["dc_posts"]
+      );
+      expect(
+        live.tables[0]?.foreignKeys?.map(fk => ({
+          columns: fk.columns,
+          referencesTable: fk.referencesTable,
+        }))
+      ).toEqual([{ columns: ["author"], referencesTable: "dc_authors" }]);
+
+      // A later save that rebuilds the table for another change (SQLite makes a column required by
+      // rebuilding it) keeps the key: the file's rebuild carries it.
+      const later = await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: posts([text("title"), author]),
+        entity: posts([text("title", { required: true }), author]),
+        change: "update",
+        keys: { before: [authorKey], after: [authorKey] },
+      });
+      expect(later.applied).toBe(true);
+      const kept = await introspectLiveSnapshot(
+        adapter.getDrizzle(),
+        dialect === "postgresql" ? "postgresql" : dialect,
+        ["dc_posts"]
+      );
+      expect(
+        kept.tables[0]?.foreignKeys?.map(fk => fk.referencesTable)
+      ).toEqual(["dc_authors"]);
+    });
+
+    it("moves a relationship key in its file, adding the new key before dropping the old one", async () => {
+      const authorKey = {
+        name: "fk_dc_posts_author",
+        columns: ["author"],
+        referencesTable: "dc_authors",
+        referencesColumns: ["id"],
+        onDelete: "set null" as const,
+        onUpdate: "no action" as const,
+      };
+      const movedKey = {
+        ...authorKey,
+        name: "fk_dc_posts_author_to_dc_editors",
+        referencesTable: "dc_editors",
+      };
+      for (const slug of ["authors", "editors"]) {
+        await writeCollectionSave(deps(), {
+          slug,
+          previous: null,
+          entity: {
+            slug,
+            labels: { singular: slug, plural: slug },
+            fields: [text("name")],
+          } as UiSchemaEntity,
+          change: "create",
+        });
+      }
+      const pointingAt = (relationTo: string) =>
+        ({
+          name: "author",
+          type: "relationship",
+          relationTo,
+        }) as UiSchemaEntity["fields"][number];
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("title")]),
+        change: "create",
+      });
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: posts([text("title")]),
+        entity: posts([text("title"), pointingAt("authors")]),
+        change: "update",
+        keys: { before: [], after: [authorKey] },
+      });
+
+      const moved = await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: posts([text("title"), pointingAt("authors")]),
+        entity: posts([text("title"), pointingAt("editors")]),
+        change: "update",
+        keys: { before: [authorKey], after: [movedKey] },
+      });
+
+      expect(moved.applied).toBe(true);
+      const files = migrationFiles();
+      const up = readFileSync(
+        join(dir, "migrations", files[files.length - 1]!),
+        "utf-8"
+      ).split("-- DOWN")[0]!;
+      if (dialect !== "sqlite") {
+        // The new key is added before the old one goes, so the column is never left unkeyed.
+        expect(
+          up.indexOf("fk_dc_posts_author_to_dc_editors"),
+          up
+        ).toBeGreaterThan(-1);
+        expect(up.indexOf("fk_dc_posts_author_to_dc_editors"), up).toBeLessThan(
+          up.search(
+            /DROP (FOREIGN KEY|CONSTRAINT) (IF EXISTS )?[`"]?fk_dc_posts_author[`"]?(\s|;|$)/m
+          )
+        );
+      }
+      const live = await introspectLiveSnapshot(
+        adapter.getDrizzle(),
+        dialect === "postgresql" ? "postgresql" : dialect,
+        ["dc_posts"]
+      );
+      expect(
+        live.tables[0]?.foreignKeys?.map(fk => fk.referencesTable)
+      ).toEqual(["dc_editors"]);
+    });
+
     it("writes a many-to-many field's join table into the file: made here, replayed on an empty database, dropped with the collection", async () => {
       const m2m = {
         name: "tags",

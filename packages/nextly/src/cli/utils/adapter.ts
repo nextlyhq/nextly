@@ -13,6 +13,7 @@ import { resolve } from "node:path";
 
 import {
   activePostgresSchema,
+  assertInstallationInConfiguredSchema,
   DEFAULT_POSTGRES_SCHEMA,
 } from "../../domains/schema/services/postgres-schema";
 import { dialectFromUrl } from "../../shared/lib/env";
@@ -322,6 +323,20 @@ async function createUnderEnv(
     // Loaded here, as the factory is, so the CLI's light entry points do not import the tables.
     const { installRegistryResolver } = await import("./registry-resolver");
     installRegistryResolver(adapter);
+    // Before the command creates or migrates anything: with the setting moved
+    // on an existing site, `migrate` and `db:sync` would build a second, empty
+    // installation in the newly named schema.
+    if (dialect === "postgresql") {
+      try {
+        await assertInstallationInConfiguredSchema(
+          adapter.getDrizzle(),
+          schema
+        );
+      } catch (error) {
+        await adapter.disconnect().catch(() => {});
+        throw error;
+      }
+    }
     return adapter;
   } catch (error) {
     if (

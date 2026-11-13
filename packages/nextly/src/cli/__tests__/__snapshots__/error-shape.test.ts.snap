@@ -1632,6 +1632,13 @@ exports[`each code, as a command ends with it > POSTGRES_SCHEMA_MISMATCH 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/postgres-schema-mismatch  (POSTGRES_SCHEMA_MISMATCH)"
 `;
 
+exports[`each code, as a command ends with it > POSTGRES_SCHEMA_MOVED 1`] = `
+"✗ db.postgres.schema is "tenant_a", but this database's Nextly installation is in "public".
+  Why:  Starting would create a second, empty installation in "tenant_a" and serve it instead of the existing one.
+  Next: To keep using the existing installation, remove db.postgres.schema. To start a separate installation in "tenant_a" on purpose, set NEXTLY_POSTGRES_SCHEMA_NEW_INSTALL=1 for its first start.
+  Docs: https://nextlyhq.com/docs/cli/errors/postgres-schema-moved  (POSTGRES_SCHEMA_MOVED)"
+`;
+
 exports[`each code, as a command ends with it > POSTGRES_SCHEMA_UNSUPPORTED 1`] = `
 "✗ db.postgres.schema is "tenant_a", but a PostgreSQL schema other than "public" is not supported yet.
   Why:  Nextly can only create and migrate its tables in "public".
