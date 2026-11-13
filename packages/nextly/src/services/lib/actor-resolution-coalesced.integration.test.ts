@@ -76,6 +76,8 @@ describe.each(getConfiguredTestDialects())(
     let holdNext: Promise<void> | undefined;
     /** Where set: the next walk fails with it. */
     let failNext: Error | undefined;
+    /** Held open where set: the next grants read waits for it before it runs. */
+    let holdNextGrants: Promise<void> | undefined;
 
     beforeAll(async () => {
       t = await createTestNextly({ dialect, collections: [gadgets] });
@@ -105,9 +107,16 @@ describe.each(getConfiguredTestDialects())(
               reject: (error: unknown) => unknown
             ) => Promise<unknown>;
           };
-          if (!isTable(table) || getTableName(table) !== "user_roles") {
+          const name = isTable(table) ? getTableName(table) : undefined;
+          if (name === "role_permissions" && holdNextGrants !== undefined) {
+            const grantsHold = holdNextGrants;
+            holdNextGrants = undefined;
+            const runGrants = query.then.bind(query);
+            query.then = (resolve, reject) =>
+              grantsHold.then(() => runGrants(resolve, reject), reject);
             return query;
           }
+          if (name !== "user_roles") return query;
           walks += 1;
           const hold = holdNext;
           const failure = failNext;
@@ -133,6 +142,7 @@ describe.each(getConfiguredTestDialects())(
       walks = 0;
       holdNext = undefined;
       failNext = undefined;
+      holdNextGrants = undefined;
     });
 
     afterAll(async () => {
@@ -264,6 +274,33 @@ describe.each(getConfiguredTestDialects())(
       const walksBefore = walks;
       expect(await request(userId)).toBe(true);
       expect(walks - walksBefore).toBe(1);
+    });
+
+    it("never serves a resolution that outlived the assignment it read, joined or not", async () => {
+      // The assignment is read while in force, then the resolution stalls on
+      // its grants until after it has ended: an expiry moves no role
+      // version, so only the expiry itself can keep the ended role's grants
+      // from the request that began it and from one that joins it later.
+      const userId = await newHolder(
+        await newRole(),
+        new Date(Date.now() + 1500)
+      );
+      let openGrants!: () => void;
+      holdNextGrants = new Promise<void>(resolve => {
+        openGrants = resolve;
+      });
+
+      const first = request(userId);
+      await walksBegun(1);
+      // Past the expiry, with room for a column that keeps whole seconds.
+      await new Promise(resolve => setTimeout(resolve, 2600));
+      const late = request(userId);
+      openGrants();
+
+      expect(await late).toBe(false);
+      expect(await first).toBe(false);
+      // Kept by neither: the next request reads the assignment as ended.
+      expect(await request(userId)).toBe(false);
     });
 
     it("serves a burst's resolution no longer than the assignment it came from", async () => {

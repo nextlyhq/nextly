@@ -466,6 +466,51 @@ async function loadActor(userId: string): Promise<ResolvedActor> {
 }
 
 /**
+ * How many times a request resolves the user again because the resolution it
+ * was handed outlived a role assignment it was built from, before it gives up
+ * and fails closed.
+ */
+const EXPIRED_RESOLUTION_RETRIES = 3;
+
+/**
+ * `actor`, when every role assignment it was built from is still in force,
+ * and otherwise the user resolved again, alone.
+ *
+ * An assignment's expiry moves no role version, so the version in the key
+ * does not keep a request from joining a resolution that read an assignment
+ * which has expired since: one whose later reads (inheritance, grants) ran
+ * past the moment it ended, or one a request joined after it ended. Served,
+ * that resolution would hand the request the ended role's grants, where a
+ * resolution of its own would have read the assignment as ended. So
+ * whichever request receives it, the one that began it included, checks the
+ * soonest expiry it carries (`validUntil`) against the time now, and resolves
+ * the user again on its own where it has passed: never joined, so never
+ * across an expiry. A fresh resolution leaves out every assignment ended when
+ * it read them; one that itself outlives another assignment is resolved
+ * again, a few times at most, then refused (the caller fails closed).
+ */
+async function stillInForce(
+  userId: string,
+  actor: ResolvedActor
+): Promise<ResolvedActor> {
+  let current = actor;
+  for (let retry = 0; ; retry += 1) {
+    if (current.validUntil === undefined || current.validUntil > Date.now()) {
+      return current;
+    }
+    if (retry === EXPIRED_RESOLUTION_RETRIES) {
+      throw NextlyError.internal({
+        logContext: {
+          reason:
+            "every resolution of the user's roles outlived a role assignment it read",
+        },
+      });
+    }
+    current = await loadActor(userId);
+  }
+}
+
+/**
  * The user's actor on the pool: the one this process kept, while the role
  * version it was resolved under stands and before it expires, and otherwise
  * read now and kept.
@@ -489,11 +534,12 @@ async function actorOnPool(userId: string): Promise<ResolvedActor> {
   }
   // Joined only while the version this request read is still the one in
   // force: checked here, after the kept actor, with no await before the join.
-  const actor = stampIsCurrent(resolvedUnder)
+  const shared = stampIsCurrent(resolvedUnder)
     ? await coalesce(actorLoads, `${userId}\u0000${resolvedUnder}`, () =>
         loadActor(userId)
       )
     : await loadActor(userId);
+  const actor = await stillInForce(userId, shared);
   const expiresAt = keptUntil(userId, actor.validUntil);
   if (stampIsCurrent(resolvedUnder)) {
     if (actorCache.size >= ACTOR_CACHE_MAX_ENTRIES) {
