@@ -42,7 +42,16 @@ afterEach(async () => {
   current = undefined;
 });
 
-describe.each(getConfiguredTestDialects().filter(d => d !== "sqlite"))(
+// PostgreSQL and MySQL only (see above). A run configured with neither still reports the cases,
+// skipped, rather than a file with no suite in it.
+const DIALECTS = getConfiguredTestDialects().filter(d => d !== "sqlite");
+if (DIALECTS.length === 0) {
+  describe("a main-table column relaxed as translation starts", () => {
+    it.skip("needs PostgreSQL or MySQL", () => undefined);
+  });
+}
+
+describe.each(DIALECTS)(
   "a main-table column relaxed as translation starts (%s)",
   dialect => {
     const q = (id: string) => (dialect === "mysql" ? `\`${id}\`` : `"${id}"`);

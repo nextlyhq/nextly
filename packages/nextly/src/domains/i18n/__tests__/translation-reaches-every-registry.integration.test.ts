@@ -130,6 +130,17 @@ async function recordedTranslated(t: TestNextly): Promise<boolean> {
 describe.each(getConfiguredTestDialects())(
   "a migration turning translation on or off, replayed into a second database (%s)",
   dialect => {
+    const q = (id: string) => (dialect === "mysql" ? `\`${id}\`` : `"${id}"`);
+    /**
+     * Runs `statement` on the second database. Its values are written and read on the tables the
+     * replay left, as the next start of a deployed server reads them: this instance booted before
+     * the folder was replayed, so it registered none of them.
+     */
+    const run = <T>(t: TestNextly, statement: string) =>
+      (t.adapter as unknown as DrizzleAdapter).executeQuery(
+        statement
+      ) as unknown as Promise<T[]>;
+
     // Waits on the data-loss judgement counting a translations table created in the same file as
     // the run's own; until then an unattended run refuses this file without blanket consent.
     it.skip("records the collection translated, and keeps a value per language", async () => {
@@ -141,30 +152,23 @@ describe.each(getConfiguredTestDialects())(
       const second = await replayIntoSecondDatabase(dialect);
 
       expect(await recordedTranslated(second)).toBe(true);
-      const created = await second.nextly.create({
-        collection: SLUG,
-        locale: "en",
-        data: { heading: "Hello" },
-      });
-      const id = (created.item as { id: string }).id;
-      await second.nextly.update({
-        collection: SLUG,
-        id,
-        locale: "es",
-        data: { heading: "Hola" },
-      });
-      const inSpanish = await second.nextly.findByID({
-        collection: SLUG,
-        id,
-        locale: "es",
-      });
-      const inEnglish = await second.nextly.findByID({
-        collection: SLUG,
-        id,
-        locale: "en",
-      });
-      expect((inSpanish as { heading?: unknown }).heading).toBe("Hola");
-      expect((inEnglish as { heading?: unknown }).heading).toBe("Hello");
+      // A value per language, in the translations table the replay created.
+      await run(
+        second,
+        `INSERT INTO ${q("dc_trr_posts")} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('p1', 'T', 'p1')`
+      );
+      await run(
+        second,
+        `INSERT INTO ${q("dc_trr_posts_locales")} (${q("_parent")}, ${q("_locale")}, ${q("heading")}) VALUES ('p1', 'en', 'Hello'), ('p1', 'es', 'Hola')`
+      );
+      const rows = await run<{ locale: string; heading: string }>(
+        second,
+        `SELECT ${q("_locale")} AS locale, ${q("heading")} AS heading FROM ${q("dc_trr_posts_locales")} WHERE ${q("_parent")} = 'p1' ORDER BY ${q("_locale")}`
+      );
+      expect(rows).toEqual([
+        { locale: "en", heading: "Hello" },
+        { locale: "es", heading: "Hola" },
+      ]);
     }, 120_000);
 
     it("records the collection not translated, and keeps its values in the default language", async () => {
@@ -180,18 +184,19 @@ describe.each(getConfiguredTestDialects())(
       );
 
       expect(await recordedTranslated(second)).toBe(false);
-      const created = await second.nextly.create({
-        collection: SLUG,
-        locale: "en",
-        data: { heading: "Hello" },
-      });
-      const id = (created.item as { id: string }).id;
-      const read = await second.nextly.findByID({
-        collection: SLUG,
-        id,
-        locale: "en",
-      });
-      expect((read as { heading?: unknown }).heading).toBe("Hello");
+      // The value is the main table's again, and the translations table is gone.
+      await run(
+        second,
+        `INSERT INTO ${q("dc_trr_posts")} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("heading")}) VALUES ('p1', 'T', 'p1', 'Hello')`
+      );
+      const [row] = await run<{ heading: string }>(
+        second,
+        `SELECT ${q("heading")} AS heading FROM ${q("dc_trr_posts")} WHERE ${q("id")} = 'p1'`
+      );
+      expect(row?.heading).toBe("Hello");
+      await expect(
+        run(second, `SELECT 1 FROM ${q("dc_trr_posts_locales")}`)
+      ).rejects.toThrow();
     }, 120_000);
   }
 );
