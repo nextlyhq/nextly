@@ -76,6 +76,12 @@ const EARLY_AND_LATE = [
 ] as Fields;
 // A required column added over a row: the classifier asks what the row gets. Answered "make it
 // optional", the column is added nullable, which every dialect adds without drizzle-kit.
+// Two columns added, as two statements: the first can commit before the second waits.
+const EARLY_AND_TWO_MORE = [
+  { name: "early", type: "text" },
+  { name: "late", type: "text" },
+  { name: "later", type: "text" },
+] as Fields;
 const EARLY_AND_REQUIRED = [
   { name: "early", type: "text" },
   { name: "needed", type: "text", required: true },
@@ -418,6 +424,65 @@ describe.each(DIALECTS)(
         } finally {
           await single.disconnect();
         }
+      }
+    );
+
+    // MySQL and SQLite keep what a try committed, and a later try plans only what is left: the
+    // apply still reports every statement and every change its tries made, not the last try's.
+    it.runIf(dialect !== "postgresql")(
+      "reports what an earlier try committed with what the last try applied",
+      async () => {
+        const db = adapter.getDrizzle();
+        const inner = new DrizzleStatementExecutor(dialect, db);
+        let freeing: Promise<void> = Promise.resolve();
+        let held = false;
+        // The hold starts once the first column's statement has committed, so the second waits;
+        // it ends during the pause after that try, so the next try applies the rest.
+        const executor = {
+          executeStatements: async (tx: unknown, statements: string[]) => {
+            for (const statement of statements) {
+              await inner.executeStatements(tx, [statement]);
+              if (!held && /\bADD\b/i.test(statement)) {
+                held = true;
+                await holdTheTable();
+                freeing = sleep(1_500).then(() => free());
+              }
+            }
+          },
+        };
+        const pipeline = new PushSchemaPipeline({
+          executor,
+          renameDetector: new RegexRenameDetector(),
+          classifier: new RealClassifier(),
+          promptDispatcher: noopPromptDispatcher,
+          preRenameExecutor: noopPreRenameExecutor,
+          preCleanupExecutor: new RealPreCleanupExecutor(),
+          migrationJournal: recordingJournal(),
+          notifier: noopNotifier,
+        });
+        const applied = await pipeline.apply({
+          desired: desiredWith(EARLY_AND_TWO_MORE),
+          db,
+          dialect,
+          source: "code",
+          promptChannel: "terminal",
+          ...(databaseName === undefined ? {} : { databaseName }),
+          busyTable: {
+            bounds: { tryMs: 1_000, totalMs: 20_000 },
+            notify: line => notices.push(line),
+            change: "schema sync",
+          },
+        });
+        await freeing;
+
+        expect(applied.success, JSON.stringify(applied.error)).toBe(true);
+        expect(held).toBe(true);
+        expect(notices).toHaveLength(1);
+        expect(await columnsOf(BUSY)).toEqual(
+          expect.arrayContaining(["late", "later"])
+        );
+        expect(applied.statementsExecuted).toBe(2);
+        expect(applied.summary).toMatchObject({ added: 2 });
       }
     );
 

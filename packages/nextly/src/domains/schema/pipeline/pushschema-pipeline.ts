@@ -847,12 +847,21 @@ export class PushSchemaPipeline {
       const promptDispatcher = askingOnce(this.deps.promptDispatcher);
       // The statements a try sent and saw finish, counted where the apply hands its statements to
       // the executor and as the pre-resolution phase reports them; on MySQL and SQLite each has
-      // committed, and stays when the try ends waiting. MySQL's are handed over one at a time
-      // while the tries are on, since each commits as it runs and a batch that waits part-way
-      // would not say how many before it did; elsewhere a batch is handed over whole, as always.
+      // committed, and stays when the try ends waiting. MySQL's and SQLite's are handed over one
+      // at a time while the tries are on, since each commits as it runs and a batch that waits
+      // part-way would not say how many before it did; on PostgreSQL a batch is handed over whole,
+      // as always, its try's transaction rolling back whole.
       let finishedThisTry = 0;
       let finishedEarlier = 0;
-      const oneByOne = busyTable !== undefined && dialect === "mysql";
+      const oneByOne = busyTable !== undefined && dialect !== "postgresql";
+      // What each MySQL or SQLite try planned, and what the tries that ended waiting planned in
+      // all: a later try plans from the live database, where what an earlier one committed is no
+      // longer a change, so the apply reports that from the earlier plans (`withEarlierTries`).
+      let plannedThisTry: Pick<PlannedApply, "resolvedOps" | "moved"> = {
+        resolvedOps: [],
+        moved: [],
+      };
+      const plannedEarlier: Pick<PlannedApply, "resolvedOps" | "moved">[] = [];
       const executor: DrizzleStatementExecutor = {
         executeStatements: async (tx, statements) => {
           for (const batch of oneByOne
@@ -1113,6 +1122,7 @@ export class PushSchemaPipeline {
                 .map(c => c.tableName.toLowerCase())
             )
           );
+        plannedThisTry = { resolvedOps, moved: moves.moved };
 
         // A column made NOT NULL over rows no answer fills is refused here, before anything runs:
         // every column the answered plan makes NOT NULL, not only those the classifier raised.
@@ -1950,35 +1960,41 @@ export class PushSchemaPipeline {
       const { statementsExecuted, resolvedOps, renamesApplied, moved } =
         busyTable === undefined || dialect === "postgresql"
           ? await planAndApply(undefined, false)
-          : await withBusyTableTries(
-              busyTableTries(busyTable, dialect),
-              (tryNumber, tryMs) =>
-                watchedTry(
-                  reader,
-                  dialect,
-                  tryMs,
-                  async bound => {
-                    const restore =
-                      dialect === "sqlite"
-                        ? await boundSqliteWait(db, tryMs)
-                        : undefined;
-                    try {
-                      return await planAndApply(bound, tryNumber > 1);
-                    } finally {
-                      await restore?.();
+          : withEarlierTries(
+              await withBusyTableTries(
+                busyTableTries(busyTable, dialect),
+                (tryNumber, tryMs) =>
+                  watchedTry(
+                    reader,
+                    dialect,
+                    tryMs,
+                    async bound => {
+                      const restore =
+                        dialect === "sqlite"
+                          ? await boundSqliteWait(db, tryMs)
+                          : undefined;
+                      try {
+                        return await planAndApply(bound, tryNumber > 1);
+                      } finally {
+                        await restore?.();
+                      }
+                    },
+                    () => {
+                      // Numbered across the apply's tries, so a statement a later try finished is
+                      // not named by the number of one an earlier try did.
+                      const committed = Array.from(
+                        { length: finishedThisTry },
+                        (_, index) => finishedEarlier + index + 1
+                      );
+                      finishedEarlier += finishedThisTry;
+                      plannedEarlier.push(plannedThisTry);
+                      return { table: waitedTable, undone: false, committed };
                     }
-                  },
-                  () => {
-                    // Numbered across the apply's tries, so a statement a later try finished is
-                    // not named by the number of one an earlier try did.
-                    const committed = Array.from(
-                      { length: finishedThisTry },
-                      (_, index) => finishedEarlier + index + 1
-                    );
-                    finishedEarlier += finishedThisTry;
-                    return { table: waitedTable, undone: false, committed };
-                  }
-                )
+                  )
+              ),
+              // Read once the tries are over, after the last one that ended counted its own.
+              plannedEarlier,
+              finishedEarlier
             );
 
       // F10 PR 2: derive the per-change-kind summary from the
@@ -2615,6 +2631,46 @@ function askingOnce(inner: PromptDispatcher): PromptDispatcher {
         }),
       };
     },
+  };
+}
+
+/**
+ * What an apply whose MySQL or SQLite tries ended waiting before `last` succeeded did in all: the
+ * statements every try committed (`finishedEarlier` before `last`'s own), and each operation and
+ * moved column an earlier try planned that `last` did not plan again, which that try had applied,
+ * since `last` planned from the live database after it. An operation `last` planned again had not
+ * been applied, and is counted once, as `last`'s.
+ */
+function withEarlierTries(
+  last: PlannedApply,
+  plannedEarlier: readonly Pick<PlannedApply, "resolvedOps" | "moved">[],
+  finishedEarlier: number
+): PlannedApply {
+  const resolvedOps: Operation[] = [];
+  const moved: PlannedApply["moved"] = [];
+  for (const plan of plannedEarlier) {
+    for (const op of plan.resolvedOps) {
+      const again = [...resolvedOps, ...last.resolvedOps].some(seen =>
+        dequal(seen, op)
+      );
+      if (!again) resolvedOps.push(op);
+    }
+    for (const column of plan.moved) {
+      const again = [...moved, ...last.moved].some(seen =>
+        dequal(seen, column)
+      );
+      if (!again) moved.push(column);
+    }
+  }
+  return {
+    statementsExecuted: finishedEarlier + last.statementsExecuted,
+    resolvedOps: [...resolvedOps, ...last.resolvedOps],
+    renamesApplied:
+      last.renamesApplied +
+      resolvedOps.filter(
+        op => op.type === "rename_table" || op.type === "rename_column"
+      ).length,
+    moved: [...moved, ...last.moved],
   };
 }
 
