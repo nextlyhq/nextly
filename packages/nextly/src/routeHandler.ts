@@ -239,6 +239,7 @@ import {
   isBuilderEnabled,
   isBuilderRoute,
 } from "./shared/builder-access";
+import { datesFormatted } from "./shared/lib/dates-formatted";
 import { consoleLogger } from "./shared/types";
 import {
   hexToCssColor,
@@ -330,7 +331,13 @@ function withoutInternalMarkers(response: Response): Response {
 
 async function applyGlobalDateFormatting(
   response: Response,
-  req?: Request
+  req?: Request,
+  /**
+   * Whether the handler answered with a response it formatted itself
+   * (`datesFormatted`, asked of its own response, before the request id was
+   * added to it): its dates already read in the configured timezone.
+   */
+  formattedByHandler = false
 ): Promise<Response> {
   // READ the markers, then remove them, then act on what they said.
   //
@@ -353,7 +360,7 @@ async function applyGlobalDateFormatting(
     return clean;
   }
 
-  if (optedOut) {
+  if (optedOut || formattedByHandler) {
     return clean;
   }
 
@@ -2952,7 +2959,8 @@ export function createDynamicHandlers(options?: {
     }
     const formattedResponse = await applyGlobalDateFormatting(
       identifiedResponse,
-      req
+      req,
+      datesFormatted(response)
     );
     // Tagged once the body is final, after the formatting above, so the tag
     // is of the bytes the caller receives.
