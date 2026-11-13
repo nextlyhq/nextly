@@ -16,7 +16,7 @@
  */
 import { createHash } from "node:crypto";
 
-import { getColumns, isTable, type Table } from "drizzle-orm";
+import { getColumns, getTableName, isTable, type Table } from "drizzle-orm";
 
 import { loadDialectTables } from "../../../database/dialect-tables";
 import {
@@ -284,12 +284,35 @@ function keyRelationsOf(
   const own = (table.foreignKeys ?? []).filter(
     fk => fk.contributedBy === undefined
   );
-  return foreignKeyRelations(own, table.columns, table.relations ?? []).filter(
-    rel =>
-      rel.toColumn === undefined ||
-      byName.has(rel.targetTable) ||
-      isTable(coreTables[rel.targetTable])
+  return foreignKeyRelations(own, table.columns, table.relations ?? [])
+    .map(rel => ({
+      ...rel,
+      targetTable: relationTargetKey(rel.targetTable, byName, coreTables),
+    }))
+    .filter(
+      rel =>
+        rel.toColumn === undefined ||
+        byName.has(rel.targetTable) ||
+        isTable(coreTables[rel.targetTable])
+    );
+}
+
+/**
+ * The name the registry finds a key's target by. A key names its target's
+ * SQL table, and the registry holds a core table under its bundle key
+ * (`dynamicCollections` for `dynamic_collections`), so a core target is
+ * translated; any other table is registered under its SQL name already.
+ */
+function relationTargetKey(
+  sqlName: string,
+  byName: ReadonlyMap<string, ExtensionTable>,
+  coreTables: Readonly<Record<string, unknown>>
+): string {
+  if (byName.has(sqlName) || isTable(coreTables[sqlName])) return sqlName;
+  const core = Object.entries(coreTables).find(
+    ([, table]) => isTable(table) && getTableName(table) === sqlName
   );
+  return core?.[0] ?? sqlName;
 }
 
 function invalidTargetColumn(path: string, message: string): never {

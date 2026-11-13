@@ -14,7 +14,10 @@
  */
 import { beforeAll, describe, expect, it } from "vitest";
 
+import { getTableName, type Table } from "drizzle-orm";
+
 import { loadDialectTables } from "../../../../database/dialect-tables";
+import { staticRelationTables } from "../../../../database/schema-registry";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { buildExtensionSchema } from "../build-extension-schema";
 import { col, defineTable, type TableDefinition } from "../dsl";
@@ -220,6 +223,59 @@ describe("a table's own foreign key", () => {
           {
             columns: ["pa", "pb"],
             references: { table: "rp__rows", columns: ["a", "b"] },
+          },
+        ],
+      }
+    );
+    const built = await compile([table]);
+    expect(built.relations.get("rp__rows")).toBeUndefined();
+  });
+
+  it("names a core target by the key the registry holds it under", async () => {
+    // `dynamic_collections` is the SQL name; the registry composes the core
+    // tables under their bundle keys, so an edge naming the SQL name would
+    // not resolve.
+    const table = defineTable(
+      "rows",
+      { id: col.id(), collectionId: col.shortText() },
+      {
+        foreignKeys: [
+          {
+            columns: ["collectionId"],
+            references: { table: "dynamic_collections", columns: ["id"] },
+          },
+        ],
+      }
+    );
+    const built = await compile([table]);
+    const core = staticRelationTables("postgresql");
+    const [edge] = built.relations.get("rp__rows") ?? [];
+    expect(edge?.targetTable).not.toBe("dynamic_collections");
+    expect(getTableName(core[edge?.targetTable ?? ""] as Table)).toBe(
+      "dynamic_collections"
+    );
+    // The key itself keeps the SQL name it is created with.
+    expect(
+      built.specs.find(spec => spec.name === "rp__rows")?.foreignKeys?.[0]
+        ?.referencesTable
+    ).toBe("dynamic_collections");
+  });
+
+  it("carries none where a column already holds the edge's name", async () => {
+    const table = defineTable(
+      "rows",
+      {
+        id: col.id(),
+        code: col.varchar(20),
+        ownerCode: col.varchar(20),
+        ownerCodeRef: col.shortText({ nullable: true }),
+      },
+      {
+        indexes: [{ columns: ["code"], unique: true }],
+        foreignKeys: [
+          {
+            columns: ["ownerCode"],
+            references: { table: "rp__rows", columns: ["code"] },
           },
         ],
       }

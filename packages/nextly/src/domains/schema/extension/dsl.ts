@@ -1433,7 +1433,11 @@ export function foreignKeyRelations(
     const key =
       columns.find(column => column.name === fromColumn)?.key ?? fromColumn;
     const name = implicitEdgeName(key, columnKeys);
-    if (names.has(name)) continue;
+    // A relation and a column share the row's namespace, and the fallback
+    // name (`<key>Ref`) is not checked against the columns by
+    // `implicitEdgeName`: a table holding a column of that name gets no
+    // edge for the key rather than a pair Drizzle refuses.
+    if (names.has(name) || columnKeys.has(name)) continue;
     names.add(name);
     edges.push({
       name,
