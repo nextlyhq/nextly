@@ -114,6 +114,8 @@ describe("seoPlugin", () => {
       ["POST", "/share-image", undefined, undefined],
       // The settings screen's reads, for a signed-in reader of the settings.
       ["GET", "/settings/content-types", undefined, undefined],
+      // Which sitemap pages own robots.txt rules being typed would block.
+      ["POST", "/settings/robots-rules-check", undefined, undefined],
       ["GET", "/settings/document", undefined, undefined],
       // The redirects screen's routes, for those the redirects' permissions allow.
       ["GET", "/redirects", undefined, undefined],
@@ -128,6 +130,8 @@ describe("seoPlugin", () => {
       // What search engines received: the pages it offers, and the check,
       // for anyone signed in.
       ["POST", "/received", undefined, undefined],
+      // Whether the live home page carries the saved verification codes.
+      ["POST", "/settings/verification-check", undefined, undefined],
       ["POST", "/resolve", undefined, undefined],
       // A Page Builder template's SEO panel's read.
       ["POST", "/template", undefined, undefined],
@@ -221,6 +225,7 @@ describe("seoPlugin", () => {
       "/llms.txt",
       "/share-image",
       "/settings/content-types",
+      "/settings/robots-rules-check",
       "/settings/document",
       "/redirects",
       "/redirects",
@@ -231,6 +236,7 @@ describe("seoPlugin", () => {
       "/not-found/:id",
       "/proxy-status",
       "/received",
+      "/settings/verification-check",
       "/resolve",
       "/template",
       "/problems",
@@ -266,6 +272,7 @@ describe("seoPlugin", () => {
       "/llms.txt",
       "/share-image",
       "/settings/content-types",
+      "/settings/robots-rules-check",
       "/settings/document",
       "/redirects",
       "/redirects",
@@ -276,6 +283,7 @@ describe("seoPlugin", () => {
       "/not-found/:id",
       "/proxy-status",
       "/received",
+      "/settings/verification-check",
       "/resolve",
       "/template",
       "/problems",
