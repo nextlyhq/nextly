@@ -88,7 +88,10 @@ over.
   order) and are both repeatable or both not. A field group whose name is taken in the same
   change by a different field (a field of another kind, such as the SEO plugin's `seo` group
   added where your own `seo` field group was, or a field group holding other groups) counts as
-  removed, so its rename is still asked about.
+  removed, so its rename is still asked about. A rename onto a name whose old field group shares
+  a group with the new one is not offered, because that field's rows still sit under the name in
+  the shared table (two fields exchanging names is the common case): rename through a new name,
+  one migration at a time.
 
 ```sql
 -- UP
