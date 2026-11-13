@@ -372,3 +372,50 @@ describe("the live home page", () => {
     expect(checks).toBe(1);
   });
 });
+
+describe("after a pasted tag is saved", () => {
+  it("shows the live home page's answer, not the note about the paste", async () => {
+    checked = {
+      checkedAt: "2026-11-13T14:02:00.000Z",
+      homePages: [{ address: "https://nextlyhq.com", read: true }],
+      tags: [{ name: "msvalidate.01", foundAt: ["https://nextlyhq.com"] }],
+    };
+    openConnections();
+    type(box("Bing"), `<meta name="msvalidate.01" content="${BING}" />`);
+    expect(
+      screen.getByText("Took the code from the tag you pasted.")
+    ).toBeTruthy();
+    fireEvent.click(saveButton());
+    await settle();
+    expect(
+      screen.queryByText("Took the code from the tag you pasted.")
+    ).toBeNull();
+    expect(
+      screen.getByText(
+        /Found on the live home page at .*\. Now press Verify in Bing Webmaster Tools\./
+      )
+    ).toBeTruthy();
+  });
+});
+
+describe("a full Other services", () => {
+  const full = Array.from({ length: 20 }, (_, index) => ({
+    name: `service-${index}-verification`,
+    code: `code${index}`,
+  }));
+
+  it("offers no move of another tag there, and says why", () => {
+    openConnections({ verificationCodes: { others: full } });
+    type(
+      box("Google"),
+      '<meta name="facebook-domain-verification" content="q3x9k2m8a7c1v5b0n4" />'
+    );
+    expect(
+      screen.queryByRole("button", { name: "Move it to Other services" })
+    ).toBeNull();
+    expect(
+      screen.getByText(/Other services already holds 20 tags/)
+    ).toBeTruthy();
+    expect(saveButton().disabled).toBe(true);
+  });
+});

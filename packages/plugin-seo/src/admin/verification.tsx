@@ -70,11 +70,19 @@ export function verificationDraftProblem(
       return `Fix the ${service.name} code first.`;
     }
   }
+  if (filledOthers(draft.others).length > MAX_OTHER_SERVICES) {
+    return `Keep other services to ${MAX_OTHER_SERVICES} tags.`;
+  }
   return draft.others.some(
     (_, index) => otherRowProblem(draft.others, index) !== null
   )
     ? "Fix the other services' tags first."
     : null;
+}
+
+/** The rows under Other services that hold anything. */
+function filledOthers(others: readonly OtherTagDraft[]): OtherTagDraft[] {
+  return others.filter(tag => tag.name.trim() !== "" || tag.code.trim() !== "");
 }
 
 /** Why one row under Other services cannot be saved; null when it can. */
@@ -230,6 +238,7 @@ function ServiceBoxNote({
   keyOf,
   text,
   took,
+  othersFull,
   move,
   live,
 }: {
@@ -237,6 +246,8 @@ function ServiceBoxNote({
   keyOf: VerificationServiceKey;
   text: string;
   took: string | undefined;
+  /** Other services holds as many tags as it may, so none can move there. */
+  othersFull: boolean;
   move: (target: VerificationServiceKey | "others") => void;
   live: ReactNode;
 }): JSX.Element | null {
@@ -245,6 +256,15 @@ function ServiceBoxNote({
     return (
       <ControlNote id={id} tone="danger">
         {read.message}
+      </ControlNote>
+    );
+  }
+  if (read.kind === "other" && othersFull) {
+    return (
+      <ControlNote id={id} tone="danger">
+        That&apos;s the {read.name} tag, which has no box of its own. Other
+        services already holds {MAX_OTHER_SERVICES} tags: remove one there
+        first.
       </ControlNote>
     );
   }
@@ -356,7 +376,7 @@ function ServiceRow({
       }
     >
       <Input
-        className="font-mono text-[13px]"
+        className="font-mono text-[13px] placeholder:font-sans"
         value={text}
         placeholder={PLACEHOLDER}
         aria-label={`${service.name} verification code`}
@@ -370,7 +390,10 @@ function ServiceRow({
         id={noteId}
         keyOf={serviceKey}
         text={text}
-        took={took}
+        // Once the code is saved, what the live home page says replaces the
+        // note about the paste.
+        took={savedHere ? undefined : took}
+        othersFull={filledOthers(draft.others).length >= MAX_OTHER_SERVICES}
         move={to => {
           setTook(undefined);
           move(serviceKey, to);
@@ -450,7 +473,7 @@ function OtherServices({
             <div key={index}>
               <div className="flex items-center gap-2">
                 <Input
-                  className="w-2/5 font-mono text-[13px]"
+                  className="w-2/5 font-mono text-[13px] placeholder:font-sans"
                   value={row.name}
                   placeholder="Name"
                   aria-label={`Other service ${index + 1}: name`}
@@ -470,7 +493,7 @@ function OtherServices({
                   }}
                 />
                 <Input
-                  className="flex-1 font-mono text-[13px]"
+                  className="flex-1 font-mono text-[13px] placeholder:font-sans"
                   value={row.code}
                   placeholder="Code"
                   aria-label={`Other service ${index + 1}: code`}
@@ -585,10 +608,12 @@ export function VerificationCard({
       if (read.kind === "elsewhere" && to !== "others") {
         return { ...current, [from]: "", [to]: read.code };
       }
-      if (read.kind === "other" && to === "others") {
-        const others = current.others.filter(
-          tag => tag.name.trim() !== "" || tag.code.trim() !== ""
-        );
+      const others = filledOthers(current.others);
+      if (
+        read.kind === "other" &&
+        to === "others" &&
+        others.length < MAX_OTHER_SERVICES
+      ) {
         return {
           ...current,
           [from]: "",
