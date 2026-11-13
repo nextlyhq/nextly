@@ -198,10 +198,13 @@ describe("a table's own foreign key", () => {
         ],
       }
     );
-    expect(table.relations.map(rel => rel.name)).toEqual(["up"]);
+    const built = await compile([table]);
+    expect(built.relations.get("rp__rows")?.map(edge => edge.key)).toEqual([
+      "up",
+    ]);
   });
 
-  it("carries none for a key over two columns, which no edge can join", () => {
+  it("carries none for a key over two columns, which no edge can join", async () => {
     const table = defineTable(
       "rows",
       {
@@ -221,6 +224,48 @@ describe("a table's own foreign key", () => {
         ],
       }
     );
-    expect(table.relations).toEqual([]);
+    const built = await compile([table]);
+    expect(built.relations.get("rp__rows")).toBeUndefined();
+  });
+
+  it("carries none to a column other than id on a collection, which the compile cannot check", async () => {
+    const table = defineTable(
+      "rows",
+      { id: col.id(), postSlug: col.varchar(20), postId: col.varchar(36) },
+      {
+        foreignKeys: [
+          {
+            columns: ["postSlug"],
+            references: { table: "dc_posts", columns: ["slug"] },
+          },
+          // CONTROL: the collection's id is joined, as a ref() column's is.
+          {
+            columns: ["postId"],
+            references: { table: "dc_posts", columns: ["id"] },
+          },
+        ],
+      }
+    );
+    const built = await compile([table], {
+      entities: [
+        {
+          name: "dc_posts",
+          slug: "posts",
+          entityKind: "collection",
+          columns: [
+            { name: "id", kind: "varchar", nullable: false },
+            { name: "slug", kind: "varchar", nullable: false },
+          ],
+        },
+      ],
+    });
+    expect(built.relations.get("rp__rows")).toEqual([
+      {
+        key: "post",
+        kind: "one",
+        fromColumn: "postId",
+        targetTable: "dc_posts",
+      },
+    ]);
   });
 });

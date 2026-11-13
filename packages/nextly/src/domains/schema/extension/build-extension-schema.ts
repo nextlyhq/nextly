@@ -49,6 +49,7 @@ import {
   toTableSpec,
 } from "./compile";
 import { type SeedEntityTable, SchemaDraftStore } from "./draft";
+import { foreignKeyRelations, type TableRelationInput } from "./dsl";
 import { enumChecks } from "./enum-check";
 import { assertMysqlRowFits, foreignKeyColumnProblem } from "./naming";
 import {
@@ -229,7 +230,10 @@ function relationEdgesOf(
   byName: ReadonlyMap<string, ExtensionTable>,
   coreTables: Readonly<Record<string, unknown>>
 ): DynamicRelationEdge[] {
-  return (table.relations ?? []).map((rel, position) => {
+  return [
+    ...(table.relations ?? []),
+    ...keyRelationsOf(table, byName, coreTables),
+  ].map((rel, position) => {
     const path = `${table.name}.relations[${String(position)}]`;
     if (rel.fromColumn === undefined) {
       throw NextlyError.internal({
@@ -258,6 +262,33 @@ function relationEdgesOf(
         : {}),
     };
   });
+}
+
+/**
+ * The one-edges the table's own foreign keys carry (`foreignKeyRelations`),
+ * so a key is queryable with `with` as a `ref()` column is.
+ *
+ * Its own keys only: a key another owner added to this table is that
+ * owner's, and an edge for it would take a name on a table the contributor
+ * does not own. A key to a column other than `id` on a table whose columns
+ * this compile does not know (a collection's, a Single's) carries none, since
+ * the edge could not be checked and would fail the first query; the key
+ * itself is still the database's to judge, as any such key is.
+ */
+function keyRelationsOf(
+  table: ExtensionTable,
+  byName: ReadonlyMap<string, ExtensionTable>,
+  coreTables: Readonly<Record<string, unknown>>
+): TableRelationInput[] {
+  const own = (table.foreignKeys ?? []).filter(
+    fk => fk.contributedBy === undefined
+  );
+  return foreignKeyRelations(own, table.columns, table.relations ?? []).filter(
+    rel =>
+      rel.toColumn === undefined ||
+      byName.has(rel.targetTable) ||
+      isTable(coreTables[rel.targetTable])
+  );
 }
 
 function invalidTargetColumn(path: string, message: string): never {
@@ -882,7 +913,6 @@ export async function buildExtensionSchema(
   );
   // The core tables a relation may target, as the registry will resolve them.
   const coreTables = staticRelationTables(input.dialect);
-  const relations = relationsOf(tables, byName, coreTables);
 
   const { entityIndexes, entityColumns } = foreignTableContributions(store);
 
@@ -899,6 +929,10 @@ export async function buildExtensionSchema(
     input.dialect
   );
   assertForeignKeyTargetsExist(tables, store);
+  // After the keys' targets are judged: a key's own edge names its target
+  // column, and a key to a column its target lacks is refused as a key, by
+  // the check above, rather than as the edge it carries.
+  const relations = relationsOf(tables, byName, coreTables);
   // Each table whole, its own columns and every one a hook added, so a row
   // only MySQL cannot hold is refused on every dialect alike.
   for (const table of tables) assertMysqlRowFits(table);

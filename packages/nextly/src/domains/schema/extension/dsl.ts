@@ -1406,16 +1406,17 @@ function resolveRelations(
  * through it. None either where a declared relation or a `ref()` column's
  * edge already joins that column to that table, or already holds the name:
  * the author's own edge wins, as it does over a `ref()` column's. The
- * target's `id` is left implied, as a `ref()` column's is, so a key to a
- * collection's or Single's table, whose columns the compiler does not know,
- * still carries its edge; any other target column is named.
+ * target's `id` is left implied, as a `ref()` column's is; any other target
+ * column is named. Derived by the compiler (`relationsOf`), once the keys'
+ * targets are checked, rather than by `defineTable`: whether an edge to a
+ * column other than `id` can be checked depends on what the target is.
  */
-function foreignKeyRelations(
+export function foreignKeyRelations(
   foreignKeys: readonly DeclaredForeignKey[],
-  columns: readonly ResolvedColumn[],
-  columnKeys: ReadonlySet<string>,
+  columns: readonly { name: string; key: string }[],
   existing: readonly TableRelationInput[]
 ): TableRelationInput[] {
+  const columnKeys = new Set(columns.map(column => column.key));
   const names = new Set(existing.map(rel => rel.name));
   const edges: TableRelationInput[] = [];
   for (const fk of foreignKeys) {
@@ -1631,14 +1632,7 @@ export function defineTable<
       fromColumn: column.name,
     }))
     .filter(rel => !declaredNames.has(rel.name));
-  const relations = [
-    ...declaredRelations,
-    ...autoRelations,
-    ...foreignKeyRelations(foreignKeys, resolved, columnKeys, [
-      ...declaredRelations,
-      ...autoRelations,
-    ]),
-  ];
+  const relations = [...declaredRelations, ...autoRelations];
   assertDistinctRelationNames(
     name,
     relations,
