@@ -1223,15 +1223,21 @@ export class SingleQueryService extends BaseService {
       );
       await fieldGroupPass?.(entry, fieldGroupCaller);
     };
+    // The document as its own pass finds it, before that pass withholds
+    // anything: each language's rules are judged on the same evidence.
+    const evidence = { ...doc };
     await finishFields(doc);
     // Every language's values beside the document go through the same
     // pipeline, asked in that language: a rule answering by value or by
     // language, and a field hook that masks a value, act on each language's
     // value as they act on the document's.
-    await judgeEachLanguage(doc, (inLanguage, locale) =>
-      withRuleLanguage({ locale, locales: [locale] }, () =>
-        finishFields(inLanguage)
-      )
+    await judgeEachLanguage(
+      doc,
+      (inLanguage, locale) =>
+        withRuleLanguage({ locale, locales: [locale] }, () =>
+          finishFields(inLanguage)
+        ),
+      evidence
     );
     // The side keys say only what the document says: a withheld field's
     // source language is withheld with it.

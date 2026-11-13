@@ -175,10 +175,15 @@ export function decodeEachLanguage(
  * translated fields in that language, and what it leaves of them is what that
  * language's values become: a rule that answers by value or by language
  * withholds a language's value as it would withhold the row's own.
+ *
+ * Each copy is built from `evidence`, the row as its own pass found it before
+ * withholding anything, so a rule reading a sibling the row's pass withheld
+ * (a hidden flag) is shown it in every language, as the row's rule was.
  */
 export async function judgeEachLanguage(
   row: Record<string, unknown>,
-  judge: (inLanguage: Record<string, unknown>, locale: string) => Promise<void>
+  judge: (inLanguage: Record<string, unknown>, locale: string) => Promise<void>,
+  evidence: Record<string, unknown> = row
 ): Promise<void> {
   const every = row[ALL_LOCALES_KEY];
   if (!isValues(every)) return;
@@ -190,7 +195,7 @@ export async function judgeEachLanguage(
     Object.keys(every).map(name => [name, {}])
   );
   for (const code of codes) {
-    const inLanguage: Record<string, unknown> = { ...row };
+    const inLanguage: Record<string, unknown> = { ...evidence };
     delete inLanguage[ALL_LOCALES_KEY];
     delete inLanguage[SOURCE_LOCALES_KEY];
     for (const [name, value] of Object.entries(every)) {

@@ -8,7 +8,13 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, defineSingle, json, text } from "../../../config";
+import {
+  defineCollection,
+  defineSingle,
+  json,
+  relationship,
+  text,
+} from "../../../config";
 import { createDynamicHandlers } from "../../../routeHandler";
 import {
   createTestNextly,
@@ -27,6 +33,10 @@ const DATA = "rlang_data";
 const SITE_DATA = "rlang_site_data";
 // A collection whose read rule refuses a read that carries Spanish content.
 const GUARDED = "rlang_guarded";
+// A note relates a post, which relates an author.
+const NOTES = "rlang_notes";
+const POSTS = "rlang_posts";
+const AUTHORS = "rlang_authors";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -69,6 +79,26 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           json({ name: "meta", localized: true }),
           // Left out by a Direct API read that leaves hidden fields out.
           text({ name: "internal", admin: { hidden: true } }),
+          // Shared, and hidden from every reader by its own read rule.
+          text({
+            name: "flag",
+            localized: false,
+            access: { read: () => false },
+          }),
+          // Translated, and withheld in Spanish where the hidden flag says
+          // the document is private.
+          text({
+            name: "teaser",
+            access: {
+              read: ({
+                data,
+                locale,
+              }: {
+                data?: Record<string, unknown>;
+                locale?: string;
+              }) => !(data?.flag === "private" && locale === "es"),
+            },
+          }),
           // Masked by its read hook in every language.
           text({
             name: "code",
@@ -79,6 +109,33 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
               ],
             },
           }),
+        ],
+      }),
+      defineCollection({
+        slug: AUTHORS,
+        localized: true,
+        status: true,
+        access: { read: () => true },
+        fields: [text({ name: "name" })],
+      }),
+      defineCollection({
+        slug: POSTS,
+        localized: true,
+        status: true,
+        access: { read: () => true },
+        fields: [
+          text({ name: "title" }),
+          relationship({ name: "author", relationTo: AUTHORS }),
+        ],
+      }),
+      defineCollection({
+        slug: NOTES,
+        localized: true,
+        status: true,
+        access: { read: () => true },
+        fields: [
+          text({ name: "title" }),
+          relationship({ name: "post", relationTo: POSTS }),
         ],
       }),
       defineCollection({
@@ -681,6 +738,45 @@ describe.each(getConfiguredTestDialects())(
       });
     }, 90_000);
 
+    // Each language's rule is shown the row as the row's own rule was, a
+    // sibling its own rule hides included: a value withheld by reading that
+    // sibling is withheld in its language beside the read.
+    it("judges each language's value on the row's hidden siblings too", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: DATA,
+        locale: "en",
+        data: {
+          title: "One",
+          flag: "private",
+          teaser: "en teaser",
+          status: "published",
+        },
+      });
+      const id = String(created.item.id);
+      await t.nextly.update({
+        collection: DATA,
+        id,
+        locale: "es",
+        data: {
+          title: "Uno",
+          teaser: "es teaser",
+          status: "published",
+          _overwrite: true,
+        },
+      });
+      const read = await restGet(
+        ["collections", DATA, "entries", id],
+        "?locale=en&translations=all"
+      );
+      expect(read.status, JSON.stringify(read.json)).toBe(200);
+      // The flag is hidden, and English's teaser is shown.
+      expect(read.json).not.toHaveProperty("flag");
+      expect(read.json.teaser).toBe("en teaser");
+      const every = read.json._allLocales as Record<string, unknown>;
+      expect(every.teaser).toEqual({ en: "en teaser" });
+    }, 90_000);
+
     // A read carrying every language's values is judged by the read rule in
     // every language, as `locale=all` is: a rule refusing Spanish refuses it.
     it("judges a read carrying every language by its read rule in every language", async () => {
@@ -747,6 +843,51 @@ describe.each(getConfiguredTestDialects())(
       expect(read).not.toHaveProperty("internal");
       expect(read._allLocales).not.toHaveProperty("internal");
       expect(read._sources).not.toHaveProperty("internal");
+    }, 90_000);
+
+    // A related document is read in the read's language at every depth: a
+    // Spanish read never shows one in English where Spanish has its own.
+    it("reads related documents in the read's language at depth 2", async () => {
+      const t = await boot(dialect);
+      const inBoth = async (
+        collection: string,
+        en: Record<string, unknown>,
+        es: Record<string, unknown>
+      ): Promise<string> => {
+        const created = (await t.nextly.create({
+          collection,
+          locale: "en",
+          data: { ...en, status: "published" },
+        })) as { item: { id: string } };
+        await t.nextly.update({
+          collection,
+          id: created.item.id,
+          locale: "es",
+          data: { ...es, status: "published", _overwrite: true },
+        });
+        return created.item.id;
+      };
+      const author = await inBoth(AUTHORS, { name: "Ann" }, { name: "Ana" });
+      const post = await inBoth(
+        POSTS,
+        { title: "Post", author },
+        { title: "Entrada" }
+      );
+      const note = await inBoth(
+        NOTES,
+        { title: "Note", post },
+        { title: "Nota" }
+      );
+
+      const read = await restGet(
+        ["collections", NOTES, "entries", note],
+        "?locale=es&depth=2"
+      );
+      expect(read.status, JSON.stringify(read.json)).toBe(200);
+      const related = read.json.post as Record<string, unknown>;
+      expect(related.title).toBe("Entrada");
+      const writer = related.author as Record<string, unknown>;
+      expect(writer.name).toBe("Ana");
     }, 90_000);
 
     // Every language's structured values beside a read are the field's own

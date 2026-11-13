@@ -3098,15 +3098,21 @@ export class CollectionQueryService extends BaseService {
       await fieldGroupPass?.(entry, rowFieldGroupCaller);
     };
     for (const row of finalData) {
+      // The row as its own pass finds it, before that pass withholds
+      // anything: each language's rules are judged on the same evidence.
+      const evidence = { ...row };
       await finishFields(row);
       // Every language's values beside the row go through the same pipeline,
       // asked in that language: a rule answering by value or by language,
       // and a field hook that masks a value, act on each language's value as
       // they act on the row's.
-      await judgeEachLanguage(row, (inLanguage, locale) =>
-        withRuleLanguage({ locale, locales: [locale] }, () =>
-          finishFields(inLanguage)
-        )
+      await judgeEachLanguage(
+        row,
+        (inLanguage, locale) =>
+          withRuleLanguage({ locale, locales: [locale] }, () =>
+            finishFields(inLanguage)
+          ),
+        evidence
       );
     }
 
