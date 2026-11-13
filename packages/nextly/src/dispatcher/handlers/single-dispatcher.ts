@@ -64,10 +64,7 @@ import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-c
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../domains/schema/sibling-fields";
-import {
-  resolveSingleTableName,
-  singleTableFamiliesCollide,
-} from "../../domains/singles/services/resolve-single-table-name";
+import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import type { SingleEntryService } from "../../domains/singles/services/single-entry-service";
 import type { SingleMetadataService } from "../../domains/singles/services/single-metadata-service";
 import type { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
@@ -139,6 +136,7 @@ import { readListOffset } from "./list-offset";
 import { readListOwner, slugListsForOwner } from "./list-owner";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 import { assertSchemaVersionMatch } from "./schema-version-guard";
+import { assertSingleTablesUnowned } from "./single-table-family";
 import {
   assertLabelRequestValid,
   autosaveForDocument,
@@ -626,25 +624,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         });
       }
 
-      // Refused before any DDL runs, and keyed on the TABLE FAMILY rather than the slug. A slug is
-      // normalised on its way to a table name, so `foo-bar` and `foo_bar` name one physical table
-      // while looking like two free slugs — and a Single's storage spans its main table AND the
-      // `_locales` companion beside it, so `foo-locales` collides with `foo` the same way. The
-      // registry's own check runs after the DDL, by which point the create has already acted
-      // against the table that exists and rebound the runtime to this request's fields.
-      const owner = (await svc.registry.getAllSingles()).find(s =>
-        singleTableFamiliesCollide(s.tableName, tableName)
-      );
-      if (owner) {
-        throw NextlyError.duplicate({
-          logContext: {
-            reason: "single-table-conflict",
-            slug: b.slug,
-            tableName,
-            ownedBy: owner.slug,
-          },
-        });
-      }
+      // Refused before any DDL runs, by the table family another Single holds; the Builder's
+      // address check asks the same function.
+      await assertSingleTablesUnowned(svc.registry, b.slug, tableName);
 
       // i18n: a localized single stores translatable values via the app's
       // `localization` config; creating one without that config would split

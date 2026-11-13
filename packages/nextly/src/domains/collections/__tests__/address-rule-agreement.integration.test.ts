@@ -200,6 +200,29 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await t!.adapter.tableExists("comp_seo")).toBe(false);
     });
 
+    // A Single `foo-locales`, recorded before the rule refused such an address, stores in
+    // `single_foo_locales`: the companion a new Single `foo` would need.
+    it("beside a Single 'foo-locales' recorded before the rule, a Single 'foo' is refused by both", async () => {
+      const singles = t!.getService("singleRegistryService") as unknown as {
+        registerSingle(data: object): Promise<unknown>;
+      };
+      await singles.registerSingle({
+        slug: "foo-locales",
+        label: "Foo locales",
+        tableName: "single_foo_locales",
+        fields: [{ name: "note", type: "text" }],
+        source: "ui",
+        locked: false,
+        schemaHash: "foo-locales",
+      });
+      const { check, create: created } = await bothVerdicts("single", "foo");
+      expect(check).toEqual(created);
+      expect(check).toEqual({
+        code: "DUPLICATE",
+        message: "Resource already exists.",
+      });
+    });
+
     it.each([
       // An address held exactly, where the two kinds must differ.
       ["single", "about", "collection", "about", "refused"],
@@ -216,8 +239,6 @@ for (const dialect of getConfiguredTestDialects()) {
       // A field group is compared with field groups only.
       ["collection", "blog_posts", "fieldGroup", "blog-posts", "accepted"],
       ["fieldGroup", "blog_posts", "fieldGroup", "blog-posts", "refused"],
-      // A Single's tables: `foo-locales` holds the companion `foo` would need.
-      ["single", "foo-locales", "single", "foo", "refused"],
     ] as const)(
       "beside a %s '%s', a %s '%s' is %s by both",
       async (heldKind, held, kind, address, outcome) => {

@@ -17,19 +17,19 @@ import type { AddressKind } from "../../shared/address-rule";
 import {
   getAdapterFromDI,
   getFieldGroupMetadataServiceFromDI,
+  getSingleRegistryFromDI,
 } from "../helpers/di";
 
-/**
- * The longest address taken, far past the rule's own limit so that a long address still reaches
- * the rule and gets its "too long" answer; the bound only keeps the request small.
- */
+/** The longest address of an unsaved entity taken for comparison; it keeps the request small. */
 const MAX_ADDRESS_INPUT = 1000;
 
 /** How many unsaved entities one editor may hold for the check to compare with. */
 const MAX_PENDING_CREATES = 500;
 
 const addressCheckBody = z.object({
-  address: z.string().max(MAX_ADDRESS_INPUT),
+  // Any value: the address rule judges it, missing, not a string or too long alike, so the answer
+  // is the create's for every address the check is given.
+  address: z.unknown().optional(),
   // The entities created in the editor and not saved yet, which hold their addresses until the
   // save or a discard.
   pendingCreates: z
@@ -55,14 +55,15 @@ export async function respondAddressCheck(
   if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
   const adapter = getAdapterFromDI();
   const fieldGroups = getFieldGroupMetadataServiceFromDI();
-  if (!adapter || !fieldGroups) {
+  const singleRegistry = getSingleRegistryFromDI();
+  if (!adapter || !fieldGroups || !singleRegistry) {
     throw NextlyError.internal({
       logContext: { reason: "address-check-services-unavailable", kind },
     });
   }
   const { address, pendingCreates } = parsed.data;
   const refusal = await checkNewAddress(
-    { adapter, fieldGroups },
+    { adapter, fieldGroups, singleRegistry },
     { kind, address, pendingCreates }
   );
   return respondData({ kind, address, refusal });

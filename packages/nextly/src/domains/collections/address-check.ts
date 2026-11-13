@@ -18,6 +18,10 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import {
+  assertSingleTablesUnowned,
+  type SingleTablesRegistry,
+} from "../../dispatcher/handlers/single-table-family";
 import { NextlyError } from "../../errors/nextly-error";
 import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-slug-guard";
 import {
@@ -29,6 +33,7 @@ import {
   type UsedAddress,
 } from "../../shared/address-rule";
 import { resolveComponentTableName } from "../schema/utils/resolve-table-name";
+import { resolveSingleTableName } from "../singles/services/resolve-single-table-name";
 
 /** A refusal as the create reports it: its code and its public message. */
 export interface AddressCheckRefusal {
@@ -42,12 +47,17 @@ export interface AddressCheckDeps {
   fieldGroups: {
     assertNewAddressAvailable(slug: string, tableName: string): Promise<void>;
   };
+  /** The Singles registry, whose tables a new Single's must not meet. */
+  singleRegistry: SingleTablesRegistry;
 }
 
-/** The address asked about, and the entities created in the editor but not yet saved. */
+/**
+ * The address asked about, as the request gave it, and the entities created in the editor but not
+ * yet saved. The address may be any value: the rule judges it as the create does.
+ */
 export interface AddressCheckInput {
   kind: AddressKind;
-  address: string;
+  address: unknown;
   pendingCreates: readonly UsedAddress[];
 }
 
@@ -58,20 +68,37 @@ export interface AddressCheckInput {
 async function assertCreateAccepts(
   deps: AddressCheckDeps,
   kind: AddressKind,
-  address: string
-): Promise<void> {
+  address: unknown
+): Promise<string> {
+  // The rule first, as every create asks it first; it refuses anything that is not a string.
+  assertAddressAllowed(kind, address);
+  if (typeof address !== "string") {
+    // Unreachable while the rule refuses every other value; refused rather than answered free if
+    // that ever changes.
+    throw NextlyError.internal({
+      logContext: { reason: "address-rule-accepted-a-non-string", kind },
+    });
+  }
   if (kind === "fieldGroup") {
     // The table the field-group create derives from the address, which its check is keyed on.
     await deps.fieldGroups.assertNewAddressAvailable(
       address,
       resolveComponentTableName(address)
     );
-    return;
+    return address;
   }
-  assertAddressAllowed(kind, address);
   await assertGlobalResourceSlugAvailable(deps.adapter, address, {
     addressKind: kind,
   });
+  if (kind === "single") {
+    // The table family the Single create derives from the address, checked as the create does.
+    await assertSingleTablesUnowned(
+      deps.singleRegistry,
+      address,
+      resolveSingleTableName({ slug: address })
+    );
+  }
+  return address;
 }
 
 /**
@@ -79,8 +106,11 @@ async function assertCreateAccepts(
  * create's own answer for an address already held; or by its snake_case form, as the rule refuses
  * a saved one.
  */
-function assertNotHeldByPendingCreate(input: AddressCheckInput): void {
-  const { kind, address, pendingCreates } = input;
+function assertNotHeldByPendingCreate(
+  kind: AddressKind,
+  address: string,
+  pendingCreates: readonly UsedAddress[]
+): void {
   if (
     pendingCreates.some(
       other => other.address === address && sharesNamespace(kind, other.kind)
@@ -122,8 +152,8 @@ export async function checkNewAddress(
   input: AddressCheckInput
 ): Promise<AddressCheckRefusal | null> {
   try {
-    await assertCreateAccepts(deps, input.kind, input.address);
-    assertNotHeldByPendingCreate(input);
+    const address = await assertCreateAccepts(deps, input.kind, input.address);
+    assertNotHeldByPendingCreate(input.kind, address, input.pendingCreates);
     return null;
   } catch (error) {
     return refusalOf(error);

@@ -1098,6 +1098,17 @@ export class FieldGroupMetadataService {
     tableName: string
   ): Promise<void> {
     await this.assertAddressAllowed(slug);
+    // A field group already under this address, whatever table it was recorded with: an older one
+    // may keep a table name of its own, which the table check below cannot see. Refused here,
+    // before any DDL, rather than by the registry after the new table is built.
+    const held = (await this.registry.getAllComponents()).some(
+      existing => existing.slug === slug
+    );
+    if (held) {
+      throw NextlyError.duplicate({
+        logContext: { reason: "field-group-address-taken", slug },
+      });
+    }
     await this.assertTableUnowned({ slug, tableName });
   }
 
