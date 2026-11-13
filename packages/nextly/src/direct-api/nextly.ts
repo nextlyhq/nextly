@@ -746,12 +746,19 @@ export class Nextly implements NextlyContext {
    * that instance's site, as it reads its content: `readPublicSiteSettings`
    * from `nextly/runtime`, and the block page routes, read it through here.
    *
+   * Read from the row, never this process's kept copy: what this answers is
+   * cached outside the process, under the tag a settings save expires
+   * (`nextlySiteSettingsTags()`). When another instance saves, the refill
+   * after that expiry may be made here, and a copy read a moment before the
+   * save would be cached again until the next save. A page render asks once
+   * per request (the block renderer shares the read), as it always did.
+   *
    * @experimental
    */
   async publicSiteSettings(): Promise<PublicSiteSettings> {
     const settings = await container
       .get<GeneralSettingsService>("generalSettingsService")
-      .getSettings();
+      .getSettings({ fresh: true });
     return publicSiteSettingsOf(settings);
   }
 
