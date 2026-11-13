@@ -85,8 +85,11 @@ test("an entry's SEO tab shows the preview, what will be used and where it comes
   await expectNoSeoFieldIn(page.getByLabel("Document panel").first());
 
   await seoTab(page).click();
-  // The panel's one read-only SEO line says whether the page is listed.
-  await expect(page.getByTestId("seo-status")).toBeVisible();
+  // The panel's one read-only SEO line says the page is listed: plainly,
+  // or with what is left to check on it, never hidden.
+  await expect(page.getByTestId("seo-status")).toHaveText(
+    /^(Listed|\d+ to check)$/
+  );
   await expect(page).toHaveURL(new RegExp(`tab=${TAB_ID.replace(".", "\\.")}`));
 
   // At rest: the page on Google beside its shared card, then the title and

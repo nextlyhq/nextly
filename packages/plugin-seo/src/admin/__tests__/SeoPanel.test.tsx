@@ -595,20 +595,25 @@ describe("Advanced", () => {
         onMakeShareImage={() => Promise.resolve(undefined)}
       />
     );
+    // Regions kept in place, so the failure is announced as it happens.
+    const announced = () =>
+      screen
+        .getAllByRole("status")
+        .filter(region =>
+          /The share image couldn't be made/.test(region.textContent ?? "")
+        );
+    expect(announced()).toHaveLength(0);
     const [fromNotice] = screen.getAllByRole("button", {
       name: "Make a share image",
     });
     await user.click(fromNotice as HTMLElement);
+    await waitFor(() => expect(announced()).toHaveLength(1));
     await user.click(screen.getByRole("button", { name: /Advanced/ }));
     await user.click(
       within(inAdvanced()).getByRole("button", { name: "Make a share image" })
     );
-    // Said beside the notice and in the row.
-    await waitFor(() =>
-      expect(
-        screen.getAllByText(/The share image couldn't be made\./)
-      ).toHaveLength(2)
-    );
+    // Said beside the notice and in the row, and announced from both.
+    await waitFor(() => expect(announced()).toHaveLength(2));
 
     await user.click(screen.getByRole("button", { name: "Reload" }));
     expect(
