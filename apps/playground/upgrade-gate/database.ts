@@ -425,8 +425,13 @@ export function sqliteChecks(sql: string): Record<string, string> {
 
 type SqliteDb = InstanceType<typeof Sqlite>;
 
-/** A SQLite table's columns, from `PRAGMA table_xinfo`. */
-function sqliteColumns(db: SqliteDb, table: string): Record<string, string> {
+/** A SQLite table's columns, from `PRAGMA table_xinfo`, and its statement `sql`. */
+function sqliteColumns(
+  db: SqliteDb,
+  table: string,
+  sql: string
+): Record<string, string> {
+  const generated = generatedExpressions(sql);
   const columns = db.prepare(`PRAGMA table_xinfo("${table}")`).all() as {
     name: string;
     type: string;
@@ -443,7 +448,10 @@ function sqliteColumns(db: SqliteDb, table: string): Record<string, string> {
         column.notnull ? "not null" : "null",
         column.dflt_value !== null && `default ${column.dflt_value}`,
         column.pk > 0 && `primary key ${column.pk}`,
-        column.hidden > 0 && "generated"
+        // 2 is a virtual generated column and 3 a stored one; each is stated
+        // with its expression, so a change to either is an operation.
+        column.hidden >= 2 &&
+          `${generated.get(column.name) ?? "as (?)"} ${column.hidden === 3 ? "stored" : "virtual"}`
       ),
     ])
   );
@@ -456,15 +464,12 @@ function sqliteColumns(db: SqliteDb, table: string): Record<string, string> {
  * covers, as a constraint.
  */
 /**
- * The key list of a CREATE INDEX statement, one entry per key: the text
- * between the parentheses after the table, split at its top-level commas.
+ * The items of the parenthesised list that opens at `open` in `sql`, split at
+ * its top-level commas, quoted text skipped, each with its spaces collapsed.
  */
-function indexKeyTexts(sql: string): string[] {
-  const on = /\bON\s+(?:"[^"]*"|`[^`]*`|\[[^\]]*\]|\S+?)\s*\(/i.exec(sql);
-  if (on === null) return [];
-  const open = on.index + on[0].length - 1;
+function listItems(sql: string, open: number): string[] {
   const inner = sql.slice(open + 1, pastParenthesised(sql, open) - 1);
-  const keys: string[] = [];
+  const items: string[] = [];
   let depth = 0;
   let from = 0;
   let at = 0;
@@ -477,13 +482,43 @@ function indexKeyTexts(sql: string): string[] {
     if (char === "(") depth += 1;
     if (char === ")") depth -= 1;
     if (char === "," && depth === 0) {
-      keys.push(inner.slice(from, at));
+      items.push(inner.slice(from, at));
       from = at + 1;
     }
     at += 1;
   }
-  keys.push(inner.slice(from));
-  return keys.map(key => key.replace(/\s+/g, " ").trim());
+  items.push(inner.slice(from));
+  return items.map(item => item.replace(/\s+/g, " ").trim());
+}
+
+/** The key list of a CREATE INDEX statement, one entry per key. */
+function indexKeyTexts(sql: string): string[] {
+  const on = /\bON\s+(?:"[^"]*"|`[^`]*`|\[[^\]]*\]|\S+?)\s*\(/i.exec(sql);
+  return on === null ? [] : listItems(sql, on.index + on[0].length - 1);
+}
+
+/**
+ * Each generated column's expression in a CREATE TABLE statement, by column
+ * name, since no pragma lists it: `as (<expression>)`.
+ */
+function generatedExpressions(sql: string): Map<string, string> {
+  const expressions = new Map<string, string>();
+  const open = sql.indexOf("(");
+  if (open < 0) return expressions;
+  for (const item of listItems(sql, open)) {
+    const name = /^(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|(\w+))/.exec(item);
+    const as = /\bAS\s*\(/i.exec(item);
+    if (name === null || as === null) continue;
+    const start = as.index + as[0].length - 1;
+    const column = name.slice(1).find(part => part !== undefined);
+    if (column !== undefined) {
+      expressions.set(
+        column,
+        `as ${item.slice(start, pastParenthesised(item, start))}`
+      );
+    }
+  }
+  return expressions;
 }
 
 /**
@@ -585,7 +620,7 @@ function readSqliteCatalog(url: string): Catalog {
       .all() as { name: string; sql: string }[];
     for (const { name, sql } of tables) {
       const shape = tableIn(catalog, name);
-      shape.columns = sqliteColumns(db, name);
+      shape.columns = sqliteColumns(db, name, sql);
       Object.assign(shape.constraints, sqliteChecks(sql));
       sqliteIndexes(db, name, shape);
       sqliteForeignKeys(db, name, shape);

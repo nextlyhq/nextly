@@ -149,3 +149,48 @@ describe("the SQLite catalog's indexes", () => {
     ).toEqual([]);
   });
 });
+
+describe("the SQLite catalog's generated columns", () => {
+  async function operations(before: string, after: string) {
+    const scratch = mkdtempSync(join(tmpdir(), "upgrade-gate-generated-"));
+    try {
+      const read = async (name: string, ddl: string) => {
+        const file = join(scratch, `${name}.sqlite`);
+        const db = new Sqlite(file);
+        db.exec(ddl);
+        db.close();
+        return readCatalog("sqlite", `file:${file}`);
+      };
+      return operationsBetween(
+        await read("before", before),
+        await read("after", after)
+      );
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }
+  const table = (total: string) =>
+    `CREATE TABLE "t" ("price" integer, "quantity" integer, "total" integer GENERATED ALWAYS AS ${total})`;
+
+  it("reads a generated column whose expression changed as a change", async () => {
+    expect(
+      await operations(
+        table('("price" * "quantity")'),
+        table('("price" + "quantity")')
+      )
+    ).toEqual([
+      'change column t.total: integer null as ("price" * "quantity") virtual -> integer null as ("price" + "quantity") virtual',
+    ]);
+  });
+
+  it("reads a virtual column made stored as a change", async () => {
+    expect(
+      await operations(
+        table('("price" * "quantity") VIRTUAL'),
+        table('("price" * "quantity") STORED')
+      )
+    ).toEqual([
+      'change column t.total: integer null as ("price" * "quantity") virtual -> integer null as ("price" * "quantity") stored',
+    ]);
+  });
+});
