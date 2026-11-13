@@ -39,6 +39,7 @@ import {
   markPending,
 } from "@admin/lib/builder/outline/pending-rows";
 import { navigateTo } from "@admin/lib/navigation";
+import type { StoredHookConfig } from "@admin/types/collection";
 
 import type { BuilderConfig } from "./builder-config";
 import { BuilderFieldSettings } from "./BuilderFieldSettings";
@@ -71,6 +72,8 @@ type Props = {
   onSave: () => void;
   settings: BuilderSettingsValues;
   onSettingsChange: (next: BuilderSettingsValues) => void;
+  /** A collection's stored hooks, shown read-only in its settings modal. */
+  storedHooks?: readonly StoredHookConfig[];
   active: ActiveOverlay;
   onActiveChange: (next: ActiveOverlay) => void;
   onDuplicateField: (fieldId: string) => void;
@@ -99,6 +102,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     onSave,
     settings,
     onSettingsChange,
+    storedHooks,
     active,
     onActiveChange,
     isSaving,
@@ -138,6 +142,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           settings={settings}
           onSettingsChange={onSettingsChange}
           readOnly={locked}
+          storedHooks={storedHooks}
         />
 
         {children}
