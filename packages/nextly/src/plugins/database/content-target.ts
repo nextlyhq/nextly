@@ -18,6 +18,8 @@ import type { EntityOwner } from "../../domains/schema/extension/build-extension
 import { getNextlyLogger } from "../../observability/logger";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
 
+import { tableKeyColumn } from "./table-key";
+
 /** A collection entry or a Single, whose cached reads a write changed. */
 export type ContentTarget =
   | { kind: "collection"; slug: string; id: string }
@@ -108,7 +110,7 @@ function parentColumns(
   if (runtime === undefined || runtime === null) return undefined;
   const columns = Object.values(getColumns(runtime as Table));
   const named = (name: string) => columns.find(column => column.name === name);
-  const key = columns.find(column => column.primary);
+  const key = tableKeyColumn(runtime as Table);
   const parentTable = named(STORAGE_FORMAT.columns.parentTable);
   const parentId = named(STORAGE_FORMAT.columns.parentId);
   if (!key || !parentTable || !parentId) return undefined;

@@ -29,19 +29,14 @@ import { SEO_STATUS_COMPONENT, SEO_TAB_COMPONENT } from "../tab/contributions";
 import { PAGE_BUILDER_TAB_COMPONENT } from "../template/contributions";
 
 import { PageBuilderSeoTab } from "./PageBuilderSeoTab";
-import {
-  PAGES_STEP,
-  SeoBulkMoved,
-  SeoReceivedMoved,
-  withTrail,
-} from "./section";
-import { SeoImportPage as ImportScreen } from "./SeoImportPage";
+import { SeoBulkMoved, SeoReceivedMoved, withTrail } from "./section";
+import { SeoImportPage } from "./SeoImportPage";
 import { SeoInspectPage } from "./SeoInspectPage";
 import { SeoOverviewPage } from "./SeoOverviewPage";
 import { SeoPagesPage as PagesScreen } from "./SeoPagesPage";
 import { SeoProblemsPage } from "./SeoProblemsPage";
 import { SeoRedirectsPage } from "./SeoRedirectsPage";
-import { SeoSettingsPage as SettingsScreen } from "./SeoSettingsPage";
+import { SeoSettingsPage } from "./SeoSettingsPage";
 import { SeoTab } from "./SeoTab";
 import { SeoStatusSection } from "./status";
 
@@ -51,14 +46,6 @@ import { SeoStatusSection } from "./status";
 // registers that export.
 export const SeoPagesPage: () => JSX.Element = withTrail(PagesScreen, [
   { label: "Pages" },
-]);
-export const SeoSettingsPage: () => JSX.Element = withTrail(SettingsScreen, [
-  { label: "Settings" },
-]);
-/** Import, reached from Pages. */
-export const SeoImportPage: () => JSX.Element = withTrail(ImportScreen, [
-  PAGES_STEP,
-  { label: "Import" },
 ]);
 
 // Registered as the module loads, which is when the component map imports it.
@@ -81,9 +68,24 @@ registerComponents({
 });
 
 export { SeoOverviewPage } from "./SeoOverviewPage";
+export { SeoImportPage } from "./SeoImportPage";
 export { SeoProblemsPage } from "./SeoProblemsPage";
 export { SeoRedirectsPage } from "./SeoRedirectsPage";
+export { SeoSettingsPage } from "./SeoSettingsPage";
 export { SeoBulkMoved, SeoReceivedMoved } from "./section";
+/**
+ * The names these two screens were published under before they became
+ * forwards to Pages and Inspect. A site's committed component map imports
+ * each component by name, and a name this entry stops exporting fails that
+ * map's compile, so the admin could not load to rewrite it. Kept so a site
+ * upgrading from an earlier release loads; the map then names the new ones.
+ *
+ * @deprecated Use `SeoBulkMoved` and `SeoReceivedMoved`.
+ */
+export {
+  SeoBulkMoved as SeoBulkPage,
+  SeoReceivedMoved as SeoReceivedPage,
+} from "./section";
 export { SeoInspectPage } from "./SeoInspectPage";
 export { SeoTab } from "./SeoTab";
 export { PageBuilderSeoTab } from "./PageBuilderSeoTab";

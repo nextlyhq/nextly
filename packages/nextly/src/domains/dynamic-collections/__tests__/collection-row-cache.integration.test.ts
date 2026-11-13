@@ -223,7 +223,9 @@ describe.each(getConfiguredTestDialects())(
     });
 
     // The card component's registry row comes from the cache as well, a statement off each read.
-    it("sends a warm read 3 statements for an entry and 4 for a page, where without the cache it sends 11 and 13", async () => {
+    // Without the cache, a read asks for that row twice since field groups placed in field groups
+    // are read at any depth: the cache answers both.
+    it("sends a warm read 3 statements for an entry and 4 for a page, where without the cache it sends 12 and 14", async () => {
       const { t, articleId } = await bootSite(dialect);
       const reads = readsOf(t, articleId);
       const counted = async (read: () => Promise<unknown>) => {
@@ -242,7 +244,7 @@ describe.each(getConfiguredTestDialects())(
       };
       expect({ warm, cold }).toEqual({
         warm: { detail: 3, list: 4 },
-        cold: { detail: 11, list: 13 },
+        cold: { detail: 12, list: 14 },
       });
     });
 

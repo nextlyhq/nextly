@@ -435,6 +435,12 @@ export type {
   StepState,
 } from "./components/ui/stepper";
 
+// The drop area a file is dragged onto or chosen from, as the Media library
+// draws it: re-exported by `@nextlyhq/plugin-sdk/admin` for a plugin screen
+// that reads a file itself, such as an import.
+export { FileDropArea } from "./components/ui/file-drop-area";
+export type { FileDropAreaProps } from "./components/ui/file-drop-area";
+
 // A plugin's own admin UI reading a route that plugin contributed. The two
 // halves of a plugin — its HTTP routes and its admin components — had no way to
 // reach each other: the SDK exported no route client, so an author's choice was

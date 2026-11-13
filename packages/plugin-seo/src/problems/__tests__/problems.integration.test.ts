@@ -307,6 +307,15 @@ describe.each(getConfiguredTestDialects())(
       expect(list.problems.some(p => p.subject.id === b)).toBe(false);
       // The title it shares is with a page the reader may not see.
       expect(kindsOf(list.problems, a)).not.toContain("sharedTitle");
+      // The pages checked for them: theirs, not the one left out, whose
+      // missing problems say nothing about it.
+      expect(list.checked).toEqual([{ type: "posts", id: a }]);
+      expect((await problemList(ctx, CHECKS, everything)).checked).toEqual(
+        expect.arrayContaining([
+          { type: "posts", id: a },
+          { type: "posts", id: b },
+        ])
+      );
     });
 
     it("lists a shared title on both pages, and forgets a deleted page", async () => {

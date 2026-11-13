@@ -294,6 +294,29 @@ describe("the list", () => {
     );
   });
 
+  it("says a page the problem list didn't check for this person is not checked, though it checked others of its type", () => {
+    vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
+      // Their read rule admits the Blog page alone of the type's pages.
+      data:
+        args.path === "/problems"
+          ? {
+              ...PROBLEMS,
+              checked: [{ type: "pages", id: "8" }],
+            }
+          : { items: listed },
+      pending: false,
+      error: null,
+      refetch: () => {},
+      fetching: false,
+    })) as unknown as typeof usePluginRoute);
+    render(<SeoPagesPage />);
+    expect(rowOf("Home").getByText("Not checked")).toBeTruthy();
+    expect(rowOf("Home").queryByText("Good")).toBeNull();
+    expect(rowOf("Blog").getByText("Warning")).toBeTruthy();
+    // A page built in code isn't checked page by page either way.
+    expect(rowOf("Pricing").getByText("Not connected")).toBeTruthy();
+  });
+
   it("finds a page by part of its address or name", async () => {
     render(<SeoPagesPage />);
     fireEvent.change(screen.getByPlaceholderText("Search pages"), {
@@ -548,12 +571,16 @@ describe("the panel of a page built in code", () => {
       within(panel).getByText(/doesn't call the SEO function yet/)
     ).toBeTruthy();
     // Nothing typed: the automatic title, shown in the preview.
-    expect(within(panel).getByText("Pricing | Acme")).toBeTruthy();
+    expect(within(panel).getByTestId("seo-search-title")).toHaveTextContent(
+      "Pricing | Acme"
+    );
 
     fireEvent.change(within(panel).getByLabelText("Title on Google"), {
       target: { value: "Plans and prices" },
     });
-    expect(within(panel).getByText("Plans and prices")).toBeTruthy();
+    expect(within(panel).getByTestId("seo-search-title")).toHaveTextContent(
+      "Plans and prices"
+    );
     expect(within(panel).getByText("Typed for this address")).toBeTruthy();
 
     fireEvent.click(within(panel).getByRole("button", { name: "Save" }));
@@ -596,7 +623,6 @@ describe("the share image of a page built in code", () => {
     render(<SeoPagesPage />);
     await editSeo("About");
     const panel = screen.getByRole("dialog", { name: "SEO for /about" });
-    fireEvent.click(within(panel).getByRole("tab", { name: "When shared" }));
     fireEvent.click(within(panel).getByRole("button", { name: /Advanced/ }));
 
     fireEvent.click(within(panel).getByRole("button", { name: "Remove" }));

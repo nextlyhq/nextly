@@ -54,6 +54,7 @@ import { type ContentTarget, contentTarget } from "./content-target";
 import { type Increment, incrementBy, isIncrement } from "./increment";
 import { runInPluginTransactionFlow } from "./plugin-transaction-in-flow";
 import { linkPluginTransaction } from "./plugin-transaction-link";
+import { tableKeyColumn } from "./table-key";
 
 /** What a caller may narrow a read or a write with. */
 export interface PortableWhere<TResult> {
@@ -70,9 +71,22 @@ export interface PortableSelect<TDefinition> {
   /**
    * @experimental How many rows match the `where`, counted in the database:
    * no row is read into the process. `orderBy`, `limit` and `offset` are
-   * ignored, as a count has no order and no page.
+   * ignored, as a count has no order and no page, and so is `lock`: a count
+   * locks no row.
    */
   count(): Promise<number>;
+  /**
+   * @experimental Read the rows locked until the transaction ends:
+   * `update` (`FOR UPDATE`) keeps any other transaction from changing or
+   * locking them, `share` (`FOR SHARE`) only from changing them. Either reads
+   * the latest committed rows, which on MySQL a plain read inside a
+   * transaction does not: it reads the snapshot its first read took. Meant
+   * for `tx` inside `ctx.db.transaction` or an in-transaction hook; on the
+   * pooled `ctx.db` the lock ends with the statement. SQLite runs one writer
+   * at a time, so there it reads the rows as a plain read does. Refused in a
+   * snapshot transaction, which is read-only.
+   */
+  lock(mode: "update" | "share"): PortableSelect<TDefinition>;
 }
 
 export interface PluginDatabaseDeps {
@@ -1188,6 +1202,7 @@ interface SelectState {
   readonly orderBy: readonly SQL[];
   readonly limit?: number;
   readonly offset?: number;
+  readonly lock?: "update" | "share";
 }
 
 /**
@@ -1372,7 +1387,17 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
         orderBy: (...columns) => build({ ...state, orderBy: columns }),
         limit: count => build({ ...state, limit: count }),
         offset: count => build({ ...state, offset: count }),
-        all: () => track(selectRows(state), "read"),
+        lock: mode => build({ ...state, lock: mode }),
+        // A locking read is refused where a write is: a read-only transaction
+        // refuses `FOR UPDATE` and `FOR SHARE` on PostgreSQL, so the refusal
+        // is made here, alike on every dialect.
+        all: () =>
+          track(
+            state.lock === undefined
+              ? selectRows(state)
+              : writable(deps, () => selectRows(state)),
+            "read"
+          ),
         async first() {
           const rows = await build({ ...state, limit: 1 }).all();
           return rows[0] ?? null;
@@ -1417,6 +1442,11 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
         }
         if (state.offset !== undefined) {
           query = query.offset(state.offset as never) as typeof query;
+        }
+        // SQLite has no row locks, and one writer at a time already keeps
+        // the rows read from changing before the transaction ends.
+        if (state.lock !== undefined && deps.dialect !== "sqlite") {
+          query = query.for(state.lock as never) as typeof query;
         }
         return (await (query as unknown as Promise<unknown>)) as never;
       };
@@ -1713,9 +1743,9 @@ function contributedReach(
       },
     });
   }
-  const primary = Object.values(getColumns(runtime as Table)).find(
-    column => column.primary
-  );
+  // Wherever the table declares its key: on the column, or on the table as
+  // SQLite's field-group table does.
+  const primary = tableKeyColumn(runtime as Table);
   if (primary === undefined) {
     throw NextlyError.internal({
       logContext: {

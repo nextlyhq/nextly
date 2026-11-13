@@ -16,10 +16,16 @@
  * @module admin/TemplateSeoPanel
  */
 import {
+  Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Switch,
   useDocumentLocale,
   useReportUnsavedWork,
 } from "@nextlyhq/plugin-sdk/admin";
-import { Input, Switch } from "@nextlyhq/ui";
 import { Info } from "lucide-react";
 import {
   useEffect,
@@ -44,7 +50,6 @@ import {
 import { CharacterCount, inSentence, Note } from "./parts";
 import { PreviewCard } from "./previews";
 import { Row, RowButton } from "./rows";
-import { ROOT, SeoStyles } from "./styles";
 import { useTemplateContext } from "./use-template-context";
 
 /** A design's own metadata, as the Page Builder stores it. */
@@ -437,7 +442,6 @@ function RuleEditor(props: RuleEditorProps): ReactNode {
   });
   return (
     <div className="flex flex-col gap-[18px] pt-4 pb-12">
-      <SeoStyles />
       <Note icon={<Info className="size-4" />}>
         {props.ownDesign ? (
           <>
@@ -556,6 +560,13 @@ function RuleEditor(props: RuleEditorProps): ReactNode {
   );
 }
 
+/**
+ * The choice of no image field, so the template's pages take theirs
+ * automatically. The admin's select takes no empty value, so it has a name
+ * no field has.
+ */
+const AUTOMATIC_IMAGE = "=automatic";
+
 /** "Preview with": the page of the type the preview is worked out for. */
 function PreviewWith({
   id,
@@ -571,29 +582,29 @@ function PreviewWith({
   onChange: (id: string) => void;
 }): ReactNode {
   return (
-    <span className={`${ROOT} flex min-w-0 items-center gap-2`}>
+    <span className="flex min-w-0 items-center gap-2">
       <label
         htmlFor={id}
         className="text-xs font-semibold whitespace-nowrap text-muted-foreground"
       >
         Preview with
       </label>
-      <select
-        id={id}
-        className="nx-seo-select min-w-0"
-        value={value ?? ""}
+      <Select
+        value={value ?? undefined}
         disabled={context.entries.length === 0}
-        onChange={event => onChange(event.target.value)}
+        onValueChange={onChange}
       >
-        {context.entries.length === 0 ? (
-          <option value="">No published {one} yet</option>
-        ) : null}
-        {context.entries.map(entry => (
-          <option key={entry.id} value={entry.id}>
-            {entry.label}
-          </option>
-        ))}
-      </select>
+        <SelectTrigger id={id} className="h-8 w-auto min-w-0 text-xs">
+          <SelectValue placeholder={`No published ${one} yet`} />
+        </SelectTrigger>
+        <SelectContent>
+          {context.entries.map(entry => (
+            <SelectItem key={entry.id} value={entry.id}>
+              {entry.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </span>
   );
 }
@@ -766,28 +777,29 @@ function ShareImageRule({
       }
     >
       {changing ? (
-        <label
-          className={`${ROOT} grid gap-1 text-[12.5px] text-muted-foreground`}
-        >
-          <span>Take the share image from</span>
-          <select
-            id={`${id}-field`}
-            className="nx-seo-select"
-            value={draft.image ?? ""}
+        <div className="grid gap-1 text-[12.5px] text-muted-foreground">
+          <label htmlFor={`${id}-field`}>Take the share image from</label>
+          <Select
+            value={draft.image ?? AUTOMATIC_IMAGE}
             disabled={!writable}
-            onChange={event => {
-              onChoose(event.target.value === "" ? null : event.target.value);
+            onValueChange={next => {
+              onChoose(next === AUTOMATIC_IMAGE ? null : next);
               setChanging(false);
             }}
           >
-            <option value="">Automatic</option>
-            {context.imageFields.map(field => (
-              <option key={field.name} value={field.name}>
-                {field.label}
-              </option>
-            ))}
-          </select>
-        </label>
+            <SelectTrigger id={`${id}-field`} className="h-8 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={AUTOMATIC_IMAGE}>Automatic</SelectItem>
+              {context.imageFields.map(field => (
+                <SelectItem key={field.name} value={field.name}>
+                  {field.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       ) : undefined}
     </Row>
   );

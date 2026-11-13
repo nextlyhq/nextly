@@ -26,7 +26,11 @@ import type {
   ConnectionAttempt,
   ConnectionsBody,
 } from "../connections/contract";
-import type { NotFoundView, ProxyStatus } from "../redirects/contract";
+import {
+  REDIRECTS_PAGE_HREF,
+  type NotFoundView,
+  type ProxyStatus,
+} from "../redirects/contract";
 import { SEO_ADMIN_SLUG, SETTINGS_PAGE_HREF } from "../settings/contract";
 
 /** Where the section's screens are mounted. */
@@ -138,7 +142,7 @@ export function checklistItemText(item: ChecklistItemState): ChecklistItemText {
       return {
         label: "Add a default share image",
         action: "Add",
-        href: `${SETTINGS_PAGE_HREF}?tab=general`,
+        href: `${SETTINGS_PAGE_HREF}?tab=images`,
       };
     case "brand":
       return {
@@ -176,9 +180,6 @@ export interface ConnectionLine {
 
 /** Where the connections are set up. */
 const CONNECTIONS_HREF = `${SETTINGS_PAGE_HREF}?tab=connections`;
-
-/** Where the redirects are. */
-const REDIRECTS_HREF = `${SECTION_BASE}/redirects`;
 
 /** What to do about IndexNow's last notice, where it failed. */
 const INDEXNOW_FIX: Record<
@@ -227,7 +228,7 @@ export function indexNowConnection(
 
 /** The line for the site's Proxy, which serves the redirects. */
 export function redirectsConnection(status: ProxyStatus): ConnectionLine {
-  const base = { name: "Redirects on the site", href: REDIRECTS_HREF };
+  const base = { name: "Redirects on the site", href: REDIRECTS_PAGE_HREF };
   switch (status.state) {
     case "running":
       return { name: base.name, standing: "connected", text: "Running" };
