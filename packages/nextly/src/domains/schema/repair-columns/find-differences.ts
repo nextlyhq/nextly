@@ -30,6 +30,8 @@ import { classifyDifference, planDifference } from "./classify";
 import { compareColumn } from "./column-comparison";
 import type { ColumnConversionPlan } from "./conversion/types";
 import { differenceCause } from "./difference-cause";
+import type { TableLockFacts } from "./outcome";
+import type { TableWaits } from "./table-wait";
 import type {
   ColumnFinding,
   ColumnLocation,
@@ -216,19 +218,23 @@ interface PlannedEntity {
 }
 
 /** The live columns of every table the planned columns are in, read in one introspection. */
-async function readLiveTables(
-  db: unknown,
-  dialect: SupportedDialect,
-  planned: readonly PlannedEntity[]
-): Promise<LiveTables> {
-  const tableNames = [
+/** Every table the planned columns are in, once each. */
+function tableNamesOf(planned: readonly PlannedEntity[]): string[] {
+  return [
     ...new Set(
       planned.flatMap(({ applied, configured }) =>
         [...(applied ?? []), ...(configured ?? [])].map(c => c.location.table)
       )
     ),
   ];
-  const snapshot = await introspectLiveColumns(db, dialect, tableNames);
+}
+
+async function readLiveTables(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableNames: readonly string[]
+): Promise<Map<string, LiveTable>> {
+  const snapshot = await introspectLiveColumns(db, dialect, [...tableNames]);
   return new Map(
     snapshot.tables.map(table => [
       table.name.toLowerCase(),
@@ -256,8 +262,15 @@ export async function findColumnDifferences(args: {
   db: unknown;
   dialect: SupportedDialect;
   entities: readonly RepairEntity[];
+  /**
+   * The run's waits for a table another session is using. Given, each table's rows are read in
+   * its tries, and a column whose table's tries run out is reported with the lock rather than
+   * classed; on SQLite the definitions are read in the database's tries too. Left out, every
+   * read runs once, as a test of the classing alone needs.
+   */
+  waits?: TableWaits;
 }): Promise<ColumnFinding[]> {
-  const { db, dialect, entities } = args;
+  const { db, dialect, entities, waits } = args;
 
   const namedBy = (
     definition: EntityDefinition | null,
@@ -272,19 +285,50 @@ export async function findColumnDifferences(args: {
     })
   );
   let live: LiveTables;
+  let held: ReadonlyMap<string, TableLockFacts>;
   try {
-    live = await readLiveTables(db, dialect, planned);
+    const read = await readDefinitions(db, dialect, planned, waits);
+    if (read.kind === "ran-out") {
+      return planned.flatMap(entity =>
+        definitionUnreadableFindings(entity, () => read.lock)
+      );
+    }
+    live = read.live;
+    held = read.held;
   } catch (error) {
     if (!isDatabaseHeld(error, dialect)) throw error;
     // Another connection holds the whole database, so no table's definition can be read: every
     // column each entity names is reported, and whether it differs is unknown.
-    return planned.flatMap(definitionUnreadableFindings);
+    return planned.flatMap(entity => definitionUnreadableFindings(entity));
   }
 
   // A table's row count is the same for each of its columns, so it is read once per table.
-  const countRows = rowCounter(db, dialect);
+  const countRows = rowCounter(dialect);
   const findings: ColumnFinding[] = [];
-  for (const { entity, applied, configured } of planned) {
+  const lockOf = (table: string) => held.get(table.toLowerCase());
+  const readable = (columns: NamedColumn[] | null) =>
+    columns === null
+      ? null
+      : columns.filter(c => lockOf(c.location.table) === undefined);
+  for (const each of planned) {
+    const { entity } = each;
+    // A table whose definition its tries could not read: each column its fields name, once.
+    const unread = (columns: NamedColumn[] | null) =>
+      columns === null
+        ? null
+        : columns.filter(c => lockOf(c.location.table) !== undefined);
+    findings.push(
+      ...definitionUnreadableFindings(
+        {
+          entity,
+          applied: unread(each.applied),
+          configured: unread(each.configured),
+        },
+        lockOf
+      )
+    );
+    const applied = readable(each.applied);
+    const configured = readable(each.configured);
     if (entity.applied === null || applied === null) {
       findings.push(...awaitingMigrationFindings(entity, configured, live));
       continue;
@@ -297,7 +341,7 @@ export async function findColumnDifferences(args: {
         applied,
         live,
         dialect,
-        countRows
+        { countRows, waits }
       ))
     );
     if (configured !== null) {
@@ -340,23 +384,28 @@ function isDatabaseHeld(error: unknown, dialect: SupportedDialect): boolean {
  * column its applied definition names, then each one only its configured definition names (a field
  * the configuration adds), once each.
  */
-function definitionUnreadableFindings({
-  entity,
-  applied,
-  configured,
-}: PlannedEntity): ColumnFinding[] {
+function definitionUnreadableFindings(
+  { entity, applied, configured }: PlannedEntity,
+  lockOf?: (table: string) => TableLockFacts | undefined
+): ColumnFinding[] {
   const named = new Map<string, NamedColumn>();
   for (const column of [...(applied ?? []), ...(configured ?? [])]) {
     const key =
       `${column.location.table}.${column.location.column}`.toLowerCase();
     if (!named.has(key)) named.set(key, column);
   }
-  return [...named.values()].map(column => ({
-    kind: "definition-unreadable",
-    location: column.location,
-    ...ownedBy(entity.plugin),
-    expected: column.expected,
-  }));
+  return [...named.values()].map(column => {
+    const lock = lockOf?.(column.location.table);
+    return {
+      kind: "definition-unreadable",
+      location: column.location,
+      ...ownedBy(entity.plugin),
+      expected: column.expected,
+      ...(lock === undefined
+        ? {}
+        : { lock: { ...lock, table: column.location.table } }),
+    };
+  });
 }
 
 /**
@@ -407,7 +456,7 @@ async function appliedColumnFindings(
   applied: readonly NamedColumn[],
   live: LiveTables,
   dialect: SupportedDialect,
-  countRows: (table: string) => Promise<number>
+  reads: { countRows: RowCounter; waits: TableWaits | undefined }
 ): Promise<ColumnFinding[]> {
   const findings: ColumnFinding[] = [];
   for (const column of applied) {
@@ -425,23 +474,91 @@ async function appliedColumnFindings(
       expected: finding.expected,
       ...liveNamesOf(live, finding.location),
     };
-    const judgement = await classifyDifference(db, dialect, difference);
-    // What the conversion would run and what the new type cannot keep, read from the same live
-    // table, so the report can say both and block what cannot be carried.
-    const conversion = await planDifference(db, dialect, difference, judgement);
-    findings.push({
-      ...finding,
-      judged: difference,
-      judgement,
-      conversion,
-      rowsRewritten: await rowsRewrittenBy(
-        countRows,
+    const classed = async (on: unknown) => {
+      const judgement = await classifyDifference(on, dialect, difference);
+      // What the conversion would run and what the new type cannot keep, read from the same live
+      // table, so the report can say both and block what cannot be carried.
+      const conversion = await planDifference(
+        on,
+        dialect,
+        difference,
+        judgement
+      );
+      const rowsRewritten = await rowsRewrittenBy(
+        table => reads.countRows(on, table),
         difference.liveTable,
         conversion
-      ),
-    });
+      );
+      return { judgement, conversion, rowsRewritten };
+    };
+    if (reads.waits === undefined) {
+      findings.push({ ...finding, judged: difference, ...(await classed(db)) });
+      continue;
+    }
+    const read = await reads.waits.read(difference.liveTable, classed);
+    findings.push(
+      read.kind === "done"
+        ? { ...finding, judged: difference, ...read.value }
+        : // Its rows could not be read: never classed, so never converted.
+          { ...finding, judged: difference, lock: read.lock }
+    );
   }
   return findings;
+}
+
+/**
+ * The live columns of every table the entities name, in the database's tries where `waits` is
+ * given on SQLite: there what another connection holds is the whole database, which in exclusive
+ * locking mode keeps even a table's definition from being read. A server's catalog read waits for
+ * no table, so it runs once.
+ */
+async function readDefinitions(
+  db: unknown,
+  dialect: SupportedDialect,
+  planned: readonly PlannedEntity[],
+  waits: TableWaits | undefined
+): Promise<
+  | {
+      kind: "done";
+      live: LiveTables;
+      /** Each table whose tries ran out before its definition could be read, with the lock. */
+      held: ReadonlyMap<string, TableLockFacts>;
+    }
+  | { kind: "ran-out"; lock: TableLockFacts }
+> {
+  const names = tableNamesOf(planned);
+  const none = new Map<string, TableLockFacts>();
+  // MySQL's catalog read waits for no table (measured): it runs once, as with no tries.
+  if (waits === undefined || dialect === "mysql") {
+    return {
+      kind: "done",
+      live: await readLiveTables(db, dialect, names),
+      held: none,
+    };
+  }
+  if (dialect === "sqlite") {
+    const read = await waits.read(names[0] ?? "", on =>
+      readLiveTables(on, dialect, names)
+    );
+    return read.kind === "ran-out"
+      ? read
+      : { kind: "done", live: read.value, held: none };
+  }
+  // PostgreSQL: reading a table's definition opens the table, which waits behind another
+  // session's change to it, so each table is read in its own tries.
+  const live = new Map<string, LiveTable>();
+  const held = new Map<string, TableLockFacts>();
+  for (const name of names) {
+    const read = await waits.read(name, on =>
+      readLiveTables(on, dialect, [name])
+    );
+    if (read.kind === "ran-out") {
+      held.set(name.toLowerCase(), read.lock);
+      continue;
+    }
+    for (const [key, table] of read.value) live.set(key, table);
+  }
+  return { kind: "done", live, held };
 }
 
 /**
@@ -464,23 +581,25 @@ async function rowsRewrittenBy(
  * How many rows a table holds, read at most once per table for one run: each column of a table
  * whose conversion rewrites it rewrites the same rows, and a count can scan the whole table.
  */
-function rowCounter(
-  db: unknown,
-  dialect: SupportedDialect
-): (table: string) => Promise<number> {
-  const counted = new Map<string, Promise<number>>();
-  return table => {
+function rowCounter(dialect: SupportedDialect): RowCounter {
+  const counted = new Map<string, number>();
+  return async (db, table) => {
     const known = counted.get(table);
     if (known !== undefined) return known;
-    const count = querySqlRows<{ n: unknown }>(
+    // Kept only once read: a count a try's wait ended is read again by the next try.
+    const [row] = await querySqlRows<{ n: unknown }>(
       db,
       dialect,
       sql`SELECT COUNT(*) AS ${sql.identifier("n")} FROM ${sql.identifier(table)}`
-    ).then(([row]) => Number(row?.n ?? 0));
+    );
+    const count = Number(row?.n ?? 0);
     counted.set(table, count);
     return count;
   };
 }
+
+/** How many rows a table holds, read through `db`. */
+type RowCounter = (db: unknown, table: string) => Promise<number>;
 
 /**
  * How one applied column differs from the live database: missing (with its table, or alone), of

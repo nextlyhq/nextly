@@ -15,6 +15,7 @@ import type { ConversionJudgement } from "../value-conversion/types";
 import type { DifferenceToClass } from "./classify";
 import type { ColumnAspects } from "./column-comparison";
 import type { ColumnConversionPlan } from "./conversion/types";
+import type { TableLockFacts } from "./outcome";
 
 /** The kinds of entity whose fields Nextly builds a table from. */
 export type RepairEntityKind =
@@ -169,6 +170,12 @@ export interface DiffersFinding extends FindingBase {
    * written since the report is judged too. Absent on a finding built by hand.
    */
   judged?: DifferenceToClass;
+  /**
+   * Why its rows could not be read: another session held its table until the run's tries for it
+   * ran out. Such a column is neither classed nor converted, so its judgement and conversion are
+   * null. Absent where the rows were read.
+   */
+  lock?: TableLockFacts;
 }
 
 /**
@@ -193,6 +200,8 @@ export interface PendingMigrationFinding extends FindingBase {
 export interface DefinitionUnreadableFinding extends FindingBase {
   kind: "definition-unreadable";
   expected: ColumnState;
+  /** The wait for the database that ran out, where the run waited in tries; absent otherwise. */
+  lock?: TableLockFacts;
 }
 
 export type ColumnFinding =

@@ -48,7 +48,11 @@ import {
   type SnapshotEntity,
   type UserFieldSources,
 } from "./resolve-entities";
+import type { TableWaits } from "./table-wait";
 import type { RepairEntity } from "./types";
+
+/** What the entity reads wait for, as a lock's facts would name it. */
+const REGISTRY_READ = "nextly_schema_events";
 
 type RecordedKind = ConfiguredEntity["kind"];
 
@@ -509,15 +513,39 @@ export async function readRepairEntities(args: {
   deferredExtends?: readonly unknown[];
   migrationsDir: string;
   logger: Logger;
+  /**
+   * The run's waits for a table another session is using. On SQLite, where another connection can
+   * hold the whole database, the database's reads run in its tries; where they run out, only the
+   * configuration is read, and every column it names is reported as one whose definition could
+   * not be read (the run's later reads take the same, spent, tries).
+   */
+  waits?: TableWaits;
 }): Promise<RepairEntity[]> {
   const { adapter, dialect, logger } = args;
+  const codeFields = args.config.users?.fields ?? [];
   // Independent reads, so none waits on another.
-  const [configured, registry, snapshots, userFields] = await Promise.all([
+  const fromDatabase = () =>
+    Promise.all([
+      registryEntities(adapter, logger),
+      snapshotEntities(adapter, dialect, args.migrationsDir),
+      userFieldSources(adapter, dialect, logger, codeFields),
+    ]);
+  const [configured, read] = await Promise.all([
     configuredEntities(args),
-    registryEntities(adapter, logger),
-    snapshotEntities(adapter, dialect, args.migrationsDir),
-    userFieldSources(adapter, dialect, logger, args.config.users?.fields ?? []),
+    args.waits === undefined || dialect !== "sqlite"
+      ? fromDatabase().then(value => ({ kind: "done" as const, value }))
+      : // SQLite's tries are the whole database's, whichever table names them.
+        args.waits.read(REGISTRY_READ, fromDatabase),
   ]);
+  if (read.kind === "ran-out") {
+    return resolveRepairEntities({
+      configured,
+      registry: [],
+      snapshots: [],
+      userFields: { stored: null, configured: codeFields },
+    });
+  }
+  const [registry, snapshots, userFields] = read.value;
   return resolveRepairEntities({
     configured,
     registry,
