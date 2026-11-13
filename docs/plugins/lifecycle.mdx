@@ -7,7 +7,7 @@ This page covers _when_ a plugin's code runs, in _what order_, and how to expres
 ordering and version constraints. For the errors these rules produce, see the
 [error reference](/docs/plugins/error-reference).
 
-## The lifecycle: `contributes → setup → init → destroy` (D4)
+## The lifecycle: `contributes → setup → init → destroy`
 
 ```ts
 definePlugin({
@@ -46,7 +46,7 @@ Phase order:
    keeps running, and a change to either takes effect on the next start. Always clean
    up here — a subscription or timer left behind outlives the plugin and breaks tests.
 
-## Load order (D5)
+## Load order
 
 Plugins are run in a **topological sort** over their declared dependencies, so a plugin
 always initializes **after** the plugins it depends on. When two plugins have no
@@ -65,7 +65,7 @@ export default defineConfig({
 A **dependency cycle** is a fail-fast boot error (`PLUGIN_RESOLUTION_ERROR`,
 `reason: "dependency-cycle"`).
 
-## Dependencies (D5)
+## Dependencies
 
 Declare dependencies on other plugins by **package name → version range**:
 
@@ -94,7 +94,7 @@ definePlugin({
 If your plugin **extends or relates to another plugin's entity**, you must declare a
 `dependsOn` on it — otherwise you get `NEXTLY_SCHEMA_CROSS_PLUGIN_RELATION`.
 
-## Version compatibility (D6)
+## Version compatibility
 
 Every plugin declares the **core** range it supports via `nextly`. It's checked at boot;
 an out-of-range core is a fail-fast error (`reason: "core-incompatible"` /
@@ -107,7 +107,7 @@ nextly: ">=0.0.2-alpha.63", // a range may span multiple majors once they exist
 Prereleases (alpha/beta) count as in-range. For runtime feature-detection, read
 `ctx.nextlyVersion` rather than branching on the declared range.
 
-## Enabling & disabling (D49)
+## Enabling & disabling
 
 `enabled` defaults to `true`. Setting it to `false` **skips the plugin's behavior**
 (`init`, hooks, events, routes, admin UI) but **still applies its declarative schema** —
@@ -157,7 +157,10 @@ the DOWN of each applied module, newest first. Each boots the app from your conf
 build the hook's context, and only when the plugin declares the hook. Write both so
 they can run again: an install that failed part-way is repaired by running it again,
 which calls `onInstall` again, and an uninstall that stopped part-way is finished by
-running it again, which calls `onUninstall` again. A plugin counts as installed only
+running it again, which calls `onUninstall` again. Once an install has finished, running
+it again calls no `onInstall` and records no second install: it applies only the
+migration modules, permissions and roles an upgraded package added (see
+[Installing](/docs/guides/production-migrations#installing)). A plugin counts as installed only
 once `nextly plugins install` has finished on that database: a production boot
 refuses it before then while it is enabled, and so does the install of a plugin that depends on it.
 `nextly plugins install --all` installs every enabled plugin in your config, its

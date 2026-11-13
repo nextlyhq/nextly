@@ -475,6 +475,9 @@ async function applyPendingMigrations(label: string): Promise<number> {
       dialect: drizzleAdapter.dialect,
       plugins: configResult.config.plugins ?? [],
       config: configResult.config,
+      // The connected server's limits: refuse constructs it cannot hold
+      // before any boot migration runs.
+      server: drizzleAdapter.getCapabilities(),
       logger: { warn: m => consoleLogger.warn(m) },
     });
     const result = await migrateAtDevBoot({
