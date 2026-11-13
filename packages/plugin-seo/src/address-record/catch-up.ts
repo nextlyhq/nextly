@@ -5,9 +5,13 @@
  *
  * It runs only where the fingerprint core gives of every address template
  * and site type differs from the one stored at the last run, where no run has
- * finished (a new or dropped record stores none), or where a deploy move is
- * still owed its redirect. It works in two passes so a deploy that moves one
- * page off an address and another onto it is no clash:
+ * finished (a new or dropped record stores none), where a deploy move is
+ * still owed its redirect, or where a process still running the earlier
+ * version that kept the record in a collection wrote that collection since
+ * the record last took it in (`earlierWritesSince`): the pages and redirects
+ * that process saved are recorded as they now stand, and the moves it noted
+ * are owed their redirects here. It works in two passes so a deploy that
+ * moves one page off an address and another onto it is no clash:
  *
  * 1. every page keeps the addresses it already holds and still resolves to,
  *    and lets go of the rest; a page that no longer exists lets go of all;
@@ -42,7 +46,9 @@ import {
   type PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
+import { markOutOfDate } from "../problems/store";
 import { redirectDeployMove } from "../redirects/moves";
+import { reclaimRedirectAddresses } from "../redirects/reclaim";
 
 import { heldNow } from "./participant";
 import {
@@ -52,7 +58,16 @@ import {
   type PendingMove,
 } from "./pending-moves";
 import type { RecordRow } from "./rows";
-import { heldRows, noteKey, putNote, readNotes } from "./store";
+import {
+  EARLIER_NOTE_KEYS,
+  earlierWritesSince,
+  heldRows,
+  keepEarlierShape,
+  noteKey,
+  putNote,
+  readNotes,
+  takeEarlierPending,
+} from "./store";
 
 type Transaction = ParticipantTransaction["transaction"];
 
@@ -145,6 +160,11 @@ interface CatchUpOptions {
    */
   pageSize?: number;
   betweenPages?: (listed: readonly HeldDocument[]) => Promise<void>;
+  /**
+   * How far from the earlier collection's newest write its shape must be
+   * read to be trusted (`earlierWritesSince`); the module's own where unset.
+   */
+  settleMs?: number;
 }
 
 /** Run the catch-up again with the last context, as the next start would. */
@@ -170,6 +190,7 @@ async function caughtUp(
   try {
     const report = await runCatchUp(ctx, options);
     failed = false;
+    if (report.lost.length > 0) await problemsOutOfDate(ctx);
     return report;
   } catch (error) {
     failed = true;
@@ -189,23 +210,42 @@ const sameAddress = (a: HeldAddress, b: HeldAddress) =>
   a.locale === b.locale && a.path === b.path && a.range === b.range;
 
 /**
- * The stored fingerprint and site-types notes, found by their keys, and
- * whether any deploy move is still owed its redirect: one read.
+ * Say the SEO Problems list's last full check may no longer hold, never
+ * failing the catch-up: a page left without the address another holds is
+ * listed by the next full check, and until then the list says it is out of
+ * date.
+ */
+async function problemsOutOfDate(ctx: PluginContext): Promise<void> {
+  try {
+    await markOutOfDate(ctx);
+  } catch (error) {
+    ctx.logger.warn("The SEO Problems list could not be marked out of date", {
+      error,
+    });
+  }
+}
+
+/**
+ * The stored fingerprint and site-types notes, found by their keys, whether
+ * any deploy move is still owed its redirect, and the notes of the earlier
+ * record's move: one read.
  */
 async function storedGate(ctx: PluginContext): Promise<{
   fingerprint?: string;
   siteTypes?: string;
   pending: boolean;
+  notes: ReadonlyMap<string, string | null>;
 }> {
   const { notes, pending } = await readNotes(
     ctx,
-    [FINGERPRINT_KEY, SITE_TYPES_KEY],
+    [FINGERPRINT_KEY, SITE_TYPES_KEY, ...EARLIER_NOTE_KEYS],
     true
   );
   return {
     fingerprint: notes.get(FINGERPRINT_KEY) ?? undefined,
     siteTypes: notes.get(SITE_TYPES_KEY) ?? undefined,
     pending,
+    notes,
   };
 }
 
@@ -523,12 +563,22 @@ async function runCatchUp(
   // means that run never finished. A full uninstall drops the record with
   // both rows, so a reinstall runs the whole catch-up again.
   const stored = await storedGate(ctx);
+  const earlier = await earlierWritesSince(ctx, stored.notes, options.settleMs);
   if (
+    earlier === undefined &&
     stored.fingerprint === fingerprint &&
     stored.siteTypes !== undefined &&
     !stored.pending
   ) {
     return NOTHING;
+  }
+  if (earlier !== undefined) {
+    ctx.logger.info(
+      "The SEO plugin found addresses an earlier version recorded during a deploy, and brings its record up to date from the pages",
+      { earlier: earlier.shape }
+    );
+    // Noted here before the run, which makes their redirects with its own.
+    await takeEarlierPending(ctx, earlier.since);
   }
   const held = await heldRows(ctx);
   const siteTypes = await siteTypeKeys(ctx);
@@ -543,6 +593,10 @@ async function runCatchUp(
     now: new Set(siteTypes),
     before: typesIn(stored.siteTypes),
   });
+  // The redirects that process saved or removed, once every page has let go
+  // of what it no longer holds: a redirect from a page's old address claims
+  // it only after the page lets it go.
+  if (earlier !== undefined) await reclaimRedirectAddresses(ctx);
   await options.afterReleases?.();
   const { recorded, lost } = await claimTheNew(ctx, pages, kept, expected);
   await redirectOwedMoves(ctx);
@@ -554,6 +608,9 @@ async function runCatchUp(
   );
   // Stored last: a start interrupted before this point runs it all again.
   await storeNote(ctx, stored.fingerprint, FINGERPRINT_KEY, fingerprint);
+  // And the earlier collection's shape after it: a start interrupted before
+  // it finds the same writes again, and takes them in again.
+  if (earlier !== undefined) await keepEarlierShape(ctx, earlier.shape);
   return { ran: true, recorded, lost };
 }
 
