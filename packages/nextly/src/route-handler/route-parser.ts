@@ -780,11 +780,13 @@ function parseCollectionEntryPublishAllRoute(
   // that difference twice is how a route and its twin start to disagree about
   // the shape they both match.
   const allLocales = ALL_LOCALES_ENTRY_ROUTES[additionalParams[0] ?? ""];
+  // The route ends at the action: a path that goes on past it names nothing here.
   if (
     id &&
     subresource === "entries" &&
     subId &&
     allLocales &&
+    additionalParams.length === 1 &&
     httpMethod === "POST"
   ) {
     routeParams.collectionName = id;

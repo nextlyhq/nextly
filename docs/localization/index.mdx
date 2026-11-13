@@ -232,7 +232,8 @@ await nextly.unpublish({ collection: "posts", id, locales: ["fr"], data: { _rev 
 ```
 
 Over REST, send the same choice to `POST /api/collections/{slug}/entries/{id}/publish` or
-`.../unpublish`, with a body of `{ "locales": ["es", "fr"], "shared": true, "_rev": 4 }`.
+`.../unpublish`, with a body of `{ "locales": ["es", "fr"], "shared": true, "_rev": "<_rev from your read>" }`.
+`_rev` is the string token a read returns; send it back unchanged.
 `locales: "all"` chooses every language the site has, and the shared part with them.
 
 Everything chosen moves together, or nothing moves:
