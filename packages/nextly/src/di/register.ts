@@ -1126,6 +1126,12 @@ async function registerServicesOnce(
     adapter,
     resolvedLogger,
     async () => {
+      // At the stored version read first, so the first follow of the version
+      // does not load every definition again (`loadingDefinitions`).
+      const { versionBeforeLoading, definitionsLoaded } = await import(
+        "../route-handler/schema-version"
+      );
+      const loadedAt = await versionBeforeLoading(adapter);
       const registry = await initializeSchemaRegistry(
         adapter,
         staticRegistry,
@@ -1136,6 +1142,7 @@ async function registerServicesOnce(
         // it, in their own reload.
         { createMissingCompanions: !structure.productionStart }
       );
+      if (registry !== undefined) definitionsLoaded(adapter, loadedAt);
 
       // Publish the webhook recording policy from the config INDEPENDENTLY of the
       // schema registry. `registerConfigTablesInResolver` (below) only runs when the
