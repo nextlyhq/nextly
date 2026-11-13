@@ -163,12 +163,13 @@ function useFoldedPanelWhere(key: string | null): void {
 export function useCollectionFoldedPanel(slug: string | undefined): void {
   const { plugins } = useBranding();
   // The plugins' list is the admin metadata's signed-in half: until that half
-  // has answered, a list from elsewhere proves nothing, and the prebuilt page
-  // answers instead.
-  const { isPending } = useBrandingStatus();
-  const folds =
-    slug !== undefined &&
-    collectionFoldsPanel(isPending ? undefined : plugins, slug);
+  // has answered, or when it could not be had, a list from elsewhere proves
+  // nothing, and the prebuilt page answers instead. Once it has answered, its
+  // list is the answer, even an absent one: a site with no plugins left sends
+  // none, which folds nothing, whatever a page built before said.
+  const { isPending, isUnavailable } = useBrandingStatus();
+  const settled = isPending || isUnavailable ? undefined : (plugins ?? []);
+  const folds = slug !== undefined && collectionFoldsPanel(settled, slug);
   useFoldedPanelWhere(
     folds && slug !== undefined ? collectionFoldKey(slug) : null
   );
