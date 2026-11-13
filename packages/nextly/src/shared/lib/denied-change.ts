@@ -176,12 +176,20 @@ export async function resolvePromotedDocument(
     [input.before, permittedBefore],
     [input.live, permittedLive],
   ]);
+  // The document this publish writes: what the rules allow of `before`, and every value they deny
+  // back at live.
+  const persisted = restoreDenied(
+    input.before,
+    permittedBefore,
+    input.live,
+    permittedLive
+  ) as Record<string, unknown>;
   // The pending change judged on its own, with one exemption (`allowedAsProduced`): a plain value
-  // the document the publish produces allows, though the draft's own siblings denied it.
+  // the document the publish writes allows, though the draft's own siblings denied it.
   if (input.pending && permittedPending) {
     for (const path of deniedPaths(input.pending, permittedPending, "")) {
       if (denied.has(path)) continue;
-      if (await allowedAsProduced(input, path)) continue;
+      if (await allowedAsProduced(input, persisted, path)) continue;
       denied.add(path);
     }
   }
@@ -190,12 +198,7 @@ export async function resolvePromotedDocument(
   );
   if (refusals.length > 0) refuse(input, refusals);
 
-  return restoreDenied(
-    input.before,
-    permittedBefore,
-    input.live,
-    permittedLive
-  ) as Record<string, unknown>;
+  return persisted;
 }
 
 /**
@@ -534,7 +537,9 @@ function isRefusal(
  * A rule reads the document's other fields. Judged on the pending change alone, a value is judged
  * against the draft's siblings, and a publish that sets a sibling the rule reads (a `kind` the rule
  * asks for) is refused though the document it writes allows the value. So such a value is judged
- * once more, on the produced document with the pending value put at its path. Only a plain value is
+ * once more, on the document the publish writes (`persisted`: every value the rules deny already
+ * back at live, so a sibling the rule reads is the one that persists) with the pending value put at
+ * its path. Only a plain value is
  * judged so: a container, a value inside a list, a value whose containers the produced document
  * lacks, or a path through a name an object inherits, stays denied, as before. A pending change can
  * add or delete inside a container in ways the produced document does not show, so those keep the
@@ -542,13 +547,14 @@ function isRefusal(
  */
 async function allowedAsProduced(
   input: PromotionAccessInput,
+  persisted: Record<string, unknown>,
   path: string
 ): Promise<boolean> {
   const value = valueAt(input.pending, path);
   if (path.includes("[") || isRecord(value) || Array.isArray(value)) {
     return false;
   }
-  const produced = detachData(input.before);
+  const produced = detachData(persisted);
   if (!putOwnPath(produced, path, detachData(value))) return false;
   const judged = detachData(produced);
   await input.applyRules(judged);

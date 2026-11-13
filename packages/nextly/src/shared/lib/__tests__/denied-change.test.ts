@@ -1040,4 +1040,39 @@ describe("resolvePromotedDocument judges a pending value by the document it prod
       ).publicData?.errors?.map(e => e.path)
     ).toEqual(["ops.mode", "ops.secret"]);
   });
+
+  it("refuses a pending value whose allowing sibling the publish puts back at live", async () => {
+    // `kind` may be written only while `guarded` is empty; a `guarded` value needs `kind` "public".
+    const rules = (document: Record<string, unknown>): Promise<void> => {
+      const guardedSet = document.guarded != null;
+      const kindDenied = guardedSet && "kind" in document;
+      const guardedDenied = guardedSet && document.kind !== "public";
+      if (kindDenied) delete document.kind;
+      if (guardedDenied) delete document.guarded;
+      return Promise.resolve();
+    };
+    const pending = { kind: "private", guarded: "new" };
+    const callerSupplied = { kind: "public" };
+    let refused: unknown;
+    let written: unknown;
+    try {
+      written = await resolvePromotedDocument({
+        slug: "posts",
+        applyRules: rules,
+        before: { kind: "public", guarded: "new" },
+        live: { kind: "private", guarded: null },
+        pending,
+        callerSupplied,
+      });
+    } catch (error) {
+      refused = error;
+    }
+    // The publish would write `kind` back at live "private", where `guarded` is denied.
+    expect(written).toBeUndefined();
+    expect(
+      (
+        refused as { publicData?: { errors?: { path: string }[] } }
+      ).publicData?.errors?.map(e => e.path)
+    ).toContain("guarded");
+  });
 });
