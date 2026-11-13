@@ -578,6 +578,7 @@ export async function runMigrate(
         step: options.step,
         logger,
         serverConstructs,
+        extensionSchema,
       });
       logger.success("Dry run complete (no changes made).");
       return;
@@ -1218,8 +1219,13 @@ export async function previewMigrate(args: {
   readEventTriggers?: () => Promise<readonly string[]>;
   /** Connected server capabilities, judged identically to execution. */
   serverConstructs?: ServerConstructCapabilities;
+  /** The compiled schema, whose plugin prefixes a real run checks first. */
+  extensionSchema?: Pick<ExtensionSchema, "pluginPrefixes"> | undefined;
 }): Promise<void> {
   const { adapter, db, dialect, logger } = args;
+  // Refused as a real run refuses, before anything is listed: a plugin whose
+  // prefix moved since its tables were created (`assertPluginPrefixesHold`).
+  await assertPluginPrefixesHold(args);
   const hasLedger = await (
     adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
   ).tableExists("nextly_schema_events");
@@ -1826,6 +1832,31 @@ async function appliedPluginModules(
 }
 
 /**
+ * Refuse a plugin whose schema prefix differs from the one its recorded
+ * tables were created under (`plugin-prefix-check.ts`), before anything in
+ * the run is planned or applied: its modules would create its tables again
+ * under the new names, beside the old ones and their rows.
+ */
+async function assertPluginPrefixesHold(deps: {
+  extensionSchema?: Pick<ExtensionSchema, "pluginPrefixes"> | undefined;
+  db: unknown;
+  dialect: SupportedDialect;
+  adapter: unknown;
+}): Promise<void> {
+  // Dynamic, as the owner repository is everywhere in this file: it sits on
+  // cycles that close through this command.
+  const { assertPluginPrefixesKeptIn } = await import(
+    "../../domains/schema/ownership/plugin-prefix-check"
+  );
+  await assertPluginPrefixesKeptIn({
+    prefixes: deps.extensionSchema?.pluginPrefixes,
+    db: deps.db,
+    dialect: deps.dialect,
+    adapter: deps.adapter,
+  });
+}
+
+/**
  * Phase 1.5 — plugin migration modules, between core and the app's files,
  * under the caller's lock. Plugins run first because an app migration may
  * index an entity table a plugin contributes. The first failure propagates
@@ -1838,6 +1869,9 @@ export async function runPluginPhase(
   if (!deps.pluginMigrationSets || deps.pluginMigrationSets.length === 0) {
     return { applied: 0, adopted: 0, skipped: 0 };
   }
+  // Asked here as well as by `migrateCore`: `nextly plugins install` runs
+  // this phase alone.
+  await assertPluginPrefixesHold(deps);
   deps.logger.info("Phase 1.5: applying plugin migrations...");
   const dz = deps.adapter as unknown as DrizzleAdapter;
   const eventsRepo = new SchemaEventsRepository(deps.db, deps.dialect);
@@ -2289,6 +2323,9 @@ export async function migrateCore(
   // The history checks that need no database, before the lock is waited on:
   // a list edited by hand is refused with nothing changed.
   assertPluginListsSound(deps.pluginMigrationSets ?? []);
+  // A plugin whose prefix moved since its tables were created, before the
+  // lock and before any stream plans its tables under the new names.
+  await assertPluginPrefixesHold(deps);
   // The ledger's old Builder marks in the declared names every reader below
   // reads the folder through: the command and the boot alike hand only what
   // is declared. Read again under the lock.
