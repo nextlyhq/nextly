@@ -1434,6 +1434,7 @@ export class SingleMetadataService {
       await refuseFillsTheirFieldsRefuse(
         alterInput.oldFields,
         alterInput.newFields,
+        this.fieldsLeavingTranslation(input, schemaService),
         schemaService
       );
     }
@@ -1684,24 +1685,24 @@ export class SingleMetadataService {
    * do is left out. The SQL is planned without the live table's facts, which describe the columns
    * before the migration creates them.
    */
-  private withLeavingSettingsDeferred(
+  /**
+   * The fields a localized Single that stays localized moves from translated to shared: their
+   * column is added open, given each entry's default-language value from the companion, and only
+   * then given its settings (`withLeavingSettingsDeferred`). Named after the change, by the main
+   * table's rename rule, so a field renamed and made shared leaves under its new name.
+   */
+  private fieldsLeavingTranslation(
     input: UpdateSingleSchemaInput,
-    newFields: FieldDefinition[],
-    schemaService: Pick<
-      DynamicCollectionSchemaService,
-      "generateAlterTableMigration" | "plannedColumnTypes" | "detectFieldRename"
-    >
-  ): { newFields: FieldDefinition[]; leavingSettings: LeavingSettingStep[] } {
-    const { wasLocalized, isLocalized, hasStatus } = input;
+    schemaService: Pick<DynamicCollectionSchemaService, "detectFieldRename">
+  ): ReadonlySet<string> {
+    const { wasLocalized, isLocalized } = input;
     const previousFields = (input.existing.fields ??
       []) as unknown as FieldDefinition[];
-    // Named after the change, by the main table's rename rule, so a field renamed and made shared
-    // leaves under its new name and its setting waits for the copy too.
     const rename = schemaService.detectFieldRename(
       previousFields,
       input.fields ?? []
     );
-    const leaving = new Set(
+    return new Set(
       wasLocalized && isLocalized
         ? fieldsLeavingTranslationUnder(
             previousFields,
@@ -1710,6 +1711,18 @@ export class SingleMetadataService {
           )
         : []
     );
+  }
+
+  private withLeavingSettingsDeferred(
+    input: UpdateSingleSchemaInput,
+    newFields: FieldDefinition[],
+    schemaService: Pick<
+      DynamicCollectionSchemaService,
+      "generateAlterTableMigration" | "plannedColumnTypes" | "detectFieldRename"
+    >
+  ): { newFields: FieldDefinition[]; leavingSettings: LeavingSettingStep[] } {
+    const { hasStatus } = input;
+    const leaving = this.fieldsLeavingTranslation(input, schemaService);
     const unconstrained = withoutLeavingConstraints(newFields, leaving);
     const alter = (from: FieldDefinition[], to: FieldDefinition[]) => {
       const sqliteNullability = new Map<string, boolean>();
@@ -2832,17 +2845,20 @@ export class SingleMetadataService {
 }
 
 /**
- * Refuses the save, before any statement runs, when a required field added to a Single that holds
- * its row states a default its own rules refuse: a `defaultValue` of 0 under `min: 1`, a text
- * longer than its `maxLength`. The row would be filled with that value (`singleRowFillValue`, the
- * value the ADD writes), and every later write of the Single would then refuse what it holds. The
- * value is judged by the entry validator every write answers to, so the two cannot disagree.
+ * Refuses the save, before any statement runs, when a field added to a Single that holds its row
+ * states a default its own rules refuse: a `defaultValue` of 0 under `min: 1`, a text longer than
+ * its `maxLength`. The row would be filled with that value (`singleRowFillValue`, the value the ADD
+ * writes), and every later write of the Single would then refuse what it holds. The value is
+ * judged by the entry validator every write answers to, so the two cannot disagree. A field
+ * leaving translation is not filled with its default but with each entry's default-language
+ * value from the companion (`fieldsLeavingTranslation`), so its default is not judged here.
  *
  * @throws NextlyError `VALIDATION_ERROR` naming each field and the rule its default breaks
  */
 async function refuseFillsTheirFieldsRefuse(
   oldFields: FieldDefinition[],
   newFields: FieldDefinition[],
+  leavingTranslation: ReadonlySet<string>,
   schemaService: Pick<
     DynamicCollectionSchemaService,
     "detectFieldRename" | "singleRowFillValue"
@@ -2857,7 +2873,11 @@ async function refuseFillsTheirFieldsRefuse(
   );
   const errors: { path: string; code: string; message: string }[] = [];
   for (const field of newFields) {
-    if (!field.required || before.has(field.name) || field.name === renamedTo) {
+    if (
+      before.has(field.name) ||
+      field.name === renamedTo ||
+      leavingTranslation.has(field.name)
+    ) {
       continue;
     }
     const fill = schemaService.singleRowFillValue(field);

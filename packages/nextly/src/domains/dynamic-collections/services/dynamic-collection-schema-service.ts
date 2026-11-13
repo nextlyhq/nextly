@@ -1089,16 +1089,18 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
-   * A required column added to a table holding rows, filled with `fill` and left with no default.
+   * A column added to a table holding rows, filled with `fill` and left with no default.
    * PostgreSQL and MySQL take the value as the column's default for the one statement that adds
-   * it, then drop the default. SQLite can drop no default, so there the column is added open,
-   * filled, and handed to the caller's rebuild to be made NOT NULL (`onSqliteNullability`).
+   * it, then drop the default. SQLite can drop no default, so there the column is added open and
+   * filled; a required one is handed to the caller's rebuild to be made NOT NULL
+   * (`onSqliteNullability`).
    */
   private fillThenDropDefault(
     tableName: string,
     columnName: string,
     type: string,
     fill: string,
+    required: boolean,
     onSqliteNullability:
       | ((column: string, required: boolean) => void)
       | undefined
@@ -1106,7 +1108,7 @@ export class DynamicCollectionSchemaService {
     const table = this.quoteIdentifier(tableName);
     const column = this.quoteIdentifier(columnName);
     if (this.dialect === "sqlite") {
-      onSqliteNullability?.(columnName, true);
+      if (required) onSqliteNullability?.(columnName, true);
       return [
         `ALTER TABLE ${table} ADD COLUMN ${column} ${type};`,
         `UPDATE ${table} SET ${column} = ${fill};`,
@@ -1117,7 +1119,7 @@ export class DynamicCollectionSchemaService {
     // straight after.
     const given = this.dialect === "mysql" ? `(${fill})` : fill;
     return [
-      `ALTER TABLE ${table} ADD COLUMN ${column} ${type} NOT NULL DEFAULT ${given};`,
+      `ALTER TABLE ${table} ADD COLUMN ${column} ${type}${required ? " NOT NULL" : ""} DEFAULT ${given};`,
       `ALTER TABLE ${table} ALTER COLUMN ${column} DROP DEFAULT;`,
     ];
   }
@@ -1147,7 +1149,7 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
-   * The stated default a Single's existing row is filled with when this required field is added,
+   * The stated default a Single's existing row is filled with when this field is added,
    * as the application would write it, or `undefined` where the row takes its type's empty
    * instead. The value `singleRowFill` writes, for the precondition that judges it against the
    * field's own rules before any statement runs.
@@ -1924,13 +1926,19 @@ ${allColumnDefs.join(",\n")}
         // A Single's existing row is filled with the same value, given once and then taken away
         // (`fillThenDropDefault`); a field's own default is never kept on its column.
         let fillThenDrop: string | null = null;
-        if (field.required || (columnDefaults && field.default !== undefined)) {
+        // An optional field of a Single is filled too where it states a default that is taken
+        // (`singleRowFillValue`), as a column default would have filled it: the entry already
+        // there gets the field's default, not NULL.
+        const statesDefault = columnDefaults
+          ? field.default !== undefined
+          : this.singleRowFillValue(field) !== undefined;
+        if (field.required || statesDefault) {
           // A Single's existing row takes the default the field states where it can be written
           // safely (`singleRowFill`); a collection's reads `default` alone, as it always has.
           const backfill = columnDefaults
             ? this.requiredColumnBackfill(field)
             : this.singleRowFill(field);
-          if (backfill !== null && !columnDefaults && field.required) {
+          if (backfill !== null && !columnDefaults) {
             fillThenDrop = backfill;
           } else if (backfill !== null) {
             defaultVal = `DEFAULT ${backfill}`;
@@ -1968,6 +1976,7 @@ ${allColumnDefs.join(",\n")}
               addColName,
               type,
               fillThenDrop,
+              field.required === true,
               options?.onSqliteNullability
             )
           );
