@@ -172,6 +172,23 @@ export function wordPressItems(xml: string): WordPressItem[] {
   return blocks(xml, "item").flatMap(item => itemOf(item) ?? []);
 }
 
+/**
+ * Whose SEO values a WordPress export holds, read from its posts' stored
+ * keys alone, never from their content, which may quote another tool's: the
+ * tool with more keys in it, Yoast where neither has any.
+ */
+export function seoPluginOf(xml: string): "yoast" | "rankMath" {
+  let yoast = 0;
+  let rankMath = 0;
+  for (const item of wordPressItems(xml)) {
+    for (const key of item.meta.keys()) {
+      if (key.startsWith("_yoast_wpseo_")) yoast++;
+      else if (key.startsWith("rank_math_")) rankMath++;
+    }
+  }
+  return rankMath > yoast ? "rankMath" : "yoast";
+}
+
 /** A stored value read for one place, and what the plugin calls it. */
 interface MetaField {
   key: string;

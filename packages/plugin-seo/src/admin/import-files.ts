@@ -15,6 +15,7 @@ import {
 } from "../import/contract";
 import { readFile } from "../import/read-file";
 import { ImportFileRefused, type ParsedSource } from "../import/records";
+import { seoPluginOf } from "../import/wordpress";
 
 /** A tool whose export Import reads, as its first step names it. */
 export type ImportTool = "wordpress" | "rankMathCsv" | "payload";
@@ -98,7 +99,13 @@ export function sourceOfFile(
       if (!start.startsWith("<") || !/wordpress\.org\/export/i.test(text)) {
         return undefined;
       }
-      return pluginOfMeta(text);
+      try {
+        return seoPluginOf(text);
+      } catch (error) {
+        // Not an export the reader takes: no source, so its one notice.
+        if (error instanceof ImportFileRefused) return undefined;
+        throw error;
+      }
     case "rankMathCsv":
       return start.startsWith("<") || start.startsWith("{") || start === ""
         ? undefined
@@ -108,24 +115,6 @@ export function sourceOfFile(
         ? "payload"
         : undefined;
   }
-}
-
-/**
- * Whose values a WordPress export holds, read from its meta keys alone, not
- * from page content that may mention another tool's keys: the tool with
- * more keys in the file, Yoast where neither has any.
- */
-function pluginOfMeta(xml: string): ImportFileSource {
-  let yoast = 0;
-  let rankMath = 0;
-  for (const match of xml.matchAll(
-    /<wp:meta_key>\s*(?:<!\[CDATA\[)?\s*([^<\]\s]+)/g
-  )) {
-    const key = match[1] ?? "";
-    if (key.startsWith("_yoast_wpseo_")) yoast++;
-    else if (key.startsWith("rank_math_")) rankMath++;
-  }
-  return rankMath > yoast ? "rankMath" : "yoast";
 }
 
 /** Why a file can't be used, as the one notice says it: its title and what to do. */
