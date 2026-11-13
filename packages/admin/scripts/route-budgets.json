@@ -15,6 +15,7 @@
     "CodeMirrorEditor": 246349,
     "common-passwords": 13718,
     "EmailProviderForm": 14176,
+    "FormPreview": 23828,
     "groups-drawing": 2169,
     "highlight-source": 223405,
     "IconInput": 5963,
@@ -24,11 +25,16 @@
     "LexicalList": 95607,
     "LexicalRichText": 98629,
     "LexicalTable": 112831,
+    "liquid-variables": 1639,
     "LiquidEditor": 261249,
     "over-time-drawing": 2572,
+    "page.dashboard.account.index": 2334,
     "page.dashboard.collection.index": 7869,
     "page.dashboard.collections.builder._slug_": 34946,
     "page.dashboard.collections.builder.index": 9623,
+    "page.dashboard.content.collections": 4254,
+    "page.dashboard.content.index": 4251,
+    "page.dashboard.content.singles": 4254,
     "page.dashboard.email.design": 17091,
     "page.dashboard.email.index": 8898,
     "page.dashboard.email.messages.create": 23233,
@@ -92,6 +98,6 @@
     "SendTestPanel": 4027,
     "TextMarkdown": 158087,
     "UploadTray": 1710,
-    "VersionHistorySheet": 45862
+    "VersionHistorySheet": 82622
   }
 }
