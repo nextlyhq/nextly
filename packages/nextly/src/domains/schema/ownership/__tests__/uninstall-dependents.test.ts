@@ -11,6 +11,7 @@ import type { DependentsSources } from "../../../collections/services/collection
 import { resolveIndexName } from "../../extension/compile";
 import { col, defineTable } from "../../extension/dsl";
 import { compileExtensionSchema } from "../../extension/publish";
+import type { SchemaOwner } from "../../extension/types";
 import { enumCheckName } from "../../extension/enum-check";
 import type { ExtensionSchemaRecord } from "../dependent-elements";
 import type { OwnerRecord } from "../owner-registry";
@@ -1195,10 +1196,10 @@ describe("relations pointing into the plugin's tables", () => {
               ],
             },
           ] as unknown as ExtensionSchemaRecord["tables"],
-          owners: new Map([
+          owners: new Map<string, SchemaOwner>([
             ["sso__links", SSO],
             ["sso__other", SSO],
-            ["app_pages", { kind: "app" as const }],
+            ["app_pages", { kind: "app" }],
             ["fx__notes", FX],
           ]),
         }),
