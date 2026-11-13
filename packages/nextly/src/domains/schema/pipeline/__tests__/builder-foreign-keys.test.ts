@@ -288,8 +288,15 @@ describe("withBuilderForeignKeys, for the admin's relationTo", () => {
   });
 
   it("keys none to a target the registry does not hold", () => {
-    const fields = [TITLE, adminAuthor("users")];
+    const fields = [TITLE, adminAuthor("site-settings")];
     expect(keysWithTargets(collection(fields), live([TITLE], []))).toEqual([]);
+  });
+
+  it("keys a relationship to Users to the core users table", () => {
+    const fields = [TITLE, adminAuthor("users")];
+    expect(keysWithTargets(collection(fields), live([TITLE], []))).toEqual([
+      { ...LIVE_KEY, referencesTable: "users" },
+    ]);
   });
 
   it("plans no key for a relationTo relationship recorded before, whose column has none", () => {

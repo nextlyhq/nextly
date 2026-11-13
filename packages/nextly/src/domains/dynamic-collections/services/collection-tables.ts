@@ -35,7 +35,11 @@ export interface CollectionTables extends ReadonlyMap<string, string> {
 export function builderKeyTables(
   tables: Iterable<readonly [string, string]>
 ): CollectionTables {
-  return Object.assign(new Map(tables), { keysRelationTo: true as const });
+  // Users are a target the admin's relationship picker offers beside the collections, stored in
+  // the core `users` table; set last, so no collection's row can take the slug's place.
+  const map = new Map(tables);
+  map.set("users", "users");
+  return Object.assign(map, { keysRelationTo: true as const });
 }
 
 /** Whether `field` names one target a key could point at, by `relationTo` or `options.target`. */

@@ -44,9 +44,15 @@ describe("relationshipKeyTarget, for a Builder collection's own keys", () => {
     ).toEqual({ slug: "posts", table: "dc_posts" });
   });
 
+  it("keys a relationship to Users to the core users table", () => {
+    expect(
+      relationshipKeyTarget(relationship({ relationTo: "users" }), builder)
+    ).toEqual({ slug: "users", table: "users" });
+  });
+
   it("gives a relationTo slug the registry does not hold no key", () => {
-    // Users, a Single or a slug that names nothing: a guessed table would fail the apply.
-    for (const slug of ["users", "site-settings", "nothing"]) {
+    // A Single or a slug that names nothing: a guessed table would fail the apply.
+    for (const slug of ["site-settings", "nothing"]) {
       expect(
         relationshipKeyTarget(relationship({ relationTo: slug }), builder)
       ).toBeNull();
@@ -62,7 +68,7 @@ describe("relationshipKeyTarget, for a Builder collection's own keys", () => {
     ).toEqual({ slug: "authors", table: "writers" });
     expect(
       relationshipKeyTarget(
-        relationship({ relationTo: "users", options: { target: "posts" } }),
+        relationship({ relationTo: "nothing", options: { target: "posts" } }),
         builder
       )
     ).toBeNull();

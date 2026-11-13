@@ -1231,8 +1231,8 @@ function adminShapeCases(pair: Pair, harness: AdminHarness) {
 
   it.each([
     {
-      what: "Users, which the registry does not hold here",
-      relationTo: "users",
+      what: "a Single, which the registry does not hold",
+      relationTo: "site_settings",
     },
     { what: "a slug that names nothing", relationTo: "nothing_at_all" },
     { what: "several collections", relationTo: ["a", "b"] },
