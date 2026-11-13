@@ -26,6 +26,7 @@ export {
   useTheme,
 } from "./context/providers/ThemeProvider";
 export type {
+  ResolvedTheme,
   ThemeProviderProps,
   UseThemeProps,
 } from "./context/providers/ThemeProvider";
@@ -33,10 +34,20 @@ export {
   BrandingProvider,
   useBranding,
 } from "./context/providers/BrandingProvider";
-export type { AdminBranding } from "./types/branding";
+export type { BrandingProviderProps } from "./context/providers/BrandingProvider";
+export type {
+  AdminBranding,
+  PluginClientConfigMeta,
+  PluginMetadata,
+  ResolvedBrandingColors,
+} from "./types/branding";
 
 // Error containment around the admin, and around one screen's query.
 export { ErrorBoundary } from "./components/shared/error-boundary";
+export type {
+  ErrorBoundaryProps,
+  ErrorBoundaryState,
+} from "./components/shared/error-boundary";
 export { QueryErrorBoundary } from "./components/shared/query-error-boundary";
 export type { QueryErrorBoundaryProps } from "./components/shared/query-error-boundary";
 
@@ -80,6 +91,28 @@ export { useCollection, useCollections } from "./hooks/queries/useCollections";
 export { useMedia, useMediaItem } from "./hooks/queries/useMedia";
 export { useDashboardStats } from "./hooks/queries/useDashboardStats";
 export { useRecentActivity } from "./hooks/queries/useRecentActivity";
+// The types those hooks read and answer with, so a component calling one can
+// name what it holds. Types cost the first load nothing.
+export type { UserApiResponse } from "./types/user";
+export type { ApiCollection, Role } from "./types/entities";
+export type { Collection } from "./types/collection";
+export type {
+  Media,
+  MediaLibraryView,
+  MediaListResponse,
+  MediaParams,
+  MediaType,
+} from "./types/media";
+export type {
+  CollectionCount,
+  ContentStats,
+  ContentStatus,
+  DashboardStats,
+} from "./types/dashboard/stats";
+export type {
+  Activity,
+  RecentActivityResponse,
+} from "./types/dashboard/activity";
 export { useBulkMutation } from "./hooks/useBulkMutation";
 export type {
   BulkMutationResult,
