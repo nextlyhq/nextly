@@ -35,6 +35,23 @@ export {
 } from "./context/providers/BrandingProvider";
 
 export type { AdminBranding } from "./types/branding";
+// The root's types that no other line here exports, so the kit stays the
+// whole surface the root is part of.
+export type { ResolvedTheme } from "./context/providers/ThemeProvider";
+export type { BrandingProviderProps } from "./context/providers/BrandingProvider";
+export type {
+  PluginClientConfigMeta,
+  PluginMetadata,
+  ResolvedBrandingColors,
+} from "./types/branding";
+export type {
+  ErrorBoundaryProps,
+  ErrorBoundaryState,
+} from "./components/shared/error-boundary";
+export type { UserApiResponse } from "./types/user";
+export type { ApiCollection, Role } from "./types/entities";
+export type { Collection } from "./types/collection";
+export type { MediaLibraryView } from "./types/media";
 
 // TanStack Query types
 export type {
