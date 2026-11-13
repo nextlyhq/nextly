@@ -23,6 +23,7 @@ vi.mock("@admin/hooks/queries/useEmailTemplates", () => ({
   useEmailTemplates: () => useEmailTemplates(),
   useDeleteEmailTemplate: () => ({ mutate: vi.fn(), isPending: false }),
   usePreviewEmailTemplate: () => ({ mutate: vi.fn(), isPending: false }),
+  useTemplateSenders: () => ({ data: undefined, isLoading: false }),
 }));
 
 vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
