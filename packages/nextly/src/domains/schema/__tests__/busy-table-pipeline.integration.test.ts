@@ -311,6 +311,116 @@ describe.each(DIALECTS)(
       expect(await columnsOf(BUSY)).toContain("needed");
     });
 
+    // MySQL bounds a table's metadata lock and a row's lock with two session settings, which
+    // outlive the transaction on a pooled connection: a try sets both and puts back the values
+    // the session had, never the server's defaults.
+    it.runIf(dialect === "mysql")(
+      "bounds MySQL's metadata and row lock waits in a try, and puts back the session's own values",
+      async () => {
+        // One connection, so the session read afterwards is the one the try ran on.
+        const single = await world.connect({ poolMax: 1 });
+        try {
+          await single.executeQuery("SET SESSION lock_wait_timeout = 77");
+          await single.executeQuery(
+            "SET SESSION innodb_lock_wait_timeout = 33"
+          );
+          const drizzle = single.getDrizzle() as unknown as {
+            transaction: (fn: (tx: unknown) => Promise<unknown>) => unknown;
+          };
+          // Every setting the try sends on its transaction, as text.
+          const settings: string[] = [];
+          const db = new Proxy(drizzle, {
+            get(target, property) {
+              const value: unknown = Reflect.get(target, property, target);
+              if (property !== "transaction" || typeof value !== "function") {
+                return typeof value === "function" ? value.bind(target) : value;
+              }
+              return (fn: (tx: unknown) => Promise<unknown>) =>
+                (value as typeof drizzle.transaction).call(
+                  target,
+                  (tx: unknown) =>
+                    fn(
+                      new Proxy(tx as object, {
+                        get(txTarget, txProperty) {
+                          const member: unknown = Reflect.get(
+                            txTarget,
+                            txProperty,
+                            txTarget
+                          );
+                          if (
+                            txProperty !== "execute" ||
+                            typeof member !== "function"
+                          ) {
+                            return typeof member === "function"
+                              ? member.bind(txTarget)
+                              : member;
+                          }
+                          return (query: { queryChunks?: unknown[] }) => {
+                            const text = (query.queryChunks ?? [])
+                              .map(chunk =>
+                                (chunk as { value?: unknown }).value instanceof
+                                Array
+                                  ? (chunk as { value: string[] }).value.join(
+                                      ""
+                                    )
+                                  : ""
+                              )
+                              .join("");
+                            if (text.startsWith("SET SESSION"))
+                              settings.push(text);
+                            return (member as (q: unknown) => unknown).call(
+                              txTarget,
+                              query
+                            );
+                          };
+                        },
+                      })
+                    )
+                );
+            },
+          });
+          const pipeline = new PushSchemaPipeline({
+            executor: new DrizzleStatementExecutor(dialect, db),
+            renameDetector: new RegexRenameDetector(),
+            classifier: new RealClassifier(),
+            promptDispatcher: noopPromptDispatcher,
+            preRenameExecutor: noopPreRenameExecutor,
+            preCleanupExecutor: new RealPreCleanupExecutor(),
+            migrationJournal: recordingJournal(),
+            notifier: noopNotifier,
+          });
+          const applied = await pipeline.apply({
+            desired: desiredWith(EARLY_AND_LATE),
+            db,
+            dialect,
+            source: "code",
+            promptChannel: "terminal",
+            ...(databaseName === undefined ? {} : { databaseName }),
+            busyTable: {
+              bounds: { tryMs: 1_000, totalMs: 5_000 },
+              notify: line => notices.push(line),
+              change: "schema sync",
+            },
+          });
+          expect(applied.success, JSON.stringify(applied.error)).toBe(true);
+
+          expect(settings).toEqual([
+            "SET SESSION lock_wait_timeout = 2",
+            "SET SESSION innodb_lock_wait_timeout = 2",
+            "SET SESSION lock_wait_timeout = 77",
+            "SET SESSION innodb_lock_wait_timeout = 33",
+          ]);
+          const [session] = await single.executeQuery<Record<string, unknown>>(
+            "SELECT @@SESSION.lock_wait_timeout AS lock_wait, @@SESSION.innodb_lock_wait_timeout AS row_wait"
+          );
+          expect(Number(session?.lock_wait)).toBe(77);
+          expect(Number(session?.row_wait)).toBe(33);
+        } finally {
+          await single.disconnect();
+        }
+      }
+    );
+
     it("takes db:sync's --lock-timeout 1 --lock-timeout-total 5 through the environment it hands them on in", async () => {
       // What `db:sync` does with its flags before the sync starts; the sync's pipeline is then
       // given no bounds of its own, as `performAutoSync` gives it none, and reads them.

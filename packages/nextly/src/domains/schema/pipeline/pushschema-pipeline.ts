@@ -2644,10 +2644,11 @@ async function runOnTransaction(tx: unknown, text: string): Promise<void> {
 /**
  * Runs `work` in `tx` as one try for a busy table. Each lock the transaction waits for is bounded
  * by the database half a second past the try, as a backstop for a watch that could not ask:
- * PostgreSQL's `SET LOCAL lock_timeout`, which ends with the transaction; MySQL's session
- * `lock_wait_timeout`, which would outlive it on its pooled connection, so it is set back to the
- * server's default before the transaction ends, whatever its outcome. The transaction's session
- * id goes to the try's watch, which stops before the commit (`bound.settle`).
+ * PostgreSQL's `SET LOCAL lock_timeout`, which ends with the transaction; on MySQL the session's
+ * `lock_wait_timeout` (a table's metadata lock) and `innodb_lock_wait_timeout` (a row's lock),
+ * which would outlive it on its pooled connection, so each is set back to the value the session
+ * had before the try, whatever its outcome. The transaction's session id goes to the try's watch,
+ * which stops before the commit (`bound.settle`).
  */
 async function runBoundedTry<T>(
   tx: unknown,
@@ -2661,12 +2662,9 @@ async function runBoundedTry<T>(
       tx,
       `SET LOCAL lock_timeout = '${String(Math.round(bound.tryMs) + 500)}ms'`
     );
-  } else if (dialect === "mysql") {
-    await runOnTransaction(
-      tx,
-      `SET SESSION lock_wait_timeout = ${String(Math.ceil((bound.tryMs + 500) / 1000))}`
-    );
   }
+  const restoreMysql =
+    dialect === "mysql" ? await boundMysqlWaits(tx, bound.tryMs) : undefined;
   try {
     const query = ownSessionId(dialect);
     if (query !== undefined) {
@@ -2679,13 +2677,52 @@ async function runBoundedTry<T>(
     await bound.settle();
     return value;
   } finally {
-    if (dialect === "mysql") {
+    await restoreMysql?.();
+  }
+}
+
+/** A session setting read back as a whole number, or undefined for anything else. */
+function wholeSeconds(value: unknown): number | undefined {
+  const number = typeof value === "string" ? Number(value) : value;
+  return typeof number === "number" && Number.isSafeInteger(number)
+    ? number
+    : undefined;
+}
+
+/**
+ * Bounds both of a MySQL session's lock waits half a second past the try, in whole seconds, and
+ * returns what sets each back to the value the session had: a value that could not be read goes
+ * back to the server's default, the nearest to it. Putting them back is best effort; the try has
+ * already ended, and a failure here must not change how.
+ */
+async function boundMysqlWaits(
+  tx: unknown,
+  tryMs: number
+): Promise<() => Promise<void>> {
+  const [row] = await querySqlRows<Record<string, unknown>>(
+    tx,
+    "mysql",
+    sql.raw(
+      "SELECT @@SESSION.lock_wait_timeout AS lock_wait, @@SESSION.innodb_lock_wait_timeout AS row_wait"
+    )
+  );
+  const before = [
+    ["lock_wait_timeout", wholeSeconds(row?.lock_wait)],
+    ["innodb_lock_wait_timeout", wholeSeconds(row?.row_wait)],
+  ] as const;
+  // Fixed text with a whole number of seconds, never caller input.
+  const seconds = String(Math.ceil((tryMs + 500) / 1000));
+  for (const [name] of before) {
+    await runOnTransaction(tx, `SET SESSION ${name} = ${seconds}`);
+  }
+  return async () => {
+    for (const [name, value] of before) {
       await runOnTransaction(
         tx,
-        "SET SESSION lock_wait_timeout = DEFAULT"
+        `SET SESSION ${name} = ${value === undefined ? "DEFAULT" : String(value)}`
       ).catch(() => undefined);
     }
-  }
+  };
 }
 
 /**
