@@ -105,9 +105,11 @@ describe("pending changes", () => {
       "moved summary",
     ]);
     expect(changes[0]?.inside).toBeUndefined();
-    expect([...(rowMarks(saved, current).get("summary") ?? [])]).toEqual([
-      "moved",
-    ]);
+    expect([
+      ...(rowMarks(saved, current, pendingChanges(saved, current)).get(
+        "summary"
+      ) ?? []),
+    ]).toEqual(["moved"]);
   });
 
   it("a field moved out of a container before its delete is not counted with it", () => {
@@ -118,9 +120,11 @@ describe("pending changes", () => {
       "deleted address",
     ]);
     expect(changes[1]?.inside).toBe(2);
-    expect([...(rowMarks(saved, current).get("street") ?? [])]).toEqual([
-      "moved",
-    ]);
+    expect([
+      ...(rowMarks(saved, current, pendingChanges(saved, current)).get(
+        "street"
+      ) ?? []),
+    ]).toEqual(["moved"]);
   });
 
   it("a deleted field inside a saved group is its own change", () => {
@@ -274,7 +278,7 @@ describe("row marks", () => {
       group("address", [text("street"), text("zip"), text("title")]),
       group("seo", [text("metaTitle")]),
     ];
-    const marks = rowMarks(saved, current);
+    const marks = rowMarks(saved, current, pendingChanges(saved, current));
     expect([...(marks.get("summary") ?? [])]).toEqual(["changed"]);
     expect([...(marks.get("title") ?? [])]).toEqual(["moved"]);
     expect([...(marks.get("city") ?? [])]).toEqual(["deleted"]);
@@ -285,7 +289,11 @@ describe("row marks", () => {
   });
 
   it("marks every field inside a deleted container deleted", () => {
-    const marks = rowMarks(saved, [text("title"), text("summary")]);
+    const marks = rowMarks(
+      saved,
+      [text("title"), text("summary")],
+      pendingChanges(saved, [text("title"), text("summary")])
+    );
     for (const id of ["address", "street", "city", "zip"]) {
       expect([...(marks.get(id) ?? [])]).toEqual(["deleted"]);
     }

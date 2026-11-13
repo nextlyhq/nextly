@@ -351,7 +351,9 @@ export function describeStep(
  */
 export function rowMarks(
   baseline: readonly BuilderField[],
-  current: readonly BuilderField[]
+  current: readonly BuilderField[],
+  /** `pendingChanges(baseline, current)`, as the caller already holds it. */
+  changes: readonly PendingChange[]
 ): Map<string, Set<RowMark>> {
   const marks = new Map<string, Set<RowMark>>();
   const mark = (id: string, rowMark: RowMark) =>
@@ -367,7 +369,7 @@ export function rowMarks(
     if (belongs(field.id)) mark(field.id, rowMark);
     for (const child of field.fields ?? []) markAll(child, rowMark, belongs);
   };
-  for (const change of pendingChanges(baseline, current)) {
+  for (const change of changes) {
     if (change.kind === "added") {
       const field = after.get(change.fieldId)?.field;
       if (field) markAll(field, "new", added);

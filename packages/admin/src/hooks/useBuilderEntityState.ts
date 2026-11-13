@@ -262,8 +262,11 @@ function useFieldPendingChanges(
     [saved, fields]
   );
   const marks = useMemo(
-    () => (saved ? rowMarks(saved, fields) : new Map<string, Set<RowMark>>()),
-    [saved, fields]
+    () =>
+      saved
+        ? rowMarks(saved, fields, changes)
+        : new Map<string, Set<RowMark>>(),
+    [saved, fields, changes]
   );
   const undo = useCallback(() => {
     const step = undoFields();
