@@ -35,6 +35,7 @@ import {
   assertIndexBuildable,
   type WeighedColumn,
 } from "../../extension/naming";
+import { builderColumnIsUnique } from "../../field-rules";
 import {
   componentRelationshipHoldsReferenceList,
   getColumnDescriptor,
@@ -90,6 +91,8 @@ interface MinimalFieldDef {
   unique?: boolean;
   index?: boolean;
   localized?: boolean;
+  /** A Builder relationship's options, where `relationType` says whether it is one-to-one. */
+  options?: unknown;
 }
 
 /** Optional toggles that affect which system columns are injected. */
@@ -211,6 +214,17 @@ interface CollectionIndexContext<F> {
    * forget it; an optional field with a lenient default rebuilds that place inside the option bag.
    */
   uniquenessIsIndexable: (field: F, column: string) => boolean;
+  /**
+   * Whether the field's column is unique, by the rule of whatever creates the table.
+   *
+   * The Schema Builder's collection and Single creator makes a one-to-one relationship's column
+   * unique by its cardinality, with no `unique` flag (`builderColumnIsUnique`); the field-group and
+   * code-first creators read the flag alone. Asked of the caller, and required, for the reason
+   * `uniquenessIsIndexable` is: a desired schema that read the flag alone for a Builder table left
+   * the one-to-one's uniqueness out of every migration written from it, so the table took
+   * duplicates.
+   */
+  fieldIsUnique: (field: F) => boolean;
 }
 
 /**
@@ -277,7 +291,7 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
     // keep the uniqueness inline and write no index, so declaring one here would make every diff
     // propose a `CREATE UNIQUE INDEX` the server refuses.
     const uniqueIsIndexable =
-      field.unique === true && context.uniquenessIsIndexable(field, col);
+      context.fieldIsUnique(field) && context.uniquenessIsIndexable(field, col);
 
     if (uniqueIsIndexable) {
       indexes.push({
@@ -501,6 +515,12 @@ export function buildDesiredTableFromFields(
         columns.find(c => c.name === col)?.type ?? "",
         dialect
       ),
+    // The Builder's collection and Single creator makes a one-to-one's column unique, so the
+    // table it describes does too; a code-first table reads the flag alone.
+    fieldIsUnique: field =>
+      options.builtBy === "collection"
+        ? builderColumnIsUnique(field)
+        : field.unique === true,
     localizedNames,
     columnNameFor: field =>
       getColumnDescriptor(
@@ -860,6 +880,8 @@ export function buildDesiredTableFromComponentFields(
           columns.find(c => c.name === col)?.type ?? "",
           dialect
         ),
+      // The field-group creator makes a column unique on the flag alone, a relationship included.
+      fieldIsUnique: field => field.unique === true,
       // Components have no slug column; created_at is present when the
       // component carries timestamps.
       hasSlugColumn: false,
