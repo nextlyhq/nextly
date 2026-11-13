@@ -71,7 +71,8 @@ describe("useAddressCheck", () => {
     check.mockResolvedValue(
       answer("1posts", {
         code: "SLUG_INVALID_FORMAT",
-        message: "Collection address '1posts' must start with a lowercase letter",
+        message:
+          "Collection address '1posts' must start with a lowercase letter",
       })
     );
     const { result } = setup("collection", "1posts");
@@ -84,7 +85,10 @@ describe("useAddressCheck", () => {
 
   it("says an address already used in plain words, naming no other entity", async () => {
     check.mockResolvedValue(
-      answer("posts", { code: "DUPLICATE", message: "Resource already exists." })
+      answer("posts", {
+        code: "DUPLICATE",
+        message: "Resource already exists.",
+      })
     );
     const { result } = setup("collection", "posts");
     await settle();
@@ -120,7 +124,10 @@ describe("useAddressCheck", () => {
     // The slow answer about "posts" arrives last, and says nothing about "articles".
     await act(async () => {
       answerOld(
-        answer("posts", { code: "DUPLICATE", message: "Resource already exists." })
+        answer("posts", {
+          code: "DUPLICATE",
+          message: "Resource already exists.",
+        })
       );
     });
     expect(result.current).toEqual({ status: "free" });

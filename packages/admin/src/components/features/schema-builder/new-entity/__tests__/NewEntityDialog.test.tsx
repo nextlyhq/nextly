@@ -97,7 +97,9 @@ describe("NewEntityDialog", () => {
 
   it("suggests an icon", async () => {
     const { user } = renderDialog();
-    expect(screen.getByRole("button", { name: "Icon: Document" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Icon: Document" })
+    ).toBeVisible();
     await user.type(nameInput(), "Product");
     expect(screen.getByRole("button", { name: "Icon: Package" })).toBeVisible();
   });
@@ -126,13 +128,13 @@ describe("NewEntityDialog", () => {
     await user.type(nameInput(), "Person");
     const plural = screen.getByLabelText("Plural name");
     await user.clear(plural);
-    await user.type(plural, "People");
+    await user.type(plural, "Folks");
     await user.clear(addressInput());
     await user.type(addressInput(), "staff");
 
     // A plural and an address of the person's own stay as they were typed.
     await user.type(nameInput(), "nel");
-    expect(plural).toHaveValue("People");
+    expect(plural).toHaveValue("Folks");
     expect(addressInput()).toHaveValue("staff");
   });
 
@@ -189,7 +191,9 @@ describe("NewEntityDialog", () => {
     const { user } = renderDialog();
     await user.type(nameInput(), "123");
     await waitFor(() =>
-      expect(addressInput()).toHaveAccessibleDescription(/must start with a lowercase letter/)
+      expect(addressInput()).toHaveAccessibleDescription(
+        /must start with a lowercase letter/
+      )
     );
     expect(createButton()).toBeDisabled();
   });
@@ -214,14 +218,18 @@ describe("NewEntityDialog", () => {
     const { user } = renderDialog();
     const options = screen.getByRole("button", { name: /More options/ });
     expect(options).toHaveAccessibleName("More options, none on");
-    expect(screen.queryByRole("switch", { name: "Internationalization" })).toBeNull();
+    expect(
+      screen.queryByRole("switch", { name: "Version history" })
+    ).toBeNull();
 
     await user.click(options);
-    await user.click(screen.getByRole("switch", { name: "Internationalization" }));
+    await user.click(screen.getByRole("switch", { name: "Version history" }));
     await user.click(screen.getByRole("switch", { name: "Status" }));
     expect(
       screen.getByRole("button", { name: /More options/ })
-    ).toHaveAccessibleName("More options, on: drafts and publishing, translation");
+    ).toHaveAccessibleName(
+      "More options, on: drafts and publishing, version history"
+    );
   });
 
   it("a Single", async () => {
@@ -230,7 +238,9 @@ describe("NewEntityDialog", () => {
     expect(screen.queryByLabelText("Plural name")).toBeNull();
     await user.type(nameInput(), "Home page");
     expect(addressInput()).toHaveValue("home-page");
-    await waitFor(() => expect(check).toHaveBeenLastCalledWith("single", "home-page"));
+    await waitFor(() =>
+      expect(check).toHaveBeenLastCalledWith("single", "home-page")
+    );
   });
 
   it("a field group", async () => {
