@@ -421,6 +421,40 @@ function keyRelationsOf(
 }
 
 /**
+ * Drop a key's own edge whose name an `afterDrizzle` hook gave to a column.
+ *
+ * A relation and a column share the row's namespace, and the key edges are
+ * named against the compiled table's column keys. A hook that rebuilt the
+ * table may hold a column under that name, and the pair would fail the
+ * relations' assembly at boot. The key edge yields: it is derived, not
+ * declared, while the hook's table is the app's own choice. A declared
+ * relation is the author's and is left to that refusal.
+ */
+function dropKeyEdgesAHookShadowed(
+  relations: Map<string, DynamicRelationEdge[]>,
+  tables: readonly ExtensionTable[],
+  compiled: Record<string, unknown>,
+  returned: Record<string, unknown>
+): void {
+  for (const [name, edges] of relations) {
+    const table = returned[name];
+    if (table === compiled[name] || !isTable(table)) continue;
+    const columns = new Set(Object.keys(getColumns(table)));
+    const declared = new Set(
+      (tables.find(one => one.name === name)?.relations ?? []).map(
+        relation => relation.name
+      )
+    );
+    const kept = edges.filter(
+      edge => declared.has(edge.key) || !columns.has(edge.key)
+    );
+    if (kept.length === edges.length) continue;
+    if (kept.length === 0) relations.delete(name);
+    else relations.set(name, kept);
+  }
+}
+
+/**
  * The name the registry finds a key's target by. A key names its target's
  * SQL table, and the registry holds a core table under its bundle key
  * (`dynamicCollections` for `dynamic_collections`), so a core target is
@@ -1288,6 +1322,7 @@ export async function buildExtensionSchema(
   // and a hook that removed one is refused naming the key it broke rather
   // than the edge the key carries.
   rekeyRelationEdges({ edges: relations, compiled, returned: drizzle });
+  dropKeyEdgesAHookShadowed(relations, tables, compiled, drizzle);
 
   const { adopted, adoptedRelations } = compileAdoptedTables(
     store,

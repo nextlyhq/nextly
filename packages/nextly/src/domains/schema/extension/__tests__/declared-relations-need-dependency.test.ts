@@ -373,6 +373,62 @@ describe("a table's own foreign key", () => {
     ]);
   });
 
+  it("yields its name to a column an afterDrizzle hook added under it", async () => {
+    const tree = defineTable(
+      "app_tree",
+      { id: col.id(), parentId: col.shortText({ nullable: true }) },
+      {
+        foreignKeys: [
+          {
+            columns: ["parentId"],
+            references: { table: "app_tree", columns: ["id"] },
+          },
+        ],
+      }
+    );
+    const build = (
+      afterDrizzle: Parameters<typeof buildExtensionSchema>[0]["afterDrizzle"]
+    ) =>
+      buildExtensionSchema({
+        dialect: "postgresql",
+        coreTableNames: [],
+        entities: [],
+        pluginPrefixes: new Map(),
+        plugins: [],
+        app: {
+          owner: { kind: "app" },
+          extend: [({ schema }) => schema.addTable(tree)],
+        },
+        afterDrizzle,
+      });
+    const plain = await build([]);
+    // CONTROL: without the hook, the key carries its edge.
+    expect(plain.relations.get("app_tree")?.map(edge => edge.key)).toEqual([
+      "parent",
+    ]);
+    const declared = plain.tables.find(t => t.name === "app_tree")!;
+    const built = await build([
+      () => ({
+        app_tree: toDrizzleTable(
+          {
+            ...declared,
+            columns: [
+              ...declared.columns,
+              {
+                key: "parent",
+                name: "parent_label",
+                kind: "text",
+                nullable: true,
+              },
+            ],
+          },
+          "postgresql"
+        ),
+      }),
+    ]);
+    expect(built.relations.get("app_tree")).toBeUndefined();
+  });
+
   it("carries none to a column other than id on a collection, which the compile cannot check", async () => {
     // The app's table: a plugin's key to a collection's table is refused,
     // since the app's stream creates that table after every plugin's.
