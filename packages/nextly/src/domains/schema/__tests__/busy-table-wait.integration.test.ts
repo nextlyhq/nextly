@@ -506,6 +506,11 @@ describe.each(DIALECTS)(
 
         expect(stopped).toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
         expect(Date.now() - started).toBeLessThan(10_000);
+        // The row's holder is named, read from InnoDB's lock waits: a row wait has no pending
+        // metadata lock to read it from.
+        expect(String((stopped as Error).message)).toMatch(
+          /held by session \d+/
+        );
       }
     );
 
