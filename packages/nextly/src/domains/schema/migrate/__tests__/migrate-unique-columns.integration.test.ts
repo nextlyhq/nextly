@@ -467,6 +467,131 @@ describe.each(LOCK_DIALECTS)(
       expect(await notesPersonIsUniquePerLanguage()).toBe(false);
     }, 120_000);
 
+    /**
+     * A concurrent unique build of `name` on `table` over `column` that fails on a repeat the
+     * caller seeded, leaving its index behind, marked invalid; then the repeat removed by
+     * `clear`. PostgreSQL only.
+     */
+    async function failedConcurrentBuild(
+      name: string,
+      table: string,
+      columns: string[],
+      clear: string
+    ): Promise<void> {
+      const failed = await run([
+        `CREATE UNIQUE INDEX CONCURRENTLY ${q(name)} ON ${q(table)} (${columns.map(q).join(", ")})`,
+      ]).then(
+        () => false,
+        () => true
+      );
+      expect(failed).toBe(true);
+      await run([clear]);
+      const [row] = await adapter.executeQuery<{ valid: boolean }>(
+        `SELECT indisvalid AS ${q("valid")} FROM pg_index WHERE indexrelid = to_regclass('${name}')`
+      );
+      expect(row?.valid).toBe(false);
+    }
+
+    it.runIf(dialect === "postgresql")(
+      "makes a one-to-one unique past an index a failed concurrent build left under its name",
+      async () => {
+        await recordOneToOnes("person");
+        await run([profile("p1", "ada"), profile("p2", "ada")]);
+        await failedConcurrentBuild(
+          UNIQUE,
+          PROFILES,
+          ["person"],
+          `DELETE FROM ${q(PROFILES)} WHERE ${q("id")} = 'p2'`
+        );
+
+        await migrate();
+
+        expect(await refusedAsRepeat(profile("p3", "ada"))).toBe(true);
+      },
+      120_000
+    );
+
+    it.runIf(dialect === "postgresql")(
+      "makes a translated one-to-one unique within each language past an index a failed concurrent build left under its name",
+      async () => {
+        await seedTranslatedNotes();
+        await run([noteIn("n1", "en", "ada"), noteIn("n2", "en", "ada")]);
+        await failedConcurrentBuild(
+          companionUniqueIndexName(NOTES_LOCALES, "person"),
+          NOTES_LOCALES,
+          ["person", "_locale"],
+          `DELETE FROM ${q(NOTES_LOCALES)} WHERE ${q("_parent")} = 'n2'`
+        );
+
+        await migrate();
+
+        expect(await refusedAsRepeat(noteIn("n3", "en", "ada"))).toBe(true);
+      },
+      120_000
+    );
+
+    // A translated relationship naming several collections stores one `{ relationTo, value }`
+    // reference, which MySQL keeps as JSON and cannot key with a unique index.
+    it.runIf(dialect === "mysql")(
+      "leaves a translated one-to-one whose column MySQL cannot index as it is, and finishes the run",
+      async () => {
+        const tables = new DynamicCollectionSchemaService(undefined, dialect);
+        await run(
+          splitStatements([tables.generateMigrationSQL(NOTES, [] as never)])
+        );
+        const person = (relationType: "manyToOne" | "oneToOne") => ({
+          name: "person",
+          type: "relationship",
+          relationTo: ["people", "profiles"],
+          options: { relationType },
+          localized: true,
+        });
+        await ensureCompanionTable(adapter as never, {
+          builtBy: "collection",
+          slug: "notes",
+          tableName: NOTES,
+          fields: [person("manyToOne")] as never,
+          dialect,
+        });
+        await adapter.insert("dynamic_collections", {
+          id: randomUUID(),
+          slug: "notes",
+          labels: { singular: "notes", plural: "notes" },
+          tableName: NOTES,
+          fields: [person("oneToOne")],
+          localized: true,
+          source: "ui",
+          locked: false,
+          schemaHash: "test",
+          schemaVersion: 1,
+          migrationStatus: "applied",
+        } as never);
+
+        const error = await migrate().then(
+          () => undefined,
+          (thrown: unknown) => thrown
+        );
+
+        expect(error).toBeUndefined();
+        expect(await notesPersonIsUniquePerLanguage()).toBe(false);
+      },
+      120_000
+    );
+
+    // A plugin's tables follow the plugin's own migration modules, which would read an index made
+    // here as drift.
+    it("leaves a plugin's one-to-one to the plugin's own migrations", async () => {
+      await recordOneToOnes("person");
+      await run([
+        `UPDATE ${q("dynamic_collections")} SET ${q("source")} = 'plugin:acme' WHERE ${q("slug")} = 'profiles'`,
+        profile("p1", "ada"),
+      ]);
+
+      await migrate();
+
+      expect(await isUnique("person")).toBe(false);
+    }, 120_000);
+
     it("makes a Single's one-to-one unique", async () => {
       const tables = new DynamicCollectionSchemaService(undefined, dialect);
       await run(
