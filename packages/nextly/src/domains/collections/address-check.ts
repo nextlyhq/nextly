@@ -19,7 +19,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../errors/nextly-error";
-import { resolveComponentTableName } from "../schema/utils/resolve-table-name";
 import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-slug-guard";
 import {
   addressRefusalError,
@@ -29,6 +28,7 @@ import {
   type AddressKind,
   type UsedAddress,
 } from "../../shared/address-rule";
+import { resolveComponentTableName } from "../schema/utils/resolve-table-name";
 
 /** A refusal as the create reports it: its code and its public message. */
 export interface AddressCheckRefusal {
