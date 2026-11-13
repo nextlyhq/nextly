@@ -248,8 +248,11 @@ async function missingUniqueness(
 
 /**
  * Refuse, before any index is created, a uniqueness whose index name another object already
- * holds (`readNameHoldersElsewhere`): PostgreSQL's and SQLite's `IF NOT EXISTS` would skip the
- * create, and the run would report a uniqueness nothing enforces.
+ * holds (`readNameHoldersElsewhere`), or another index on its own main table: PostgreSQL's and
+ * SQLite's `IF NOT EXISTS` would skip the create, and the run would report a uniqueness nothing
+ * enforces; MySQL would refuse the duplicate name part-way. An index there that the database
+ * cannot use is not counted: the target's statements replace it. A translations table's index of
+ * another kind under the name is replaced by its statements too.
  */
 async function refuseNamesHeldElsewhere(
   db: unknown,
@@ -265,6 +268,20 @@ async function refuseNamesHeldElsewhere(
     if (holder !== undefined) {
       held.push(
         `${target.entity.slug}.${target.field} (its index ${target.index} is the name of the ${holder.type} ${holder.table === null ? holder.name : `on ${holder.table}`})`
+      );
+      continue;
+    }
+    if (target.language !== undefined) continue;
+    const onTable = await readIndexUniqueness(db, dialect, target.table);
+    const unusable = await introspectUnusableIndexes(db, dialect, [
+      target.table,
+    ]);
+    if (
+      onTable.has(target.index) &&
+      !unusable.has(target.index.toLowerCase())
+    ) {
+      held.push(
+        `${target.entity.slug}.${target.field} (its index ${target.index} is the name of another index on ${target.table})`
       );
     }
   }
