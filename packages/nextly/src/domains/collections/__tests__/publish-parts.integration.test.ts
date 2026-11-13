@@ -955,6 +955,181 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     expect(await publishMarks()).toBe(before);
   });
 
+  // A takedown is never a publish, whichever of the chosen languages were already drafts.
+  it("records no publish when chosen languages are taken down and one was already a draft", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" }, fr: { title: "Bonjour" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: ["en", "es"],
+      shared: true,
+      data: { _overwrite: true },
+    });
+    const editor = await userWhoMay(t!, "editor", "unpublish", ["posts"]);
+    await grantTo(t!, editor, "update", ["posts"]);
+    await grantTo(t!, editor, "read", ["posts"]);
+    const publishMarks = async () =>
+      (
+        await t!.adapter.select<{ metadata: unknown }>("activity_log", {
+          where: { and: [{ column: "entryId", op: "=", value: id }] },
+        })
+      ).filter(row => {
+        const metadata =
+          typeof row.metadata === "string"
+            ? (JSON.parse(row.metadata) as Record<string, unknown>)
+            : (row.metadata as Record<string, unknown> | null);
+        return metadata?.published === true;
+      }).length;
+    const before = await publishMarks();
+
+    await t!.nextly.unpublish({
+      collection: "posts",
+      id,
+      locales: ["es", "fr"],
+      overrideAccess: false,
+      user: { id: editor, email: "editor@example.test", roles: [] },
+      data: { _overwrite: true },
+    });
+
+    expect((await states(id)).es).toBe("draft");
+    expect(await publishMarks()).toBe(before);
+  });
+
+  // A shared field's rule in a live language is asked of that language's own document: a rule
+  // that refuses a change while Spanish's own title is locked refuses it, whichever language the
+  // publish chose.
+  it("asks a live language's field rule of that language's own document", async () => {
+    await boot(
+      posts({
+        versions: { drafts: true },
+        access: { read: () => true, update: () => true, publish: () => true },
+        fields: [
+          text({ name: "title", required: true }),
+          text({
+            name: "tagline",
+            localized: false,
+            access: {
+              update: ({
+                locale,
+                data,
+              }: {
+                locale?: string;
+                data?: Record<string, unknown>;
+              }) => !(locale === "es" && data?.title === "Locked"),
+            },
+          }),
+        ],
+      } as never)
+    );
+    const id = await entry({ es: { title: "Locked" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    await t!.nextly.update({
+      collection: "posts",
+      id,
+      locale: "en",
+      data: { tagline: "Changed", _overwrite: true },
+    });
+    const publisher = await userWhoMay(t!, "publisher", "publish", ["posts"]);
+    await grantTo(t!, publisher, "read", ["posts"]);
+    await grantTo(t!, publisher, "update", ["posts"]);
+
+    const refusal = await refusalOf(
+      t!.nextly.publish({
+        collection: "posts",
+        id,
+        locales: ["en"],
+        shared: true,
+        overrideAccess: false,
+        user: { id: publisher, email: "publisher@example.test", roles: [] },
+        data: { _overwrite: true },
+      })
+    );
+    const [main] = await t!.adapter.executeQuery<{ tagline: string }>(
+      `SELECT ${q("tagline")} AS tagline FROM ${q("dc_posts")} WHERE ${q("id")} = '${id}'`
+    );
+
+    expect(refusal).toMatch(/tagline/);
+    expect(main?.tagline).toBe("Shared");
+  });
+
+  // The shared value a publish writes is the one its languages' changes resolve to, field by
+  // field; the field rules judge that value, not an older copy a later save kept.
+  it("asks the field rules of the shared value the changes resolve to", async () => {
+    await boot(
+      posts({
+        versions: { drafts: true },
+        access: { read: () => true, update: () => true, publish: () => true },
+        fields: [
+          text({ name: "title", required: true }),
+          text({
+            name: "tagline",
+            localized: false,
+            access: {
+              update: ({
+                locale,
+                data,
+              }: {
+                locale?: string;
+                data?: Record<string, unknown>;
+              }) => !(locale === "fr" && data?.tagline === "Second"),
+            },
+          }),
+        ],
+      } as never)
+    );
+    const id = await entry({ es: { title: "Hola" }, fr: { title: "Bonjour" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    // Spanish changes the tagline first, English changes it last, then Spanish saves again
+    // without touching it: English's value is the one the changes resolve to.
+    await t!.nextly.update({
+      collection: "posts",
+      id,
+      locale: "es",
+      data: { tagline: "First", _overwrite: true },
+    });
+    await t!.nextly.update({
+      collection: "posts",
+      id,
+      locale: "en",
+      data: { tagline: "Second", _overwrite: true },
+    });
+    await t!.nextly.update({
+      collection: "posts",
+      id,
+      locale: "es",
+      data: { title: "Hola 2", _overwrite: true },
+    });
+    const publisher = await userWhoMay(t!, "publisher", "publish", ["posts"]);
+    await grantTo(t!, publisher, "read", ["posts"]);
+    await grantTo(t!, publisher, "update", ["posts"]);
+
+    const refusal = await refusalOf(
+      t!.nextly.publish({
+        collection: "posts",
+        id,
+        locales: ["en", "es"],
+        shared: true,
+        overrideAccess: false,
+        user: { id: publisher, email: "publisher@example.test", roles: [] },
+        data: { _overwrite: true },
+      })
+    );
+
+    expect(refusal).toMatch(/FORBIDDEN/);
+    expect(refusal).toMatch(/tagline/);
+  });
+
   /** A gate holding back the parts `held` names: a language code, or "shared". */
   function holdBack(held: readonly string[]): void {
     container.registerSingleton<PublishGate>("publishGate", () => ({

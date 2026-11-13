@@ -10434,7 +10434,12 @@ export class CollectionMutationService extends BaseService {
           actor: publishActor,
           publication: {
             statusAfter: entryStatusAfter(),
-            statusBefore: statusBeforeEveryLanguage,
+            // A takedown of chosen languages leaves the entry as it was: before and after are the
+            // same, so it never reads as a publish, whatever the languages it took down held.
+            statusBefore:
+              publishes || movesShared(params.parts)
+                ? statusBeforeEveryLanguage
+                : entryStatusAfter(),
             // A promotion leaves a live language published, so whether
             // this publish put pending edits live cannot be read from the
             // statuses.
@@ -11174,7 +11179,9 @@ export class CollectionMutationService extends BaseService {
   private sharedChangeOf(
     args: Parameters<CollectionMutationService["promotionsJudgedOnTx"]>[1]
   ): Record<string, unknown> | undefined {
-    const slot = args.pending.find(
+    // The changes as the publish resolved them, field by field, which is what it writes: never a
+    // stored draft an earlier or later save left with an older copy of a shared value.
+    const slot = args.changes.find(
       change => change.locale === SHARED_DRAFT_SLOT
     );
     if (slot !== undefined) return snapshotRecord(slot.snapshot);
@@ -11195,7 +11202,7 @@ export class CollectionMutationService extends BaseService {
         : []
     );
     const edited: Record<string, unknown> = {};
-    for (const change of args.pending) {
+    for (const change of args.changes) {
       if (change.locale === null) continue;
       const snapshot = snapshotRecord(change.snapshot);
       for (const name of sharedFieldsEdited(fields, snapshot, args.row)) {
@@ -11242,8 +11249,20 @@ export class CollectionMutationService extends BaseService {
           movesLanguage(args.caller.parts, locale) ||
           args.prior.get(locale) === "published"
       );
+    // Each language's own document, as it is live: a rule asked in a language reads that
+    // language's values, never another's.
+    const documents = await this.languageDocumentsOnTx(tx, {
+      row: args.row,
+      collectionName: args.collectionName,
+      entryId: args.entryId,
+      tableName: args.tableName,
+      fields: args.fields,
+      manyToManyFields: args.manyToManyFields,
+      locales: showing,
+    });
     const issues: ValidationIssue[] = [];
     for (const locale of showing) {
+      const ownLive = documents.get(locale) ?? live;
       const refused = await withRuleLanguage(
         writeLanguagesFor(this.localization, locale),
         () =>
@@ -11252,7 +11271,7 @@ export class CollectionMutationService extends BaseService {
             entryId: args.storedId,
             snapshot: sharedChange,
             restoreCtx: promotion.restoreContext,
-            live,
+            live: ownLive,
             user: args.caller.user,
             authenticatedScope: args.caller.authenticatedScope,
             grants,
