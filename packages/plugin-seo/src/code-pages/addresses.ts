@@ -45,6 +45,8 @@ import type {
   CodePageSeo,
   PreviewImage,
   SiteAddress,
+  ValueSource,
+  ValueSources,
 } from "./contract";
 import type { CodeRoute } from "./routes";
 import { nameOfAddress, type CodePageRow } from "./store";
@@ -53,6 +55,39 @@ import { nameOfAddress, type CodePageRow } from "./store";
 function standingOfAnswer(answer: SeoAnswer): AddressStanding {
   if (answer.robots.value.index) return "listed";
   return answer.robots.from === "type" ? "type-hidden" : "hidden";
+}
+
+/** The level a served value came from, as the list names it. */
+function sourceOf(value: Sourced<string> | undefined): ValueSource | undefined {
+  if (value === undefined) return undefined;
+  // The two levels an answer's text cannot come from are read as the
+  // site's, the last level of the order.
+  return value.from === "address" || value.from === "type"
+    ? "site"
+    : value.from;
+}
+
+/** Where an answer's title and description come from. */
+function sourcesOf(answer: SeoAnswer): ValueSources {
+  return present({
+    title: sourceOf(answer.title),
+    description: sourceOf(answer.description),
+  });
+}
+
+/**
+ * The title and description a page is served, and the pattern the title was
+ * made from where a pattern gave it, as the list shows them.
+ */
+function servedText(
+  answer: SeoAnswer
+): Pick<SiteAddress, "title" | "titlePattern" | "description"> {
+  return present({
+    title: answer.title?.value,
+    titlePattern:
+      answer.title?.from === "pattern" ? answer.title.pattern : undefined,
+    description: answer.description?.value,
+  });
 }
 
 /** An automatic value as the screen names where it came from. */
@@ -163,8 +198,9 @@ async function codeAddressOf(
     from: route.route,
     standing:
       row?.connected === true ? standingOfAnswer(answer) : "not-connected",
+    sources: sourcesOf(answer),
     ...present({
-      title: answer.title?.value,
+      ...servedText(answer),
       canonical: canonicalOf(answer, site.origin),
     }),
     seo,
@@ -242,8 +278,9 @@ async function entryAddressOf(
     source: "entry",
     from: label,
     standing: standingOfAnswer(answer),
+    sources: sourcesOf(answer),
     ...present({
-      title: answer.title?.value,
+      ...servedText(answer),
       canonical: canonicalOf(answer, options.origin),
     }),
     entry: {
@@ -291,7 +328,7 @@ async function entriesIn(
 async function translationsOf(
   ctx: PluginContext,
   batch: readonly Candidate[],
-  options: EntryListing
+  options: EntryListing & { readable: ReadableEntries }
 ): Promise<SiteAddress[]> {
   const [first] = batch;
   if (first === undefined) return [];
@@ -313,19 +350,34 @@ async function translationsOf(
       const document = documents.get(candidate.holder.id);
       return document === undefined ? [] : [{ ...candidate, document }];
     });
-    found.push(...(await entriesIn(ctx, versions, { ...options, language })));
+    // Asked in the version's own language, where a read rule may decide
+    // otherwise than in the site's.
+    const readable = await options.readable(versions, language);
+    if (readable.length === 0) continue;
+    found.push(...(await entriesIn(ctx, readable, { ...options, language })));
   }
   return found;
 }
 
 /**
- * Each published entry at its declared address, in the site's language and
- * in each other language it is published in.
+ * Which of a read's entries a listing names in `language`: those the person
+ * asking may read in it, so a page they may not open is not named, nor any
+ * of its values.
+ */
+export type ReadableEntries = (
+  batch: readonly Candidate[],
+  language: string
+) => Promise<Candidate[]>;
+
+/**
+ * Each published entry `readable` keeps at its declared address, in the
+ * site's language and in each other language it is published in.
  */
 async function entryAddresses(
   ctx: PluginContext,
   origin: string,
-  readRules: ReadRules | undefined
+  readRules: ReadRules | undefined,
+  readable: ReadableEntries
 ): Promise<SiteAddress[]> {
   const defaultLanguage = await ctx.publicAddresses.defaultLanguage();
   const options: EntryListing = {
@@ -336,13 +388,15 @@ async function entryAddresses(
   };
   const found: SiteAddress[] = [];
   for await (const batch of candidates(ctx, { origin })) {
+    // Each language's versions are left out before anything of them is
+    // worked out, each asked in its own language.
     found.push(
-      ...(await entriesIn(ctx, batch, {
+      ...(await entriesIn(ctx, await readable(batch, defaultLanguage), {
         ...options,
         language: defaultLanguage,
       }))
     );
-    found.push(...(await translationsOf(ctx, batch, options)));
+    found.push(...(await translationsOf(ctx, batch, { ...options, readable })));
   }
   return found;
 }
@@ -350,7 +404,9 @@ async function entryAddresses(
 /**
  * Every public address the site knows of, by address: its entries first
  * where an entry and a route name one address, since the entry's `seo`
- * group is then the address's one home for its SEO.
+ * group is then the address's one home for its SEO. Of the entries, only
+ * those `readable` keeps are named; an address one it leaves out holds is
+ * still not a page built in code.
  */
 export async function siteAddresses(
   ctx: PluginContext,
@@ -358,13 +414,19 @@ export async function siteAddresses(
     origin: string;
     routes: readonly CodeRoute[];
     readRules?: ReadRules;
+    readable: ReadableEntries;
   }
 ): Promise<SiteAddress[]> {
   // The site's rules are read once per language for the whole listing, as
   // the sitemap reads them, not once a page.
   const readRules =
     options.readRules === undefined ? undefined : onceEach(options.readRules);
-  const entries = await entryAddresses(ctx, options.origin, readRules);
+  const entries = await entryAddresses(
+    ctx,
+    options.origin,
+    readRules,
+    options.readable
+  );
   const entryPaths = new Set(entries.map(entry => entry.path));
   // A route serving an address a document holds is serving that entry,
   // whatever language the address is in: its SEO is the entry's.

@@ -23,7 +23,6 @@
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { NextlyError } from "../../../errors/nextly-error";
-import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import {
   validateNumberDecimalDimensionsShared,
   type BaseValidationError,
@@ -32,10 +31,13 @@ import { env } from "../../../shared/lib/env";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import { consoleLogger } from "../../../shared/types";
 import { getTableName } from "../../collections/services/collection-utils";
+import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import {
-  fieldGroupSlugList,
-  isFieldGroupFieldType,
-} from "../../field-groups/storage/field-group-field-type";
+  fieldGroupRowMoves,
+  keepsFieldGroupRows,
+  removedAndAddedFieldGroups,
+  removedAndAddedFields as renameCandidates,
+} from "../../field-groups/storage/field-group-rename";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import type {
   ForeignKeySpec,
@@ -130,24 +132,6 @@ function sameJunctionColumns(a: JunctionShape, b: JunctionShape): boolean {
     a.sourceColumn === b.sourceColumn &&
     a.targetColumn === b.targetColumn
   );
-}
-
-/**
- * The fields a save removed and the fields it added, among those a rename
- * detector cares about. Every detector pairs from this same set, so a field
- * renamed alongside other edits reads the same way to each of them.
- */
-function renameCandidates(
-  oldFields: FieldDefinition[],
-  newFields: FieldDefinition[],
-  participates: (field: FieldDefinition) => boolean = () => true
-): { oldOnly: FieldDefinition[]; newOnly: FieldDefinition[] } {
-  const oldNames = new Set(oldFields.map(f => f.name));
-  const newNames = new Set(newFields.map(f => f.name));
-  return {
-    oldOnly: oldFields.filter(f => !newNames.has(f.name) && participates(f)),
-    newOnly: newFields.filter(f => !oldNames.has(f.name) && participates(f)),
-  };
 }
 
 /**
@@ -959,20 +943,21 @@ export class DynamicCollectionSchemaService {
       options?.associationRename ??
       this.detectFieldGroupAssociationRename(oldFields, newFields);
     if (!groupRename) return null;
-    const statements: string[] = [];
-    for (const slug of fieldGroupSlugList(groupRename.to)) {
-      // The registry resolves the physical table: comp_ today, fg_ or a historical custom name
-      // once the storage migration has run, so the name is passed in per slug rather than derived
-      // here. A slug with no resolved name has no record and no table: nothing to move.
+    // The registry resolves the physical table: comp_ today, fg_ or a historical custom name
+    // once the storage migration has run, so the name is passed in per slug rather than derived
+    // here. A slug with no resolved name has no record and no table: nothing to move.
+    const groupTables = fieldGroupSlugList(groupRename.to).flatMap(slug => {
       const groupTable = options?.fieldGroupTableNames?.get(slug);
-      if (groupTable === undefined) continue;
-      statements.push(
-        `UPDATE ${this.quoteIdentifier(groupTable)}\n` +
-          `SET ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.to.name}'\n` +
-          `WHERE ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentField)} = '${groupRename.from.name}'\n` +
-          `  AND ${this.quoteIdentifier(STORAGE_FORMAT.columns.parentTable)} = '${tableName}';`
-      );
-    }
+      return groupTable === undefined ? [] : [groupTable];
+    });
+    // The same statements `migrate:create` writes for a rename it is told keeps the rows.
+    const statements = fieldGroupRowMoves({
+      dialect: this.dialect,
+      parentTable: tableName,
+      from: groupRename.from.name,
+      to: groupRename.to.name,
+      groupTables,
+    }).map(statement => `${statement};`);
     return { rename: groupRename, statements };
   }
 
@@ -2687,8 +2672,9 @@ ${allColumnDefs.join(",\n")}
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[]
   ): { from: FieldDefinition; to: FieldDefinition } | null {
-    const { oldOnly, newOnly } = renameCandidates(oldFields, newFields, f =>
-      isFieldGroupFieldType(f.type)
+    const { oldOnly, newOnly } = removedAndAddedFieldGroups(
+      oldFields,
+      newFields
     );
     if (oldOnly.length === 0 || newOnly.length === 0) return null;
     refuseAmbiguousRename({
@@ -2702,20 +2688,8 @@ ${allColumnDefs.join(",\n")}
 
     const from = oldOnly[0];
     const to = newOnly[0];
-    if (from.repeatable !== to.repeatable) return null;
-
-    const fromSlugs = fieldGroupSlugList(from);
-    const toSlugs = fieldGroupSlugList(to);
-    // Compared as SETS, not positionally: a rename in the same save that only
-    // reorders an unchanged zone whitelist is still a pure rename, and judging
-    // it by order would orphan every row keyed by the old field name.
-    if (
-      fromSlugs.length !== toSlugs.length ||
-      fromSlugs.some(slug => !toSlugs.includes(slug))
-    ) {
-      return null;
-    }
-
+    // The same rows under either name (`keepsFieldGroupRows`), which `migrate:create` asks too.
+    if (!keepsFieldGroupRows(from, to)) return null;
     return { from, to };
   }
 

@@ -14,6 +14,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import { inArray } from "drizzle-orm";
 
 import type { AccessTarget } from "../auth/access/decide";
@@ -288,9 +289,11 @@ function startPublicRoleDeps(): PublicRoleDeps {
     meta: getService("metaService"),
     config: getService("config"),
     entities: async () => {
+      // As stored: the Public role's permissions are written from them.
+      const asStored = { forWrite: true };
       const [collections, singles] = await Promise.all([
-        getService("collectionRegistryService").getAllLabels(),
-        getService("singleRegistryService").getAllLabels(),
+        getService("collectionRegistryService").getAllLabels(asStored),
+        getService("singleRegistryService").getAllLabels(asStored),
       ]);
       return { collections, singles };
     },
@@ -330,9 +333,11 @@ async function commandPublicRoleDeps(
     meta: new MetaService(adapter, logger),
     config,
     entities: async () => {
+      // As stored: the Public role's permissions are written from them.
+      const asStored = { forWrite: true };
       const [collections, singles] = await Promise.all([
-        new CollectionRegistryService(adapter, logger).getAllLabels(),
-        new SingleRegistryService(adapter, logger).getAllLabels(),
+        new CollectionRegistryService(adapter, logger).getAllLabels(asStored),
+        new SingleRegistryService(adapter, logger).getAllLabels(asStored),
       ]);
       return { collections, singles };
     },
@@ -342,9 +347,6 @@ async function commandPublicRoleDeps(
 
 /** How long after a failure to make the Public role it is tried again. */
 const RETRY_AFTER_FAILURE_MS = 60_000;
-
-/** The value Next.js gives `NEXT_PHASE` while `next build` runs. */
-const NEXT_PRODUCTION_BUILD_PHASE = "phase-production-build";
 
 /**
  * The seeding in flight in this process, on `globalThis` for the reason the
@@ -403,7 +405,7 @@ export function seedPermissionsAndRolePresets(): Promise<void> {
   // deployments share, from a config older or newer than theirs, so its writes
   // would reach data it never serves. Next sets this phase for the build, and
   // skips `instrumentation.register()` in it for the same reason.
-  if (process.env.NEXT_PHASE === NEXT_PRODUCTION_BUILD_PHASE) {
+  if (isNextBuildPhase()) {
     return Promise.resolve();
   }
 

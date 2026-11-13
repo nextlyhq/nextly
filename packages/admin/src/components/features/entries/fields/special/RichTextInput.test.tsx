@@ -415,6 +415,22 @@ describe("RichTextInput — insert dialogs shell characterization", () => {
       ).not.toBeInTheDocument();
       await vi.waitFor(() => expect(nodeCount(ButtonLinkNode)).toBe(1));
     });
+
+    it("names each colour's picker and its hex value field", async () => {
+      const { openButtonLink } = renderPluginHarness();
+
+      openButtonLink();
+      await screen.findByRole("heading", { name: "Insert Button Link" });
+
+      // The picker takes the visible label; the typed value beside it has a
+      // name of its own rather than its placeholder.
+      for (const colour of ["Background Color", "Text Color"]) {
+        expect(screen.getByLabelText(colour)).toHaveAttribute("type", "color");
+        expect(
+          screen.getByRole("textbox", { name: `${colour} hex value` })
+        ).toBeInTheDocument();
+      }
+    });
   });
 
   describe("Button Group dialog", () => {

@@ -9,6 +9,7 @@ import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { isPluginLedgerRow } from "../events/ledger-scope";
 import {
   assertSchemaLockHeld,
@@ -275,8 +276,12 @@ export async function runMigrationStatements(
   // lapsed lock looks for an earlier holder's statements still running. SQLite runs one writer at
   // a time, so a taker cannot start while a statement of the holder runs, and its adapter reads a
   // statement's first word.
+  // The unit's name goes with the claim, so a run refused by one of these statements names the
+  // file, never the statement's text.
   const sent = (statement: string) =>
-    dialect === "sqlite" ? statement : markedForSchemaLock(statement);
+    dialect === "sqlite"
+      ? statement
+      : markedForSchemaLock(statement, unit.source);
   if (unit.transaction) {
     await executeTransaction(adapter, async tx => {
       for (const [index, statement] of statements.entries()) {
@@ -285,6 +290,9 @@ export async function runMigrationStatements(
         await assertSchemaLockHeld();
         await tx.execute(sent(statement));
       }
+      // A unit may rewrite registry rows (a schema save's upsert of its own
+      // row): what the transaction read of them before is read again.
+      clearRegistryRowCache();
       if (after !== undefined) {
         await tx.restoreSession();
         await after(tx.db, statements.length);

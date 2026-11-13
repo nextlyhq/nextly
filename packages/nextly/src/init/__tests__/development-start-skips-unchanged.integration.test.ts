@@ -85,15 +85,22 @@ import { sanitizeConfig } from "../../shared/types/config";
  * with one text field. The
  * one entity a test changes gains a field (`how: "field"`, a change a start
  * finds the table behind on) or a new label (`how: "label"`, which leaves the
- * table as it is).
+ * table as it is), or a help text on its field (`how: "help"`, a field setting
+ * that changes no column).
  */
 function entities(
   n: number,
   changed?: string,
-  how: "field" | "label" = "field"
+  how: "field" | "label" | "help" = "field"
 ) {
   const fields = (slug: string) => [
-    text({ name: "title" }),
+    text({
+      name: "title",
+      // A help text alone changes no column, so the schema hash omits it.
+      ...(slug === changed && how === "help"
+        ? { admin: { description: "Shown under the title" } }
+        : {}),
+    }),
     ...(slug === changed && how === "field"
       ? [text({ name: "subtitle" })]
       : []),
@@ -305,6 +312,30 @@ describe.each(getConfiguredTestDialects())(
       expect(
         calls.some(call => WRITE.test(call.text) && named(call).has("p2x"))
       ).toBe(true);
+    }, 300_000);
+
+    it("with one field's help text changed writes that entity's row, and no other", async () => {
+      const adapterFor = await startedDatabase(5);
+      const calls = await recordStart(adapterFor, entities(5, "p2x", "help"));
+
+      const others = new Set(
+        calls.flatMap(call => [...named(call)].filter(slug => slug !== "p2x"))
+      );
+      expect([...others]).toEqual([]);
+      const reader = await adapterFor();
+      try {
+        const [row] = await reader.executeQuery<{ fields: unknown }>(
+          "SELECT fields FROM dynamic_collections WHERE slug = 'p2x'"
+        );
+        const stored = (
+          typeof row.fields === "string" ? JSON.parse(row.fields) : row.fields
+        ) as Array<{ name: string; admin?: { description?: string } }>;
+        expect(
+          stored.find(field => field.name === "title")?.admin?.description
+        ).toBe("Shown under the title");
+      } finally {
+        await reader.disconnect();
+      }
     }, 300_000);
 
     it("checks again an entity whose registry row another writer changed, and no other", async () => {

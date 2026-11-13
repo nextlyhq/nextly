@@ -18,6 +18,7 @@ import { ScreenOutlineFor } from "../components/shared/loading-frame/screen-outl
 import { PluginPageRegistrar } from "../components/shared/plugin-page-registrar";
 import { Toaster } from "../components/ui/toaster";
 import { AdminI18nProvider } from "../context/providers/AdminI18nProvider";
+import { AdminStartupScript } from "../context/providers/AdminStartupScript";
 import { BrandingProvider } from "../context/providers/BrandingProvider";
 import { DocumentTitleProvider } from "../context/providers/DocumentTitleProvider";
 import { GeneralSettingsSync } from "../context/providers/GeneralSettingsSync";
@@ -79,6 +80,9 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
         )}
         suppressHydrationWarning
       >
+        {/* The startup request, sent as the browser reads this page rather
+            than once the admin's code has loaded; the admin takes it. */}
+        <AdminStartupScript nonce={nonce} />
         <ThemePaintScript nonce={nonce} />
         {/* Nothing but the admin's own surface: before its code runs the
             admin cannot know the screen, nor whether this browser has signed
@@ -278,8 +282,8 @@ function AdminRobotsFallback(): null {
 export interface RootLayoutProps {
   /**
    * The nonce a `script-src` Content Security Policy needs. The admin paints
-   * its saved theme with a small inline script before the first paint, which
-   * such a policy blocks without it.
+   * its saved theme, and sends its startup request, with small inline scripts
+   * before the first paint, which such a policy blocks without it.
    */
   nonce?: string;
 }

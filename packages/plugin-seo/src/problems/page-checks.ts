@@ -21,7 +21,12 @@ import {
   type ProblemKind,
   type ProblemSubject,
 } from "./contract";
-import { textChecks, type TextCheck } from "./text-checks";
+import {
+  DESCRIPTION_LIMIT,
+  TITLE_LIMIT,
+  textChecks,
+  type TextCheck,
+} from "./text-checks";
 
 /** An image a page's content shows, and the alt text it is shown with. */
 export interface ImageFact {
@@ -51,6 +56,11 @@ export interface PageFacts {
   answer: SeoAnswer;
   /** The canonical the answer names is the page's own address ({@link canonicalIsOwn}). */
   canonicalIsOwn: boolean;
+  /**
+   * The person confirmed the page first appeared on another site, so a
+   * canonical naming that site is meant, not a mistake.
+   */
+  canonicalConfirmed: boolean;
   shareImage: readonly ShareImageProblem[];
   structuredData: readonly StructuredDataProblem[];
   images: readonly ImageFact[];
@@ -137,7 +147,11 @@ function textProblems(facts: PageFacts): Problem[] {
     return {
       kind: words.kind,
       subject,
-      what: words.what ?? `${check.length ?? 0} characters`,
+      // A long value is a warning, with its length beside what Google
+      // shows: it is saved and served as it is, and Google cuts it to fit.
+      what:
+        words.what ??
+        `${check.length ?? 0} characters, Google shows about ${check.value === "title" ? TITLE_LIMIT : DESCRIPTION_LIMIT}`,
       // A long value only code sets is a note for a developer.
       action:
         check.problem === "long" ? (action ?? words.action) : words.action,
@@ -148,11 +162,18 @@ function textProblems(facts: PageFacts): Problem[] {
 
 /**
  * A canonical a person typed that names an address other than the page's
- * own, which tells search engines to list that one instead.
+ * own, which tells search engines to list that one instead. One the person
+ * confirmed, saying the page first appeared elsewhere, is meant: no problem.
  */
 function canonicalProblem(facts: PageFacts): Problem[] {
   const canonical = facts.answer.canonical;
-  if (canonical?.from !== "page" || facts.canonicalIsOwn) return [];
+  if (
+    canonical?.from !== "page" ||
+    facts.canonicalIsOwn ||
+    facts.canonicalConfirmed
+  ) {
+    return [];
+  }
   return [
     {
       kind: "canonical",

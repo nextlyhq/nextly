@@ -97,10 +97,10 @@ beforeEach(() => {
   (container.get as ReturnType<typeof vi.fn>).mockImplementation(
     (name: string) => {
       if (name === "collectionRegistryService") {
-        return { getAllCollections: vi.fn().mockResolvedValue([]) };
+        return { getAllCollectionsForRead: vi.fn().mockResolvedValue([]) };
       }
       if (name === "singleRegistryService") {
-        return { getAllSingles: vi.fn().mockResolvedValue([]) };
+        return { getAllSinglesForRead: vi.fn().mockResolvedValue([]) };
       }
       if (name === "fieldGroupRegistryService") {
         return { listComponents: fieldGroupList };

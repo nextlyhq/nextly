@@ -413,6 +413,69 @@ function landmarkName(
 }
 
 /**
+ * The rows-per-page selector. Its visible "Rows per page" text is also its
+ * programmatic name, through `aria-labelledby`: the text is hidden in a narrow
+ * container, and a name taken by reference still holds when the element
+ * naming it is not displayed, where a `<label>` would leave the select
+ * unnamed. The id is per instance, so two pagers on one page each keep their
+ * own name.
+ */
+function PageSizeSelect({
+  pageSize,
+  options,
+  disabled,
+  onChange,
+}: {
+  pageSize: number;
+  options: readonly number[];
+  disabled: boolean;
+  onChange: (pageSize: number) => void;
+}): React.JSX.Element {
+  const labelId = React.useId();
+  return (
+    <div className="flex items-center space-x-2">
+      <span
+        id={labelId}
+        className="whitespace-nowrap hidden @md/content:inline-block"
+      >
+        Rows per page
+      </span>
+      <div className="relative">
+        <select
+          id="page-size"
+          aria-labelledby={labelId}
+          value={pageSize}
+          onChange={e => onChange(Number(e.target.value))}
+          disabled={disabled}
+          className="h-9 w-[70px] appearance-none rounded-md  border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:border-primary disabled:opacity-50 disabled:cursor-not-allowed hover-unified cursor-pointer"
+        >
+          {options.map(size => (
+            <option key={size} value={size}>
+              {size}
+            </option>
+          ))}
+        </select>
+        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-muted-foreground">
+          <svg
+            className="h-3 w-3"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M19 9l-7 7-7-7"
+            />
+          </svg>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Pagination Component
  *
  * A reusable pagination component with page controls, page size selector, and smart page numbering.
@@ -592,44 +655,12 @@ export const Pagination: React.ForwardRefExoticComponent<
         <div className="flex flex-wrap items-center justify-center gap-4 @md/content:gap-6 @4xl/content:gap-8 order-1 @2xl/content:order-2">
           {/* Page size selector */}
           {showPageSizeSelector && onPageSizeChange && (
-            <div className="flex items-center space-x-2">
-              <span className="whitespace-nowrap hidden @md/content:inline-block">
-                Rows per page
-              </span>
-              <div className="relative">
-                <select
-                  id="page-size"
-                  value={pageSize}
-                  onChange={e => {
-                    const newPageSize = Number(e.target.value);
-                    onPageSizeChange(newPageSize);
-                  }}
-                  disabled={isLoading}
-                  className="h-9 w-[70px] appearance-none rounded-md  border border-input bg-background px-2 py-1 text-sm font-medium focus:outline-none focus:border-primary disabled:opacity-50 disabled:cursor-not-allowed hover-unified cursor-pointer"
-                >
-                  {pageSizeOptions.map(size => (
-                    <option key={size} value={size}>
-                      {size}
-                    </option>
-                  ))}
-                </select>
-                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-muted-foreground">
-                  <svg
-                    className="h-3 w-3"
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M19 9l-7 7-7-7"
-                    />
-                  </svg>
-                </div>
-              </div>
-            </div>
+            <PageSizeSelect
+              pageSize={pageSize}
+              options={pageSizeOptions}
+              disabled={isLoading}
+              onChange={onPageSizeChange}
+            />
           )}
 
           {/* Navigation Buttons Group */}

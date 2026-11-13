@@ -39,3 +39,13 @@ export function pluginAdminSlug(name: string): string {
 export function isInPluginNamespace(pluginName: string, name: string): boolean {
   return name.startsWith(`${pluginAdminSlug(pluginName)}.`);
 }
+
+/**
+ * Where one of a plugin's own admin pages is: `/admin/plugins/<slug>/<path>`,
+ * for the page's `path` as `contributes.admin.pages` declares it (a leading
+ * `/` or none). The admin registers the page at this address, and the
+ * prebuilt admin page names the page by it, so the two must be one function.
+ */
+export function pluginPageAddress(slug: string, path: string): string {
+  return `/admin/plugins/${slug}/${path.replace(/^\/+/, "")}`;
+}

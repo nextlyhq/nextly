@@ -202,7 +202,14 @@ export function UserProfileDropdown({
   const pluginAction = usePluginMenuAction();
   return (
     <div className={className}>
-      <DropdownMenu>
+      {/* Not modal. A modal menu sets `aria-hidden` on the whole page behind
+          it while the page's links and buttons stay focusable, so assistive
+          technology is told they are gone while they can still be reached.
+          Without it the menu still takes focus on opening, moves by arrow
+          keys and refuses Tab, and Escape closes it and returns focus to the
+          avatar; a click outside closes it and leaves focus where it landed.
+          The page simply stays as it was: scrollable, and announced. */}
+      <DropdownMenu modal={false}>
         <DropdownMenuTrigger asChild>
           <button
             type="button"

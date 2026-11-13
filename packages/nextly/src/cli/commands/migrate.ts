@@ -142,7 +142,10 @@ import {
   type PluginMigrationSet,
   type PluginModulePreview,
 } from "../../domains/schema/migrate/plugin/run-plugin-migrations";
-import { reconcileMigrationMetadata } from "../../domains/schema/migrate/reconcile-metadata";
+import {
+  asServiceLogger,
+  reconcileMigrationMetadata,
+} from "../../domains/schema/migrate/reconcile-metadata";
 import {
   findRegistryDisagreements,
   registryDisagreementLines,
@@ -153,6 +156,7 @@ import {
   takeRegistryBaseline,
   type RegistryRecord,
 } from "../../domains/schema/migrate/registry-record";
+import { typeChangedRowsWriter } from "../../domains/schema/migrate/registry-writer";
 import {
   refuseRenamesOntoTakenTargets,
   renamesOntoTakenTargets,
@@ -188,6 +192,7 @@ import {
 } from "../../domains/schema/migrate-create/format-file";
 import {
   EMPTY_SNAPSHOT,
+  isOlderFormatSnapshot,
   parseSnapshotFile,
   type SnapshotFile,
 } from "../../domains/schema/migrate-create/snapshot-io";
@@ -1113,6 +1118,7 @@ export interface MigrateCoreResult {
     singlesRegistered: number;
     fieldGroupsRegistered: number;
     rowsNotWritten: string[];
+    rowsRemoved: string[];
     marked: number;
     stillPending: number;
     awaitingMigration: number;
@@ -2026,6 +2032,13 @@ function reportMetadataOutcome(
     );
   }
 
+  // The rows of entities an applied migration dropped, removed with it.
+  if (metadata.rowsRemoved.length > 0) {
+    logger.success(
+      `${formatCount(metadata.rowsRemoved.length, "registry row")} of a dropped entity removed: ${metadata.rowsRemoved.join(", ")}.`
+    );
+  }
+
   if (marked > 0) {
     logger.success(
       `${formatCount(marked, "registry row")} recorded as applied.`
@@ -2165,6 +2178,9 @@ async function runMigrationStreams(
     judged,
     ...(beforeApply === undefined ? {} : { beforeApply }),
     ...(afterApply === undefined ? {} : { afterApply }),
+    ...(deps.collectionSources === undefined
+      ? {}
+      : { collectionSources: deps.collectionSources }),
   });
   return { pluginModulesApplied, applied };
 }
@@ -2251,6 +2267,7 @@ export async function migrateCore(
     singlesRegistered: 0,
     fieldGroupsRegistered: 0,
     rowsNotWritten: [] as string[],
+    rowsRemoved: [] as string[],
     marked: 0,
     stillPending: 0,
     awaitingMigration: 0,
@@ -3718,16 +3735,9 @@ async function loadTargetSnapshot(
     // Invalid JSON - let parseSnapshotFile handle the error reporting
   }
 
-  // If it looks like a custom metadata format (has collections/singles, no migrationHash),
-  // treat as no snapshot so migration runs verbatim
-  if (
-    parsed &&
-    typeof parsed === "object" &&
-    !("migrationHash" in parsed) &&
-    ("collections" in parsed || "singles" in parsed)
-  ) {
-    return null;
-  }
+  // A template's older-format snapshot records no tables: no snapshot, so the
+  // migration runs verbatim.
+  if (isOlderFormatSnapshot(parsed)) return null;
 
   // Otherwise, parse as a drift snapshot. The whole file, because its
   // `contributions` say which parts of a foreign table the drift check may
@@ -3929,6 +3939,11 @@ export async function runFileMigrations(args: {
    * declares a permission again clears the mark again. A throw stops the run after the file.
    */
   afterApply?: (applied: AppliedAppMigration) => Promise<void>;
+  /**
+   * Each plugin-contributed collection's origin, so a registry row a file
+   * creates with itself is that plugin's (`RegistryWriteDeps.collectionSources`).
+   */
+  collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // The files about to run judged once more, as they read now: the folder may
@@ -4172,6 +4187,21 @@ export async function runFileMigrations(args: {
           targetFile?.contributions ?? {}
         ),
       });
+      // A field whose type this file changes has its entity's registry row
+      // written with the file, not at the run's end, so no write is judged
+      // against the type the column no longer has (`typeChangedRowsWriter`).
+      const withFile = typeChangedRowsWriter({
+        from: beforeFile,
+        to: targetFile,
+        file: filename,
+        deps: {
+          adapter: dz,
+          logger: asServiceLogger(logger),
+          ...(args.collectionSources === undefined
+            ? {}
+            : { collectionSources: args.collectionSources }),
+        },
+      });
       await reconcileFile({
         file: {
           filename,
@@ -4186,6 +4216,9 @@ export async function runFileMigrations(args: {
         dialect,
         repo,
         executeSql: executeFileSql,
+        ...(withFile === undefined
+          ? {}
+          : { beforeRecorded: () => withFile(m.transaction) }),
       });
       applied++;
       lastApplied = filename;

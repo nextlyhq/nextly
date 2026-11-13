@@ -1,14 +1,12 @@
 /**
- * Shared filter + sort helpers that decide which collection / single
- * the sidebar renders FIRST in its respective section. Reused by:
+ * Shared filter + sort helpers that decide which collections and Singles the
+ * Content panel lists, and in what order. Reused by:
  *
- * - `DynamicCollectionNav` and `DynamicSingleNav` (sidebar render order)
- * - `CollectionsLandingRedirect` and `SinglesLandingRedirect` (deciding
- *   where `/admin/collections` and `/admin/singles` should land)
+ * - `DynamicCollectionNav` and `DynamicSingleNav` (the panel's lists)
+ * - the Content overview, whose tables list the same ones in the same order
  *
- * Centralising the logic guarantees the redirect target is always the
- * same as the sidebar's first item (WYSIWYG). If the sidebar's order
- * changes in the future, the redirects follow automatically.
+ * Centralising the logic means the panel and the overview cannot disagree
+ * about what the reader has, or in which order it comes.
  */
 
 import { collectionSidebarGroup } from "@admin/lib/content-groups";
@@ -207,30 +205,4 @@ export function getSidebarSinglesForLanding(
     pinned: deps.pinnedSingles,
   });
   return [...permitted].sort(comparator);
-}
-
-/**
- * Pick the first collection the sidebar would render, or null when
- * none are visible. The collection's `name` is the URL slug used by
- * `/admin/collections/{name}`.
- */
-export function pickCollectionsLandingTarget(
-  items: ApiCollection[],
-  deps: CollectionsLandingDeps
-): ApiCollection | null {
-  const sorted = getSidebarCollectionsForLanding(items, deps);
-  return sorted[0] ?? null;
-}
-
-/**
- * Pick the first single the sidebar would render, or null when none
- * are visible. The single's `slug` is the URL segment used by
- * `/admin/singles/{slug}`.
- */
-export function pickSinglesLandingTarget(
-  items: ApiSingle[],
-  deps: SinglesLandingDeps
-): ApiSingle | null {
-  const sorted = getSidebarSinglesForLanding(items, deps);
-  return sorted[0] ?? null;
 }
