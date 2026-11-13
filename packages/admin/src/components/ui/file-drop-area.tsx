@@ -16,7 +16,7 @@
  * @module components/ui/file-drop-area
  */
 
-import { useId, type JSX, type ReactNode } from "react";
+import { useId, type JSX, type KeyboardEvent, type ReactNode } from "react";
 import { useDropzone, type DropzoneState } from "react-dropzone";
 
 import { AlertTriangle, Upload } from "@admin/components/icons";
@@ -48,6 +48,12 @@ export interface DropTargetProps {
   description?: ReactNode;
   /** Above the title, such as the folder an upload goes to. */
   eyebrow?: ReactNode;
+  /**
+   * Turned off: no press opens the chooser, and the target is left out of
+   * the tab order and says it is unavailable. A drop handler that is off
+   * has no `open` to call.
+   */
+  disabled?: boolean;
   className?: string;
 }
 
@@ -73,6 +79,33 @@ const SQUARES: Record<DropTargetState, string> = {
   reject: "bg-danger-surface",
 };
 
+/**
+ * How the target is pressed: a click, or Enter or Space, opens the chooser.
+ * Turned off it takes no press, is left out of the tab order and says it is
+ * unavailable.
+ */
+function activation(
+  open: () => void,
+  disabled: boolean
+): {
+  onClick?: () => void;
+  onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
+  tabIndex: number;
+  "aria-disabled"?: true;
+} {
+  if (disabled) return { tabIndex: -1, "aria-disabled": true };
+  return {
+    onClick: open,
+    onKeyDown: event => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        open();
+      }
+    },
+    tabIndex: 0,
+  };
+}
+
 /** The drop target as the admin draws it, in each of its states. */
 export function DropTarget({
   state,
@@ -86,6 +119,7 @@ export function DropTarget({
   rejectTitle = "These files can't be taken here",
   description,
   eyebrow,
+  disabled = false,
   className,
 }: DropTargetProps): JSX.Element {
   const descriptionId = useId();
@@ -96,25 +130,19 @@ export function DropTarget({
       <input {...inputProps} aria-hidden="true" tabIndex={-1} />
       <div
         {...rootProps}
-        onClick={open}
-        onKeyDown={event => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            open();
-          }
-        }}
+        {...activation(open, disabled)}
         className={cn(
           "relative flex flex-col items-center justify-center rounded-md transition-all duration-200 group",
           BORDERS[state],
           BACKGROUNDS[state],
           "min-h-48 md:min-h-56 py-16 px-8",
           "cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2",
+          disabled && "cursor-not-allowed opacity-60",
           className
         )}
         role="button"
         aria-label={label}
         aria-describedby={description === undefined ? undefined : descriptionId}
-        tabIndex={0}
       >
         <DropIcon state={state} />
         <div className="flex flex-col items-center gap-0.5 text-center">
@@ -253,6 +281,7 @@ export function FileDropArea({
       rootProps={getRootProps()}
       inputProps={getInputProps(accept === undefined ? {} : { accept })}
       open={open}
+      disabled={disabled}
       label={label}
       title={title}
       {...(hint === undefined ? {} : { hint })}
