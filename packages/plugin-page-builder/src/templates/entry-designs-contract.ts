@@ -133,7 +133,7 @@ export function entryDesignPath(collection: string, entry: string): string {
  * section's read as the page opens: the same path, so the section's own read
  * takes the started one.
  */
-export const ENTRY_DESIGN_STARTUP_PATH = `${ENTRY_DESIGNS_ROUTE_PATH}?${ENTRY_DESIGNS_PARAMS.collection}={collection}&${ENTRY_DESIGNS_PARAMS.entry}={entryId}`;
+export const ENTRY_DESIGN_STARTUP_PATH: string = `${ENTRY_DESIGNS_ROUTE_PATH}?${ENTRY_DESIGNS_PARAMS.collection}={collection}&${ENTRY_DESIGNS_PARAMS.entry}={entryId}`;
 
 /**
  * The read's path for the own designs of some of a collection's entries,
