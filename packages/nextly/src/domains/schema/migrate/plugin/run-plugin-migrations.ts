@@ -45,6 +45,10 @@ import {
   type ReconcileRepo,
 } from "../drift-reconcile";
 import { assertRunnableStatements, statementRefusals } from "../split-sql";
+import {
+  refuseConstructsTheServerCannotHold,
+  type ServerConstructCapabilities,
+} from "../../extension/build-extension-schema";
 import type { NextlySchemaSnapshot } from "../../pipeline/diff/types";
 
 import {
@@ -74,6 +78,7 @@ import { upRendersItsSides } from "../../migrate-create/generate-plugin";
 
 import { moduleEffects } from "./module-effects";
 import { assertPluginHistories } from "./plugin-history";
+import { assertModuleForeignKeysResolve } from "./module-foreign-keys";
 import { recordedContributions } from "./recorded-contributions";
 
 /** One plugin's migrations, in the order the resolver placed the plugin. */
@@ -87,6 +92,15 @@ export interface RunPluginMigrationsDeps {
   dialect: SupportedDialect;
   /** Applied `file_apply` rows keyed by qualified filename. */
   appliedShas: ReadonlyMap<string, string | null>;
+  /**
+   * The connected server's construct capabilities, from the adapter's
+   * `getCapabilities()`. Set by callers with a server behind them, so a
+   * shipped module whose snapshot declares a check the server will not
+   * enforce, or an expression index it cannot build, is refused before any
+   * module runs — the apply-side judgement for modules generated for every
+   * dialect with no one server to ask at generation.
+   */
+  serverConstructs?: ServerConstructCapabilities;
   /**
    * Every plugin the configuration declares, a plugin whose list is empty
    * included, so a module the ledger records applied for it is found missing
@@ -280,6 +294,28 @@ export async function runPluginMigrations(
     appliedShas: deps.appliedShas,
     declaredPlugins: deps.declaredPlugins,
   });
+  // The same whole-history discipline for the chain's own order: a module's
+  // key may not reach a table only one of the plugin's LATER modules
+  // creates, and finding that after earlier modules ran is finding it too
+  // late. Asked over each plugin's modules in run order, before any of them
+  // executes; a target no module of the owner names is another owner's or
+  // one the database already held, judged for reach at the declaration
+  // compile rather than by arrival.
+  for (const set of sets) {
+    assertModuleForeignKeysResolve(
+      set.pluginName,
+      orderedMigrations(set.migrations)
+    );
+  }
+  // And for what the server itself can hold: a module generated for every
+  // dialect had no one server to be judged against, so pending modules are
+  // judged here, against the one about to run them — before any module of any
+  // plugin applies a check this server ignores or an expression index it
+  // cannot build. Already-applied modules are left alone so a pending module
+  // that removes an unsupported historical construct is not blocked by it.
+  if (deps.serverConstructs !== undefined) {
+    refusePendingConstructsTheServerCannotHold(sets, deps);
+  }
   const result: PluginMigrationRunResult = {
     applied: 0,
     adopted: 0,
@@ -321,6 +357,76 @@ export function pendingPluginModules(
     }
   }
   return pending;
+}
+
+/**
+ * Refuse pending modules whose snapshot (or contributed elements) declares a
+ * check or expression index the connected server cannot hold, within `limit`.
+ */
+function refusePendingConstructsTheServerCannotHold(
+  sets: readonly PluginMigrationSet[],
+  deps: {
+    dialect: SupportedDialect;
+    appliedShas: { has(key: string): boolean };
+    limit?: number;
+    serverConstructs?: ServerConstructCapabilities | Record<string, unknown>;
+  }
+): void {
+  const server = deps.serverConstructs;
+  if (server === undefined) return;
+  let remaining = moduleBudget(deps.limit);
+  for (const set of sets) {
+    const ordered = orderedMigrations(set.migrations);
+    for (const [at, migration] of ordered.entries()) {
+      if (!isPending(set, migration, deps)) continue;
+      if (remaining <= 0) return;
+      remaining -= 1;
+      refuseConstructsTheServerCannotHold(
+        tablesForServerConstructCheck(ordered, at, deps.dialect),
+        server
+      );
+    }
+  }
+}
+
+/**
+ * The tables a pending module declares or contributes to, narrowed on foreign
+ * tables to the checks and indexes this plugin owns.
+ */
+function tablesForServerConstructCheck(
+  ordered: readonly PluginMigration[],
+  at: number,
+  dialect: SupportedDialect
+): Parameters<typeof refuseConstructsTheServerCannotHold>[0] {
+  const migration = ordered[at];
+  const ownTables = migration.snapshot[dialect]?.tables ?? [];
+  const contributedRaw = migration.contributed?.[dialect]?.tables ?? [];
+  if (contributedRaw.length === 0) return ownTables;
+  const contributions = recordedContributions(
+    ordered.slice(0, at + 1),
+    dialect
+  );
+  return [
+    ...ownTables,
+    ...contributedRaw.map(table =>
+      narrowContributedConstructs(table, contributions[table.name])
+    ),
+  ];
+}
+
+/** Narrow a foreign table's checks and indexes to the ones this plugin contributed. */
+function narrowContributedConstructs(
+  table: NextlySchemaSnapshot["tables"][number],
+  own: { checks: readonly string[]; indexes: readonly string[] } | undefined
+): Parameters<typeof refuseConstructsTheServerCannotHold>[0][number] {
+  if (own === undefined) return { name: table.name };
+  const ownChecks = new Set(own.checks);
+  const ownIndexes = new Set(own.indexes);
+  return {
+    name: table.name,
+    checks: (table.checks ?? []).filter(ck => ownChecks.has(ck.name)),
+    indexes: (table.indexes ?? []).filter(ix => ownIndexes.has(ix.name)),
+  };
 }
 
 /**
@@ -399,6 +505,8 @@ export async function previewPluginMigrations(
     limit?: number;
     /** As a run is handed it (`RunPluginMigrationsDeps.declaredPlugins`). */
     declaredPlugins?: ReadonlySet<string>;
+    /** Server construct capabilities, judged identically to execution. */
+    serverConstructs?: ServerConstructCapabilities | Record<string, unknown>;
   }
 ): Promise<PluginModulePreview[]> {
   const appliedShas = appliedPluginShas(args.rows);
@@ -408,6 +516,21 @@ export async function previewPluginMigrations(
     appliedShas,
     declaredPlugins: args.declaredPlugins,
   });
+  // The run's own chain refusal, so a dry run reports what the run refuses.
+  for (const set of sets) {
+    assertModuleForeignKeysResolve(
+      set.pluginName,
+      orderedMigrations(set.migrations)
+    );
+  }
+  if (args.serverConstructs !== undefined) {
+    refusePendingConstructsTheServerCannotHold(sets, {
+      dialect: args.dialect,
+      appliedShas,
+      limit: args.limit,
+      serverConstructs: args.serverConstructs,
+    });
+  }
   const context: PreviewContext = {
     dialect: args.dialect,
     appliedShas,
@@ -863,7 +986,7 @@ function dataModuleFailure(
 function isPending(
   set: PluginMigrationSet,
   migration: PluginMigration,
-  deps: Pick<RunPluginMigrationsDeps, "appliedShas">
+  deps: { appliedShas: { has(key: string): boolean } }
 ): boolean {
   return !deps.appliedShas.has(
     qualifiedFilename(set.pluginName, migration.name)
