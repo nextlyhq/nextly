@@ -418,6 +418,32 @@ describe.each(DIALECTS)(
     );
 
     it.runIf(dialect === "mysql")(
+      "reports nothing changed where only a setting ran before the wait outside a transaction",
+      async () => {
+        writeFile(
+          "20261113_000001_setting_first",
+          [
+            "SET @nextly_marker = 1",
+            `ALTER TABLE ${BUSY} ADD COLUMN late integer`,
+          ],
+          { outside: true }
+        );
+        await holdTheTable();
+
+        const stopped = await migrate({ tryMs: 1_000, totalMs: 2_000 }).catch(
+          (error: unknown) => error
+        );
+
+        // The setting lived on the try's session, which is gone: it is sent again by the next
+        // run, and nothing of the file stayed.
+        expect(stopped).toMatchObject({
+          code: "NEXTLY_TABLE_BUSY",
+          logContext: { stop: { outcome: { kind: "nothing-changed" } } },
+        });
+      }
+    );
+
+    it.runIf(dialect === "mysql")(
       "bounds a row change waiting on a row another session holds, not InnoDB's own 50 seconds",
       async () => {
         await adapter.executeQuery(`INSERT INTO ${BUSY} (id) VALUES (5)`);

@@ -532,7 +532,11 @@ export async function runUnitInTries(
             (keeping === "open-transaction" &&
               kept === 0 &&
               onlyRowChanges(statements.slice(0, sentIndex + 1))),
-          committed: positionsBetween(started, kept),
+          // A setting kept ended with its session and is sent again first: nothing durable.
+          committed: positionsBetween(started, kept).filter(
+            position =>
+              !isConnectionSetting(statements[position - 1] ?? "", dialect)
+          ),
         };
       }
     }
