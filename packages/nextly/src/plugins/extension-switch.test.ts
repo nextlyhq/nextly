@@ -122,6 +122,13 @@ describe("extensionFieldsOf", () => {
                         { name: "city", type: "text", required: true },
                       ],
                     } as never,
+                    // A list that must hold a row, required or not.
+                    {
+                      name: "steps",
+                      type: "repeater",
+                      minRows: 1,
+                      fields: [{ name: "step", type: "text" }],
+                    } as never,
                     // Required too, spelled the way validation spells it.
                     {
                       name: "sku",

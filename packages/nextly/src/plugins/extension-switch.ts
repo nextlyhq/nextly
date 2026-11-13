@@ -18,6 +18,7 @@
  */
 import {
   isRequired,
+  numberRule,
   type ValidatableField,
 } from "../shared/lib/entry-validation";
 
@@ -107,13 +108,20 @@ export async function switchedOffExtensions(
 }
 
 /**
- * Whether `field` is required, or holds a required field at any depth (a
- * group's or repeater's own fields), in either spelling the entry validator
- * reads: a page that drew it nowhere could not then be saved.
+ * Whether `field` demands a value, or holds a field that does at any depth
+ * (a group's or repeater's own fields): required, or a list with a positive
+ * `minRows` or `minChips`, in either spelling the entry validator reads. A
+ * page that drew it nowhere could not then be saved.
  */
 function holdsRequired(field: unknown): boolean {
   if (typeof field !== "object" || field === null) return false;
-  if (isRequired(field as ValidatableField)) return true;
+  const validatable = field as ValidatableField;
+  // Required, or a list that must hold at least one row or chip: either way
+  // an empty value the page could not fill is refused.
+  if (isRequired(validatable)) return true;
+  for (const bound of ["minRows", "minChips"]) {
+    if ((numberRule(validatable, bound) ?? 0) > 0) return true;
+  }
   const { fields } = field as { fields?: unknown };
   return Array.isArray(fields) && fields.some(holdsRequired);
 }
