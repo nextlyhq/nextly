@@ -916,3 +916,41 @@ describe("savedContainerIdsFrom", () => {
     expect(savedContainerIdsFrom(saved)("f-draft")).toBeNull();
   });
 });
+
+describe("a move it cannot pin down", () => {
+  it("refuses moving a field whose id another field shares, rather than moving the first one", () => {
+    // Two copies whose fields share ids: a move by id cannot tell which is meant.
+    const fields = [
+      plain("f-g1", "first", {
+        type: "group",
+        fields: [plain("f-same", "note")],
+      }),
+      plain("f-g2", "second", {
+        type: "group",
+        fields: [plain("f-same", "note")],
+      }),
+    ];
+    expect(refusal(judgeMove(fields, "f-same", {}, ctx)).reason).toBe(
+      "ambiguous-place"
+    );
+  });
+
+  it("refuses taking a layout group whose fields already clash to another level, naming both", () => {
+    // The clash is held where they stand; arriving together elsewhere would make it anew.
+    const fields = [
+      plain("f-outer", "outer", {
+        type: "group",
+        fields: [
+          plain("f-layout", "", {
+            type: "group",
+            fields: [plain("f-a", "body"), plain("f-b", "Body")],
+          }),
+        ],
+      }),
+    ];
+    const answer = refusal(judgeMove(fields, "f-layout", {}, ctx));
+    expect(answer.reason).toBe("name-clash");
+    expect(answer.message).toContain("body");
+    expect(answer.message).toContain("Body");
+  });
+});

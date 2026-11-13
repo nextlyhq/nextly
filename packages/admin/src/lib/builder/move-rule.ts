@@ -441,11 +441,32 @@ function arrivalRefusal(
   return (
     containerChangeRefusal(field, ctx) ??
     lockedInsideRefusal(field, chain, ctx) ??
+    carriedClashRefusal(field, carried) ??
     carried.reduce<MoveVerdict | null>(
       (refusal, each) => refusal ?? nameRefusal(each, into, siblings, ctx),
       null
     )
   );
+}
+
+/**
+ * The refusal of a layout group carrying two names that clash with each other to another level.
+ * Where they stand the clash may be one the saved definition already holds; arriving together on a
+ * new level would make it anew, which the save refuses.
+ */
+function carriedClashRefusal(
+  field: BuilderField,
+  carried: readonly BuilderField[]
+): MoveVerdict | null {
+  for (let at = 1; at < carried.length; at++) {
+    const refusal = siblingClashRefusal(
+      carried[at],
+      field,
+      carried.slice(0, at)
+    );
+    if (refusal) return refusal;
+  }
+  return null;
 }
 
 /**
@@ -525,6 +546,7 @@ export function judgeMove(
   }
   const container = into ? into[into.length - 1] : null;
   const refusal =
+    ambiguousFieldRefusal(fields, field) ??
     ambiguousPlaceRefusal(fields, container) ??
     sourceRefusal(chain, ctx) ??
     containerRefusal(field, into, ctx) ??
@@ -557,6 +579,23 @@ export function judgeMove(
  * the field by its container's id, and a copy of a duplicated container keeps the ids inside it,
  * so the move could not tell the two apart.
  */
+/**
+ * The refusal of moving a field whose id another field shares: the move is asked by id, and the
+ * first field found would move whichever was meant. The Builder gives a copy, and everything inside
+ * it, ids of their own, so this answers only for fields that came to it sharing one.
+ */
+function ambiguousFieldRefusal(
+  fields: readonly BuilderField[],
+  field: BuilderField
+): MoveVerdict | null {
+  return fieldsWithId(fields, field.id) > 1
+    ? refuse(
+        "ambiguous-place",
+        `${called(field)} shares its id with another field, so a move could not tell the two apart.`
+      )
+    : null;
+}
+
 function ambiguousPlaceRefusal(
   fields: readonly BuilderField[],
   container: BuilderField | null
