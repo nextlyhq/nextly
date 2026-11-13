@@ -358,6 +358,14 @@ function useSettingsSave(
   const [failure, setFailure] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  const initialVersion = versionOf(initial);
+  const latestRead = useRef(initial);
+  latestRead.current = initial;
+  const latestStored = useRef(stored);
+  // The version of the last read this screen moved its draft onto.
+  const lastRead = useRef(versionOf(initial));
+  latestStored.current = stored;
+
   /** Saves `next`, and reports whether it was stored. */
   const save = useCallback(
     async (next: SettingsDraft): Promise<boolean> => {
@@ -375,6 +383,9 @@ function useSettingsSave(
           (await reread()) ??
           (isStoredDocument(saved) ? saved : { ...stored, ...sent });
         setStored(fresh);
+        // A read that landed while the save was on its way is older than
+        // what it stored: taken as read, so it never replaces it.
+        lastRead.current = versionOf(latestRead.current);
         // Edits made while the save was on its way are kept: only a draft
         // nobody touched since is replaced by what was stored.
         setDraft(current =>
@@ -399,13 +410,6 @@ function useSettingsSave(
   // person's, becomes the baseline. The draft moves onto it: a value edited
   // here stays as edited, every other takes the newer stored one, so a save
   // never sends back a value someone else changed meanwhile.
-  const initialVersion = versionOf(initial);
-  const latestRead = useRef(initial);
-  latestRead.current = initial;
-  const latestStored = useRef(stored);
-  // The version of the last read this screen moved its draft onto.
-  const lastRead = useRef(versionOf(initial));
-  latestStored.current = stored;
   useEffect(() => {
     // A read that lands while this screen's own save is on its way waits:
     // the save sets the baseline it stored, measured against what was

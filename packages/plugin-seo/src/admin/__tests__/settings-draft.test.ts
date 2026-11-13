@@ -527,6 +527,43 @@ describe("a draft moved onto newer settings", () => {
     expect(rebased.hiddenTypes).toEqual(["tags", "cases", "authors"]);
   });
 
+  it("moves the addresses and profiles item by item, keeping one added elsewhere", () => {
+    const listed = draftOf({
+      id: "s1",
+      productionAddresses: ["https://a.example"],
+      socialProfiles: [{ network: "x", url: "https://x.com/acme" }],
+    });
+    // Here: the address replaced, a profile added.
+    const draft = {
+      ...listed,
+      productionAddresses: ["https://b.example"],
+      socialProfiles: [
+        ...listed.socialProfiles,
+        { network: "github", url: "https://github.com/acme" },
+      ],
+    };
+    // Elsewhere meanwhile: an address and a profile added.
+    const after = draftOf({
+      id: "s1",
+      productionAddresses: ["https://a.example", "https://c.example"],
+      socialProfiles: [
+        { network: "x", url: "https://x.com/acme" },
+        { network: "linkedin", url: "https://linkedin.com/company/acme" },
+      ],
+    });
+
+    const rebased = rebasedDraft(draft, listed, after);
+    expect(rebased.productionAddresses).toEqual([
+      "https://c.example",
+      "https://b.example",
+    ]);
+    expect(rebased.socialProfiles).toEqual([
+      { network: "x", url: "https://x.com/acme" },
+      { network: "linkedin", url: "https://linkedin.com/company/acme" },
+      { network: "github", url: "https://github.com/acme" },
+    ]);
+  });
+
   it("takes out a type's entry taken out here, and a hidden type shown again", () => {
     const { pages: _pages, ...rest } = before.patterns;
     const draft = { ...before, patterns: rest, hiddenTypes: [] };

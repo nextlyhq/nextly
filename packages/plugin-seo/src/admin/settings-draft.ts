@@ -405,8 +405,9 @@ const same = (a: unknown, b: unknown): boolean =>
  * value edited since `before` stays as edited, and each other takes its
  * value in `after`, so a change made elsewhere meanwhile is kept. A map kept
  * per content type (patterns, structured data) is moved entry by entry, and
- * the hidden types item by item, so an edit to one type keeps another
- * person's edit to another.
+ * a list (hidden types, production addresses, social profiles) item by item,
+ * so an edit to one type keeps another person's edit to another, and an
+ * item added elsewhere stays.
  */
 export function rebasedDraft(
   draft: SettingsDraft,
@@ -427,8 +428,27 @@ export function rebasedDraft(
       before.hiddenTypes,
       after.hiddenTypes
     ),
+    productionAddresses: rebasedSet(
+      draft.productionAddresses,
+      before.productionAddresses,
+      after.productionAddresses
+    ),
+    socialProfiles: rebasedSet(
+      draft.socialProfiles,
+      before.socialProfiles,
+      after.socialProfiles
+    ),
   };
 }
+
+/** The values moved as a whole map or list rather than as one value. */
+const MOVED_BY_PART: ReadonlySet<keyof SettingsDraft> = new Set([
+  "patterns",
+  "structuredData",
+  "hiddenTypes",
+  "productionAddresses",
+  "socialProfiles",
+]);
 
 /** The draft's own values, other than the per-type ones, edited since `before`. */
 function editedScalars(
@@ -437,13 +457,7 @@ function editedScalars(
 ): Partial<SettingsDraft> {
   const edited: Partial<SettingsDraft> = {};
   for (const key of Object.keys(draft) as (keyof SettingsDraft)[]) {
-    if (
-      key === "patterns" ||
-      key === "structuredData" ||
-      key === "hiddenTypes"
-    ) {
-      continue;
-    }
+    if (MOVED_BY_PART.has(key)) continue;
     if (!same(draft[key], before[key])) keepEdited(edited, draft, key);
   }
   return edited;
@@ -474,17 +488,22 @@ function rebasedEntries<T>(
   return next;
 }
 
-/** A set moved item by item: what was added or taken out here, on the newer one. */
-function rebasedSet(
-  draft: readonly string[],
-  before: readonly string[],
-  after: readonly string[]
-): string[] {
-  const added = draft.filter(item => !before.includes(item));
-  const removed = before.filter(item => !draft.includes(item));
+/**
+ * A list moved item by item, items told apart by value: what was added or
+ * taken out here, on the newer one.
+ */
+function rebasedSet<T>(
+  draft: readonly T[],
+  before: readonly T[],
+  after: readonly T[]
+): T[] {
+  const has = (list: readonly T[], item: T) =>
+    list.some(each => same(each, item));
+  const added = draft.filter(item => !has(before, item));
+  const removed = before.filter(item => !has(draft, item));
   return [
-    ...after.filter(item => !removed.includes(item)),
-    ...added.filter(item => !after.includes(item)),
+    ...after.filter(item => !has(removed, item)),
+    ...added.filter(item => !has(after, item)),
   ];
 }
 
