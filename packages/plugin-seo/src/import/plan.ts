@@ -798,9 +798,9 @@ function decideText(at: Deciding, place: (typeof TEXT_PLACES)[number]): void {
   }
   const current = textValue(at.page.seo[STORED[place]]);
   if (current !== undefined) {
-    // Typed already: kept, and said so where the source holds another value.
-    if (same(current, value)) at.decision.same.push(place);
-    else keep(at, place);
+    // Typed already: kept as typed, whether or not the source holds the
+    // same value. Never reported as the same as automatic, which it is not.
+    keep(at, place);
     return;
   }
   const automatic =
@@ -858,8 +858,8 @@ function decideImage(at: Deciding, images: ReadonlyMap<string, string>): void {
   }
   const current = chosenImage(at.page.seo[STORED.image]);
   if (current !== undefined) {
-    if (current === id) at.decision.same.push("image");
-    else keep(at, "image");
+    // Chosen already, as this image or another: kept as chosen.
+    keep(at, "image");
     return;
   }
   at.decision.writes[STORED.image] = id;
@@ -882,9 +882,11 @@ function decideHidden(at: Deciding): void {
   } else if (hidden === true && !current) {
     at.decision.writes[STORED.hidden] = true;
     at.decision.places.push("hidden");
-  } else if (hidden === false && current) {
+  } else if (current && hidden !== undefined) {
+    // Hidden by a person: kept so, whatever the source says.
     keep(at, "hidden");
-  } else if (hidden !== undefined) {
+  } else if (hidden === false) {
+    // Shown, as a page is unless hidden: the same as automatic.
     at.decision.same.push("hidden");
   }
 }

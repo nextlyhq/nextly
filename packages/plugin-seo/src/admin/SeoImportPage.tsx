@@ -17,6 +17,7 @@ import {
   AlertDescription,
   AlertTitle,
   apiErrorMessage,
+  Badge,
   Button,
   isApiError,
   Card,
@@ -84,6 +85,7 @@ import {
 import {
   firstOfPage,
   neverServedWords,
+  otherChanges,
   reportCsv,
   reportedPages,
   resultOf,
@@ -92,6 +94,7 @@ import {
   valueCounts,
   versionWords,
 } from "./import-report";
+import { entryHref } from "./pages-view";
 import { AdminLink, PAGES_STEP, SeoTrail } from "./section";
 
 /** What was chosen on the first step. */
@@ -328,7 +331,8 @@ function OwnSeoDialog({
   return (
     <Dialog open onOpenChange={open => (open ? undefined : close())}>
       <DialogContent>
-        <DialogHeader>
+        {/* Room for the close button, so a long title wraps before it. */}
+        <DialogHeader className="pr-6">
           <DialogTitle>{`Import the ${type.label}' own "seo" field`}</DialogTitle>
           <DialogDescription>
             {`${type.label} already have a field called "seo". ${where} Then import from that field here: its values move across, and the plugin's SEO group takes the seo name.`}
@@ -515,7 +519,7 @@ function SourceStep({
 }): JSX.Element {
   const fileId = useId();
   return (
-    <div className="grid gap-6">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-6">
       <SiteSources
         groups={groups}
         ownSeo={ownSeo}
@@ -728,14 +732,20 @@ function ValueCell({
   const value = entry.values[place];
   return (
     <div className="flex items-start justify-between gap-3">
-      <span className="min-w-0 text-muted-foreground [overflow-wrap:anywhere]">
+      {/* At most 13rem wide and two lines, so the table, which sizes its
+          columns to their content, fits its card with every result in view;
+          the whole value is the line's title. */}
+      <span
+        className="line-clamp-2 min-w-0 max-w-52 whitespace-normal text-muted-foreground [overflow-wrap:anywhere]"
+        title={value ?? undefined}
+      >
         {value ?? ""}
       </span>
       {result === "none" ? null : (
-        <span className="grid shrink-0 justify-items-end text-xs">
-          <b className="font-semibold text-foreground">
+        <span className="grid shrink-0 justify-items-end gap-0.5 text-xs">
+          <Badge variant={result === "set" ? "success" : "default"}>
             {RESULT_WORDS[result].label}
-          </b>
+          </Badge>
           {RESULT_WORDS[result].why === undefined ? null : (
             <span className="text-muted-foreground">
               {RESULT_WORDS[result].why}
@@ -790,6 +800,68 @@ function rowKey(row: ImportReportEntry): string {
 }
 
 /**
+ * Where a reported page is edited, on its SEO tab; none for a record that
+ * matched no page. Types are keyed by collection slug, or `single:<slug>`.
+ */
+function reportedPageHref(row: ImportReportEntry): string | undefined {
+  if (row.type === undefined || row.id === undefined) return undefined;
+  const single = row.type.startsWith("single:");
+  return entryHref(
+    {
+      kind: single ? "single" : "collection",
+      slug: single ? row.type.slice("single:".length) : row.type,
+      id: row.id,
+    },
+    "seo"
+  );
+}
+
+/**
+ * A reported page's name, opening the page in a new tab so the dry run
+ * stays here; a record that matched no page is its name alone. A page's
+ * versions after its first are named for a screen reader only, the name
+ * shown once on its first row.
+ */
+function ReportedPage({
+  row,
+  named,
+}: {
+  row: ImportReportEntry;
+  named: boolean;
+}): JSX.Element {
+  const href = reportedPageHref(row);
+  const others = otherChanges(row);
+  return (
+    <div className="grid gap-0.5">
+      {!named ? (
+        <span className="sr-only">{row.label}</span>
+      ) : href === undefined ? (
+        <span className="font-medium text-foreground">{row.label}</span>
+      ) : (
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          className="font-medium text-foreground hover:underline"
+        >
+          {row.label}
+          <span className="sr-only"> (opens in a new tab)</span>
+        </a>
+      )}
+      {/* Its other places, which have no column: each with its result. */}
+      {others.map(change => (
+        <span
+          key={change.place}
+          className="whitespace-normal text-xs text-muted-foreground"
+        >
+          {`${change.label}: ${RESULT_WORDS[change.result].label}`}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/**
  * The last step: the dry run's counts and each page's result, one row per
  * version where a page is in several languages or has a draft, its name on
  * the first of them.
@@ -804,13 +876,9 @@ function CheckStep({ run }: { run: DryRunBody }): JSX.Element {
     {
       name: "page",
       header: "Page",
-      cell: ({ row }) =>
-        named.has(rowKey(row)) ? (
-          <span className="font-medium text-foreground">{row.label}</span>
-        ) : (
-          // The page is named on its first row; read aloud on each.
-          <span className="sr-only">{row.label}</span>
-        ),
+      cell: ({ row }) => (
+        <ReportedPage row={row} named={named.has(rowKey(row))} />
+      ),
     },
     ...(versions
       ? [
@@ -837,7 +905,7 @@ function CheckStep({ run }: { run: DryRunBody }): JSX.Element {
     },
   ];
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
       <Counts run={run} />
       <DataTableView<ImportReportEntry>
         columns={columns}
@@ -1230,7 +1298,7 @@ function MatchStep({ flow }: { flow: ImportFlow }): JSX.Element {
     matching = <FileTable run={flow.run} />;
   }
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
       {matching}
       <NeverServedNote
         run={flow.run}
@@ -1293,7 +1361,9 @@ export function SeoImportPage(): JSX.Element {
         description={leadOf(flow.step, flow.name)}
         breadcrumbs={<SeoTrail steps={[PAGES_STEP, { label: "Import" }]} />}
       />
-      <div className="grid gap-6">
+      {/* One column no wider than the screen: a wide table scrolls inside
+          its own frame rather than widening every step around it. */}
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-6">
         {current < 3 ? (
           <Stepper
             aria-label="Steps"

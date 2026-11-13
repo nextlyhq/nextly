@@ -18,7 +18,7 @@ import {
   Textarea,
 } from "@nextlyhq/plugin-sdk/admin";
 import { EyeOff, Lock } from "lucide-react";
-import { useId, useState, type ReactNode, type Ref } from "react";
+import { useId, type ReactNode, type Ref } from "react";
 
 import type { Sourced } from "../resolver/order";
 import type { SeoTabContext } from "../tab/contract";
@@ -41,6 +41,7 @@ import {
   type SourceNames,
 } from "./parts";
 import { PreviewCard } from "./previews";
+import { copyFixes, useMakeFailure, type MakeFailure } from "./share-image-row";
 import {
   isTyped,
   typedText,
@@ -97,7 +98,7 @@ const ADVANCED_VALUES: readonly string[] = ["structuredData", "image"];
 export function SeoPanel(props: SeoPanelProps): ReactNode {
   const { context, answers, problems, values, writable, errors, onSet } = props;
   // Whether the last share image copy asked for from the notices failed.
-  const [makeFailed, setMakeFailed] = useState(false);
+  const makeFailure = useMakeFailure(values.ogImage);
   const names: SourceNames = {
     typeLabel: context?.typeLabel ?? "page",
     fieldLabels: context?.fieldLabels ?? {},
@@ -125,8 +126,8 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
       <PreviewCard answer={answer} site={context?.site} status={props.status} />
       <ProblemNotices
         problems={problems}
-        onMake={makerOf(props, setMakeFailed)}
-        makeFailed={makeFailed}
+        onMake={makerOf(props, makeFailure.track)}
+        makeFailed={makeFailure.failed}
       />
       <PageTextField
         label="Title on Google"
@@ -196,19 +197,14 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
  */
 function makerOf(
   props: SeoPanelProps,
-  failed: (didFail: boolean) => void
+  track: MakeFailure["track"]
 ): (() => void) | undefined {
   const make = props.onMakeShareImage;
-  const fixable = (props.context?.shareImage?.problems ?? []).some(
-    problem => problem.fix === "make"
-  );
+  const fixable = copyFixes(props.context?.shareImage?.problems);
   if (!props.writable || make === undefined || !fixable) return undefined;
   // A copy that could not be made answers with no image: said beside the
   // notice, so trying again is a choice rather than a silent repeat.
-  return () => {
-    failed(false);
-    void make().then(id => failed(id === undefined));
-  };
+  return () => track(make());
 }
 
 function ProblemNotices({

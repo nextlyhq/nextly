@@ -16,6 +16,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 import { LOCK } from "./support/locks";
+import { ok } from "./support/releases-api";
 import { createEntry } from "./support/runtime-collection";
 import { test } from "./support/test";
 
@@ -24,6 +25,7 @@ import { test } from "./support/test";
 test.describe.configure({ lock: [LOCK.dashboard], mode: "serial" });
 
 const PAGES = "seo-pages";
+const SETTINGS_API = "/admin/api/singles/seo-settings";
 const TAB = "SEO";
 /** The tab's id, as the address keeps it. */
 const TAB_ID = "nextlyhq-plugin-seo.tab";
@@ -58,6 +60,13 @@ async function expectNoSeoFieldIn(region: Locator): Promise<void> {
 
 test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
+  // No site name, so a page's automatic title is its own title alone. The
+  // Settings and Overview specs save one, and either may run first.
+  await ok(
+    await page.request.patch(SETTINGS_API, {
+      data: { siteName: "", _overwrite: true },
+    })
+  );
 });
 
 test("an entry's SEO tab shows the preview, what will be used and where it comes from", async ({

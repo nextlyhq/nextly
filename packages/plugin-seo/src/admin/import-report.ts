@@ -8,10 +8,12 @@
  *
  * @module admin/import-report
  */
-import type {
-  DryRunBody,
-  ImportReportEntry,
-  ImportTarget,
+import {
+  IMPORT_TARGET_LABELS,
+  IMPORT_TARGETS,
+  type DryRunBody,
+  type ImportReportEntry,
+  type ImportTarget,
 } from "../import/contract";
 
 /** A value's result for one version of a page, as the report's table says it. */
@@ -123,14 +125,57 @@ export function valueCounts(run: DryRunBody): ValueCounts {
   };
 }
 
-/** The pages the table lists: those the import reads a title or description for. */
+/** The places a page's entry has any result for. */
+function placesOf(entry: ImportReportEntry): Set<ImportTarget> {
+  return new Set([
+    ...entry.set,
+    ...entry.same,
+    ...entry.kept,
+    ...entry.neverServed,
+    ...(entry.withDraft ?? []),
+    ...(entry.waiting ?? []),
+  ]);
+}
+
+/**
+ * The pages the table lists: those the import reads a title or description
+ * for, or that it changes in any other place, such as hiding one from search.
+ */
 export function reportedPages(run: DryRunBody): ImportReportEntry[] {
   return run.documents.filter(
     entry =>
       entry.id !== undefined &&
       (entry.values.title !== undefined ||
-        entry.values.description !== undefined)
+        entry.values.description !== undefined ||
+        placesOf(entry).size > 0)
   );
+}
+
+/** A place other than the title and description, with its result. */
+export interface OtherChange {
+  place: ImportTarget;
+  label: string;
+  result: Exclude<ValueResult, "none">;
+}
+
+/**
+ * What the import does to a page's other places (its share image, social
+ * text, official address, whether it is hidden), in the order the match
+ * step offers them; the title and description have columns of their own.
+ */
+export function otherChanges(entry: ImportReportEntry): OtherChange[] {
+  const places = placesOf(entry);
+  const changes: OtherChange[] = [];
+  for (const place of IMPORT_TARGETS) {
+    if (place === "title" || place === "description" || !places.has(place)) {
+      continue;
+    }
+    const result = resultOf(entry, place);
+    if (result !== "none") {
+      changes.push({ place, label: IMPORT_TARGET_LABELS[place], result });
+    }
+  }
+  return changes;
 }
 
 /**

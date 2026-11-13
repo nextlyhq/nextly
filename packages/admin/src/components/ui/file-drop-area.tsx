@@ -11,7 +11,7 @@
  *
  * The target is one `role="button"`: Enter or Space opens the chooser, and
  * the hint inside it is plain text, since a nested button inside a button is
- * invalid markup.
+ * invalid markup. The hidden file input sits beside it for the same reason.
  *
  * @module components/ui/file-drop-area
  */
@@ -90,46 +90,53 @@ export function DropTarget({
 }: DropTargetProps): JSX.Element {
   const descriptionId = useId();
   return (
-    <div
-      {...rootProps}
-      onClick={open}
-      onKeyDown={event => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          open();
-        }
-      }}
-      className={cn(
-        "relative flex flex-col items-center justify-center rounded-md transition-all duration-200 group",
-        BORDERS[state],
-        BACKGROUNDS[state],
-        "min-h-48 md:min-h-56 py-16 px-8",
-        "cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2",
-        className
-      )}
-      role="button"
-      aria-label={label}
-      aria-describedby={description === undefined ? undefined : descriptionId}
-      tabIndex={0}
-    >
+    <>
+      {/* Beside the target, not in it: a control inside a button is nested
+          interaction, which assistive technology can't reach. */}
       <input {...inputProps} aria-hidden="true" tabIndex={-1} />
-      <DropIcon state={state} />
-      <div className="flex flex-col items-center gap-0.5 text-center">
-        {eyebrow}
-        <DropLines
-          state={state}
-          title={title}
-          hint={hint}
-          activeTitle={activeTitle}
-          rejectTitle={rejectTitle}
-        />
-        {description === undefined ? null : (
-          <p id={descriptionId} className="mt-2 text-xs text-muted-foreground">
-            {description}
-          </p>
+      <div
+        {...rootProps}
+        onClick={open}
+        onKeyDown={event => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            open();
+          }
+        }}
+        className={cn(
+          "relative flex flex-col items-center justify-center rounded-md transition-all duration-200 group",
+          BORDERS[state],
+          BACKGROUNDS[state],
+          "min-h-48 md:min-h-56 py-16 px-8",
+          "cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2",
+          className
         )}
+        role="button"
+        aria-label={label}
+        aria-describedby={description === undefined ? undefined : descriptionId}
+        tabIndex={0}
+      >
+        <DropIcon state={state} />
+        <div className="flex flex-col items-center gap-0.5 text-center">
+          {eyebrow}
+          <DropLines
+            state={state}
+            title={title}
+            hint={hint}
+            activeTitle={activeTitle}
+            rejectTitle={rejectTitle}
+          />
+          {description === undefined ? null : (
+            <p
+              id={descriptionId}
+              className="mt-2 text-xs text-muted-foreground"
+            >
+              {description}
+            </p>
+          )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 

@@ -551,6 +551,16 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       metaTitle: "Typed in the tab",
       metaDescription: "Old description",
     });
+
+    // Checked again, a value it typed stays typed: kept, never taken for
+    // one the same as the automatic value.
+    const again = await dryRun(staff.importer, source);
+    const surfer = again.documents.find(
+      entry => entry.label === "Surfer vs Rext"
+    );
+    expect(surfer?.kept).toEqual(expect.arrayContaining(["title", "hidden"]));
+    expect(surfer?.same).not.toContain("title");
+    expect(surfer?.same).not.toContain("hidden");
   });
 
   it("dry-runs and applies nextlyhq.com's seo group, its canonical and noindex included", async () => {

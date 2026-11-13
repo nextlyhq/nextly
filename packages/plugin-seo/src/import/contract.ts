@@ -197,7 +197,7 @@ export interface ImportReportEntry {
   set: ImportTarget[];
   /** The places whose value is the same as the automatic one, left as they are. */
   same: ImportTarget[];
-  /** The places a person already filled with another value, which keep it. */
+  /** The places a person already filled, which keep what they hold, the same value or another. */
   kept: ImportTarget[];
   /**
    * The places whose value never reached the page, since its own code sets

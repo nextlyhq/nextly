@@ -36,3 +36,7 @@ values it holds are sent. Values a page's own code overrides are skipped as neve
 included, and the result says what was imported or that nothing was. A content type with a field
 of its own called `seo` is named, with how to import it once that field is renamed. Plugins can
 draw the admin's drop area with `FileDropArea` from `@nextlyhq/plugin-sdk/admin`.
+
+A value already typed on a page is reported as kept, never as the same as the automatic one, and
+the drop area's hidden file input sits beside its button rather than inside it, in the Media
+library's upload area too.

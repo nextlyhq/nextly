@@ -5,7 +5,13 @@
  * back to automatic, Advanced starts closed, and a typed official address on
  * another site is used only once confirmed.
  */
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useMemo, useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -569,6 +575,45 @@ describe("Advanced", () => {
         /The share image couldn't be made\. Try again, or choose another\s+image\./
       )
     ).toBeVisible();
+  });
+
+  it("lets go of a copy that couldn't be made once another image is chosen", async () => {
+    const user = userEvent.setup();
+    const imaged: SeoTabContext = {
+      ...CONTEXT,
+      shareImage: {
+        problems: [
+          { message: "800 × 600, LinkedIn will crop it", fix: "make" },
+        ],
+      },
+    };
+    render(
+      <Harness
+        context={imaged}
+        initial={{ ogImage: "cover" }}
+        reloaded={{ ogImage: "another" }}
+        onMakeShareImage={() => Promise.resolve(undefined)}
+      />
+    );
+    const [fromNotice] = screen.getAllByRole("button", {
+      name: "Make a share image",
+    });
+    await user.click(fromNotice as HTMLElement);
+    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    await user.click(
+      within(inAdvanced()).getByRole("button", { name: "Make a share image" })
+    );
+    // Said beside the notice and in the row.
+    await waitFor(() =>
+      expect(
+        screen.getAllByText(/The share image couldn't be made\./)
+      ).toHaveLength(2)
+    );
+
+    await user.click(screen.getByRole("button", { name: "Reload" }));
+    expect(
+      screen.queryAllByText(/The share image couldn't be made\./)
+    ).toHaveLength(0);
   });
 
   it("says what keeps the share image from showing, and makes one of the right size", async () => {

@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import type { DryRunBody, ImportReportEntry } from "../../import/contract";
 import {
   firstOfPage,
+  otherChanges,
   reportCsv,
   reportedPages,
   resultOf,
@@ -113,6 +114,22 @@ describe("Import's counts", () => {
       "About",
       "Changelog",
     ]);
+  });
+
+  it("lists a page whose only change is another place, naming that change", () => {
+    const hidden = entry({ label: "Old offer", set: ["hidden", "canonical"] });
+    const run = runOf([...RUN.documents, hidden]);
+    expect(reportedPages(run).map(each => each.label)).toContain("Old offer");
+    expect(otherChanges(hidden)).toEqual([
+      {
+        place: "canonical",
+        label: "Official address (canonical)",
+        result: "set",
+      },
+      { place: "hidden", label: "Hide from search", result: "set" },
+    ]);
+    // A page's title and description are their own columns.
+    expect(otherChanges(RUN.documents[0] as ImportReportEntry)).toEqual([]);
   });
 });
 
