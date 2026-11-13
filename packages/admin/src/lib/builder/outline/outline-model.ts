@@ -477,7 +477,12 @@ export function visibleRows(
   nodes: readonly OutlineNode[],
   folded: ReadonlySet<string>,
   query: string,
-  typeLabel: (type: string) => string
+  typeLabel: (type: string) => string,
+  /**
+   * The outline level of `nodes`, drawn as level 1: a focused container's fields start below
+   * its own level (`focusView`).
+   */
+  rootLevel = 1
 ): VisibleRow[] {
   const finding = query.trim() !== "";
   const matches = new Set<string>();
@@ -510,7 +515,7 @@ export function visibleRows(
         : undefined;
       rows.push({
         node,
-        level: node.level,
+        level: node.level - rootLevel + 1,
         posinset: index + 1,
         setsize: siblings.length,
         expanded,
