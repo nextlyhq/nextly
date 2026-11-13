@@ -111,7 +111,8 @@ export interface PublishPartsEngines {
    * part; or the answer that ends the request, when the entry cannot be read.
    */
   reads(ask: {
-    locales: readonly string[];
+    /** The languages whose refusal is asked, or every language the site has. */
+    locales: readonly string[] | "all";
     shared: boolean;
   }): Promise<PartsReads | CollectionServiceResult>;
   gate: PublishGate;
@@ -472,7 +473,18 @@ export async function publishParts(
   }
   // The shared part's rule is asked whether or not the request ends up moving it: whether a first
   // publish adds it is known only once the entry is read.
-  const reads = await engines.reads({ locales: asked, shared: !everyLanguage });
+  // Each chosen language's rule is asked in that language. Unpublishing every language asks every
+  // one, as a list of them would; publishing every language leaves it to the transition, which asks
+  // each language it puts live.
+  const askedForAccess = everyLanguage
+    ? request.direction === "unpublish"
+      ? "all"
+      : []
+    : asked;
+  const reads = await engines.reads({
+    locales: askedForAccess,
+    shared: !everyLanguage,
+  });
   if ("success" in reads) return reads;
   const { state } = reads;
   const { sharedPart, added } = sharedPartOf(request, asked, state);

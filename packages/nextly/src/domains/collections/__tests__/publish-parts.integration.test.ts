@@ -282,6 +282,46 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     }
   );
 
+  // Every language is a list of languages like any other: each one's unpublish rule is asked in
+  // that language, so a caller who may not take French down cannot do it by naming every language.
+  it("asks each language's unpublish rule when every language is unpublished", async () => {
+    await boot(
+      posts({
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: ({ locale }) => locale !== "fr",
+        },
+      })
+    );
+    const id = await entry({ es: { title: "Hola" }, fr: { title: "Bonjour" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    const editor = await userWhoMay(t!, "editor", "unpublish", ["posts"]);
+    await grantTo(t!, editor, "update", ["posts"]);
+    await grantTo(t!, editor, "read", ["posts"]);
+    const before = await states(id);
+
+    const refusal = await refusalOf(
+      t!.nextly.unpublish({
+        collection: "posts",
+        id,
+        locales: "all",
+        overrideAccess: false,
+        user: { id: editor, email: "editor@example.test", roles: [] },
+        data: { _overwrite: true },
+      })
+    );
+
+    expect(refusal).toMatch(/\bfr\b/);
+    expect(await states(id)).toEqual(before);
+  });
+
   /** A gate holding back the parts `held` names: a language code, or "shared". */
   function holdBack(held: readonly string[]): void {
     container.registerSingleton<PublishGate>("publishGate", () => ({

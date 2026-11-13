@@ -11612,7 +11612,8 @@ export class CollectionMutationService extends BaseService {
     params: AllLocalesLifecycleParams,
     ask: {
       action: "publish" | "unpublish";
-      locales: readonly string[];
+      /** The languages whose refusal is asked, or every language the site has. */
+      locales: readonly string[] | "all";
       shared: boolean;
     }
   ): Promise<
@@ -11722,7 +11723,7 @@ export class CollectionMutationService extends BaseService {
         authenticatedScope: params.authenticatedScope,
       });
     const languageRefusals = new Map<string, string>();
-    for (const locale of ask.locales) {
+    for (const locale of ask.locales === "all" ? configured : ask.locales) {
       const refused = await withRuleLanguage(
         writeLanguagesFor(this.localization, locale),
         refusalNow
