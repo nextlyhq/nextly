@@ -6244,8 +6244,12 @@ export class SingleMutationService extends BaseService {
       translatedIn,
       liveValue: liveBefore.value,
       workingDrafts: await new VersionsRepository(tx).findAllWorkingDrafts(ref),
-      allowed: (copy, value) =>
-        this.assertSingleRewriteAllowed(tx, args, entryId, copy, value),
+      allowed: (copy, value, current) =>
+        this.assertSingleRewriteAllowed(tx, args, entryId, {
+          copy,
+          value,
+          current,
+        }),
       // Reduced as a save reduces it: a populated reference stores its id.
       stored: value => singleRewritePayload(singleMeta.fields, field, value),
     });
@@ -6458,29 +6462,50 @@ export class SingleMutationService extends BaseService {
     tx: TransactionContext,
     args: SingleRewriteInTx,
     entryId: string,
-    copy: FieldRewriteCopy,
-    value: unknown
+    judged: { copy: FieldRewriteCopy; value: unknown; current: unknown }
   ): Promise<void> {
     const { singleMeta, field, call, companion } = args;
+    const { copy, value } = judged;
     const slug = singleMeta.slug;
     const fields = singleMeta.fields;
     const written = singleRewritePayload(fields, field, value);
     if (call.overrideAccess !== true) {
-      // Judged on a copy: the rule pass removes a field the person may not
-      // set, and may change one, and either refuses the rewrite.
+      // Judged on a copy as an update of it is, against the value it
+      // replaces: a rule that keeps a value from the person, even one a
+      // replaced group or repeater leaves out, puts the stored value back,
+      // and any value put back refuses the rewrite.
       const probe: Record<string, unknown> = {
         [field]: structuredClone(written),
       };
-      await applyFieldWriteAccess({
-        kind: "single",
-        slug,
+      await keepDeniedAtStoredOnUpdate({
         data: probe,
-        operation: "update",
-        user: call.user,
-        authenticatedScope: call.authenticatedScope,
-        overrideAccess: false,
-        id: entryId,
-        grants: args.grants,
+        stored: { [field]: structuredClone(judged.current) },
+        fields: storedAtTopLevel(fields),
+        source: this.fieldGroupDataService,
+        access: {
+          ...fieldGroupWriteAccessOf(
+            {
+              user: call.user,
+              overrideAccess: false,
+              authenticatedScope: call.authenticatedScope,
+            },
+            this.fieldRuleVisitor
+          ),
+          grants: args.grants,
+        },
+        executor: tx.getDrizzle(),
+        ownRules: document =>
+          applyFieldWriteAccess({
+            kind: "single",
+            slug,
+            data: document,
+            operation: "update",
+            user: call.user,
+            authenticatedScope: call.authenticatedScope,
+            overrideAccess: false,
+            id: entryId,
+            grants: args.grants,
+          }),
       });
       if (!(field in probe) || !sameSharedValue(probe[field], written)) {
         throw NextlyError.forbidden({
@@ -6520,11 +6545,9 @@ export class SingleMutationService extends BaseService {
           kind: "single",
           slug,
           ...(copy.locale === null ? {} : { locale: copy.locale }),
-          connection: {
-            db: this.adapter,
-            executor: tx.getDrizzle(),
-            defaultLocale,
-          },
+          // Every stored read a validator makes runs on the rewrite's own
+          // transaction, which already holds the Single's row.
+          connection: { db: tx, executor: tx.getDrizzle(), defaultLocale },
         }),
       }
     );

@@ -89,7 +89,12 @@ export async function decideRewriteCopies(args: {
   liveValue: unknown;
   /** Every working draft the document holds. */
   workingDrafts: readonly VersionRow[];
-  allowed: (copy: FieldRewriteCopy, value: unknown) => Promise<void>;
+  /** Refuses a copy's new value, judged against the value it replaces. */
+  allowed: (
+    copy: FieldRewriteCopy,
+    value: unknown,
+    current: unknown
+  ) => Promise<void>;
   /**
    * A new value as the copy stores it, where the write path reduces what it
    * is given (a populated reference to its id): compared, judged and written
@@ -107,14 +112,14 @@ export async function decideRewriteCopies(args: {
   const liveCopy: FieldRewriteCopy = { form: "live", locale: translatedIn };
   const liveValue = stored(await rewrittenValue(set, args.liveValue, liveCopy));
   const liveChanges = !sameSharedValue(liveValue, args.liveValue);
-  if (liveChanges) await args.allowed(liveCopy, liveValue);
+  if (liveChanges) await args.allowed(liveCopy, liveValue, args.liveValue);
   const drafts: { slot: DraftSlot; value: unknown }[] = [];
   for (const slot of held) {
     const copy: FieldRewriteCopy = { form: "draft", locale: slot.locale };
     const current = slot.snapshot[field];
     const value = stored(await rewrittenValue(set, current, copy));
     if (sameSharedValue(value, current)) continue;
-    await args.allowed(copy, value);
+    await args.allowed(copy, value, current);
     drafts.push({ slot, value });
   }
   return { liveCopy, liveValue, liveChanges, drafts, held };

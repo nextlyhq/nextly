@@ -66,6 +66,37 @@ const REASON = "Layout 'Wide' was deleted";
 const EDITOR = { id: "rw-single-editor" };
 
 let current: TestNextly | undefined;
+/** What the probe validator read through its write, in the order it read. */
+let probeReads: unknown[] = [];
+/** A JSON-backed type whose validator reads the Single's stored value. */
+const probe = {
+  type: "rwprobe",
+  storage: "json",
+  component: "@test/single-rewriter/admin#Probe",
+  async validate(
+    value: unknown,
+    args: {
+      write?: {
+        readStored(target: {
+          single: string;
+          field: string;
+          form: "published" | "draft";
+        }): Promise<unknown>;
+      };
+    }
+  ) {
+    if ((value as { peek?: unknown } | null)?.peek === true && args.write) {
+      probeReads.push(
+        await args.write.readStored({
+          single: SITE,
+          field: "probe",
+          form: "published",
+        })
+      );
+    }
+    return true as const;
+  },
+} as const;
 /** Each save hook call the Single under test saw, by stage. */
 let hookCalls: string[] = [];
 /** The context the test plugin was started with. */
@@ -82,6 +113,7 @@ async function boot(
   localized = false
 ): Promise<TestNextly> {
   hookCalls = [];
+  probeReads = [];
   const note =
     (stage: string) =>
     ({ data }: { data?: unknown }) => {
@@ -111,6 +143,16 @@ async function boot(
             name: "box",
             fields: [fieldGroup({ name: "hero", component: HERO })],
           }),
+          group({
+            name: "card",
+            fields: [
+              text({ name: "label" }),
+              text({ name: "locked", access: { update: () => false } }),
+            ],
+          }),
+          { name: "probe", type: "rwprobe" } as unknown as ReturnType<
+            typeof text
+          >,
         ],
       }),
       defineSingle({
@@ -179,6 +221,7 @@ async function boot(
         name: PLUGIN,
         version: "1.0.0",
         nextly: ">=0.0.0",
+        contributes: { fieldTypes: [probe] },
         init(ctx) {
           pluginCtx = ctx;
         },
@@ -319,13 +362,24 @@ describe.each(getConfiguredTestDialects())(
         takeTransactionEscapes(),
         expect.getState().testPath
       );
+      // A validator that reads what the Single stores, judging its value
+      // inside the rewrite.
+      const probed = await t.nextly.rewriteField({
+        single: SITE,
+        field: "probe",
+        expectedVersion: version,
+        set: { value: { peek: true } },
+        reason: REASON,
+      });
       await t.nextly.rewriteField({
         single: SITE,
         field: "layout",
-        expectedVersion: version,
+        expectedVersion: probed.item.version,
         set: { value: "narrow" },
         reason: REASON,
       });
+      // POPULATION CONTROL: the validator did read, inside the rewrite.
+      expect(probeReads).toHaveLength(1);
       // Every escape, accepted or not: on PostgreSQL and MySQL a read on the
       // pool runs outside the rewrite's transaction. SQLite reports none.
       const escapes = takeTransactionEscapes();
@@ -649,6 +703,44 @@ describe.each(getConfiguredTestDialects())(
       await grantTo(t, EDITOR.id, "publish", [SITE]);
       await rewrite("narrow");
       expect((await read(t, SITE)).layout).toBe("narrow");
+    });
+
+    it("refuses a person's replacement group that leaves out a value they may not change", async () => {
+      const t = await boot(dialect);
+      await userWhoMay(t, EDITOR.id, "update", [SITE]);
+      await grantTo(t, EDITOR.id, "read", [SITE]);
+      await grantTo(t, EDITOR.id, "publish", [SITE]);
+      await save(t, SITE, {
+        card: { label: "old", locked: "keep" },
+        status: "published",
+      });
+      const asEditor = new Nextly({
+        overrideAccess: false,
+        user: { id: EDITOR.id } as never,
+      });
+      const rewrite = async (card: Record<string, unknown>) =>
+        asEditor.rewriteField({
+          single: SITE,
+          field: "card",
+          expectedVersion: await versionOf(t, SITE),
+          set: { value: card },
+          reason: REASON,
+          overrideAccess: false,
+          user: { id: EDITOR.id } as never,
+        });
+      await expect(rewrite({ label: "new" })).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
+      expect((await read(t, SITE)).card).toMatchObject({
+        label: "old",
+        locked: "keep",
+      });
+      // POPULATION CONTROL: the same edit, keeping the value, goes through.
+      await rewrite({ label: "new", locked: "keep" });
+      expect((await read(t, SITE)).card).toMatchObject({
+        label: "new",
+        locked: "keep",
+      });
     });
 
     it("records no password in the version it captures", async () => {
