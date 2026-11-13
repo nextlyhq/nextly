@@ -48,6 +48,7 @@ vi.mock("@admin/hooks/queries", () => ({
 import { DynamicPluginNav } from "@admin/components/features/dashboard/DynamicPluginNav";
 import { SidebarProvider } from "@admin/components/layout/sidebar";
 import { useSidebarNavigation } from "@admin/hooks/useSidebarNavigation";
+import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 
 const noop = () => false;
 
@@ -543,5 +544,118 @@ describe("DynamicPluginNav collapsed", () => {
     expect(
       await screen.findByRole("menuitem", { name: "Widgets" })
     ).toHaveAttribute("href", "/admin/collections/widgets");
+  });
+});
+
+/**
+ * A role holding only a plugin's own settings permission can open that
+ * plugin's settings page, whose gate asks that permission, but not the
+ * overview or the plugin's detail page, which ask `manage-settings`. The
+ * panel is its only route to the page.
+ */
+describe("DynamicPluginNav for a plugin's own settings role", () => {
+  const SETTINGS_PERMISSION = "manage-acme-seo-settings";
+  const settingsHref = `/admin/plugins/${pluginSlug("@acme/seo")}/settings`;
+
+  function givePluginWithOwnSettingsPermission(
+    overrides: Record<string, unknown> = {}
+  ) {
+    mockCanManageSettings = false;
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme/seo",
+          appearance: { label: "SEO" },
+          settings: {
+            component: "@acme/seo/admin#Settings",
+            permission: SETTINGS_PERMISSION,
+          },
+          ...overrides,
+        },
+      ],
+    } as unknown as AdminBranding;
+  }
+
+  it("links a role holding only that permission to the plugin's settings", () => {
+    givePluginWithOwnSettingsPermission();
+    mockHolds = slug => slug === SETTINGS_PERMISSION;
+
+    renderNav();
+
+    expect(screen.getByRole("link", { name: "SEO settings" })).toHaveAttribute(
+      "href",
+      settingsHref
+    );
+    // Still not the overview, which that role cannot open.
+    expect(
+      screen.queryByRole("link", { name: /installed plugins/i })
+    ).toBeNull();
+  });
+
+  it("offers nothing to a role holding neither that permission nor manage-settings", () => {
+    givePluginWithOwnSettingsPermission();
+    mockHolds = () => false;
+
+    const { container } = renderNav();
+
+    expect(screen.queryByRole("link", { name: /settings/i })).toBeNull();
+    expect(container.querySelector("li")).toBeNull();
+  });
+
+  it("leaves a settings manager on the overview, which leads to every plugin's settings", () => {
+    givePluginWithOwnSettingsPermission();
+    mockCanManageSettings = true;
+
+    renderNav();
+
+    expect(
+      screen.getByRole("link", { name: /installed plugins/i })
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "SEO settings" })).toBeNull();
+  });
+
+  it("offers no link to a disabled plugin's settings, which do not load", () => {
+    givePluginWithOwnSettingsPermission({ enabled: false });
+    mockHolds = slug => slug === SETTINGS_PERMISSION;
+
+    renderNav();
+
+    expect(screen.queryByRole("link", { name: "SEO settings" })).toBeNull();
+  });
+
+  it("keeps the link while the collections query is still loading", () => {
+    givePluginWithOwnSettingsPermission();
+    mockHolds = slug => slug === SETTINGS_PERMISSION;
+    mockIsLoading = true;
+
+    renderNav();
+
+    expect(screen.getByRole("link", { name: "SEO settings" })).toHaveAttribute(
+      "href",
+      settingsHref
+    );
+  });
+
+  it("marks the link active on the settings page", () => {
+    givePluginWithOwnSettingsPermission();
+    mockHolds = slug => slug === SETTINGS_PERMISSION;
+
+    renderAt(settingsHref);
+
+    expect(screen.getByRole("link", { name: "SEO settings" })).toHaveAttribute(
+      "data-active",
+      "true"
+    );
+  });
+
+  it("lists the link in the collapsed menu", async () => {
+    givePluginWithOwnSettingsPermission();
+    mockHolds = slug => slug === SETTINGS_PERMISSION;
+
+    const { container } = renderNav({ collapsed: true });
+    fireEvent.mouseEnter(container.querySelector("li")!);
+
+    const item = await screen.findByRole("menuitem", { name: "SEO settings" });
+    expect(item).toHaveAttribute("href", settingsHref);
   });
 });

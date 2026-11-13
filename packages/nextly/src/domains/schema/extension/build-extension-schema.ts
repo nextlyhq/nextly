@@ -27,10 +27,12 @@ import {
 import { NextlyError } from "../../../errors/nextly-error";
 import { drizzleTableToTableSpec } from "../../../schemas/_internal/drizzle-to-tablespec";
 import type { TableSpec } from "../pipeline/diff/types";
+import { checkConstraintName } from "../services/index-name";
 
 import { getActiveExtensionSchema } from "./active-schema";
 import {
   type DrizzleSchemaHook,
+  assertForeignKeyTargetsAfterHooks,
   rekeyRelationEdges,
   runAfterDrizzle,
   specAfterHook,
@@ -42,6 +44,7 @@ import {
   assertSetNullColumnsNullable,
   authoredKeyOf,
   referenceTableStub,
+  resolveForeignKeyName,
   resolveIndexName,
   toDrizzleTable,
   toTableSpec,
@@ -338,6 +341,39 @@ function extensionTablesOf(store: SchemaDraftStore): ExtensionTable[] {
   }));
 }
 
+/**
+ * The foreign keys and checks a foreign contributor added to one table, under
+ * the names the table's spec gives them (`toTableSpec`), from the same naming
+ * rules: a name recorded here that the spec does not use would name an
+ * element the table never has, and the contributor's diff would add it again
+ * forever.
+ */
+function contributedConstraintElements(table: ExtensionTable): ElementOwner[] {
+  const keys = (table.foreignKeys ?? []).flatMap(fk =>
+    fk.contributedBy === undefined
+      ? []
+      : [
+          {
+            elementKind: "fk" as const,
+            elementName: resolveForeignKeyName(table, fk),
+            owner: fk.contributedBy,
+          },
+        ]
+  );
+  const checks = (table.checks ?? []).flatMap(check =>
+    check.contributedBy === undefined
+      ? []
+      : [
+          {
+            elementKind: "check" as const,
+            elementName: checkConstraintName(table.name, check.name),
+            owner: check.contributedBy,
+          },
+        ]
+  );
+  return [...keys, ...checks];
+}
+
 /** The elements a foreign contributor added to one table, in table order. */
 function elementsContributedTo(
   table: ExtensionTable,
@@ -358,6 +394,7 @@ function elementsContributedTo(
       owner: index.contributedBy,
     });
   }
+  elements.push(...contributedConstraintElements(table));
   // Hidden columns a foreign contributor added, element-recorded the same
   // way: the column rides the contributor's stream, and the table owner's
   // reconcile excludes it.
@@ -831,6 +868,9 @@ export async function buildExtensionSchema(
   } else {
     await runHooksInto(store, input);
   }
+  // Once every hook has run, so a target declared after the contributor's
+  // hook (an app table, or a later plugin's) is judged by its real owner.
+  store.assertContributedTargetsReachable();
 
   const tables = extensionTablesOf(store);
   const elementOwners = collectElementOwners(tables, input.dialect);
@@ -877,6 +917,9 @@ export async function buildExtensionSchema(
       coreTableNames: input.coreTableNames,
       pluginPrefixes: [...input.pluginPrefixes.values()],
     },
+    foreignKeys: compiledSpecs.flatMap(spec =>
+      (spec.foreignKeys ?? []).map(fk => ({ table: spec.name, fk }))
+    ),
   });
 
   // The edges were keyed to the compiled tables; the registry resolves them
@@ -934,6 +977,9 @@ export async function buildExtensionSchema(
     assertDistinctIndexNames(specs, entityIndexes);
     assertDistinctCheckNamesAcrossTables(specs, entityColumns, input.dialect);
     assertSetNullColumnsNullable(specs);
+    // Each declared key at its target end too: its own end is judged as
+    // each reshaped spec is built (`specAfterHook`).
+    assertForeignKeyTargetsAfterHooks(specs);
   }
 
   const { adopted, adoptedRelations } = compileAdoptedTables(

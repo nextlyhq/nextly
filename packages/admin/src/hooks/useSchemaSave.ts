@@ -17,7 +17,7 @@
  * `endApply` leaves the page permanently "applying", and a `stopRestart` missed
  * on one branch leaves the overlay up over a page that has finished.
  */
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import type { SchemaChangeConfirmation } from "@admin/components/features/schema-builder/types";
 import { toast } from "@admin/components/ui";
@@ -155,6 +155,15 @@ export function useSchemaSave({
   // settings change made while the preview was on its way, or while it was
   // shown, is not applied unseen.
   const previewedFields = useRef(new WeakMap<object, string>());
+  // Whether the page is still there. Leaving it drops its pending changes, so
+  // a preview that answers afterwards saves nothing and asks nobody.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const handleSave = useCallback(() => {
     void (async () => {
@@ -171,6 +180,7 @@ export function useSchemaSave({
       confirmation.beginPreview();
       try {
         const previewed = await preview(fields);
+        if (!mounted.current) return;
         if (!previewed.hasChanges) {
           onNoChanges(fields);
           return;

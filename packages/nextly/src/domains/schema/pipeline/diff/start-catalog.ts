@@ -8,6 +8,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
+import { activePostgresSchema } from "../../services/postgres-schema";
 import {
   readMysqlIdentifierCaseRules,
   type RawSqlExecutor,
@@ -45,7 +46,8 @@ function rowsOf<Row>(raw: unknown): Row[] {
  * Every relation of the database, in one query of the catalog's table listing:
  *
  * - PostgreSQL: `information_schema.tables` outside the system schemas. Listed when a base
- *   table of `public`, as `listTables()` lists them; reachable when it is the relation an
+ *   table of the installation's schema (`public`, or the one `db.postgres.schema` names), as
+ *   `listTables()` lists them; reachable when it is the relation an
  *   unqualified name resolves to, as `tableExists()` resolves it.
  * - MySQL: the current database's tables and views, every one reachable, the base tables listed.
  * - SQLite: `sqlite_master`'s tables and views. Only a table is reachable, as `tableExists()`
@@ -73,7 +75,8 @@ async function readRelations(
       return {
         name: row.name,
         baseTable,
-        listed: baseTable && row.schema === "public",
+        // The installation's schema: `public`, or the one `db.postgres.schema` names.
+        listed: baseTable && row.schema === activePostgresSchema(),
         reachable: row.reachable === true,
       };
     });

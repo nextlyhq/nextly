@@ -134,14 +134,19 @@ export interface DatabaseConfig {
     /**
      * The schema every managed table, index and enum lives in.
      *
-     * Only `"public"` is supported for now, and leaving it out means the
-     * same. Any other value is refused at boot and by every CLI command: the
-     * schema push cannot yet create tables outside `public`, so an
-     * installation pointed elsewhere would start with no core tables.
+     * Defaults to `"public"`. A named schema holds every table Nextly
+     * manages, plus the tables plugins and `db.schema.extend` add. It is
+     * applied as `search_path` on every connection, so one setting covers
+     * everything that resolves a name. The name must be lower-case letters,
+     * digits and underscores, start with a letter or underscore, be at most
+     * 63 characters, and not begin with `pg_`; anything else is refused at
+     * boot.
      *
-     * Reserved for placing an installation in its own namespace, applied as
-     * `search_path` on every connection so one setting covers everything
-     * that resolves a name.
+     * Moving the setting on an existing install is refused with
+     * `NEXTLY_POSTGRES_SCHEMA_MOVED`, because the new schema would start
+     * empty while the old one still holds the data. To start a second,
+     * separate installation in a new schema on purpose, set
+     * `NEXTLY_POSTGRES_SCHEMA_NEW_INSTALL=1` for its first start.
      *
      * MySQL and SQLite have no equivalent (MySQL's schema IS its database,
      * SQLite is one file) and ignore it with a warning, so a config shared

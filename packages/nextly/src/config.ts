@@ -253,6 +253,15 @@ export {
 // because a plugin's own UI calling its own route has to address it, and the
 // dispatcher is the only thing that knows where that is.
 export { pluginRouteFullPath } from "./plugins/routes/route-path";
+// Whether two sibling names clash, and whether a field's column is unique, by
+// the rules a save refuses by (@experimental). The Builder refuses a move or
+// names a copy by them: a copy of either rule would let the outline offer a
+// move the save then refuses.
+export {
+  builderColumnIsUnique,
+  siblingNameClash,
+  type SiblingClashKind,
+} from "./domains/schema/field-rules";
 // The mount travels with the path builder, so a client that resolves a route
 // names the same union the server declared it with.
 export type { PluginRouteMount } from "./plugins/routes/route-types";

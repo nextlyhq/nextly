@@ -14,6 +14,7 @@ import { col, defineTable } from "../dsl";
 import {
   enumCheckName,
   enumCheckSql,
+  enumColumnIn,
   enumValuesIn,
   removedEnumValues,
 } from "../enum-check";
@@ -207,6 +208,21 @@ describe("an enum check on a column named like a keyword", () => {
         enumCheckSql({ name: "order", enumValues: ["a", "b"] }, "mysql") ?? ""
       )
     ).toEqual(["a", "b"]);
+  });
+
+  it("recognizes permitted dollar-sign column identifiers", () => {
+    for (const dialect of ["postgresql", "mysql", "sqlite"] as const) {
+      const sql = enumCheckSql(
+        { name: "state$", enumValues: ["draft", "live"] },
+        dialect
+      );
+      expect(sql).toBeDefined();
+      expect(enumColumnIn(sql ?? "")).toBe("state$");
+      expect(enumValuesIn(sql ?? "")).toEqual(["draft", "live"]);
+    }
+    expect(
+      removedEnumValues("state$ IN ('draft', 'live')", "state$ IN ('draft')")
+    ).toEqual(["live"]);
   });
 });
 

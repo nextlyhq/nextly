@@ -457,5 +457,32 @@ describe("BuilderPageLayout", () => {
       leave();
       expect(screen.queryByRole("alertdialog")).toBeNull();
     });
+
+    // A save on its way writes what it was started with: discarding then would
+    // leave the page while the save could still write the discarded values.
+    // A save on its way still writes what it was started with, even when an
+    // undo since has brought the pending count back to none: the way out waits
+    // for it rather than leaving the save to land unseen.
+    it("asks before leaving while a save is on its way, with nothing pending", async () => {
+      renderLayout({ unsavedCount: 0, isSaving: true });
+      leave();
+      const dialog = await screen.findByRole("alertdialog");
+      expect(window.location.pathname).toBe(start);
+      expect(
+        within(dialog).getByRole("button", { name: /discard/i })
+      ).toBeDisabled();
+    });
+
+    it("offers no Discard Changes while a save is on its way", async () => {
+      renderLayout({ unsavedCount: 2, isSaving: true });
+      leave();
+      const dialog = await screen.findByRole("alertdialog");
+      expect(
+        within(dialog).getByRole("button", { name: /discard/i })
+      ).toBeDisabled();
+      expect(
+        within(dialog).getByRole("button", { name: /keep editing/i })
+      ).toBeEnabled();
+    });
   });
 });
