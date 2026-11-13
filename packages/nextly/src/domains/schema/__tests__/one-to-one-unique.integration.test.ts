@@ -877,11 +877,12 @@ describeEachDialect(
         t.adapter.dialect,
         ["single_o2o_hub"]
       );
+      // Once: two unique indexes on the column would cost every write and say nothing more.
       expect(
-        live.tables[0]?.indexes?.some(
+        live.tables[0]?.indexes?.filter(
           index => index.unique && index.columns.join() === "person"
         )
-      ).toBe(true);
+      ).toHaveLength(1);
     }, 120_000);
 
     it("opens a Single's one-to-one the earlier Builder stored with its target and Unique", async () => {
