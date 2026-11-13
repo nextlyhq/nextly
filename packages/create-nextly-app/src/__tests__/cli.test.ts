@@ -23,7 +23,7 @@ vi.mock("@nextlyhq/telemetry", () => ({
 /** Parses `args` without running a scaffold: what it printed and its exit code. */
 async function parse(args: string[]) {
   const out: string[] = [];
-  const createNextly = vi.fn(async () => {});
+  const createNextly = vi.fn(async (_options: unknown) => {});
   let exitCode = 0;
   let thrown = "";
   try {
@@ -43,6 +43,9 @@ async function parse(args: string[]) {
     exitCode,
     thrown,
     ran: createNextly.mock.calls.length,
+    options: createNextly.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined,
   };
 }
 
@@ -59,6 +62,11 @@ describe("the create-nextly-app command line", () => {
     expect(result.out).toContain("unknown option '--package-manger'");
     expect(result.out).toContain("Did you mean --package-manager?");
     expect(result.ran).toBe(0);
+  });
+
+  it("--no-git reaches the scaffold as git: false, and git is on otherwise", async () => {
+    expect((await parse(["my-app", "--no-git"])).options?.git).toBe(false);
+    expect((await parse(["my-app"])).options?.git).toBe(true);
   });
 
   it("a misspelt choice is refused with the nearest suggested", async () => {

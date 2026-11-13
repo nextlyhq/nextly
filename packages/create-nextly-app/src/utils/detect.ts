@@ -2,6 +2,7 @@ import path from "path";
 
 import fs from "fs-extra";
 
+import { PACKAGE_MANAGERS } from "../lib/choices";
 import type { PackageManager, ProjectInfo } from "../types";
 
 import { detectPmFromUserAgent } from "./detect-pm-from-user-agent";
@@ -36,11 +37,48 @@ export async function detectPackageManager(
 export async function detectAppPackageManager(
   cwd: string
 ): Promise<PackageManager> {
+  return (await installedAppPackageManager(cwd)) ?? launcher();
+}
+
+/**
+ * The manager an existing app was installed with, from its own lockfile or
+ * its workspace's; undefined when it has none, where the launcher decides.
+ */
+export async function installedAppPackageManager(
+  cwd: string
+): Promise<PackageManager | undefined> {
   return (
-    (await lockfileManager(cwd)) ??
-    (await findWorkspaceRoot(cwd))?.manager ??
-    launcher()
+    (await lockfileManager(cwd)) ?? (await findWorkspaceRoot(cwd))?.manager
   );
+}
+
+/**
+ * The manager an existing app's package.json declares, by `packageManager`
+ * or by `devEngines.packageManager`, which Corepack enforces: installing with
+ * another fails part-way. Undefined when it declares none.
+ */
+export async function declaredAppPackageManager(
+  cwd: string
+): Promise<PackageManager | undefined> {
+  let manifest: {
+    packageManager?: unknown;
+    devEngines?: { packageManager?: unknown };
+  };
+  try {
+    manifest = await fs.readJson(path.join(cwd, "package.json"));
+  } catch {
+    return undefined;
+  }
+  const declared = manifest.devEngines?.packageManager;
+  const name =
+    typeof manifest.packageManager === "string"
+      ? manifest.packageManager.split("@")[0]
+      : (
+          (Array.isArray(declared) ? declared[0] : declared) as
+            | { name?: unknown }
+            | undefined
+        )?.name;
+  return PACKAGE_MANAGERS.find(manager => manager === name);
 }
 
 const launcher = (): PackageManager =>

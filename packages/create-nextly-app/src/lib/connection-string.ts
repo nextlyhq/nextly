@@ -10,32 +10,51 @@ const MASK = "***";
 // the whole URL and its query string are scrubbed regardless.
 const SHORTEST_SCRUBBED = 3;
 
+/**
+ * The connection string's parts, read by hand rather than by `URL`, which
+ * refuses a password holding an unencoded `#`, `/` or `?`: the credentials run
+ * from `//` to the last `@` before the query, and the query from there on.
+ */
+function splitConnection(url: string) {
+  const slashes = url.indexOf("//");
+  const scheme = slashes >= 0 ? url.slice(0, slashes) : "";
+  const rest = slashes >= 0 ? url.slice(slashes + 2) : url;
+  const firstAt = rest.indexOf("@");
+  const queryFrom = rest.indexOf("?", Math.max(firstAt, 0));
+  const authorityEnd = queryFrom < 0 ? rest.length : queryFrom;
+  const at = firstAt < 0 ? -1 : rest.lastIndexOf("@", authorityEnd);
+  return {
+    scheme,
+    userinfo: at > 0 ? rest.slice(0, at) : "",
+    hostAndPath: rest.slice(at + 1, authorityEnd),
+    query: queryFrom < 0 ? "" : rest.slice(queryFrom + 1),
+  };
+}
+
 /** The parts of `url` that must never be printed, longest first. */
 export function connectionSecrets(url: string | undefined): string[] {
   if (!url) return [];
   const secrets = new Set<string>([url]);
-  let parsed: URL | undefined;
-  try {
-    parsed = new URL(url);
-  } catch {
-    // Not a URL Node can read: only the whole string is known to be secret.
+  const { userinfo, query } = splitConnection(url);
+  if (userinfo) {
+    secrets.add(userinfo);
+    const colon = userinfo.indexOf(":");
+    const parts =
+      colon < 0
+        ? [userinfo]
+        : [userinfo.slice(0, colon), userinfo.slice(colon + 1)];
+    for (const part of parts) {
+      secrets.add(part);
+      secrets.add(safeDecode(part));
+    }
   }
-  if (parsed) {
-    for (const raw of [parsed.username, parsed.password]) {
-      secrets.add(raw);
-      secrets.add(safeDecode(raw));
+  if (query) {
+    secrets.add(query);
+    for (const pair of query.split("&")) {
+      const equals = pair.indexOf("=");
+      const value = equals < 0 ? pair : pair.slice(equals + 1);
+      for (const form of [pair, value, safeDecode(value)]) secrets.add(form);
     }
-    if (parsed.search) {
-      secrets.add(parsed.search.slice(1));
-      for (const [key, value] of parsed.searchParams) {
-        secrets.add(value);
-        secrets.add(encodeURIComponent(value));
-        secrets.add(`${key}=${value}`);
-      }
-    }
-    // A URL with credentials as it may be quoted without its scheme.
-    const at = url.indexOf("@");
-    if (at > 0) secrets.add(url.slice(url.indexOf("//") + 2, at));
   }
   return [...secrets]
     .filter(secret => secret.length >= SHORTEST_SCRUBBED)
@@ -45,31 +64,35 @@ export function connectionSecrets(url: string | undefined): string[] {
 /**
  * `text` with every secret part of the connection string masked. The whole
  * URL becomes its safe form, which keeps the scheme, host, port and database
- * so a message still says which server it is about.
+ * so a message still says which server it is about. A fragment is masked only
+ * where it stands as a word of its own, so a user named `postgres` does not
+ * turn `postgresql` into `***ql`, nor a `sslmode=require` value `required`.
  */
 export function redactConnection(
   text: string,
   url: string | undefined
 ): string {
   if (!url) return text;
-  let out = text.split(url).join(safeConnection(url));
+  // Held aside while the fragments are masked, so they are not masked in it.
+  const placeholder = "\u0000connection\u0000";
+  let out = text.split(url).join(placeholder);
   for (const secret of connectionSecrets(url)) {
     if (secret === url) continue;
-    out = out.split(secret).join(MASK);
+    out = out.replace(standingAlone(secret), MASK);
   }
-  return out;
+  return out.split(placeholder).join(safeConnection(url));
 }
 
 /** `postgresql://***@db.example.com:5432/app?***`: no user, password or query. */
 export function safeConnection(url: string): string {
-  try {
-    const parsed = new URL(url);
-    const credentials = parsed.username || parsed.password ? `${MASK}@` : "";
-    const query = parsed.search ? `?${MASK}` : "";
-    return `${parsed.protocol}//${credentials}${parsed.host}${parsed.pathname}${query}`;
-  } catch {
-    return MASK;
-  }
+  const { scheme, userinfo, hostAndPath, query } = splitConnection(url);
+  if (!scheme) return MASK;
+  return `${scheme}//${userinfo ? `${MASK}@` : ""}${hostAndPath}${query ? `?${MASK}` : ""}`;
+}
+
+function standingAlone(fragment: string): RegExp {
+  const escaped = fragment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`, "g");
 }
 
 /** Whether `url` holds a user name, a password or query parameters. */

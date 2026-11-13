@@ -39,13 +39,6 @@ export async function recordLaunchingPackageManager(
   installer: PackageManager,
   options: { selected?: boolean; userAgent?: string } = {}
 ): Promise<string | null> {
-  const value = options.selected
-    ? await installerVersion(cwd, installer)
-    : packageManagerFromUserAgent(
-        options.userAgent ?? process.env.npm_config_user_agent
-      );
-  if (value === null || !value.startsWith(`${installer}@`)) return null;
-
   const file = path.join(cwd, "package.json");
   let text: string;
   let manifest: Record<string, unknown>;
@@ -60,6 +53,15 @@ export async function recordLaunchingPackageManager(
   if (manifest.packageManager !== undefined) return null;
   if (devEngines?.packageManager !== undefined) return null;
   if (await findWorkspaceRoot(cwd)) return null;
+
+  // Read last, once nothing above rules the field out: the selected
+  // manager's version costs a process.
+  const value = options.selected
+    ? await installerVersion(cwd, installer)
+    : packageManagerFromUserAgent(
+        options.userAgent ?? process.env.npm_config_user_agent
+      );
+  if (value === null || !value.startsWith(`${installer}@`)) return null;
 
   await fs.writeFile(file, withPackageManager(text, value), "utf-8");
   return value;

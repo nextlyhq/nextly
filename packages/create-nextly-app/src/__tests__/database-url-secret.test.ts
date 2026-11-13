@@ -145,6 +145,39 @@ describe("the connection string is kept secret", () => {
     for (const secret of SECRETS) expect(said).not.toContain(secret);
   });
 
+  it("a URL for another database than --database is refused, nothing written", async () => {
+    const code = await runCli(
+      [
+        "my-app",
+        "-d",
+        "mysql",
+        "--yes",
+        "--database-url",
+        URL_WITH_SECRETS,
+        ...HERMETIC,
+      ],
+      { cwd: work }
+    );
+
+    expect(code).toBe(1);
+    expect(await readdir(work)).toEqual([]);
+    expect(allOutput()).toContain(
+      "is a postgresql connection string, but --database is mysql"
+    );
+    for (const secret of SECRETS) expect(allOutput()).not.toContain(secret);
+  });
+
+  it("a URL without --database is refused, naming the flag", async () => {
+    const code = await runCli(
+      ["my-app", "--yes", "--database-url", URL_WITH_SECRETS, ...HERMETIC],
+      { cwd: work }
+    );
+
+    expect(code).toBe(1);
+    expect(await readdir(work)).toEqual([]);
+    expect(allOutput()).toContain("Pass -d postgresql");
+  });
+
   it("--database-url - with nothing on standard input is refused, nothing written", async () => {
     const code = await runCli([...FLAGS, "--database-url", "-", ...HERMETIC], {
       cwd: work,
@@ -190,6 +223,34 @@ describe("scrubbing printed text", () => {
     );
     expect(scrubbed).not.toMatch(/us@er|p@ss!word|us%40er|p%40ss%21word/);
     expect(connectionSecrets(undefined)).toEqual([]);
+  });
+
+  it("masks a password holding an unencoded @, and one no URL parser reads", () => {
+    const withAt = "mysql://root:p@ss@localhost/db";
+    expect(
+      redactConnection("Access denied for root:p@ss@localhost", withAt)
+    ).not.toMatch(/p@ss|ss@/);
+    const unparsable = "postgresql://admin:pa#ss/wd@db.example.com/app";
+    const said = redactConnection(
+      'auth failed for "admin" with pa#ss/wd',
+      unparsable
+    );
+    expect(said).not.toContain("admin");
+    expect(said).not.toContain("pa#ss/wd");
+    expect(redactConnection(unparsable, unparsable)).toBe(
+      "postgresql://***@db.example.com/app"
+    );
+  });
+
+  it("masks a fragment only where it stands alone, so messages stay readable", () => {
+    const url =
+      "postgresql://postgres:pw-secret@localhost:5432/app?sslmode=require";
+    expect(redactConnection(`connect to ${url}`, url)).toBe(
+      "connect to postgresql://***@localhost:5432/app?***"
+    );
+    expect(redactConnection('SSL is required for user "postgres"', url)).toBe(
+      'SSL is required for user "***"'
+    );
   });
 
   it("knows a URL with no credentials from one with them", () => {

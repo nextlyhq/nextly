@@ -174,7 +174,28 @@ describe("create-nextly-app without a terminal", () => {
     expect(code).toBe(1);
     expect((await readdir(app)).sort()).toEqual(before);
     expect(await fakes.calls()).toEqual([]);
-    expect(allOutput()).toContain("installed with pnpm");
+    expect(allOutput()).toContain("set up for pnpm");
     expect(allOutput()).toContain("--package-manager pnpm");
+  });
+
+  it("an app whose package.json declares pnpm is refused --package-manager yarn, untouched", async () => {
+    const app = path.join(dir, "app");
+    await mkdir(path.join(app, "src", "app"), { recursive: true });
+    const manifest = JSON.stringify({
+      name: "app",
+      packageManager: "pnpm@10.18.0",
+      dependencies: { next: "16.0.0", react: "19.2.0", "react-dom": "19.2.0" },
+    });
+    await writeFile(path.join(app, "package.json"), manifest);
+    await writeFile(path.join(app, "next.config.ts"), "export default {};\n");
+
+    const code = await runCli(
+      [".", "--package-manager", "yarn", "--yes", ...HERMETIC],
+      { cwd: app }
+    );
+
+    expect(code).toBe(1);
+    expect(await fakes.calls()).toEqual([]);
+    expect(allOutput()).toContain("set up for pnpm");
   });
 });

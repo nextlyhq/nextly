@@ -6,6 +6,7 @@
  * code-first, visual, and hybrid approaches in a single CLI.
  */
 
+import { APPROACHES } from "../lib/choices";
 import type { ProjectApproach } from "../types";
 
 /**
@@ -33,7 +34,7 @@ export function getApproachPromptOptions(): Array<{
   label: string;
   hint: string;
 }> {
-  return (["code-first", "visual"] as const).map(value => ({
+  return APPROACHES.map(value => ({
     value,
     label: APPROACH_LABELS[value].label,
     hint: APPROACH_LABELS[value].hint,

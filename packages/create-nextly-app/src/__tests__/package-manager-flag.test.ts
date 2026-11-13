@@ -72,22 +72,38 @@ async function scaffold(launcher: Manager, selected: Manager) {
 }
 
 /**
- * Whether Corepack can run `spec` here without the network: it needs that
- * exact version in its cache. Checked so the second-install test runs where
- * it can and says why where it cannot, rather than downloading in a unit run.
+ * What Corepack answers for `<manager> --version` in `cwd`, offline. It reads
+ * the project's `packageManager` field: with that version in its cache it
+ * runs it, and without one it names the exact version it would fetch. A
+ * field it rejects, or one naming another manager, fails instead.
  */
-function corepackRuns(spec: string, cwd: string): string | undefined {
+function corepackAnswer(manager: string, cwd: string): string {
   try {
-    return execFileSync("corepack", [spec, "--version"], {
+    return execFileSync("corepack", [manager, "--version"], {
       cwd,
       encoding: "utf-8",
-      env: { ...process.env, COREPACK_ENABLE_NETWORK: "0" },
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return undefined;
+      env: {
+        ...process.env,
+        COREPACK_ENABLE_NETWORK: "0",
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+        COREPACK_ENABLE_STRICT: "1",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  } catch (error) {
+    const failed = error as { stdout?: string; stderr?: string };
+    return `${failed.stdout ?? ""}${failed.stderr ?? ""}`;
   }
 }
+
+const hasCorepack = (() => {
+  try {
+    execFileSync("corepack", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 describe("--package-manager decides the install and the pin", () => {
   it("launched through pnpm with --package-manager yarn: yarn at its version, yarn.lock only", async () => {
@@ -117,17 +133,29 @@ describe("--package-manager decides the install and the pin", () => {
     expect(run.installers).toEqual(["npm"]);
   });
 
-  it("a second install through Corepack accepts the pinned field", async ({
-    skip,
-  }) => {
-    const run = await scaffold("pnpm", "yarn");
-    expect(run.field).toBe(`yarn@${FAKE_VERSIONS.yarn}`);
-    // The fakes are first on PATH; Corepack is asked directly.
-    vi.unstubAllEnvs();
-    const ran = corepackRuns(run.field as string, run.project);
-    if (ran === undefined) {
-      skip(`Corepack cannot run ${run.field} offline here (not in its cache)`);
-    }
-    expect(ran).toBe(FAKE_VERSIONS.yarn);
-  });
+  for (const [launcher, selected] of [
+    ["pnpm", "yarn"],
+    ["yarn", "pnpm"],
+  ] as [Manager, Manager][]) {
+    it.skipIf(!hasCorepack)(
+      `a second install through Corepack takes the pinned ${selected} version`,
+      async () => {
+        const run = await scaffold(launcher, selected);
+        const version = FAKE_VERSIONS[selected];
+        expect(run.field).toBe(`${selected}@${version}`);
+        // Corepack itself, not the fakes first on PATH.
+        vi.unstubAllEnvs();
+
+        const answer = corepackAnswer(selected, run.project);
+
+        // Run from the cache, or named as the exact version to fetch.
+        expect(answer).toMatch(
+          new RegExp(
+            `^${version}\\s*$|[/-]${version.replaceAll(".", "\\.")}[/.]`
+          )
+        );
+        expect(answer).not.toMatch(/configured to use|Invalid/i);
+      }
+    );
+  }
 });

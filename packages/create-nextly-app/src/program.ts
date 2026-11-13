@@ -7,6 +7,12 @@ import {
   validateTemplateName,
 } from "./cli-args";
 import { createNextly as runCreateNextly } from "./create-nextly";
+import {
+  APPROACHES,
+  DATABASES,
+  PACKAGE_MANAGERS,
+  databaseOfUrl,
+} from "./lib/choices";
 import { redactConnection } from "./lib/connection-string";
 import { packageVersion } from "./lib/package-version";
 import { invalidChoiceMessage } from "./lib/suggest";
@@ -18,15 +24,6 @@ import type {
   ProjectApproach,
   ProjectType,
 } from "./types";
-
-const DATABASES: readonly DatabaseType[] = ["sqlite", "postgresql", "mysql"];
-const PACKAGE_MANAGERS: readonly PackageManager[] = [
-  "npm",
-  "pnpm",
-  "yarn",
-  "bun",
-];
-const APPROACHES: readonly ProjectApproach[] = ["code-first", "visual"];
 
 /** What the program runs against; tests replace the standard input. */
 export interface ProgramDeps {
@@ -230,6 +227,30 @@ A connection string with a password, kept out of the command line:
           if (!databaseUrl) refuse("--database-url was given an empty value.");
         }
 
+        // A connection string is for one database, and the scaffold writes
+        // the dialect beside it, so the two must agree. Asked for together
+        // rather than inferred, so a URL never silently picks the database.
+        if (databaseUrl !== undefined) {
+          const urlDatabase = databaseOfUrl(databaseUrl);
+          if (!urlDatabase) {
+            refuse(
+              `--database-url is not a connection string for ${DATABASES.join(", ")}: ` +
+                "it should start with postgresql://, mysql:// or file:."
+            );
+          }
+          if (!options.database) {
+            refuse(
+              `--database-url needs --database too. Pass -d ${urlDatabase}.`
+            );
+          }
+          if (urlDatabase !== options.database) {
+            refuse(
+              `--database-url is a ${urlDatabase} connection string, but --database is ${options.database}. ` +
+                `Pass -d ${urlDatabase}, or a ${options.database} URL.`
+            );
+          }
+        }
+
         telemetry.capture("scaffold_started", {
           flags: {
             yes: Boolean(options.yes),
@@ -268,7 +289,11 @@ A connection string with a password, kept out of the command line:
         // An error nothing above caught still never prints the connection
         // string (a driver's message can quote it).
         if (databaseUrl === undefined) throw error;
-        refuse(redactConnection((error as Error).message, databaseUrl));
+        // Not process.exit: the telemetry below still flushes.
+        console.error(
+          `Error: ${redactConnection((error as Error).message, databaseUrl)}`
+        );
+        process.exitCode = 1;
       } finally {
         // Always flush. shutdown() has its own 2s timeout so this never hangs.
         await telemetry.shutdown();

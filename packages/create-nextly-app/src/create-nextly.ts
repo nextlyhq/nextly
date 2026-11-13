@@ -32,6 +32,7 @@ import {
   writesInitialMigration,
 } from "./installers/initial-migration";
 import { recordLaunchingPackageManager } from "./installers/package-manager-field";
+import { DATABASES } from "./lib/choices";
 import { holdsCredentials, redactConnection } from "./lib/connection-string";
 import {
   resolveTemplateSource,
@@ -77,16 +78,17 @@ import type {
   ProjectType,
 } from "./types";
 import {
+  declaredAppPackageManager,
   detectAppPackageManager,
   detectPackageManager,
   detectPluginPackage,
   detectProject,
+  installedAppPackageManager,
 } from "./utils/detect";
 import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
 import { scriptRunner } from "./utils/package-manager-commands";
 import { pluginNodeRefusal } from "./utils/plugin-node";
 import { copyTemplate, resolveTemplatePath } from "./utils/template";
-import { findWorkspaceRoot, lockfileManager } from "./utils/workspace";
 
 /**
  * Pick a safe project name when the user has chosen "install in cwd".
@@ -218,11 +220,13 @@ export async function createNextly(
     }
   }
 
-  // An app already installed with one manager keeps it: installing with
-  // another would leave two lockfiles, which break the next install and CI.
+  // An app already set up for one manager keeps it: installing with another
+  // leaves two lockfiles, or is refused part-way by Corepack where the app
+  // declares its manager, so it is refused here with nothing written.
   if (existingProject && options.packageManager) {
     const installedWith =
-      (await lockfileManager(cwd)) ?? (await findWorkspaceRoot(cwd))?.manager;
+      (await installedAppPackageManager(cwd)) ??
+      (await declaredAppPackageManager(cwd));
     if (installedWith && installedWith !== options.packageManager) {
       telemetry.capture("scaffold_failed", {
         stage: "detect",
@@ -230,8 +234,8 @@ export async function createNextly(
         duration_ms: Date.now() - overallStartedAt,
       });
       p.cancel(
-        `This app is installed with ${installedWith}, and --package-manager ${options.packageManager} ` +
-          `would add a second lockfile. Leave out --package-manager, or pass --package-manager ${installedWith}. ` +
+        `This app is set up for ${installedWith}; installing it with ${options.packageManager} ` +
+          `would mix two package managers. Leave out --package-manager, or pass --package-manager ${installedWith}. ` +
           "Nothing was written."
       );
       process.exit(1);
@@ -464,7 +468,7 @@ export async function createNextly(
   } else {
     const db = await p.select({
       message: "Which database will you use?",
-      options: (["sqlite", "postgresql", "mysql"] as const).map(value => ({
+      options: DATABASES.map(value => ({
         value,
         label: DATABASE_LABELS[value].label,
         hint: DATABASE_LABELS[value].hint,

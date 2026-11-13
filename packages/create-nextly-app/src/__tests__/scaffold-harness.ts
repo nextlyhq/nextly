@@ -126,6 +126,7 @@ export async function runCli(
     exitCode ??= Number(code ?? 0);
     throw new ExitCalled(Number(code ?? 0));
   });
+  process.exitCode = undefined;
   try {
     await buildProgram({ stdin: input })
       .exitOverride()
@@ -140,6 +141,11 @@ export async function runCli(
     const code = (error as { exitCode?: number }).exitCode;
     if (typeof code === "number") return code;
     throw error;
+  } finally {
+    // Set by the program where it must not exit early; never the test's.
+    const set = process.exitCode;
+    process.exitCode = undefined;
+    if (exitCode === undefined && set !== undefined) exitCode = Number(set);
   }
   return exitCode ?? 0;
 }

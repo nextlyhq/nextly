@@ -1,5 +1,6 @@
 import type { DatabaseType, ProjectApproach, ProjectType } from "../types";
 
+import { APPROACHES, DATABASES, SERVER_DATABASES } from "./choices";
 import { getAvailableTemplateNames, templateHasApproaches } from "./templates";
 
 /** What a run without a terminal was told, and what it found on disk. */
@@ -21,9 +22,6 @@ export interface AnswersGiven {
   /** false for `--no-skills`; otherwise the skills prompt would ask. */
   skills?: boolean;
 }
-
-const DATABASES = "sqlite, postgresql, mysql";
-const SERVER_DATABASES = "postgresql, mysql";
 
 /**
  * Every answer the run would ask a prompt for, as the flag that gives it.
@@ -68,23 +66,23 @@ export function missingAnswers(given: AnswersGiven): string[] {
     );
     if (template === undefined && withApproaches.length > 0) {
       missing.push(
-        `--approach <code-first|visual> (for the ${withApproaches.join(", ")} template)`
+        `--approach <${APPROACHES.join("|")}> (for the ${withApproaches.join(", ")} template)`
       );
     } else if (template && withApproaches.includes(template)) {
-      missing.push("--approach <code-first|visual>");
+      missing.push(`--approach <${APPROACHES.join("|")}>`);
     }
   }
 
   if (template !== "plugin") {
     if (!given.database && !defaults) {
-      missing.push(`--database <${DATABASES.replaceAll(", ", "|")}>`);
+      missing.push(`--database <${DATABASES.join("|")}>`);
     }
     const database = given.database ?? (defaults ? "sqlite" : undefined);
     if (!given.databaseUrl && !defaults && database !== "sqlite") {
       missing.push(
         database
           ? "--database-url <url>, or --database-url - to read it from standard input"
-          : `--database-url <url>, or --database-url - to read it from standard input (for ${SERVER_DATABASES})`
+          : `--database-url <url>, or --database-url - to read it from standard input (for ${SERVER_DATABASES.join(", ")})`
       );
     }
     if (given.skills === undefined && !defaults) {
