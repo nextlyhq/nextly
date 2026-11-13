@@ -59,8 +59,11 @@ type VersionSource = Pick<DrizzleAdapter, "getDrizzle" | "getCapabilities">;
 
 /**
  * This process's readings of each database's count, followed as every
- * install-wide value is (`shared/lib/followed-value`), under the name the
- * readings have always been kept by on `globalThis`.
+ * install-wide value is (`shared/lib/followed-value`). Kept on `globalThis`
+ * under the name the readings have always had, with the followed value's
+ * version added to it: the readings kept before they moved onto it had
+ * another shape, and a dev server reloaded across the change still holds
+ * them under the bare name.
  */
 function seqState(): FollowedState<number> {
   return followedState<number>("__nextly_storedSchemaSeq");
