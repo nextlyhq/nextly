@@ -37,6 +37,7 @@ import { nextlyTags } from "../cache/nextly-tags";
 import {
   knownNoPageMetadataProvider,
   pageMetadataFor,
+  pageMetadataProviderToAsk,
   pageStructuredDataFor,
   type PageMetadataRequest,
 } from "../seo/page-metadata";
@@ -1105,9 +1106,11 @@ async function contentPageRequest<TNode>(
   const code = config.buildMetadata
     ? await config.buildMetadata(entry, context)
     : undefined;
-  // What the content offers costs reads of its own, so it is not worked out
-  // for a process known to have nobody to give it to.
-  if (knownNoPageMetadataProvider()) return { code, request: null };
+  // What the content offers costs reads of its own, so it is worked out only
+  // where a provider can be asked: Nextly is started first where nothing has
+  // started it, and with no provider, or none reachable, the route's own
+  // metadata is served without the content being read for one.
+  if (!(await pageMetadataProviderToAsk(path))) return { code, request: null };
   const derived = config.derivedMetadata
     ? await config.derivedMetadata(entry, context)
     : undefined;
@@ -1171,8 +1174,9 @@ export async function contentPageStructuredData<TNode>(
   context: RenderContext,
   path: string
 ): Promise<string | undefined> {
-  // Nobody to answer: the route's own metadata is not worked out for nothing.
-  if (knownNoPageMetadataProvider()) return undefined;
+  // Nobody to answer, or nobody reachable once Nextly's start was tried: the
+  // route's own metadata is not worked out for nothing.
+  if (!(await pageMetadataProviderToAsk(path))) return undefined;
   const { request } = await contentPageRequest(config, entry, context, path);
   if (request === null) return undefined;
   const hints = await config.structuredDataHints?.(entry, context);
