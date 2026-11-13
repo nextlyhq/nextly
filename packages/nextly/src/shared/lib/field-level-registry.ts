@@ -538,6 +538,35 @@ export function hasFieldAccessRule(
 }
 
 /**
+ * Whether any field of this entity declares a hook for one phase, at any
+ * depth.
+ *
+ * Asked by a read deciding whether it may take fewer columns than the whole
+ * row: a field hook is handed the row its field sits in, so it may read a
+ * sibling the caller did not select, and such a read has to take every value
+ * a hook could look at.
+ */
+export function hasFieldHook(
+  kind: EntityKind,
+  slug: string,
+  phase: keyof NonNullable<FieldFunctions["hooks"]>
+): boolean {
+  const fns = getFieldFunctions(kind, slug);
+  return fns ? nestedHasHook(fns, phase) : false;
+}
+
+function nestedHasHook(
+  fns: Record<string, FieldFunctions>,
+  phase: keyof NonNullable<FieldFunctions["hooks"]>
+): boolean {
+  for (const entry of Object.values(fns)) {
+    if ((entry.hooks?.[phase]?.length ?? 0) > 0) return true;
+    if (entry.fields && nestedHasHook(entry.fields, phase)) return true;
+  }
+  return false;
+}
+
+/**
  * Whether any field group declares an access rule for one operation, at any
  * depth.
  *

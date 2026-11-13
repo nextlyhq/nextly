@@ -593,9 +593,10 @@ export function toPublicFindSingle(
  * left out stays out.
  *
  * Kept though the read is asked for the same fields: the Direct API's
- * `findSingle` does not yet hand `select` to the Singles service, which reads
- * whole documents, and a source a route hands over may ignore it too. Without
- * this a page would be answered fields it never asked for.
+ * `findSingle` answers the selection with the system timestamps beside it,
+ * which a page did not ask for, and a source a route hands over may ignore the
+ * selection altogether. Without this a page would be answered fields it never
+ * asked for.
  */
 export function selectedFrom(
   document: Record<string, unknown>,

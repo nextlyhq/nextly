@@ -54,6 +54,18 @@ import {
 } from "./lib/registry-listing-page";
 import type { Logger } from "./types";
 
+/**
+ * The order every registry listing is read in: oldest first, and by slug
+ * among rows created at the same instant. MySQL keeps `created_at` to the
+ * second, so entities registered together (a start registering the config's
+ * Singles) share one, and ordered by it alone they came back in whichever
+ * order the server sorted them that time.
+ */
+const REGISTRY_ORDER = [
+  { column: "createdAt", direction: "asc" },
+  { column: "slug", direction: "asc" },
+] as const;
+
 // ============================================================
 // Shared Types
 // ============================================================
@@ -587,7 +599,10 @@ export abstract class BaseRegistryService<
               },
             }
           : {}),
+        // In REGISTRY_ORDER: rows a start registered within one second
+        // (MySQL's created_at precision) keep one order, by slug.
         orderBy: "createdAt",
+        thenBy: "slug",
         direction: "asc",
         ...(options?.offset === undefined ? {} : { offset: options.offset }),
         ...(options?.limit === undefined ? {} : { limit: options.limit }),
@@ -791,7 +806,7 @@ export abstract class BaseRegistryService<
         await this.resolveRegistryTableName(),
         {
           ...query,
-          orderBy: [{ column: "createdAt", direction: "asc" }],
+          orderBy: [...REGISTRY_ORDER],
         }
       );
       return results.map(record => this.deserializeRecord(record));
@@ -1004,7 +1019,7 @@ export async function listStoredRegistry<T>(
   try {
     const read = (): Promise<Record<string, unknown>[]> =>
       adapter.select<Record<string, unknown>>(table, {
-        orderBy: [{ column: "createdAt", direction: "asc" }],
+        orderBy: [...REGISTRY_ORDER],
       });
     const flow = adapter as Partial<
       Pick<DrizzleAdapter, "transactionOpenInFlow">

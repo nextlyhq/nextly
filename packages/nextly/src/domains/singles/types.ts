@@ -86,6 +86,19 @@ export interface GetSingleOptions {
    */
   translationStatus?: boolean;
 
+  /**
+   * The fields to answer with, as a collection read selects them
+   * (`shared/lib/field-selection`): a field named `true` is included, a `false`
+   * entry is ignored, and a selection that includes nothing answers the whole
+   * document. The id and the system timestamps are always answered.
+   *
+   * The read takes only the selected fields' columns (with the system columns)
+   * when nothing else needs the rest: no read hook and no field read rule that
+   * runs for this read. Such a read takes the whole row and only its answer is
+   * narrowed, so a hook or a rule still sees every value.
+   */
+  select?: Record<string, boolean>;
+
   /** User context for access control and hooks. */
   user?: UserContext;
 

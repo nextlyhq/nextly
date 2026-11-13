@@ -184,8 +184,15 @@ export async function seedPermissionsRolesAndPresets(args: {
   config: PermissionSeeding["config"] &
     Pick<NextlyServiceConfig, "roles"> &
     RuleContextConfig;
+  /**
+   * Whether the Public role's plugin grants that `config.plugins` no longer
+   * declares are taken back (`seedPublicReadGrants`). True by default, where
+   * `config.plugins` is every enabled plugin; false where it is not, as for a
+   * plugin's install, so another plugin's grant is never taken from visitors.
+   */
+  takeBackUndeclared?: boolean;
 }): Promise<void> {
-  const { adapter, logger, config } = args;
+  const { adapter, logger, config, takeBackUndeclared = true } = args;
   // Loaded here, where a command needs them, rather than with this module,
   // which every start imports.
   const { withRuleContextOf } = await import("./code-rule-context");
@@ -202,7 +209,7 @@ export async function seedPermissionsRolesAndPresets(args: {
   const made = await publicRole.make();
   if (made.made) {
     await withRuleContextOf(adapter, config, () =>
-      seedPublicReadGrants(publicRole.grantSeeding())
+      seedPublicReadGrants(publicRole.grantSeeding(), { takeBackUndeclared })
     );
   } else {
     // A start in development holds the claim to make it: the next run makes it.
