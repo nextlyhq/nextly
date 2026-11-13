@@ -1549,3 +1549,55 @@ describe("parity with the contributions a reader is sent", () => {
     ).toBe(true);
   });
 });
+
+describe("a component path naming the admin's root entry", () => {
+  // A site or plugin may name `@nextlyhq/admin#<Name>`. The root now exports
+  // only what an application mounts; a name it no longer exports lives in
+  // `@nextlyhq/admin/kit`, and a namespace import of the root would read it
+  // as undefined.
+  const site = {
+    widgets: [
+      {
+        id: "site/media",
+        view: { component: "@nextlyhq/admin#MediaLibrary" },
+      },
+      {
+        id: "site/stats",
+        view: { component: "@nextlyhq/admin#useDashboardStats" },
+      },
+    ],
+  };
+  const pagePlugin = plugin({
+    pages: [{ path: "frame", component: "@nextlyhq/admin#RootLayout" }],
+  });
+
+  it("imports a name the root no longer exports from the kit entry", () => {
+    const map = buildComponentImportMap([pagePlugin], undefined, site);
+    expect(map).toMatch(
+      /import \* as (_p\d+) from "@nextlyhq\/admin\/kit";[\s\S]*"@nextlyhq\/admin#MediaLibrary": \1\.MediaLibrary,/
+    );
+  });
+
+  it("keeps a name the root exports on the root, and the registry key as declared", () => {
+    const map = buildComponentImportMap([pagePlugin], undefined, site);
+    expect(map).toMatch(
+      /import \* as (_p\d+) from "@nextlyhq\/admin";[\s\S]*"@nextlyhq\/admin#RootLayout": \1\.RootLayout,/
+    );
+    expect(map).toMatch(
+      /import \* as (_p\d+) from "@nextlyhq\/admin";[\s\S]*"@nextlyhq\/admin#useDashboardStats": \1\.useDashboardStats,/
+    );
+    // The registration call itself still comes from the root.
+    expect(map).toContain(
+      'import { registerComponentMap } from "@nextlyhq/admin";'
+    );
+  });
+
+  it("CONTROL: leaves every other package's path as written", () => {
+    const map = buildComponentImportMap(
+      [plugin({ pages: [{ path: "p", component: "@acme/x/admin#Kit" }] })],
+      undefined
+    );
+    expect(map).toContain('import * as _p0 from "@acme/x/admin";');
+    expect(map).not.toContain("@nextlyhq/admin/kit");
+  });
+});

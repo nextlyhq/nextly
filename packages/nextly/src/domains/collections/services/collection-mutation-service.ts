@@ -129,6 +129,7 @@ import { narrows } from "../../../services/collections/trust-grant";
 import type { TrustBound } from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { BaseService } from "../../../shared/base-service";
 import {
   convertTimestampsToCamelCase,
@@ -284,6 +285,7 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
+import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 import {
   sharedComparison,
   type SharedComparison,
@@ -310,8 +312,6 @@ import {
   mergeComponentPatches,
 } from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
-import { addressableFields } from "../../../shared/addressable-fields";
-import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 import { storeDraftSave } from "../../versions/draft-save";
 import {
   evaluateDraftSplitEligibility,
@@ -6978,7 +6978,7 @@ export class CollectionMutationService extends BaseService {
     const recorded = { ...parentRow };
     if (translatedIn !== null && args.languageStatusTable) {
       const inLanguage = await readCompanionLocaleStatus(
-        tx.getDrizzle() as Parameters<typeof readCompanionLocaleStatus>[0],
+        tx.getDrizzle(),
         args.languageStatusTable.table,
         params.entryId,
         translatedIn,
@@ -7110,8 +7110,9 @@ export class CollectionMutationService extends BaseService {
     }
   > {
     const { params, fields, tableName, field } = args;
-    // On the transaction: a table not built yet is built from the registry
-    // row, read on the rewrite's own connection rather than the pool.
+    // Built from the registry row, where this process has not built it yet,
+    // on the rewrite's own connection: through the pool it would wait for the
+    // connection this transaction holds.
     const schema = await this.fileManager.loadDynamicSchema(
       params.collectionName,
       tx.getDrizzle()

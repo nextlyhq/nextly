@@ -214,9 +214,13 @@ function sharedRedirectDeps(declaration: PreviewDeclaration | undefined): {
     // Already resolved by the caller, so this hands the value back rather than
     // fetching it again.
     loadDeclaration: () => Promise.resolve(declaration),
+    // From the row, never a kept copy: where a preview link sends its holder
+    // follows an address saved through another instance at once.
     loadSiteUrl: async () =>
       resolvePreviewSiteUrl(
-        await (await settingsService()).getSettings().then(s => s.siteUrl)
+        await (await settingsService())
+          .getSettings({ fresh: true })
+          .then(s => s.siteUrl)
       ),
   };
 }
@@ -511,7 +515,11 @@ async function respondWithPreviewLink(
   // Everything the answer needs that can still fail is read BEFORE the link is
   // recorded. A failure after the row is written would leave a live row whose
   // token nobody received, listed until it expired.
-  const settings = await (await settingsService()).getSettings();
+  //
+  // From the row, never a kept copy, as the generation above is: the site URL
+  // is where the link sends its holder, so an address saved through another
+  // instance a moment ago applies to this link.
+  const settings = await (await settingsService()).getSettings({ fresh: true });
   const viewports = await resolvePreviewViewports(declaration?.breakpoints);
 
   // Before signing: a revoke-all of this document that replaces the mark

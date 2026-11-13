@@ -127,6 +127,7 @@ export default function SingleBuilderEditPage({
     setSettings,
     isInitialized,
     unsavedCount,
+    pending,
     savedFieldIds,
     pinFields,
     pinSettings,
@@ -286,6 +287,7 @@ export default function SingleBuilderEditPage({
       ),
     onNoChanges: saveSettingsOnly,
     onApplied: onSchemaApplied,
+    previewedWith: { localized },
   });
 
   // ---------------------------- Loading / error guards ----------------------
@@ -318,6 +320,7 @@ export default function SingleBuilderEditPage({
       locked={isLocked}
       configPath={single?.configPath}
       unsavedCount={unsavedCount}
+      pending={pending}
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
@@ -334,7 +337,7 @@ export default function SingleBuilderEditPage({
           context="single"
         />
       }
-      isSaving={isSaving || confirmation.isApplying}
+      isSaving={isSaving || confirmation.isBusy}
       savingLabel="Saving Single changes…"
     >
       <BuilderSchemaChangeDialogs

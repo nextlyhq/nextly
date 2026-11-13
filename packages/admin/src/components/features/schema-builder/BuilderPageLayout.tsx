@@ -18,8 +18,10 @@ import { DndContext, type DragEndEvent } from "@dnd-kit/core";
 import type { JSX, ReactNode } from "react";
 import { useMemo } from "react";
 
+import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
 import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { findFieldById } from "@admin/lib/builder";
 import { builderAnnouncements } from "@admin/lib/builder/builder-announcements";
@@ -32,6 +34,10 @@ import {
   type LoadedFieldGroup,
   type OutlineNode,
 } from "@admin/lib/builder/outline/outline-model";
+import {
+  fieldsWithDeleted,
+  markPending,
+} from "@admin/lib/builder/outline/pending-rows";
 import { navigateTo } from "@admin/lib/navigation";
 import type { StoredHookConfig } from "@admin/types/collection";
 
@@ -41,7 +47,6 @@ import { BuilderOverlays, type ActiveOverlay } from "./BuilderOverlays";
 import { BuilderReadOnlyNotice } from "./BuilderReadOnlyNotice";
 import type { BuilderSettingsValues } from "./BuilderSettingsModal";
 import { BuilderToolbar } from "./BuilderToolbar";
-import { mayLeaveBuilder } from "./leave-builder";
 import { FormPreview } from "./outline/FormPreview";
 import { Outline, type OutlineCallbacks } from "./outline/Outline";
 import { useBuilderOutline } from "./outline/useBuilderOutline";
@@ -58,8 +63,10 @@ type Props = {
   locked: boolean;
   /** Source file of a locked entity, shown in the read-only notice. */
   configPath?: string | null;
-  /** Drives the toolbar's Save enable state. */
+  /** How many changes are unsaved: shown in the toolbar, and what enables Save. */
   unsavedCount: number;
+  /** The pending changes the toolbar's Undo, Redo and Discard all act on. */
+  pending: BuilderPendingChanges;
   /** Fields saved before, whose names no longer follow their labels. */
   savedFieldIds: ReadonlySet<string>;
   onSave: () => void;
@@ -91,6 +98,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     name,
     locked,
     unsavedCount,
+    pending,
     onSave,
     settings,
     onSettingsChange,
@@ -101,41 +109,55 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     savingLabel,
     children,
   } = props;
+  // While changes are pending, every way out asks first: an in-app link, the
+  // field group's editor, the browser's back, a reload and closing the tab.
+  // The guard is the admin's one, which entries use too. A read-only entity
+  // holds no changes to lose. While a save is on its way the guard asks even
+  // with nothing pending (an undo since may have brought the count to none)
+  // and offers no Discard Changes, so leaving cannot let the save land unseen.
   return (
-    <div className="flex flex-col min-h-screen bg-background">
-      <BuilderToolbar
-        config={config}
-        name={name}
-        locked={locked}
-        unsavedCount={unsavedCount}
-        onAddField={() => onActiveChange({ kind: "picker", position: {} })}
-        onOpenSettings={() => onActiveChange({ kind: "settings" })}
-        onSave={onSave}
-      />
-      <BuilderWorkspace {...props} />
+    <UnsavedChangesGuard
+      isDirty={unsavedCount > 0 || isSaving}
+      disabled={locked}
+      busy={isSaving}
+    >
+      <div className="flex flex-col min-h-screen bg-background">
+        <BuilderToolbar
+          config={config}
+          name={name}
+          locked={locked}
+          saving={isSaving}
+          unsavedCount={unsavedCount}
+          pending={pending}
+          onAddField={() => onActiveChange({ kind: "picker", position: {} })}
+          onOpenSettings={() => onActiveChange({ kind: "settings" })}
+          onSave={onSave}
+        />
+        <BuilderWorkspace {...props} />
 
-      <BuilderOverlays
-        active={active}
-        onActiveChange={onActiveChange}
-        config={config}
-        builder={builder}
-        settings={settings}
-        onSettingsChange={onSettingsChange}
-        readOnly={locked}
-        storedHooks={storedHooks}
-      />
+        <BuilderOverlays
+          active={active}
+          onActiveChange={onActiveChange}
+          config={config}
+          builder={builder}
+          settings={settings}
+          onSettingsChange={onSettingsChange}
+          readOnly={locked}
+          storedHooks={storedHooks}
+        />
 
-      {children}
+        {children}
 
-      {/* Mounted whether or not a save is running, and only its text changes.
+        {/* Mounted whether or not a save is running, and only its text changes.
           A live region inserted at the same moment as its message is not
           reliably announced: several screen readers only watch regions that
           were already present when the text appeared, so a region that arrives
           with its own content can be skipped entirely. */}
-      <div aria-live="polite" className="sr-only">
-        {isSaving ? savingLabel : ""}
+        <div aria-live="polite" className="sr-only">
+          {isSaving ? savingLabel : ""}
+        </div>
       </div>
-    </div>
+    </UnsavedChangesGuard>
   );
 }
 
@@ -158,18 +180,30 @@ function BuilderWorkspace(
     | "onRowDragEnd"
     | "savedFieldIds"
     | "settings"
-    | "unsavedCount"
+    | "pending"
   >
 ): JSX.Element {
-  const { outline, fieldGroups, fieldGroupsLoad } = useBuilderOutline(
-    props.builder.fields,
-    props.locked,
-    props.settings.i18n === true
+  const { builder, pending } = props;
+  // Drawn with every pending delete shown where it was saved, marked, so a
+  // delete stays in sight until it is saved or undone. Only drawn: the save
+  // sends the builder's fields as they are.
+  const shown = useMemo(
+    () => fieldsWithDeleted(builder.fields, pending.saved),
+    [builder.fields, pending.saved]
   );
-  // Leaves for a field group's own editor, where its fields are changed:
-  // asked first while there are unsaved changes, which leaving discards.
+  const {
+    outline: built,
+    fieldGroups,
+    fieldGroupsLoad,
+  } = useBuilderOutline(shown, props.locked, props.settings.i18n === true);
+  const outline = useMemo(
+    () => markPending(built, pending.marks, pending.changes),
+    [built, pending.marks, pending.changes]
+  );
+  // Leaves for a field group's own editor, where its fields are changed. The
+  // page's guard asks first while changes are pending, as it does for every
+  // other way out.
   const openFieldGroup = (slug: string) => {
-    if (!mayLeaveBuilder(props.unsavedCount, props.config.kind)) return;
     navigateTo(buildRoute(ROUTES.BUILDER_FIELD_GROUPS_EDIT, { slug }));
   };
   return (

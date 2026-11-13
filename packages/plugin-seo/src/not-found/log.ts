@@ -33,6 +33,7 @@ import {
 import { isUniqueViolation } from "@nextlyhq/plugin-sdk/schema";
 
 import { within } from "../address-record/rows";
+import { addNoteOnce, noteKey, readNotes } from "../address-record/store";
 import { notFoundLog } from "../schema/tables";
 
 import { notFoundSlug } from "./collection";
@@ -284,11 +285,41 @@ export async function setNotFoundIgnored(
  * collection empty, `left` while one has rows to move, unknown before the
  * start's move has counted. Kept on `globalThis`, as the plugin's context
  * is, so every copy of this module a site's bundler loads reads the same
- * answer. Only a move sets it; nothing writes the collection any more.
+ * answer. Only a move sets it. Nothing in this version writes the
+ * collection; a process still running the earlier version during a deploy
+ * does, and the next move (at the next start, or the later check a
+ * long-running server makes) finds those rows and moves them.
+ *
+ * `__nextly_seoNotFoundDrained` holds each context that has found the drained
+ * note kept, so a process reads it once.
  */
 const legacyState = globalThis as unknown as {
   __nextly_seoLegacyNotFound?: "none" | "left";
+  __nextly_seoNotFoundDrained?: WeakSet<PluginContext>;
 };
+
+/**
+ * The note saying the earlier collection was once found empty: every row an
+ * earlier version logged there has moved to the table. The release that
+ * stops declaring the collection reads it as the log's drained marker; until
+ * then each start still counts the collection, since a process running the
+ * earlier version during a deploy may log there again.
+ */
+const DRAINED_KEY = noteKey("not-found-drained");
+
+/**
+ * Keep the drained note where it is not kept yet: one read per process, and
+ * one write the first time any process finds the collection empty.
+ */
+async function noteDrained(ctx: PluginContext): Promise<void> {
+  const noted = (legacyState.__nextly_seoNotFoundDrained ??= new WeakSet());
+  if (noted.has(ctx)) return;
+  const { notes } = await readNotes(ctx, [DRAINED_KEY]);
+  if (!notes.has(DRAINED_KEY)) {
+    await addNoteOnce(ctx, DRAINED_KEY, new Date().toISOString());
+  }
+  noted.add(ctx);
+}
 
 type Token = Parameters<
   PluginContext["services"]["collections"]["deleteEntryInTransaction"]
@@ -559,9 +590,9 @@ function moveOne(
  * Move every row an earlier version of the plugin kept in the not-found
  * log's collection to the plugin's table, and answer how many moved. Started
  * at each start, not awaited: once the collection is empty it costs one
- * count. The collection stays declared, so a site's rows are never dropped
- * with it; a row that cannot be moved now is left in place for the next
- * start.
+ * count, and one read of the drained note per process. The collection stays
+ * declared, so a site's rows are never dropped with it; a row that cannot be
+ * moved now is left in place for the next start.
  */
 export async function moveLoggedRows(
   ctx: PluginContext,
@@ -570,6 +601,7 @@ export async function moveLoggedRows(
   const slug = notFoundSlug(ctx);
   if ((await ctx.services.ownCollections.count(slug)) === 0) {
     legacyState.__nextly_seoLegacyNotFound = "none";
+    await noteDrained(ctx);
     return 0;
   }
   // Until the rows are gone, a redirect saved meanwhile drops its address
@@ -594,6 +626,7 @@ export async function moveLoggedRows(
     }));
     if (listed.length === 0) {
       legacyState.__nextly_seoLegacyNotFound = "none";
+      await noteDrained(ctx);
       return moved;
     }
     let movedNow = 0;

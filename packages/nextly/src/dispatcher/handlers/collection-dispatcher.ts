@@ -131,6 +131,7 @@ import {
 } from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
+import { respondAddressCheck } from "./address-check-route";
 import { readListOwner, slugListsForOwner } from "./list-owner";
 import { readAccessCallerForDispatch } from "./read-access-caller";
 // Shared guard that centralizes required + stale schema-version validation for
@@ -538,6 +539,11 @@ const COLLECTIONS_METHODS: Record<
   MethodHandler<CollectionsHandlerType>
 > = {
   ...COLLECTION_VERSION_METHODS,
+  // What creating a collection under an address would answer, for the Builder's new-entity
+  // dialog; writes nothing.
+  checkCollectionAddress: {
+    execute: (_svc, _p, body) => respondAddressCheck("collection", body),
+  },
   createCollection: {
     // The metadata service returns the legacy CollectionServiceResult
     // envelope; we unwrap it and pass the legacy success message through

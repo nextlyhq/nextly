@@ -466,6 +466,38 @@ function constraintDropOf(
 }
 
 /**
+ * Remove drizzle-kit's drops of the columns a push keeps for a plugin that is
+ * no longer configured (`ownership/kept-elements.ts`).
+ *
+ * The kit's runtime tables are built from the configuration, which no longer
+ * declares those columns, so it reads each as removed and drops it with its
+ * values. The desired snapshot keeps them, and only this pipeline's own
+ * `drop_column` removes a column. Matched only as a statement that drops one
+ * column and does nothing else, per table; any other spelling is KEPT, for
+ * the destructive scan to refuse.
+ */
+export function stripKitDropsOfKeptColumns(
+  statements: string[],
+  kept: ReadonlyArray<{ table: string; name: string }>
+): { kept: string[]; strippedCount: number } {
+  if (kept.length === 0) return { kept: statements, strippedCount: 0 };
+  const keys = new Set(
+    kept.map(c => `${c.table.toLowerCase()}.${c.name.toLowerCase()}`)
+  );
+  let strippedCount = 0;
+  const out = statements.filter(stmt => {
+    const m = stmt.match(
+      /^ALTER\s+TABLE\s+(?:["`]?\w+["`]?\.)?["`]?(\w+)["`]?\s+DROP\s+(?:COLUMN\s+)?["`]?(\w+)["`]?\s*;?\s*$/i
+    );
+    if (!m) return true;
+    const isKept = keys.has(`${m[1].toLowerCase()}.${m[2].toLowerCase()}`);
+    if (isKept) strippedCount++;
+    return !isKept;
+  });
+  return { kept: out, strippedCount };
+}
+
+/**
  * Remove drizzle-kit's drops of the live UNIQUE constraints a save keeps.
  *
  * A Schema Builder table gets one inline from its own DDL, on a one-to-one

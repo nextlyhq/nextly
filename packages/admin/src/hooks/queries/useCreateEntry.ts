@@ -44,7 +44,7 @@ import {
 } from "@tanstack/react-query";
 import type { UseFormSetError, FieldValues } from "react-hook-form";
 
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import {
   parseServerErrorMessage,
   placeServerRefusal,

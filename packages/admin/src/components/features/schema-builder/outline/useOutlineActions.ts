@@ -13,6 +13,7 @@ import {
   flattenOutline,
   type OutlineNode,
 } from "@admin/lib/builder/outline/outline-model";
+import { isPendingDelete } from "@admin/lib/builder/outline/pending-rows";
 
 import type { OutlineActions, OutlineCallbacks } from "./outline-types";
 
@@ -76,11 +77,20 @@ export function useOutlineActions(
 
     const canMove = (id: string, delta: -1 | 1): boolean => {
       const node = nodeOf(id);
-      if (!node || !node.own || node.readOnly) return false;
+      // A deleted row neither moves nor is moved past: the builder no
+      // longer holds it, so a move beside it would land elsewhere.
+      if (!node || !node.own || node.readOnly || isPendingDelete(node)) {
+        return false;
+      }
       const siblings = siblingsOf(node);
       const target = siblings[siblings.indexOf(node) + delta];
       // Nor past a read-only sibling: that would move it too.
-      return target !== undefined && target.own && target.readOnly === null;
+      return (
+        target !== undefined &&
+        target.own &&
+        target.readOnly === null &&
+        !isPendingDelete(target)
+      );
     };
 
     /** Right after a field, in its own container. */
@@ -97,15 +107,22 @@ export function useOutlineActions(
       setMenuOpen: setMenuFor,
       focusRow: id => focusRow(id),
       select: id => {
-        // A registered block, or its prop, is no field: nothing to open.
-        if (!nodeOf(id)?.meta) call().select(id);
+        const node = nodeOf(id);
+        // A registered block, or its prop, is no field: nothing to open; nor
+        // is a deleted field, which the builder no longer holds.
+        if (!node?.meta && !(node && isPendingDelete(node))) call().select(id);
         focusRow(id);
       },
-      addInside: id => call().addAt({ parentFieldId: id }),
+      addInside: id => {
+        const node = nodeOf(id);
+        // The builder no longer holds a deleted container to add into.
+        if (!node || !isPendingDelete(node))
+          call().addAt({ parentFieldId: id });
+      },
       addAfter: id => {
         const node = nodeOf(id);
         // A read-only row, or one in a read-only container, offers no place.
-        if (node?.own && node.readOnly === null) {
+        if (node?.own && node.readOnly === null && !isPendingDelete(node)) {
           call().addAt(positionAfter(node));
         }
       },
@@ -123,7 +140,25 @@ export function useOutlineActions(
         );
       },
       duplicate: id => call().duplicate(id),
-      remove: id => call().remove(id),
+      remove: id => {
+        const node = nodeOf(id);
+        call().remove(id);
+        // Pending until the save, and said so, with what goes with it.
+        if (node) {
+          // Only the fields that go with it: a field group's own fields, shown
+          // beneath a field that uses it, stay where they are defined.
+          const inside = flattenOutline(node.children).filter(
+            row => row.own && !row.meta
+          ).length;
+          setAnnouncement(
+            `Deleted ${spokenName(node)}${
+              inside
+                ? ` and ${inside} ${inside === 1 ? "field" : "fields"} inside`
+                : ""
+            }. Undo brings ${inside ? "them" : "it"} back.`
+          );
+        }
+      },
       setHidden: (id, hidden) => call().setHidden(id, hidden),
       openFieldGroup: slug => call().openFieldGroup(slug),
     };

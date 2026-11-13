@@ -22,7 +22,11 @@ import {
   type Secret,
 } from "@nextlyhq/plugin-sdk";
 
-import { startCatchUp } from "./address-record/catch-up";
+import {
+  forgetCatchUpFingerprint,
+  lastCatchUp,
+  startCatchUp,
+} from "./address-record/catch-up";
 import { addressRecordCollection } from "./address-record/collection";
 import {
   ADDRESSES_MOVED,
@@ -30,6 +34,7 @@ import {
   addressRecord,
   releaseOnCollectionDelete,
 } from "./address-record/participant";
+import { startRecheck } from "./address-record/recheck";
 import {
   ADDRESS_RECORD_CACHE_PART,
   ADDRESS_RECORD_CHANGED,
@@ -585,6 +590,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const googleClient = googleClientOf(options);
   // Stops noting changes for IndexNow when the plugin is taken down.
   let stopIndexNow: (() => Promise<void>) | undefined;
+  // The later look at what an earlier version wrote during a deploy.
+  let stopRecheck: (() => void) | undefined;
 
   // Checked here, so a misspelled type or detail fails when the site starts.
   const readStructuredDataRules = rulesFromOptions(
@@ -994,7 +1001,19 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         targets
       );
     },
+    // Between an uninstall that keeps the data and the next install, the
+    // plugin does not run: pages saved meanwhile reach no record. Both
+    // forget the catch-up's fingerprint, so the first start after the
+    // install records them. A full uninstall drops the record instead.
+    async onInstall(ctx) {
+      await forgetCatchUpFingerprint(ctx);
+    },
+    async onUninstall(ctx, { keepData }) {
+      if (keepData) await forgetCatchUpFingerprint(ctx);
+    },
     async destroy() {
+      stopRecheck?.();
+      stopRecheck = undefined;
       // What was noted is still sent: a notice is not lost to a shutdown.
       const stop = stopIndexNow;
       stopIndexNow = undefined;
@@ -1018,6 +1037,24 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
           { error }
         );
       });
+      // Both again once, a while later, unawaited and never keeping the
+      // process alive: a process of the earlier version still serving
+      // during a deploy may write after this start, and a long-running
+      // server may not start again until the next one.
+      stopRecheck?.();
+      stopRecheck = startRecheck(
+        async () => {
+          await lastCatchUp();
+          await startCatchUp(ctx);
+          await moveLoggedRows(ctx);
+        },
+        (error: unknown) => {
+          ctx.logger.error(
+            "The SEO plugin could not take in what an earlier version wrote during a deploy",
+            { error }
+          );
+        }
+      );
       // Decided once, the first time the plugin starts on a site: whether a
       // site with no production address known is kept out of search.
       void decideStanding(ctx).catch((error: unknown) => {
