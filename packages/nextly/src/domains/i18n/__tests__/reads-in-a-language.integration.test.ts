@@ -1064,6 +1064,42 @@ describe.each(getConfiguredTestDialects())(
       expect((read.json.post as Record<string, unknown>).title).toBe("Post");
     }, 90_000);
 
+    // Published in a language means that language is published, whatever
+    // its fields hold: one published with no values of its own is found,
+    // its fields falling back, by a get-one, a list and a count alike.
+    it("finds a document published in a language with no values of its own", async () => {
+      const t = await boot(dialect);
+      const id = await publishedInEnglish(t, { title: "Harbour", slug: "a" });
+      const spanish = await t.nextly.update({
+        collection: DOCS,
+        id,
+        locale: "es",
+        data: { status: "published", _overwrite: true },
+      });
+      expect(spanish.item, JSON.stringify(spanish)).toBeDefined();
+
+      const one = await restGet(
+        ["collections", DOCS, "entries", id],
+        "?locale=es"
+      );
+      expect(one.status, JSON.stringify(one.json)).toBe(200);
+      expect(one.json.title).toBe("Harbour");
+      const listed = await restGet(
+        ["collections", DOCS, "entries"],
+        "?locale=es"
+      );
+      expect(listed.status, JSON.stringify(listed.json)).toBe(200);
+      expect(
+        (listed.json.items as { id: string }[]).map(item => item.id)
+      ).toEqual([id]);
+      const counted = await t.nextly.count({
+        collection: DOCS,
+        locale: "es",
+        status: "published",
+      });
+      expect(counted.total).toBe(1);
+    }, 90_000);
+
     // Every language's structured values beside a read are the field's own
     // type, as the row's are: on a driver that stores JSON as text, a value
     // left encoded would reach the reader as a string.

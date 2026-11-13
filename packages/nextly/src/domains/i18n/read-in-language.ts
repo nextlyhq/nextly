@@ -18,10 +18,7 @@ import type { StatusFilter } from "../../lib/status-filter";
 import type { FieldGroupReach } from "../../shared/lib/password-fields";
 
 import { isFieldLocalized } from "./classify-fields";
-import {
-  buildTranslationStatusCondition,
-  SOURCE_LOCALES_KEY,
-} from "./companion-join";
+import { buildCompanionExists, SOURCE_LOCALES_KEY } from "./companion-join";
 import { EVERY_TRANSLATION } from "./locale-selector";
 import type { CompanionSchema } from "./runtime/companion-io";
 
@@ -30,8 +27,11 @@ import type { CompanionSchema } from "./runtime/companion-io";
  * published in it; `undefined` where there is nothing to keep out. Only where
  * the entity publishes each language on its own (`companion.hasStatus`):
  * elsewhere a document's one status is the only publication there is.
- * "Published in a language" is the language filter's `published` state, so
- * the two cannot disagree about which documents it names.
+ * "Published in a language" is that language's row holding a public status,
+ * whatever its fields hold: a language published with every translated field
+ * blank is published, its fields falling back. The translation worklist's
+ * `published` state also asks for content of its own, which is a different
+ * question (is it translated), so it is not asked here.
  */
 export function publishedInLanguageCondition(args: {
   companion: CompanionSchema | null | undefined;
@@ -57,20 +57,15 @@ export function publishedInLanguageCondition(args: {
   ) {
     return undefined;
   }
-  const inLanguage = buildTranslationStatusCondition({
+  const inLanguage = buildCompanionExists({
     companionTableName: args.companion.companionTableName,
     mainIdColumn: args.mainIdColumn,
-    localizedColumns: args.companion.localizedFields.map(field => field.column),
-    structuredColumns: args.companion.localizedFields
-      .filter(field => field.structured === true)
-      .map(field => field.column),
-    hasStatus: true,
-    defaultLocale: args.defaultLocale,
-    filter: { locale: requested, state: "published" },
+    locale: requested,
+    valueCondition: sql`1 = 1`,
     // Every state the workflow calls public, as the read's own bound does.
-    publicStates: args.statusFilter.values,
+    statusValues: args.statusFilter.values,
   });
-  if (inLanguage === undefined || !args.revealed?.length) return inLanguage;
+  if (!args.revealed?.length) return inLanguage;
   return sql`(${inLanguage} OR ${args.mainIdColumn} IN (${sql.join(
     args.revealed.map(id => sql`${id}`),
     sql`, `
