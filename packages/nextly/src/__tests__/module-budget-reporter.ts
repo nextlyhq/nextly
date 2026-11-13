@@ -123,6 +123,16 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * administrator load the seeders when they seed. 56 and 1,284 measured. Four
  * request-path tests joined the heavy files by design: the request path now
  * starts Nextly through `getNextly`, so they load the boot.
+ * Both rose to 65 and 1,357 when a week of features grew the graph that the
+ * registry and the SQLite schema bundle reach: CI measured 63 and 1,357. The
+ * one new edge with a large graph behind it, the collection service and
+ * dispatcher loading the Builder save writer (the migration generator and
+ * runner) at import, now loads it where a save runs, which took about thirty
+ * modules off each file that boots: 63 and 1,323 measured. The rest is about
+ * ten features' modules spread along chains the files already held (workflow
+ * stage history, plugin events, received webhooks, public addresses), and it
+ * took six files that sat just under the heavy line over it, with a seventh
+ * that reaches the PostgreSQL bundle; both hold whether CI measures one fewer.
  * Each
  * pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
@@ -130,7 +140,7 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 59, tailMeanModules: 1_319 };
+export const BUDGET = { heavyFiles: 65, tailMeanModules: 1_357 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",
