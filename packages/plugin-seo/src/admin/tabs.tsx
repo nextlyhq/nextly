@@ -479,7 +479,7 @@ function AiOverviewsRow(): JSX.Element {
       description="Answers Google shows above its results."
     >
       <Alert variant="info" role="note">
-        <Info className="size-4" aria-hidden="true" />
+        <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
         <AlertDescription>
           robots.txt can&apos;t take your site out of them. They read pages with
           Google Search&apos;s own crawler, so blocking it would take you out of

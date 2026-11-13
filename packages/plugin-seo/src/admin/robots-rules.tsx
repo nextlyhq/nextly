@@ -240,7 +240,7 @@ function Refusal({ finding }: { finding: RuleFinding }): JSX.Element {
   const rest = stop === -1 ? "" : finding.message.slice(stop + 2);
   return (
     <Alert variant="destructive" className="mt-2">
-      <XCircle className="size-4" aria-hidden="true" />
+      <XCircle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
       <AlertDescription>
         <b className="font-semibold">{lead}</b> {rest}
       </AlertDescription>
@@ -290,7 +290,10 @@ function BlockedPages({
         const more = line.count - line.examples.length;
         return (
           <Alert key={line.line} variant="warning" role="status">
-            <AlertTriangle className="size-4" aria-hidden="true" />
+            <AlertTriangle
+              className="mt-0.5 size-4 shrink-0"
+              aria-hidden="true"
+            />
             <AlertDescription>
               <b className="font-semibold">
                 Line {line.line} keeps crawlers away from {line.count}{" "}
@@ -445,7 +448,7 @@ export function OwnRulesRow({
       </div>
       {served === "own" ? (
         <Alert variant="info" role="status" className="mt-2">
-          <Info className="size-4" aria-hidden="true" />
+          <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           <AlertDescription>
             Your site has its own robots.txt file, so these rules and the AI
             tools choice aren&apos;t used. A developer can remove the file to
