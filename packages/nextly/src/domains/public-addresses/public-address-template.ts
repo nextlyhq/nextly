@@ -280,6 +280,31 @@ const OWN_ADDRESS_SHAPE =
   'Use an address on this site, starting with "/", such as "/about"';
 
 /**
+ * One part of an own address as a browser sends it, or why it can't be one:
+ * not a valid escape, empty, or a step out of the path (`.`, `..`, escaped
+ * or not), which is refused rather than encoded into a segment as a
+ * placeholder's value would be.
+ */
+function spelledPart(part: string): string | OwnAddress {
+  let plain: string;
+  try {
+    plain = decodeURIComponent(part);
+  } catch {
+    return {
+      status: "invalid",
+      problem: `${OWN_ADDRESS_SHAPE}: "${part}" is not a valid part of an address.`,
+    };
+  }
+  if (plain === "" || plain === "." || plain === "..") {
+    return {
+      status: "invalid",
+      problem: `${OWN_ADDRESS_SHAPE}, with no empty, "." or ".." part.`,
+    };
+  }
+  return encodeURIComponent(plain);
+}
+
+/**
  * The address `value` names as an entry's own, judged and spelled as a
  * template's result is: from the site's root, with no other host, query,
  * fragment or trailing `/`, each segment encoded as a browser sends it, and
@@ -305,23 +330,18 @@ export function ownAddressOf(value: unknown): OwnAddress {
       problem: `${OWN_ADDRESS_SHAPE}, without a "/" at the end.`,
     };
   }
-  // A step out of the path, or an empty part, is refused rather than encoded
-  // into one segment as a placeholder's value would be: a person typed it.
-  const segments = text.slice(1).split("/");
-  if (segments.some(part => part === "" || part === "." || part === "..")) {
-    return {
-      status: "invalid",
-      problem: `${OWN_ADDRESS_SHAPE}, with no empty, "." or ".." part.`,
-    };
+  // Each part read as a browser sends it, so an address typed already
+  // escaped (`/caf%C3%A9`) and one typed plainly (`/café`) are one address,
+  // never escaped twice.
+  const parts: string[] = [];
+  for (const part of text.slice(1).split("/")) {
+    const spelled = spelledPart(part);
+    if (typeof spelled !== "string") return spelled;
+    parts.push(spelled);
   }
-  // Filled as a template's one path placeholder is, so an own address and a
-  // template's result are encoded and refused by the same rule.
-  const path = fillPublicAddress(
-    "/{address}",
-    { address: text.slice(1) },
-    { pathFields: ["address"] }
-  );
-  return path === null
+  const path = `/${parts.join("/")}`;
+  // Nothing under a path the runtime keeps, as no template's result may be.
+  return isReservedPath(path)
     ? {
         status: "invalid",
         problem: `${OWN_ADDRESS_SHAPE}, outside the paths kept for the admin, the API and the runtime.`,
@@ -354,6 +374,10 @@ export function publicAddressFieldProblem(
   }
   if (declared.type !== "text") {
     return `publicAddressField: "${field}" must be a text field.`;
+  }
+  // A list of values is no one address.
+  if ((declared as { hasMany?: unknown }).hasMany === true) {
+    return `publicAddressField: "${field}" must hold one value, not a list (hasMany).`;
   }
   return null;
 }
