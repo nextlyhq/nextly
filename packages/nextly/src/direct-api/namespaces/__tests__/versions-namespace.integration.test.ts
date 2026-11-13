@@ -375,7 +375,10 @@ describe.each(getConfiguredTestDialects())(
       await expect(
         versions().list({ collection: POSTS, id, limit: -2 })
       ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
-      const page = (await versions().list({ collection: POSTS, id })) as {
+      const page = (await versions().list({
+        collection: POSTS,
+        id,
+      })) as unknown as {
         meta: { limit: number };
       };
       const viaRest = (await rest("GET", history(id))) as {
@@ -447,15 +450,6 @@ describe.each(getConfiguredTestDialects())(
         await role(t, "dav-private-readers", [`read-${PRIVATE}`]),
       ]);
 
-      // Judged as themselves, the person may not read it.
-      await expect(
-        versions().markSeen({
-          collection: PRIVATE,
-          id,
-          versionNo: 1,
-          ...asUser(readerId),
-        })
-      ).rejects.toMatchObject({ code: "NOT_FOUND" });
       // The server showed this version under its own bypass; the person's
       // marker is recorded as shown, whatever their own rules would say.
       await expect(

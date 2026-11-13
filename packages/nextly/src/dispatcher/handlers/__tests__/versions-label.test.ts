@@ -87,6 +87,8 @@ describe("setVersionLabelForDocument — normalization", () => {
     canReadSpy.mockResolvedValue(true);
     readableSpy.mockResolvedValue(undefined);
     setLabelSpy.mockResolvedValue({ versionNo: 3, label: "x", snapshot: {} });
+    // The version as stored, read before the rename is written.
+    getSpy.mockResolvedValue({ versionNo: 3, label: null, snapshot: {} });
   });
 
   it("stores a trimmed label", async () => {
@@ -158,6 +160,8 @@ describe("setVersionLabelForDocument — access", () => {
     canReadSpy.mockResolvedValue(true);
     readableSpy.mockResolvedValue(undefined);
     setLabelSpy.mockResolvedValue({ versionNo: 3, label: "x", snapshot: {} });
+    // The version as stored, read before the rename is written.
+    getSpy.mockResolvedValue({ versionNo: 3, label: null, snapshot: {} });
   });
 
   it("names nothing when the answer cannot be made readable for the caller", async () => {

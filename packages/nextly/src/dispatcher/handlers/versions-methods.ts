@@ -64,7 +64,11 @@ import {
 import type { TakenLiveValues } from "../../domains/versions/shared-publish-base";
 import { markVersionSeen } from "../../domains/versions/version-views";
 import { VersionsRepository } from "../../domains/versions/versions-repository";
-import type { VersionRow } from "../../domains/versions/versions-repository";
+import type {
+  VersionMeta,
+  VersionRow,
+} from "../../domains/versions/versions-repository";
+import type { VersionListOptions } from "../../domains/versions/versions-service";
 import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { isUniqueViolation } from "../../shared/lib/unique-violation";
@@ -162,8 +166,7 @@ export async function listVersionsForDocument(
 ): Promise<{ items: VersionMetaWithAuthor[]; meta: PaginationMeta }> {
   // Validate before the gate so malformed pagination fails fast, and validate
   // here rather than per dispatcher so every caller of this core is covered.
-  if (args.limit !== undefined) assertPositiveInteger(args.limit, "limit");
-  if (args.cursor !== undefined) assertPositiveInteger(args.cursor, "cursor");
+  assertVersionPaging(args);
 
   await assertVersionDocumentReadable(
     args.scopeKind,
@@ -183,41 +186,33 @@ export async function listVersionsForDocument(
     args.locale
   );
 
-  const limit = Math.min(args.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
-  const versions = getService("versionsService");
-  // Ask for one extra row: its presence is what proves another page exists.
-  // Inferring from a full page would claim a next page whenever the history
-  // length is an exact multiple of the page size.
-  const window = await versions.list(
-    {
+  const ref = {
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+    entryId: args.entryId,
+  };
+  const page = await pageOfVersions(ref, {
+    ...(args.limit !== undefined ? { limit: args.limit } : {}),
+    ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
+    // An empty `?locale=` reaches the dispatcher as "" (the route parser keeps
+    // it); `historyListLanguages` treats that as absent, so both list surfaces
+    // list every readable locale rather than matching a non-existent
+    // empty-string locale and returning nothing.
+    languages,
+  });
+  const window = page.items;
+  const hasNext = page.meta.hasNext;
+  const limit = page.meta.limit;
+  // Each row names only the restored fields this reader may read.
+  const items = await readableFieldSources(window, {
+    ref: {
       scopeKind: args.scopeKind,
       scopeSlug: args.slug,
       entryId: args.entryId,
     },
-    {
-      limit: limit + 1,
-      ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
-      // An empty `?locale=` reaches the dispatcher as "" (the route parser keeps
-      // it); `historyListLanguages` treats that as absent, so both list surfaces
-      // list every readable locale rather than matching a non-existent
-      // empty-string locale and returning nothing.
-      ...languages,
-    }
-  );
-  const hasNext = window.length > limit;
-  // Each row names only the restored fields this reader may read.
-  const items = await readableFieldSources(
-    hasNext ? window.slice(0, limit) : window,
-    {
-      ref: {
-        scopeKind: args.scopeKind,
-        scopeSlug: args.slug,
-        entryId: args.entryId,
-      },
-      user: args.user,
-      authenticatedScope: args.authenticatedScope,
-    }
-  );
+    user: args.user,
+    authenticatedScope: args.authenticatedScope,
+  });
 
   // Keyset pagination: page/totalPages are not meaningful for a cursor walk,
   // so the meta describes the returned window.
@@ -241,6 +236,62 @@ export async function listVersionsForDocument(
       totalPages: 1,
       hasNext,
       hasPrev: args.cursor !== undefined,
+    },
+  };
+}
+
+/**
+ * Reject a page size or cursor that is not a positive integer: every history
+ * page, a trusted one included, is held to this before it reads anything.
+ */
+export function assertVersionPaging(paging: {
+  limit?: number;
+  cursor?: number;
+}): void {
+  if (paging.limit !== undefined) assertPositiveInteger(paging.limit, "limit");
+  if (paging.cursor !== undefined) {
+    assertPositiveInteger(paging.cursor, "cursor");
+  }
+}
+
+/**
+ * One page of a document's versions, newest first, without snapshots: the
+ * page size (REST's default, never past its ceiling), the extra row that
+ * proves another page exists, and the window's meta. Every list of history,
+ * a trusted one included, pages through this, so they cannot page apart.
+ * The caller has validated the paging (`assertVersionPaging`) and decided
+ * which languages to read.
+ */
+export async function pageOfVersions(
+  ref: { scopeKind: VersionScopeKind; scopeSlug: string; entryId: string },
+  paging: {
+    limit?: number;
+    cursor?: number;
+    languages: Pick<VersionListOptions, "locale" | "locales">;
+  }
+): Promise<{ items: VersionMeta[]; meta: PaginationMeta }> {
+  const limit = Math.min(paging.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
+  // Ask for one extra row: its presence is what proves another page exists.
+  // Inferring from a full page would claim a next page whenever the history
+  // length is an exact multiple of the page size.
+  const window = await getService("versionsService").list(ref, {
+    limit: limit + 1,
+    ...(paging.cursor !== undefined ? { cursor: paging.cursor } : {}),
+    ...paging.languages,
+  });
+  const hasNext = window.length > limit;
+  const items = hasNext ? window.slice(0, limit) : window;
+  // Keyset pagination: page/totalPages are not meaningful for a cursor walk,
+  // so the meta describes the returned window.
+  return {
+    items,
+    meta: {
+      total: items.length,
+      page: 1,
+      limit,
+      totalPages: 1,
+      hasNext,
+      hasPrev: paging.cursor !== undefined,
     },
   };
 }
@@ -671,6 +722,19 @@ export async function setVersionLabelForDocument(
     entryId: args.entryId,
   };
 
+  // The restored fields the answer names, judged before anything is written:
+  // a rename does not change them, and a judgment that fails then refuses the
+  // call with nothing changed, rather than failing after the name and its
+  // history event are in.
+  const [judged] = await readableFieldSources(
+    [await versions.get(ref, args.versionNo)],
+    {
+      ref,
+      user: args.user,
+      authenticatedScope: readAuthenticatedScope(),
+    }
+  );
+
   // Nothing was asked for, so nothing is written. The version is still read
   // back, so the response shape is the same either way and a caller cannot
   // tell a no-op from a rename by its status. A name given is recorded in the
@@ -686,13 +750,8 @@ export async function setVersionLabelForDocument(
   // version, not to read its content, and returning it here would bypass the
   // redaction the version-detail endpoint applies.
   const { snapshot: _snapshot, ...meta } = row;
-
   // It names only the restored fields the caller may read, as a list does.
-  const [readable] = await readableFieldSources([meta], {
-    ref,
-    user: args.user,
-    authenticatedScope: readAuthenticatedScope(),
-  });
+  const readable = { ...meta, fieldSources: judged.fieldSources };
   // The same shape a history list returns, author included. Without this the
   // renamed row comes back carrying only an author id, and an admin that
   // renders the response directly would show the version losing its author the

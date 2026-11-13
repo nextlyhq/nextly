@@ -181,7 +181,7 @@ describe.each(getConfiguredTestDialects())(
       });
     }, 120_000);
 
-    it("records each restored field's version on the save, from two versions, and keeps both", async () => {
+    it("records each restored field's version on the save, from two versions, and keeps both while it stands", async () => {
       const entries = await boot(dialect);
       const { id, a, b, c } = await threeVersions(entries);
 
@@ -203,15 +203,18 @@ describe.each(getConfiguredTestDialects())(
         "_restoredFrom"
       );
 
-      // Later saves push the history past its cap of three: the third
-      // version, which nothing names, goes, and both sources stay with the
-      // save that names them.
+      // Later saves push the history past its cap of three. The third
+      // version, which nothing names, goes first. The save's restored fields
+      // keep the versions they name, not the save itself: a client names
+      // them, so they pin no row of their own. When the cap reaches the save,
+      // it goes, and both versions it named are still kept by that prune.
       await save(entries, id, { views: 1 });
       await save(entries, id, { views: 2 });
       await save(entries, id, { views: 3 });
       const after = await kept(id);
       expect(after).not.toContain(c);
-      expect(after).toEqual(expect.arrayContaining([a, b, restoredSave]));
+      expect(after).not.toContain(restoredSave);
+      expect(after).toEqual(expect.arrayContaining([a, b]));
     }, 120_000);
 
     it("records no source for a restored value undone before the save", async () => {

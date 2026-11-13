@@ -102,7 +102,12 @@ export async function storeDraftSave(
     });
   }
   const entity = input.ref.scopeKind === "single" ? "single" : "collection";
-  if (sameContent(input.snapshot, input.replaces, entity)) {
+  const isRestore = typeof input.sourceVersionNo === "number";
+  // A save that changes nothing records nothing. A restore is recorded even
+  // then: it is an act someone made, with a source the history shows and
+  // retention keeps, and answered "restored" it must leave a trace.
+  const unchanged = sameContent(input.snapshot, input.replaces, entity);
+  if (unchanged && !isRestore) {
     return { versionNo: null };
   }
 
@@ -111,7 +116,8 @@ export async function storeDraftSave(
   // restore's undo point carries, so it takes the number just below the
   // restore's own, which retention keeps. No retention runs here; the restore's
   // capture below trims once, with that protection in place.
-  if (typeof input.sourceVersionNo === "number") {
+  // Nothing to undo when the restore changed nothing.
+  if (isRestore && !unchanged) {
     await capture.capture(tx, {
       ref: input.ref,
       status: "draft",

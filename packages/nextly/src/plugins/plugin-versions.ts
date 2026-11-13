@@ -555,7 +555,9 @@ export function pluginVersionWrites(
           versionNo,
         });
         // The same restore REST's route runs once its gates have passed; a
-        // trusted call runs it with no person to judge.
+        // trusted call runs it with no person to judge. A trusted call made
+        // for a named person is still theirs: their actor, never their gates.
+        const named = resolved.user?.id;
         return restoreVersion({
           scopeKind: ref.scopeKind,
           slug: ref.scopeSlug,
@@ -569,7 +571,11 @@ export function pluginVersionWrites(
                   ? { authenticatedScope: writer.authenticatedScope }
                   : {}),
               }
-            : {}),
+            : named === undefined
+              ? {}
+              : { actor: { type: "user" as const, id: String(named) } }),
+          // What the plugin hands its hooks, for the update the restore makes.
+          ...hookInputsOf(resolved),
           ...(options?.fields ? { fields: options.fields } : {}),
           ...(options?.version ? { version: options.version } : {}),
         });
