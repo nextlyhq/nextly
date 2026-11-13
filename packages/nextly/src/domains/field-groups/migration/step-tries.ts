@@ -97,7 +97,7 @@ function stepNextStep(stop: BusyTableStop, direction: "up" | "down"): string {
  * The error a step's tries stop with: the engine's report (`tableBusyError`), its code, reason and
  * stop as they are, with its last line, the next step, given for this command.
  */
-export function stepTableBusyError(
+function stepTableBusyError(
   stop: BusyTableStop,
   direction: "up" | "down"
 ): NextlyError {
@@ -241,6 +241,101 @@ function boundedSession(
 }
 
 /**
+ * How many of `sent` stay applied once the try ended waiting. On MySQL a schema statement commits
+ * what ran before it before it waits, and itself once it has run, so everything before the waiting
+ * statement (the last one sent) is durable where that statement is a schema statement, and
+ * everything up to the last one that ran where it is not; the rest is rolled back. One that waited
+ * did not run. On PostgreSQL and SQLite the transaction rolled back whole.
+ */
+function keptOf(
+  sent: readonly SentStatement[],
+  dialect: MigrationSession["dialect"]
+): number {
+  const waited = sent[sent.length - 1];
+  if (dialect !== "mysql" || waited === undefined) return 0;
+  if (waited.schema) return sent.length - 1;
+  return (
+    sent
+      .slice(0, -1)
+      .map(statement => statement.schema)
+      .lastIndexOf(true) + 1
+  );
+}
+
+/**
+ * Whether the rest of the step was undone with the try. On PostgreSQL and SQLite the transaction
+ * rolled back whole. On MySQL only where the try kept nothing and sent no schema statement: every
+ * statement it sent was a row change or a setting, which the rollback undid.
+ */
+function undoneOf(
+  sent: readonly SentStatement[],
+  dialect: MigrationSession["dialect"],
+  kept: number
+): boolean {
+  if (dialect !== "mysql") return true;
+  return kept === 0 && sent.every(statement => ROW_CHANGE.test(statement.text));
+}
+
+/**
+ * The first statement the next try would send again that may not be sent again, numbered across
+ * the step's tries (`before` statements kept ahead of `again`); undefined where every one may.
+ */
+async function lastingOf(
+  again: readonly string[],
+  dialect: MigrationSession["dialect"],
+  adapter: DrizzleAdapter,
+  before: number
+): Promise<Extract<TryResult<undefined>, { kind: "ended" }>["lasting"]> {
+  if (again.length === 0) return undefined;
+  const triggers = await triggerTables(adapter, dialect).catch(
+    () => "unseen" as const
+  );
+  const lasting = firstNoRetry(again, dialect, triggers);
+  return lasting === undefined
+    ? undefined
+    : {
+        statementNumber: before + lasting.statementNumber,
+        judgement: lasting.judgement,
+      };
+}
+
+/**
+ * How a try that ended waiting left the step, from the statements it sent: the table the last one
+ * waited for (none where the wait came as the transaction opened, on SQLite, or before any
+ * statement), what of it committed, numbered after the `committedEarlier` statements earlier tries
+ * kept, and what the next try may not send again.
+ */
+async function endedTry(
+  sent: readonly SentStatement[],
+  dialect: MigrationSession["dialect"],
+  adapter: DrizzleAdapter,
+  committedEarlier: number
+): Promise<Extract<TryResult<undefined>, { kind: "ended" }>> {
+  const waited = sent[sent.length - 1];
+  const kept = keptOf(sent, dialect);
+  // The next try runs again what was not kept, the waiting statement included.
+  const lasting = await lastingOf(
+    sent.slice(kept).map(statement => statement.text),
+    dialect,
+    adapter,
+    committedEarlier + kept
+  );
+  return {
+    kind: "ended",
+    ended: {
+      table: waited === undefined ? null : targetTable(waited.text, dialect),
+      holder: HOLDER_NOT_LOOKED_UP,
+    },
+    ...(lasting === undefined ? {} : { lasting }),
+    undone: undoneOf(sent, dialect, kept),
+    committed: Array.from(
+      { length: kept },
+      (_, index) => committedEarlier + index + 1
+    ),
+  };
+}
+
+/**
  * Runs `step` in tries for a busy table (see the module's comment), as the change `change`, with
  * `appliedBefore` the steps this run applied before it. Throws `NEXTLY_TABLE_BUSY` once the tries
  * run out, or at once where the next try would send again a statement that may not be sent again;
@@ -281,65 +376,9 @@ export async function runStepInTries(
         return { kind: "done", value: undefined };
       } catch (error) {
         if (!endedWaiting(error, dialect, false)) throw error;
-        // The statement that waited is the last one sent; none where the wait came as the
-        // transaction opened (SQLite) or before any statement of the step.
-        const waited = sent[sent.length - 1];
-        // On MySQL a schema statement commits what ran before it before it waits, and itself once
-        // it has run, so everything before the waiting statement is durable where that statement
-        // is a schema statement, and everything up to the last one that ran where it is not; the
-        // rest is rolled back. One that waited did not run. On PostgreSQL and SQLite the
-        // transaction rolled back whole.
-        const kept =
-          dialect !== "mysql" || waited === undefined
-            ? 0
-            : waited.schema
-              ? sent.length - 1
-              : sent
-                  .slice(0, -1)
-                  .map(statement => statement.schema)
-                  .lastIndexOf(true) + 1;
-        const committed = Array.from(
-          { length: kept },
-          (_, index) => committedEarlier + index + 1
-        );
-        const keptEarlier = committedEarlier;
-        committedEarlier += kept;
-        // The next try runs again what was not kept, the waiting statement included.
-        const again = sent.slice(kept).map(statement => statement.text);
-        const lasting =
-          again.length === 0
-            ? undefined
-            : firstNoRetry(
-                again,
-                dialect,
-                await triggerTables(adapter, dialect).catch(
-                  () => "unseen" as const
-                )
-              );
-        return {
-          kind: "ended",
-          ended: {
-            table:
-              waited === undefined ? null : targetTable(waited.text, dialect),
-            holder: HOLDER_NOT_LOOKED_UP,
-          },
-          ...(lasting === undefined
-            ? {}
-            : {
-                lasting: {
-                  statementNumber: keptEarlier + kept + lasting.statementNumber,
-                  judgement: lasting.judgement,
-                },
-              }),
-          // On PostgreSQL and SQLite the transaction rolled back whole. On MySQL the rest of the
-          // step was undone only where the try kept nothing and sent no schema statement: every
-          // statement it sent was a row change or a setting, which the rollback undid.
-          undone:
-            dialect !== "mysql" ||
-            (kept === 0 &&
-              sent.every(statement => ROW_CHANGE.test(statement.text))),
-          committed,
-        };
+        const ended = await endedTry(sent, dialect, adapter, committedEarlier);
+        committedEarlier += ended.committed.length;
+        return ended;
       }
     }
   );

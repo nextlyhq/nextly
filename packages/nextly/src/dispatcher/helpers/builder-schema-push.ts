@@ -264,7 +264,7 @@ const leavingSettingsRefusals = new WeakSet<Error>();
  * Whether `error` is a settings step's refusal, which a caller passes on as it is: nothing has
  * been dropped by then, and it names the fields.
  */
-export function isLeavingSettingsRefusal(error: unknown): boolean {
+function isLeavingSettingsRefusal(error: unknown): boolean {
   return error instanceof Error && leavingSettingsRefusals.has(error);
 }
 
