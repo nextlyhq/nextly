@@ -1052,11 +1052,17 @@ function assertSeededIndexBuildable(
     }
   }
   const opaque = table.opaqueColumns ?? new Set<string>();
+  // Weighed whole where the seed types every column the index names, so its
+  // key width is summed, an override's width included whichever was declared
+  // first. A column known by name only leaves the width unknown.
   assertIndexBuildable(
     index,
     table.columns.filter(column => !opaque.has(column.name)),
     table.name,
-    false
+    table.columns.length > 0 &&
+      index.columns.every(
+        name => !opaque.has(name) && table.columns.some(c => c.name === name)
+      )
   );
 }
 

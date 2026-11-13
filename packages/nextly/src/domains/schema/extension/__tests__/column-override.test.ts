@@ -353,6 +353,19 @@ describe("which columns an override reaches", () => {
     });
   });
 
+  it("refuses a hook's index past MySQL's key limit over a column already overridden", async () => {
+    // The opposite order: the override first, then the index over it.
+    const message = await refusal(() =>
+      buildExtensionSchema(
+        input(({ schema }) => {
+          schema.overrideColumn(TABLE, "city", col.varchar(1000));
+          schema.extendTable(TABLE, { indexes: [{ columns: ["city"] }] });
+        })
+      )
+    );
+    expect(message).toMatch(/mysql limits an index key/);
+  });
+
   it("refuses an unbounded string where a compound index the collection declares needs a bound", async () => {
     const declared = (storage: ColumnBuilder) =>
       buildExtensionSchema(
