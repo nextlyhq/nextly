@@ -78,17 +78,20 @@ The default zero-config local-disk adapter does **not** work on Vercel -- server
 
 - **S3 / R2 / DigitalOcean Spaces / etc.** -- install `@nextlyhq/storage-s3`, set `S3_BUCKET` + `S3_REGION` + `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (and `S3_ENDPOINT` + `S3_FORCE_PATH_STYLE` for non-AWS providers).
 
-Vercel's serverless functions also have a 4.5MB request-body limit. Enable client-side direct uploads on storage collections that need to accept larger files:
+Vercel's serverless functions also have a 4.5MB request-body limit. To accept larger files, store them on S3 (or an S3-compatible provider) and enable client-side direct uploads for that collection. Vercel Blob does not sign direct uploads.
 
 ```typescript
 // nextly.config.ts
 import { defineConfig } from "nextly/config";
-import { vercelBlobStorage } from "@nextlyhq/storage-vercel-blob";
+import { s3Storage } from "@nextlyhq/storage-s3";
 
 export default defineConfig({
   storage: [
-    vercelBlobStorage({
-      token: process.env.BLOB_READ_WRITE_TOKEN,
+    s3Storage({
+      bucket: process.env.S3_BUCKET!,
+      region: process.env.S3_REGION!,
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
       collections: {
         media: {
           clientUploads: true,
@@ -98,6 +101,8 @@ export default defineConfig({
   ],
 });
 ```
+
+The browser asks `POST /api/nextly/storage/upload-url` for a URL with the file's `filename`, `mimeType`, `collection` and exact `size`, then sends the file to that URL. The file is checked before the URL is signed (see [Media upload security](/docs/configuration/media-upload-security)).
 
 See [Media & Storage](/docs/guides/media-storage) for the full storage reference.
 

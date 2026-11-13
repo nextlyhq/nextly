@@ -73,6 +73,8 @@ import {
   systemColumnsForFields,
   toSnakeCase,
 } from "../../schema/services/field-column-descriptor";
+import { movedForeignKeyName } from "../../schema/services/index-name";
+import { relationshipTargetSlug } from "../../schema/services/relationship-key-target";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 import { buildCollectionMetadataUpsert } from "../../schema/ui-schema/metadata-sql";
@@ -2237,6 +2239,25 @@ export class DynamicCollectionService extends BaseService {
       const held = liveByColumn.get(from);
       if (held !== undefined) liveByColumn.set(to, held);
     }
+    // The target each old relationship named, by column: a held key whose relationship this save
+    // points at another collection moves there (`movedForeignKeyName` lets it be added before the
+    // old one is dropped); every other held key keeps the target the database records.
+    const oldTargets = new Map(
+      oldFields
+        .filter(field => field.type === "relationship")
+        .map(field => [
+          lower(toSnakeCase(field.name)),
+          relationshipTargetSlug(field),
+        ])
+    );
+    const newTargets = new Map(
+      newFields
+        .filter(field => field.type === "relationship")
+        .map(field => [
+          lower(toSnakeCase(field.name)),
+          relationshipTargetSlug(field),
+        ])
+    );
     return {
       before: live.filter(key =>
         oldRelationColumns.has(lower(key.columns[0] ?? ""))
@@ -2244,17 +2265,34 @@ export class DynamicCollectionService extends BaseService {
       after: described.flatMap(key => {
         const column = lower(key.columns[0] ?? "");
         const held = liveByColumn.get(column);
-        if (held !== undefined) {
-          return [
-            {
-              ...key,
-              name: held.name,
-              referencesTable: held.referencesTable,
-              referencesColumns: held.referencesColumns,
-            },
-          ];
-        }
-        return oldColumns.has(column) ? [] : [key];
+        if (held === undefined) return oldColumns.has(column) ? [] : [key];
+        const moved =
+          oldTargets.has(column) &&
+          oldTargets.get(column) !== newTargets.get(column);
+        return [
+          moved
+            ? {
+                ...key,
+                name: movedForeignKeyName(
+                  tableName,
+                  key.columns[0] ?? "",
+                  held.name,
+                  key.referencesTable,
+                  // Every other key's name, held or described, which the moved one must not take.
+                  new Set(
+                    [...live, ...described]
+                      .filter(other => lower(other.columns[0] ?? "") !== column)
+                      .map(other => other.name)
+                  )
+                ),
+              }
+            : {
+                ...key,
+                name: held.name,
+                referencesTable: held.referencesTable,
+                referencesColumns: held.referencesColumns,
+              },
+        ];
       }),
     };
   }

@@ -1446,8 +1446,17 @@ it, the boot requires one.
 
 So, for every enabled plugin in your config, run the install command once on
 each database, after `nextly migrate`, before the first production boot that
-includes the plugin. Running it again is safe: it applies what is pending and
-calls `onInstall` again, which is why `onInstall` has to be idempotent.
+includes the plugin. Running it again is safe. Once the plugin is recorded
+installed, a later install runs no `onInstall` and records no second install:
+it applies any migration module the plugin's package added since, adds any
+permission or role the package newly declares (with every preset role's grants
+and the release record, in one transaction, as a first install writes them),
+and exits 0. So a build that runs `nextly plugins install --all` on every
+release leaves the ledger as the first install wrote it. An install that
+stopped before it finished has not recorded the plugin installed, so running
+it again calls `onInstall` again, which is why `onInstall` has to be
+idempotent. An install after an uninstall is a full install, `onInstall`
+included.
 Each run also records which tables the plugin owns and which columns,
 indexes, keys and checks its modules added to other owners' tables, so an
 install run again after one that stopped part way records whatever that run
@@ -1465,8 +1474,9 @@ existing app? Add its install to your build, after `nextly migrate`:
 nextly migrate && nextly plugins install <name> && next build
 ```
 
-Each run of an install records one row in `nextly_schema_events` and changes
-nothing else that is already in place. When you remove a plugin from
+A first install, and one after an uninstall, records one row in
+`nextly_schema_events`; an install of a plugin already installed records none,
+and changes nothing that is already in place. When you remove a plugin from
 `nextly.config.ts`, remove its `nextly plugins install` from your build
 script, since installing a plugin that is not configured fails the build.
 Install plugins that depend on others after them, as `dependsOn` lists them.
