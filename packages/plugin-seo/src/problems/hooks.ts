@@ -13,8 +13,10 @@ import { forgetDeleted, recheckSaved, type ProblemChecks } from "./check";
 import { singleKey } from "./page-types";
 
 /** What a hook the checks are started from is handed, as far as they read it. */
-interface SavedContext {
+export interface SavedContext {
   data?: unknown;
+  /** The document as it was before an update, where the hook is handed it. */
+  originalData?: unknown;
   /**
    * Runs an effect once the write is durable: after its transaction commits,
    * where it is made on one, or at once. Absent on a context built by hand.
@@ -73,7 +75,7 @@ export function watchSaves(ctx: PluginContext, checks: ProblemChecks): void {
  * and MySQL the two name the same savepoint and either can fail. Held until
  * the commit, it runs outside the transaction and reads what was saved.
  */
-function onceDurable(context: SavedContext, start: () => void): void {
+export function onceDurable(context: SavedContext, start: () => void): void {
   if (context.afterCommit === undefined) {
     start();
     return;
