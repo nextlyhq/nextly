@@ -43,7 +43,6 @@ import {
   resolveMigration,
   type ResolveMode,
 } from "../../../domains/schema/migrate/resolve";
-import { resolveDataLossConsent } from "../../../domains/schema/migrate/data-loss-consent";
 import { parseSqlSections } from "../../../domains/schema/migrate/sql-sections";
 import { marksNoTransaction } from "../../../domains/schema/migrate/split-sql";
 import { withMigrateLock } from "../../../domains/schema/pipeline/locks";

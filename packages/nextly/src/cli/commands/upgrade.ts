@@ -261,7 +261,7 @@ export interface RunReconcileCoreDeps {
   /** Asks that person a yes-or-no question; only called when `interactive`. */
   askToDelete?: (question: string) => Promise<boolean>;
   /** What plugins and hooks contributed to the core tables (the compiled extension schema). */
-  contributions?: EntityContributionSource;
+  contributions?: EntityContributionSource | undefined;
   /**
    * The app history checks every command that changes core tables makes
    * before its first write (`assertAppHistoryHolds`), asked under the lock
@@ -389,7 +389,7 @@ export async function previewReconcileCore(deps: {
   /** The run's consent, as the real run would read it. */
   consent: DataLossConsent;
   /** As `RunReconcileCoreDeps.contributions`. */
-  contributions?: EntityContributionSource;
+  contributions?: EntityContributionSource | undefined;
   /** As `RunReconcileCoreDeps.checkAppHistory`, read-only: recording no checksum. */
   checkAppHistory: () => Promise<void>;
 }): Promise<DryRunPlan> {
@@ -489,7 +489,8 @@ async function reconcileSetup(
   recordChecksums: boolean
 ): Promise<{
   checkAppHistory: () => Promise<void>;
-  contributions: EntityContributionSource;
+  /** None where the configuration compiles to no extension schema. */
+  contributions: EntityContributionSource | undefined;
 }> {
   const configResult = await loadConfig({
     configPath: globalOpts.config,

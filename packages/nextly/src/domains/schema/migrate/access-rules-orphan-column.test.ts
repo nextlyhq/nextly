@@ -199,7 +199,6 @@ describe("the access_rules column on a database that predates its removal", () =
       reconcileCore({
         db: testDb.db,
         dialect: "sqlite",
-        mode: "dev-loose",
         introspect: () => Promise.resolve(liveWithAccessRules()),
         applyCore: vi.fn(),
         executeSql,

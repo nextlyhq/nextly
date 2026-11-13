@@ -234,7 +234,7 @@ describe.each(availableDialects())(
         await buildCurrentCoreSchema({
           dialect,
           db: setup.db,
-          exec: statement => setup.exec(statement),
+          exec: (statement: string) => setup.exec(statement),
         } as unknown as FreshDatabase);
         for (const table of REGISTRY_TABLES) {
           await setup.exec(`ALTER TABLE ${table} ADD COLUMN access_rules text`);
