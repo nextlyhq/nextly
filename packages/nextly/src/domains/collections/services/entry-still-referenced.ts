@@ -161,7 +161,9 @@ export async function referrersHolding(
  */
 export function entryStillReferenced(
   referrers: readonly EntryReferrer[],
-  logContext: Record<string, unknown>
+  logContext: Record<string, unknown>,
+  // What is being deleted, as the message names it: an entry, or a user account.
+  thing: "entry" | "user" = "entry"
 ): NextlyError {
   const each = referrers.map(r => `${r.count} ${r.collection} in "${r.field}"`);
   // "a", "a and b", "a, b and c".
@@ -171,7 +173,7 @@ export function entryStillReferenced(
       : `${each.slice(0, -1).join(", ")} and ${each[each.length - 1]}`;
   return NextlyError.conflict({
     reason: "state",
-    message: `This entry is still used by ${uses}. Change or delete those first.`,
+    message: `This ${thing} is still used by ${uses}. Change or delete those first.`,
     logContext: { ...logContext, reason: "entry-still-referenced" },
   });
 }

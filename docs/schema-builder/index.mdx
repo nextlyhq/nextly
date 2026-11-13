@@ -85,10 +85,10 @@ keys this way has none, and a later save does not add one, so a database that
 already holds rows pointing at missing entries is never asked to accept a key
 those rows would break.
 
-The key points at the table the target collection is stored in. A relationship
-to Users, to a Single, or to several collections at once gets no key, and
-neither does one that holds several entries: there is no single row for a key
-to check.
+The key points at the table the target collection is stored in, and a
+relationship to Users points at the users table. A relationship to a Single, or
+to several collections at once, gets no key, and neither does one that holds
+several entries: there is no single row for a key to check.
 
 What the key does when an entry it points at is deleted:
 
@@ -99,6 +99,12 @@ What the key does when an entry it points at is deleted:
 - **An optional relationship is emptied** in the database, and the delete goes
   through. The referring entries' hooks, versions and webhooks do not run for
   that change.
+
+Deleting a user works the same way. A required relationship to Users refuses
+the deletion before anything of the account is removed (its roles, its media
+ownership, its email records), with a message such as _This user is still used
+by 12 Posts in "Author". Change or delete those first._ An optional one is
+emptied, and the account is deleted.
 
 A relationship whose column holds a key can't be pointed at another collection:
 the save is refused, naming the field, and the key stays. Add a new
