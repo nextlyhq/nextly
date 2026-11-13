@@ -697,17 +697,20 @@ export async function runMigrate(
     // from the applied subset instead is not worth it: the operator stepping through migrations
     // will reach the end, and the run that gets there does the provisioning.
     try {
-      const stillPending = await findPendingFiles(
+      const stillPending = await migrationsStillPending({
         adapter,
         db,
         dialect,
-        appMigrationsDir,
+        migrationsDir: appMigrationsDir,
         logger,
-        declared
-      );
-      if (stillPending.length > 0) {
+        declared,
+        pluginMigrationSets: (
+          await pluginMigrationArgs(configResult.config.plugins ?? [])
+        ).pluginMigrationSets,
+      });
+      if (stillPending > 0) {
         logger.info(
-          `Skipping translation-table provisioning: ${formatCount(stillPending.length, "migration")} still pending. ` +
+          `Skipping translation-table provisioning, user fields and the workflow pass: ${formatCount(stillPending, "migration")} still pending. ` +
             `Run \`nextly migrate\` without --step to finish.`
         );
       } else {
@@ -1818,8 +1821,12 @@ export async function runPluginPhase(
       // still returns it — so the live table matched neither side and a valid
       // upgrade was refused as drift. The registry has recorded
       // `elementKind: "column"` all along; this simply asks it.
+      //
+      // Foreign keys and checks too: a plugin depending on this one may add
+      // either to its table, recorded as `fk` and `check` elements, and the
+      // owner's next module must not read them as drift.
       const ownedByAnother = (
-        kind: "column" | "index",
+        kind: "column" | "index" | "fk" | "check",
         tableName: string,
         elementName: string
       ): boolean => {
@@ -1833,10 +1840,21 @@ export async function runPluginPhase(
         table.columns = table.columns.filter(
           column => !ownedByAnother("column", table.name, column.name)
         );
-        if (table.indexes === undefined) continue;
-        table.indexes = table.indexes.filter(
-          index => !ownedByAnother("index", table.name, index.name)
-        );
+        if (table.indexes !== undefined) {
+          table.indexes = table.indexes.filter(
+            index => !ownedByAnother("index", table.name, index.name)
+          );
+        }
+        if (table.foreignKeys !== undefined) {
+          table.foreignKeys = table.foreignKeys.filter(
+            fk => !ownedByAnother("fk", table.name, fk.name)
+          );
+        }
+        if (table.checks !== undefined) {
+          table.checks = table.checks.filter(
+            check => !ownedByAnother("check", table.name, check.name)
+          );
+        }
       }
       return live;
     },
@@ -3559,6 +3577,45 @@ export async function findPendingFiles(
       declared
     )
   ).flatMap(({ file, applied }) => (applied ? [] : [file]));
+}
+
+/**
+ * How many migrations a run left for a later one: the app's files and the plugins' modules both.
+ * The work that follows the configuration's final schema (translation tables, user fields, the
+ * workflow pass) waits while any is pending, which a run cut short by `--step` leaves. Plugin
+ * modules count too: they run before the app's files, so a step can stop among them while no app
+ * file is pending.
+ */
+export async function migrationsStillPending(args: {
+  adapter: CLIDatabaseAdapter;
+  db: unknown;
+  dialect: SupportedDialect;
+  migrationsDir: string;
+  logger: CommandContext["logger"];
+  declared?: DeclaredNames;
+  pluginMigrationSets: readonly PluginMigrationSet[];
+}): Promise<number> {
+  const files = await findPendingFiles(
+    args.adapter,
+    args.db,
+    args.dialect,
+    args.migrationsDir,
+    args.logger,
+    args.declared
+  );
+  const modules =
+    args.pluginMigrationSets.length === 0
+      ? []
+      : pendingPluginModules(
+          args.pluginMigrationSets,
+          await appliedPluginModules({
+            adapter: args.adapter,
+            db: args.db,
+            dialect: args.dialect,
+          }),
+          undefined
+        );
+  return files.length + modules.length;
 }
 
 /** The app's migration files in run order, each with whether the ledger records it applied. */

@@ -35,6 +35,8 @@ import {
 import { seedBuilderComponent } from "../../../plugins/__tests__/seed-builder-entity";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { _resetEnvCache } from "../../../shared/lib/env";
+import { setWebhookAuditEnabled } from "../../webhooks/recording-activation";
+import { resetWebhookRecordingPolicy } from "../../webhooks/recording-policy";
 import type { VersionsDbApi } from "../../versions/db-api";
 import { defineWorkflow } from "../define-workflow";
 import { workflowDefinitionHash } from "../hash";
@@ -218,6 +220,21 @@ const quiet = {
   warn: () => undefined,
   error: () => undefined,
 };
+
+/** The `workflow.stage_changed` events the outbox holds for one collection's documents. */
+async function stageChangedFor(collection: string): Promise<unknown[]> {
+  const rows = await app().adapter.select<{ type: string; payload: unknown }>(
+    "nextly_events"
+  );
+  return rows
+    .filter(row => row.type === "workflow.stage_changed")
+    .map(row =>
+      typeof row.payload === "string"
+        ? (JSON.parse(row.payload) as { resource?: { collection?: string } })
+        : (row.payload as { resource?: { collection?: string } })
+    )
+    .filter(envelope => envelope.resource?.collection === collection);
+}
 
 /** The deploy step `nextly migrate` runs, for the configuration `collections` describe. */
 const deployStep = (collections: ReturnType<typeof collectionsOn>) =>
@@ -625,6 +642,53 @@ describe.each(getConfiguredTestDialects())(
           stage: "paused",
           definitionHash: workflowDefinitionHash(deskRenamed),
         });
+      });
+    });
+
+    describe("the deploy step's webhook events", () => {
+      it("records no stage change for an entity whose webhooks are off, as a request records none", async () => {
+        await boot(dialect);
+        // Recording on whether or not an endpoint exists, so only an entity's own switch holds an
+        // event back.
+        setWebhookAuditEnabled(true);
+        try {
+          const post = await entry(app(), "posts");
+          const page = await entry(app(), "pages");
+          await seedState(app(), partOf("posts", post, "en"), "hold", {
+            definitionHash: DESK,
+          });
+          await seedState(app(), partOf("pages", page, null), "hold", {
+            definitionHash: DESK,
+          });
+          // A `nextly migrate` process holds no recording decision until it publishes one.
+          resetWebhookRecordingPolicy();
+
+          await followWorkflowsAfterMigrate(
+            defineConfig({
+              localization: { locales: ["en", "es"], defaultLocale: "en" },
+              collections: collectionsOn({
+                posts: deskRenamed,
+                pages: deskRenamed,
+              }).map(collection =>
+                collection.slug === "pages"
+                  ? { ...collection, webhooks: false }
+                  : collection
+              ),
+            }),
+            null,
+            app().adapter,
+            quiet
+          );
+
+          // Both parts followed the rename; only Posts, whose webhooks are on, says so.
+          expect(
+            await stateOf(app(), partOf("pages", page, null))
+          ).toMatchObject({ stage: "paused" });
+          expect(await stageChangedFor("posts")).toHaveLength(1);
+          expect(await stageChangedFor("pages")).toEqual([]);
+        } finally {
+          setWebhookAuditEnabled(false);
+        }
       });
     });
 

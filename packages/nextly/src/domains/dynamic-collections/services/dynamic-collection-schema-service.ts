@@ -73,6 +73,10 @@ import {
   uniquenessNotEnforceableError,
 } from "../../schema/services/index-name";
 import {
+  relationshipKeyTarget,
+  relationshipTargetSlug,
+} from "../../schema/services/relationship-key-target";
+import {
   backfillDefaultForType,
   backfillValueForType,
   storedDateValue,
@@ -733,24 +737,17 @@ export class DynamicCollectionSchemaService {
     refuse = true,
     targetTables?: CollectionTables
   ): ForeignKeySpec | null {
-    if (field.type !== "relationship" || !field.options?.target) return null;
-    // A relationship holding a list keeps its ids in a JSON column: no single column can reference
-    // one row, so it gets no foreign key.
-    if (relationshipStoresJson(field)) return null;
-    // Many-to-one when unstated, as the Builder creates it.
-    const relationType = field.options.relationType || "manyToOne";
-    if (
-      relationType !== "oneToOne" &&
-      relationType !== "manyToOne" &&
-      relationType !== "oneToMany"
-    ) {
-      return null;
-    }
+    // Which relationships carry a key, and the table it points at, are one shared answer
+    // (`relationshipKeyTarget`): a list held as JSON, a many-to-many and a target with no table
+    // get none, and a relationship naming its target by `relationTo` is keyed only for a Schema
+    // Builder collection's own keys.
+    const target = relationshipKeyTarget(field, targetTables);
+    if (target === null) return null;
     const column = toSnakeCase(field.name);
     return {
       name: this.relationshipKeyName(tableName, column),
       columns: [column],
-      referencesTable: this.targetTableOf(field.options.target, targetTables),
+      referencesTable: target.table,
       referencesColumns: ["id"],
       // Through the SQL spelling and back, so an action the mapping does not
       // know falls back exactly as the rendered constraint does.
@@ -2507,9 +2504,19 @@ ${allColumnDefs.join(",\n")}
     targetTables?: CollectionTables,
     columnDefaults = true
   ): ReferentialActionChange {
-    if (newField.type !== "relationship") return NO_REFERENTIAL_ACTION_CHANGE;
-    const target = newField.options?.target;
-    if (!target || usesJunctionTable(newField)) {
+    // Only a relationship that carries a key has actions to change: one stored as JSON, a
+    // many-to-many, or one whose target has no table never had a constraint to replace.
+    const keyTarget = relationshipKeyTarget(newField, targetTables);
+    if (keyTarget === null) return NO_REFERENTIAL_ACTION_CHANGE;
+    const target = keyTarget.slug;
+    // A relationship keyed through its `relationTo` alone is one the admin made. One made before
+    // such relationships carried keys has none, and an existing column is never given a key its
+    // rows might break, so its actions move only where the live table shows its key. On SQLite
+    // a keyed column is listed with no constraint names, so presence is the answer.
+    if (
+      target !== newField.options?.target &&
+      liveForeignKeys?.has(previousColumnName) !== true
+    ) {
       return NO_REFERENTIAL_ACTION_CHANGE;
     }
 
@@ -2577,7 +2584,7 @@ ${allColumnDefs.join(",\n")}
       tableName,
       constraintName: this.relationshipKeyName(tableName, columnName),
       columnName,
-      referencesTable: this.targetTableOf(target, targetTables),
+      referencesTable: keyTarget.table,
       referencesColumn: "id",
       fromOnDelete: from.onDelete,
       fromOnUpdate: from.onUpdate,
@@ -2933,8 +2940,14 @@ ${allColumnDefs.join(",\n")}
    * same relation kind — the only relations a rename preserves.
    */
   private sameRelationTarget(a: FieldDefinition, b: FieldDefinition): boolean {
+    // The target as reads take it (`relationTo` before `options.target`), so two relationships
+    // naming different collections only by `relationTo` are not mistaken for one; a `relationTo`
+    // list is compared whole.
+    const listOf = (f: FieldDefinition) =>
+      Array.isArray(f.relationTo) ? JSON.stringify(f.relationTo) : null;
     return (
-      a.options?.target === b.options?.target &&
+      relationshipTargetSlug(a) === relationshipTargetSlug(b) &&
+      listOf(a) === listOf(b) &&
       a.options?.relationType === b.options?.relationType
     );
   }
@@ -2956,7 +2969,9 @@ ${allColumnDefs.join(",\n")}
    */
   plannedAttachments(
     tableName: string,
-    fields: FieldDefinition[]
+    fields: FieldDefinition[],
+    // The tables the create keys each relationship to, so the keys predicted are the ones it writes.
+    targetTables?: CollectionTables
   ): {
     indexNames: Set<string>;
     indexColumns: Map<string, string[]>;
@@ -3004,7 +3019,12 @@ ${allColumnDefs.join(",\n")}
       }
       // Predicted from the description the create emits the key from, so a relationship holding a
       // list, which the create gives no key, is not predicted one a later edit would drop.
-      const fk = this.relationshipForeignKey(tableName, field, false);
+      const fk = this.relationshipForeignKey(
+        tableName,
+        field,
+        false,
+        targetTables
+      );
       if (fk !== null) {
         foreignKeysByColumn.set(column, [fk.name]);
       }
