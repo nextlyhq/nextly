@@ -297,6 +297,7 @@ async function boot(
       importer: await keyHolding([
         ...content,
         "read-media",
+        "read-legacy",
         MANAGE_SEO_PERMISSION,
       ]),
       editorOnly: await keyHolding(content),
@@ -517,7 +518,8 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       checked: 5,
       fromFile: false,
       pages: 4,
-      same: 2,
+      // Jasper's title, and its `index`: listed, as it is automatically.
+      same: 3,
       kept: 1,
       redirects: 0,
       left: ["twitterCard", "keywords"],
@@ -611,7 +613,9 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
       },
     };
     const dry = await dryRun(staff.importer, source);
-    expect(dry).toMatchObject({ checked: 5, pages: 3, same: 1 });
+    // One value the same as automatic, and four pages listed, as they are
+    // automatically: the group's noIndex left off.
+    expect(dry).toMatchObject({ checked: 5, pages: 3, same: 5 });
     expect(dry.warnings.join(" ")).toContain(
       "1 official address (canonical) is on another site"
     );
@@ -695,6 +699,13 @@ describe.each(getConfiguredTestDialects())("the SEO import (%s)", dialect => {
     expect(body.ownSeo).toEqual([
       { slug: "legacy", label: "Legacy pages", definedIn: "code" },
     ]);
+    // Never to someone who may not read that type.
+    const unseen = await call(
+      staff.importerWithoutMedia,
+      "GET",
+      "/import/groups"
+    );
+    expect(((await unseen.json()) as ImportGroupsBody).ownSeo).toEqual([]);
     const fields = offered?.fields;
     expect(fields?.find(field => field.name === "metaTitle")?.example).toMatch(
       /^(Nextly pricing|Old changelog title)$/
