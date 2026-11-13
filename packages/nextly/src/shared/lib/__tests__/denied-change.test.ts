@@ -12,6 +12,7 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { currentFieldGroupTypeKey } from "../../../domains/field-groups/storage/field-group-type-key";
 import { NextlyError } from "../../../errors";
 import {
   declaredFieldNames,
@@ -1039,6 +1040,60 @@ describe("resolvePromotedDocument judges a pending value by the document it prod
         refused as { publicData?: { errors?: { path: string }[] } }
       ).publicData?.errors?.map(e => e.path)
     ).toEqual(["ops.mode", "ops.secret"]);
+  });
+
+  it("refuses a pending value whose component the publish replaces with another type", async () => {
+    const type = currentFieldGroupTypeKey;
+    // A `secure` component's `secret` may never be written; an `open` component has no such rule.
+    const rules = (document: Record<string, unknown>): Promise<void> => {
+      const zone = (document.box as Record<string, unknown> | undefined)
+        ?.zone as Record<string, unknown> | undefined;
+      if (zone?.[type] === "secure") delete zone.secret;
+      return Promise.resolve();
+    };
+    const pending = { box: { zone: { [type]: "secure", secret: "pending" } } };
+    const callerSupplied = { box: { zone: { [type]: "open" } } };
+    let refused: unknown;
+    try {
+      await resolvePromotedDocument({
+        slug: "posts",
+        applyRules: rules,
+        before: { box: { zone: { [type]: "open" } } },
+        live: { box: { zone: { [type]: "open" } } },
+        pending,
+        callerSupplied,
+      });
+    } catch (error) {
+      refused = error;
+    }
+    expect(
+      (
+        refused as { publicData?: { errors?: { path: string }[] } }
+      ).publicData?.errors?.map(e => e.path)
+    ).toContain("box.zone.secret");
+  });
+
+  it("does not judge again a pending value the row already holds", async () => {
+    // `guarded` may be written only where `kind` is "public".
+    let passes = 0;
+    const rules = (document: Record<string, unknown>): Promise<void> => {
+      passes++;
+      if (document.kind !== "public") delete document.guarded;
+      return Promise.resolve();
+    };
+    const pending = { kind: "private", guarded: "old" };
+    const callerSupplied = { kind: "public" };
+    const out = await resolvePromotedDocument({
+      slug: "posts",
+      applyRules: rules,
+      before: { kind: "public", guarded: "old" },
+      live: { kind: "public", guarded: "old" },
+      pending,
+      callerSupplied,
+    });
+    expect(out).toEqual({ kind: "public", guarded: "old" });
+    // The produced document, live, the pending change and the caller's payload: one pass each.
+    expect(passes).toBe(4);
   });
 
   it("refuses a pending value whose allowing sibling the publish puts back at live", async () => {

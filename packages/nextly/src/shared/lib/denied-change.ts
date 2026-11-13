@@ -32,6 +32,7 @@
 
 import { isDeepStrictEqual } from "node:util";
 
+import { readFieldGroupType } from "../../domains/field-groups/storage/field-group-type-key";
 import { NextlyError } from "../../errors";
 
 import { detachData } from "./detach";
@@ -187,11 +188,7 @@ export async function resolvePromotedDocument(
   // The pending change judged on its own, with one exemption (`allowedAsProduced`): a plain value
   // the document the publish writes allows, though the draft's own siblings denied it.
   if (input.pending && permittedPending) {
-    for (const path of deniedPaths(input.pending, permittedPending, "")) {
-      if (denied.has(path)) continue;
-      if (await allowedAsProduced(input, persisted, path)) continue;
-      denied.add(path);
-    }
+    await addPendingDenials(input, permittedPending, persisted, denied);
   }
   const refusals = [...denied].flatMap(path =>
     refusedLeaves(input, path, credited)
@@ -531,6 +528,31 @@ function isRefusal(
 }
 
 /**
+ * Add to `denied` every path the pending change is denied on its own, except one the document
+ * the publish writes allows (`allowedAsProduced`).
+ */
+async function addPendingDenials(
+  input: PromotionAccessInput,
+  permittedPending: Record<string, unknown>,
+  persisted: Record<string, unknown>,
+  denied: Set<string>
+): Promise<void> {
+  for (const path of deniedPaths(input.pending, permittedPending, "")) {
+    if (denied.has(path)) continue;
+    // A pending value the row already holds changes nothing, so no refusal can come of it, and
+    // judging it again would cost a pass of the rules over the whole document for nothing.
+    const unchanged = sameStoredValue(
+      valueAt(input.pending, path),
+      valueAt(input.live, path)
+    );
+    if (!unchanged && (await allowedAsProduced(input, persisted, path))) {
+      continue;
+    }
+    denied.add(path);
+  }
+}
+
+/**
  * Whether a path the pending change is denied on its own is allowed by the document the publish
  * produces, holding the pending value there.
  *
@@ -554,6 +576,9 @@ async function allowedAsProduced(
   if (path.includes("[") || isRecord(value) || Array.isArray(value)) {
     return false;
   }
+  // A component's field rules are chosen by its type, so a value whose component the publish
+  // replaces with another type would be judged by the other type's rules, or by none.
+  if (!sameComponentsAlong(input.pending, persisted, path)) return false;
   const produced = detachData(persisted);
   if (!putOwnPath(produced, path, detachData(value))) return false;
   const judged = detachData(produced);
@@ -561,6 +586,28 @@ async function allowedAsProduced(
   return !deniedPaths(produced, judged, "").some(
     denied => denied === path || path.startsWith(`${denied}.`)
   );
+}
+
+/**
+ * Whether every container on the way to `path` is the same component (or none) in the pending
+ * change and in the document the publish writes.
+ */
+function sameComponentsAlong(
+  pending: Record<string, unknown> | undefined,
+  persisted: Record<string, unknown>,
+  path: string
+): boolean {
+  const steps = path.split(".");
+  for (let depth = 1; depth < steps.length; depth++) {
+    const prefix = steps.slice(0, depth).join(".");
+    if (
+      readFieldGroupType(valueAt(pending, prefix)) !==
+      readFieldGroupType(valueAt(persisted, prefix))
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
