@@ -188,6 +188,11 @@ const clientEntries = [
   // every domain it counts -- so the card reaching the vocabulary through it
   // would take all of them, and one writing its own copy would drift.
   "src/domains/widgets/attention-keys.ts",
+  // The admin root entry's export list, as its own entry. The admin's test
+  // holds its built root to it and the component-map generator imports a
+  // moved name from the admin's kit entry by it, so neither keeps a copy; it
+  // imports nothing. Internal: not a public API.
+  "src/plugins/codegen/admin-root-exports.ts",
   // A card's body height and the list rows it holds, as their own entry. The
   // admin draws its grid and frame by these numbers and a widget's server
   // `load` counts its rows by the same formula, so neither keeps a copy; the

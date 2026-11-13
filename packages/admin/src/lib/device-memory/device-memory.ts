@@ -45,7 +45,7 @@
  *
  * @module lib/device-memory/device-memory
  */
-import { z } from "zod";
+import * as z from "zod/mini";
 
 import { adminVersion } from "@admin/lib/admin-version";
 
@@ -119,29 +119,29 @@ export function buildLabel(): string {
 // ---------------------------------------------------------------------------
 
 /** A short text kept in an entry: a name, a slug, an icon's name. */
-const name = z.string().min(1).max(200);
+const name = z.string().check(z.minLength(1), z.maxLength(200));
 /** A link within the admin: an absolute path on this origin, or none. */
-const adminLink = z
-  .string()
-  .max(500)
-  .refine(
+const adminLink = z.string().check(
+  z.maxLength(500),
+  z.refine(
     href => href === "#" || (href.startsWith("/") && !href.startsWith("//"))
-  );
+  )
+);
 
 const railEntrySchema = z.object({
   id: name,
   label: name,
   href: adminLink,
   /** The icon's name, for an entry the admin does not draw an icon for itself. */
-  icon: name.optional(),
+  icon: z.optional(name),
 });
 
 const contentItemSchema = z.object({
   slug: name,
   label: name,
-  icon: name.optional(),
+  icon: z.optional(name),
   /** The `sidebarGroup` a collection is listed under, and its shown name. */
-  group: z.object({ slug: name, label: name }).optional(),
+  group: z.optional(z.object({ slug: name, label: name })),
 });
 
 /**
@@ -150,11 +150,11 @@ const contentItemSchema = z.object({
  * is ever kept.
  */
 const rememberedMenuSchema = z.object({
-  rail: z.array(railEntrySchema).max(64),
+  rail: z.array(railEntrySchema).check(z.maxLength(64)),
   /** Which headings the Content panel shows, so they are drawn from memory. */
   parts: z.object({ collections: z.boolean(), singles: z.boolean() }),
-  collections: z.array(contentItemSchema).max(1000),
-  singles: z.array(contentItemSchema).max(1000),
+  collections: z.array(contentItemSchema).check(z.maxLength(1000)),
+  singles: z.array(contentItemSchema).check(z.maxLength(1000)),
 });
 
 export type RememberedMenu = z.infer<typeof rememberedMenuSchema>;
@@ -163,13 +163,16 @@ export type RememberedContentItem = z.infer<typeof contentItemSchema>;
 
 /** A schema as the server answered it, with the tag it carried. */
 const rememberedSchemaSchema = z.object({
-  etag: z.string().min(1).max(200),
+  etag: z.string().check(z.minLength(1), z.maxLength(200)),
   body: z.record(z.string(), z.unknown()),
 });
 
 export type RememberedSchema = z.infer<typeof rememberedSchemaSchema>;
 
-const setText = z.string().trim().min(1).max(2048).optional().catch(undefined);
+const setText = z.catch(
+  z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(2048))),
+  undefined
+);
 
 /** The site's public branding: what the sign-in page shows anyone. */
 const rememberedBrandingSchema = z.object({
@@ -223,9 +226,9 @@ function entryKey(kind: MemoryKind, id: string): string {
 const storedEntrySchema = z.object({
   labels: z.object({
     build: z.string(),
-    user: z.string().optional(),
-    schemaVersion: z.string().optional(),
-    permissionVersion: z.string().optional(),
+    user: z.optional(z.string()),
+    schemaVersion: z.optional(z.string()),
+    permissionVersion: z.optional(z.string()),
   }),
   data: z.unknown(),
 });

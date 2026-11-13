@@ -283,6 +283,21 @@ jobs:
           # (packages/nextly/src/__tests__/worker-database-guard.ts).
           NEXTLY_INTEGRATION_WORKERS: "2"
 
+      # The playground's fixture plugin (apps/playground/src/plugins/
+      # reading-lists-fixture) through a site's whole life on this leg's
+      # dialect: the app's migration generated, then migrate, install, use,
+      # uninstall each way and reinstall, with the real `nextly` command. On the
+      # first shard only, after the suite, on a database of its own: it needs
+      # nothing but the packages the suite's build made, and takes about a
+      # minute.
+      - name: Fixture plugin (postgres)
+        if: matrix.shard == 1
+        run: |
+          scripts/run-with-budget.sh 5m "the fixture plugin on PostgreSQL" \
+            pnpm lane:test:integration:playground
+        env:
+          TEST_POSTGRES_URL: postgres://nextly:nextly@localhost:5432/nextly_test
+
       # Only a job that finished its work publishes what it learned. A cancelled or
       # failed run leaves the cache as it found it — `actions/cache` saves in a post
       # step that runs however the job ended, and splitting restore from save is the
@@ -489,6 +504,21 @@ jobs:
             exit 1
           fi
 
+      # The playground's fixture plugin (apps/playground/src/plugins/
+      # reading-lists-fixture) through a site's whole life on this leg's
+      # dialect: the app's migration generated, then migrate, install, use,
+      # uninstall each way and reinstall, with the real `nextly` command. On the
+      # first shard only, after the suite, on a database of its own: it needs
+      # nothing but the packages the suite's build made, and takes about a
+      # minute.
+      - name: Fixture plugin (mysql)
+        if: matrix.shard == 1
+        run: |
+          scripts/run-with-budget.sh 5m "the fixture plugin on MySQL" \
+            pnpm lane:test:integration:playground
+        env:
+          TEST_MYSQL_URL: mysql://root:nextly@127.0.0.1:3306/nextly_test
+
       # Only a job that finished its work publishes what it learned. A cancelled or
       # failed run leaves the cache as it found it — `actions/cache` saves in a post
       # step that runs however the job ended, and splitting restore from save is the
@@ -618,6 +648,19 @@ jobs:
           # each worker runs on its own in-memory SQLite database
           # (packages/nextly/src/__tests__/worker-database-guard.ts).
           NEXTLY_INTEGRATION_WORKERS: "2"
+
+      # The playground's fixture plugin (apps/playground/src/plugins/
+      # reading-lists-fixture) through a site's whole life on this leg's
+      # dialect: the app's migration generated, then migrate, install, use,
+      # uninstall each way and reinstall, with the real `nextly` command. On the
+      # first shard only, after the suite, on a database of its own: it needs
+      # nothing but the packages the suite's build made, and takes about a
+      # minute.
+      - name: Fixture plugin (sqlite)
+        if: matrix.shard == 1
+        run: |
+          scripts/run-with-budget.sh 5m "the fixture plugin on SQLite" \
+            pnpm lane:test:integration:playground
 
       # Only a job that finished its work publishes what it learned. A cancelled or
       # failed run leaves the cache as it found it — `actions/cache` saves in a post

@@ -58,13 +58,25 @@ export interface ParticipantRunner {
     address: HeldAddress,
     asker: AddressHolder,
     batch: readonly HeldAddressUpdate[],
-    tx: TransactionContext
+    tx: TransactionContext,
+    saveKey: object
   ): Promise<AddressHolder | null>;
   /** Replace what each holder in `batch` holds, releases before claims. */
   record(
     batch: readonly HeldAddressUpdate[],
-    tx: TransactionContext
+    tx: TransactionContext,
+    saveKey: object
   ): Promise<void>;
+}
+
+/**
+ * A new identity for one question core asks the participants: one save, or
+ * one `move`. Every call of that question is handed it, and the next
+ * question another, even on the same transaction. Frozen and empty: it
+ * names the question and carries nothing.
+ */
+export function newSaveKey(): object {
+  return Object.freeze({});
 }
 
 /**
@@ -160,14 +172,21 @@ function sameHolder(a: AddressHolder, b: AddressHolder): boolean {
 export async function firstHolder(
   update: HeldAddressUpdate,
   batch: readonly HeldAddressUpdate[],
-  tx: TransactionContext
+  tx: TransactionContext,
+  saveKey: object
 ): Promise<{ address: HeldAddress; heldBy: AddressHolder } | null> {
   // Taken once, so a participant added meanwhile is asked on the next write.
   const asked = active();
   let clash: { address: HeldAddress; heldBy: AddressHolder } | null = null;
   for (const runner of asked) {
     for (const address of update.holds) {
-      const heldBy = await runner.holderOf(address, update.holder, batch, tx);
+      const heldBy = await runner.holderOf(
+        address,
+        update.holder,
+        batch,
+        tx,
+        saveKey
+      );
       if (
         clash === null &&
         heldBy !== null &&
@@ -183,10 +202,11 @@ export async function firstHolder(
 /** Tell every participant what each holder in `batch` holds now. */
 export async function recordEverywhere(
   batch: readonly HeldAddressUpdate[],
-  tx: TransactionContext
+  tx: TransactionContext,
+  saveKey: object
 ): Promise<void> {
   const told = active();
-  for (const runner of told) await runner.record(batch, tx);
+  for (const runner of told) await runner.record(batch, tx, saveKey);
 }
 
 /**

@@ -16,6 +16,8 @@ import {
 } from "../participants";
 
 const tx = {} as TransactionContext;
+/** One question's identity, as core hands it to every call of the question. */
+const key = Object.freeze({});
 const post: AddressHolder = { collection: "posts", id: "p1" };
 const page: AddressHolder = { collection: "pages", id: "1", label: "Hello" };
 const en: HeldAddress = { locale: "en", path: "/blog/hello" };
@@ -57,7 +59,7 @@ describe("the question participants share", () => {
     join(holding.runner);
     const update = { holder: post, holds: [en, fr] };
 
-    const clash = await firstHolder(update, [update], tx);
+    const clash = await firstHolder(update, [update], tx, key);
 
     expect(clash).toEqual({ address: fr, heldBy: page });
     expect(quiet.asked.map(a => a.address)).toEqual([en, fr]);
@@ -70,7 +72,7 @@ describe("the question participants share", () => {
     );
     const update = { holder: post, holds: [en] };
 
-    expect(await firstHolder(update, [update], tx)).toBeNull();
+    expect(await firstHolder(update, [update], tx, key)).toBeNull();
   });
 
   it("hands each participant the whole batch", async () => {
@@ -79,7 +81,7 @@ describe("the question participants share", () => {
     const update = { holder: post, holds: [en] };
     const other = { holder: page, holds: [] };
 
-    await firstHolder(update, [update, other], tx);
+    await firstHolder(update, [update, other], tx, key);
 
     expect(one.asked[0]?.batch).toEqual([update, other]);
   });
@@ -91,7 +93,7 @@ describe("the question participants share", () => {
     join(two.runner);
     const batch = [{ holder: post, holds: [en] }];
 
-    await recordEverywhere(batch, tx);
+    await recordEverywhere(batch, tx, key);
 
     expect(one.recorded).toEqual([batch]);
     expect(two.recorded).toEqual([batch]);
@@ -105,7 +107,7 @@ describe("the question participants share", () => {
     });
     const update = { holder: post, holds: [en] };
 
-    await expect(firstHolder(update, [update], tx)).rejects.toBe(broken);
+    await expect(firstHolder(update, [update], tx, key)).rejects.toBe(broken);
   });
 
   it("knows whether anyone takes part, and says when that changes", () => {
@@ -185,8 +187,8 @@ describe("a plugin a reload switched off", () => {
     const update = { holder: post, holds: [en] };
 
     try {
-      expect(await firstHolder(update, [update], tx)).toBeNull();
-      await recordEverywhere([update], tx);
+      expect(await firstHolder(update, [update], tx, key)).toBeNull();
+      await recordEverywhere([update], tx, key);
     } finally {
       registry.setSuspendedOwners(before);
     }
