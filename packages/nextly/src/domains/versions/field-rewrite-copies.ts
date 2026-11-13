@@ -17,13 +17,13 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { RequestActor } from "../../auth/request-actor";
 import { isFieldGroupField } from "../../collections/fields/guards";
+import { NextlyError } from "../../errors";
+import { pathsKeptFromCaller } from "../../shared/lib/denied-change";
 import type {
   FieldGroupReach,
   NamedField,
 } from "../../shared/lib/password-fields";
 import { assignRepeaterRowIds } from "../../shared/lib/repeater-row-ids";
-import { NextlyError } from "../../errors";
-import { pathsKeptFromCaller } from "../../shared/lib/denied-change";
 import type { WriteEventInput } from "../content-events/write-event";
 import { keepDeniedAtStoredOnUpdate } from "../field-groups/field-group-write-access";
 
