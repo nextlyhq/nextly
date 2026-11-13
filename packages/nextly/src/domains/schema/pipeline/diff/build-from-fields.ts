@@ -35,6 +35,7 @@ import {
   assertIndexBuildable,
   type WeighedColumn,
 } from "../../extension/naming";
+import { builderColumnIsUnique } from "../../field-rules";
 import {
   componentRelationshipHoldsReferenceList,
   getColumnDescriptor,
@@ -90,6 +91,8 @@ interface MinimalFieldDef {
   unique?: boolean;
   index?: boolean;
   localized?: boolean;
+  /** A Builder relationship's options, where `relationType` says whether it is one-to-one. */
+  options?: unknown;
 }
 
 /** Optional toggles that affect which system columns are injected. */
@@ -211,6 +214,17 @@ interface CollectionIndexContext<F> {
    * forget it; an optional field with a lenient default rebuilds that place inside the option bag.
    */
   uniquenessIsIndexable: (field: F, column: string) => boolean;
+  /**
+   * Whether the field's column is unique, by the rule of whatever creates the table.
+   *
+   * The Schema Builder's collection and Single creator makes a one-to-one relationship's column
+   * unique by its cardinality, with no `unique` flag (`builderColumnIsUnique`); the field-group and
+   * code-first creators read the flag alone. Asked of the caller, and required, for the reason
+   * `uniquenessIsIndexable` is: a desired schema that read the flag alone for a Builder table left
+   * the one-to-one's uniqueness out of every migration written from it, so the table took
+   * duplicates.
+   */
+  fieldIsUnique: (field: F) => boolean;
 }
 
 /**
@@ -277,7 +291,7 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
     // keep the uniqueness inline and write no index, so declaring one here would make every diff
     // propose a `CREATE UNIQUE INDEX` the server refuses.
     const uniqueIsIndexable =
-      field.unique === true && context.uniquenessIsIndexable(field, col);
+      context.fieldIsUnique(field) && context.uniquenessIsIndexable(field, col);
 
     if (uniqueIsIndexable) {
       indexes.push({
@@ -501,6 +515,12 @@ export function buildDesiredTableFromFields(
         columns.find(c => c.name === col)?.type ?? "",
         dialect
       ),
+    // The Builder's collection and Single creator makes a one-to-one's column unique, so the
+    // table it describes does too; a code-first table reads the flag alone.
+    fieldIsUnique: field =>
+      options.builtBy === "collection"
+        ? builderColumnIsUnique(field)
+        : field.unique === true,
     localizedNames,
     columnNameFor: field =>
       getColumnDescriptor(
@@ -621,6 +641,13 @@ export function buildDesiredTableFromComponentFields(
 ): TableSpec {
   const typeColumn = options.typeColumn ?? STORAGE_FORMAT.columns.type;
   const columns: ColumnSpec[] = [];
+  // The fields that own a column on the row. A group with no name only lays fields out, and the
+  // field-group creator gives it and what it holds no column (`columnFields`, which reads named
+  // fields alone), so it is described with none. Read whole, its missing name stopped the column
+  // descriptor, and with it every Builder save once such a field group was in the definition file.
+  const namedFields = fields.filter(
+    field => typeof field.name === "string" && field.name.length > 0
+  );
 
   // i18n: when the component is localized, its translatable fields live in the
   // companion `comp_<slug>_locales` table (migration-owned) and MUST be omitted
@@ -754,7 +781,7 @@ export function buildDesiredTableFromComponentFields(
   }
 
   // User-defined fields.
-  for (const field of fields) {
+  for (const field of namedFields) {
     if (localizedNames.has(field.name)) continue; // lives in the companion table
     const desc = getComponentRowColumnDescriptor(
       field as unknown as Parameters<typeof getColumnDescriptor>[0],
@@ -838,7 +865,7 @@ export function buildDesiredTableFromComponentFields(
     // created_at indexes here left the rest out of the snapshot, so a SQLite
     // rebuild dropped them and nothing put them back — including the unique
     // ones, which is a constraint silently disappearing, not just an index.
-    ...collectionIndexSpecs(tableName, fields, {
+    ...collectionIndexSpecs(tableName, namedFields, {
       // A relation holding a list of references takes no plain index even when it asks for one,
       // as the creator writes none (`componentRelationshipHoldsReferenceList` says why). A single
       // polymorphic reference is one object and keeps an index it asks for.
@@ -853,6 +880,8 @@ export function buildDesiredTableFromComponentFields(
           columns.find(c => c.name === col)?.type ?? "",
           dialect
         ),
+      // The field-group creator makes a column unique on the flag alone, a relationship included.
+      fieldIsUnique: field => field.unique === true,
       // Components have no slug column; created_at is present when the
       // component carries timestamps.
       hasSlugColumn: false,

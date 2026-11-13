@@ -100,6 +100,57 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
+    it("in development makes a one-to-one's column unique, so a second entry cannot name the same target", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      const service = t.getService("collectionService");
+      const relation = (relationType: string) =>
+        ({
+          name: "profile",
+          type: "relationship",
+          options: { target: "people", relationType, onDelete: "set null" },
+        }) as never;
+      await service.createCollection(
+        {
+          name: "people",
+          label: "Person",
+          fields: [{ name: "name", type: "text" }],
+        } as Parameters<CollectionService["createCollection"]>[0],
+        {}
+      );
+      for (const [name, relationType] of [
+        ["posts", "oneToOne"],
+        ["notes", "manyToOne"],
+      ] as const) {
+        await service.createCollection(
+          {
+            name,
+            label: name,
+            fields: [{ name: "body", type: "text" }, relation(relationType)],
+          } as Parameters<CollectionService["createCollection"]>[0],
+          {}
+        );
+      }
+      const person = await t.nextly.create({
+        collection: "people" as never,
+        data: { name: "Ada" } as never,
+      });
+      const profile = (person.item as { id: string }).id;
+      const write = (collection: string, body: string) =>
+        t.nextly.create({
+          collection: collection as never,
+          data: { body, profile } as never,
+        });
+
+      // The one-to-one's cardinality is held by the table: a second entry naming the same person
+      // is refused.
+      await write("posts", "first");
+      await expect(write("posts", "second")).rejects.toBeDefined();
+      // The control: a many-to-one beside it takes both, so the refusal above is the column's
+      // uniqueness and not something else about the write.
+      await write("notes", "first");
+      await expect(write("notes", "second")).resolves.toBeDefined();
+    });
+
     it("keeps a plugin many-to-one's foreign-key action through the definition into a deploy's registry row", async () => {
       vi.stubEnv("NODE_ENV", "development");
       const service = t.getService("collectionService");
