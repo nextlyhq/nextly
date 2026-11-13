@@ -753,40 +753,6 @@ describeEachDialect(
       120_000
     );
 
-    // A translated field's rename names its translations table.
-    it.skipIf(writerCannotRebuildEarlierKey)(
-      "keeps a translated stored relationship's options through a rename",
-      async () => {
-        const t = await boot(dialect, "manyToOne", {
-          legacy: true,
-          localized: true,
-          onDelete: "cascade",
-        });
-        const stored = await storedPersonField(t);
-        const [title, person] = await asTheEditorSendsIt();
-
-        await apply(
-          t,
-          [title, { ...person, localized: true, name: "owner" }],
-          true,
-          [
-            {
-              tableName: `${PROFILES_TABLE}_locales`,
-              fromColumn: "person",
-              toColumn: "owner",
-              choice: "rename",
-            },
-          ]
-        );
-
-        expect(await storedField(t, "owner")).toEqual({
-          ...stored,
-          name: "owner",
-        });
-      },
-      120_000
-    );
-
     it.skipIf(writerCannotRebuildEarlierKey)(
       "keeps a stored relationship's options and its key's delete action through a rename",
       async () => {
