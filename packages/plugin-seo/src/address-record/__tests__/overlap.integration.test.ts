@@ -20,7 +20,9 @@ import {
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
 import { defineCollection, text } from "nextly";
-import { afterEach, describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { statementsOf, writesAmong } from "../../__tests__/count-statements";
 import { moveLoggedRows } from "../../not-found/log";
@@ -31,6 +33,7 @@ import {
   saveSiteCheck,
 } from "../../problems/store";
 import { redirectsSlug } from "../../redirects/collection";
+import { putRedirect, removeRedirect } from "../../redirects/store";
 import { addressClaims } from "../../schema/tables";
 import { catchUp, lastCatchUp } from "../catch-up";
 import { ADDRESS_RECORD_SLUG } from "../collection";
@@ -48,6 +51,7 @@ import {
 let current: TestNextly | undefined;
 
 afterEach(async () => {
+  vi.useRealTimers();
   await current?.destroy();
   current = undefined;
 });
@@ -114,6 +118,18 @@ async function earlierWrites(t: TestNextly, rows: Record<string, unknown>[]) {
   for (const data of rows) {
     await t.nextly.create({ collection: ADDRESS_RECORD_SLUG, data });
   }
+}
+
+/** The id of the earlier collection's row under `key`. */
+async function earlierRowId(t: TestNextly, key: string) {
+  const { items } = await t.nextly.find({
+    collection: ADDRESS_RECORD_SLUG,
+    where: { claimKey: { equals: key } },
+    limit: 1,
+  });
+  const [row] = items as Record<string, unknown>[];
+  if (row === undefined) throw new Error(`no earlier row under ${key}`);
+  return String(row.id);
 }
 
 /** The earlier collection's lock row for `path`, as a save of it took one. */
@@ -192,6 +208,32 @@ async function redirectsFrom(
   return items as Record<string, unknown>[];
 }
 
+/**
+ * Stop this process's clock at `at`, as every write it makes and every time
+ * it reads is stamped: the earlier version's servers and this one stamp rows
+ * and readings by the clock of the process.
+ */
+function clockAt(at: number) {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(at);
+}
+
+/** A whole second, so a time kept to the second keeps it exactly. */
+const wholeSecond = () => Math.floor(Date.now() / 1000) * 1000;
+
+/** Save a redirect as a person would, from `source` to `target`. */
+async function savedRedirect(
+  seo: PluginContext,
+  source: string,
+  target: string
+) {
+  const outcome = await seo.services.collections.withTransaction(tx =>
+    putRedirect(seo, tx, { locale: "en", source, target, origin: "person" })
+  );
+  if (!("saved" in outcome)) throw new Error(outcome.refused);
+  return outcome.saved.id;
+}
+
 describe.each(getConfiguredTestDialects())(
   "the address record after an earlier version wrote its collection (%s)",
   dialect => {
@@ -212,7 +254,9 @@ describe.each(getConfiguredTestDialects())(
       expect((await recordedRows(seo))["en|/blog/old-only"]).toBe(
         `posts:${id}`
       );
-      await expect(publish(t, "posts", "old-only")).rejects.toMatchObject({
+      // An article, not a second post: posts' own slugs are unique already,
+      // so only the record keeps another page off the address.
+      await expect(publish(t, "articles", "old-only")).rejects.toMatchObject({
         code: "DUPLICATE",
       });
     });
@@ -311,6 +355,102 @@ describe.each(getConfiguredTestDialects())(
       expect((await recordedRows(seo))["en|/blog/kept"]).toBe(`posts:${id}`);
       const [made] = await redirectsFrom(t, seo, "/blog/kept-was");
       expect(made).toMatchObject({ target: "/blog/kept" });
+    });
+
+    it("hands a redirect's From address to the one an earlier version's process saved in place of it", async () => {
+      const { t, seo } = await boot(dialect);
+      const slug = redirectsSlug(seo);
+      const removed = await savedRedirect(seo, "/blog/from", "/elsewhere");
+      // Removed on the earlier version, and another saved from the same
+      // address: only that version's record heard of either.
+      await t.nextly.delete({ collection: slug, id: removed });
+      const { item } = await t.nextly.create({
+        collection: slug,
+        data: {
+          sourceKey: createHash("sha256")
+            .update("en|/blog/from", "utf8")
+            .digest("hex"),
+          source: "/blog/from",
+          locale: "en",
+          target: "/somewhere-else",
+          origin: "person",
+        },
+      });
+      const replacement = String(item.id);
+      expect((await recordedRows(seo))["en|/blog/from"]).toBe(
+        `${slug}:${removed}`
+      );
+      await earlierWrites(t, [earlierClaim("/blog/from", slug, replacement)]);
+
+      await catchUp();
+
+      expect((await recordedRows(seo))["en|/blog/from"]).toBe(
+        `${slug}:${replacement}`
+      );
+    });
+
+    it("reads again a shape it read close to the newest write, however long the repair took", async () => {
+      const { t, seo } = await boot(dialect);
+      const at = wholeSecond();
+      clockAt(at);
+      await earlierWrites(t, [earlierLock("/blog/first")]);
+      let late = "";
+      await catchUp({
+        // While the repair runs, in the second its shape was read in, an
+        // earlier version's process publishes a page: the count and the
+        // newest time stay as they were read. The repair then runs long.
+        afterListing: async () => {
+          late = await publish(t, "posts", "late");
+          await unrecord(seo, "/blog/late");
+          await t.nextly.delete({
+            collection: ADDRESS_RECORD_SLUG,
+            id: await earlierRowId(t, claimKey("lock", "en", "/blog/first")),
+          });
+          await earlierWrites(t, [earlierClaim("/blog/late", "posts", late)]);
+          vi.setSystemTime(at + 11 * 60 * 1000);
+        },
+      });
+      expect((await recordedRows(seo))["en|/blog/late"]).toBeUndefined();
+
+      await catchUp();
+
+      expect((await recordedRows(seo))["en|/blog/late"]).toBe(`posts:${late}`);
+    });
+
+    it("takes over a move an earlier version's process noted with a clock behind, once", async () => {
+      const { t, seo } = await boot(dialect);
+      const id = await publish(t, "posts", "here");
+      const at = wholeSecond();
+      clockAt(at);
+      await earlierWrites(t, [earlierLock("/blog/first")]);
+      await catchUp({ settleMs: 0 });
+      // Noted by a process whose clock is a minute behind.
+      clockAt(at - 60_000);
+      await earlierWrites(t, [
+        {
+          claimKey: sha256(`pending:posts:${id}|address:en|/blog/there`),
+          kind: "pending",
+          locale: "en",
+          path: JSON.stringify({ locale: "en", path: "/blog/there" }),
+          holderCollection: "posts",
+          holderId: id,
+        },
+      ]);
+      clockAt(at + 1_000);
+
+      await catchUp({ settleMs: 0 });
+
+      const [made] = await redirectsFrom(t, seo, "/blog/there");
+      expect(made).toMatchObject({ target: "/blog/here" });
+      // Removed by a person, it is not made again when the earlier version
+      // writes again: the move was taken over once.
+      await seo.services.collections.withTransaction(tx =>
+        removeRedirect(seo, tx, String(made?.id))
+      );
+      clockAt(at + 2_000);
+      await earlierWrites(t, [earlierLock("/blog/second")]);
+      await catchUp({ settleMs: 0 });
+      expect(await redirectsFrom(t, seo, "/blog/there")).toEqual([]);
     });
 
     it("says the SEO Problems list is out of date when a page lost its address in the catch-up", async () => {

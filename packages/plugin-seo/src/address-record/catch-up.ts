@@ -61,6 +61,7 @@ import type { RecordRow } from "./rows";
 import {
   EARLIER_NOTE_KEYS,
   earlierWritesSince,
+  type EarlierShape,
   heldRows,
   keepEarlierShape,
   noteKey,
@@ -564,22 +565,8 @@ async function runCatchUp(
   // both rows, so a reinstall runs the whole catch-up again.
   const stored = await storedGate(ctx);
   const earlier = await earlierWritesSince(ctx, stored.notes, options.settleMs);
-  if (
-    earlier === undefined &&
-    stored.fingerprint === fingerprint &&
-    stored.siteTypes !== undefined &&
-    !stored.pending
-  ) {
-    return NOTHING;
-  }
-  if (earlier !== undefined) {
-    ctx.logger.info(
-      "The SEO plugin found addresses an earlier version recorded during a deploy, and brings its record up to date from the pages",
-      { earlier: earlier.shape }
-    );
-    // Noted here before the run, which makes their redirects with its own.
-    await takeEarlierPending(ctx, earlier.since);
-  }
+  if (earlier === undefined && isCurrent(stored, fingerprint)) return NOTHING;
+  if (earlier !== undefined) await beginTakingIn(ctx, earlier);
   const held = await heldRows(ctx);
   const siteTypes = await siteTypeKeys(ctx);
   const pages = await everyPage(ctx, options);
@@ -596,7 +583,10 @@ async function runCatchUp(
   // The redirects that process saved or removed, once every page has let go
   // of what it no longer holds: a redirect from a page's old address claims
   // it only after the page lets it go.
-  if (earlier !== undefined) await reclaimRedirectAddresses(ctx);
+  const redirects =
+    earlier === undefined
+      ? { settled: true }
+      : await reclaimRedirectAddresses(ctx);
   await options.afterReleases?.();
   const { recorded, lost } = await claimTheNew(ctx, pages, kept, expected);
   await redirectOwedMoves(ctx);
@@ -608,10 +598,45 @@ async function runCatchUp(
   );
   // Stored last: a start interrupted before this point runs it all again.
   await storeNote(ctx, stored.fingerprint, FINGERPRINT_KEY, fingerprint);
-  // And the earlier collection's shape after it: a start interrupted before
-  // it finds the same writes again, and takes them in again.
-  if (earlier !== undefined) await keepEarlierShape(ctx, earlier.shape);
+  // And the earlier collection's shape after it, as it was read before the
+  // run began: a start interrupted before it, or a run that could not settle
+  // every redirect, finds the same writes again, and takes them in again.
+  if (earlier !== undefined && redirects.settled) {
+    await keepEarlierShape(ctx, earlier);
+  }
   return { ran: true, recorded, lost };
+}
+
+/**
+ * Whether the stored notes say the record is current for `fingerprint`: the
+ * same fingerprint, the site types kept beside it by a run that finished,
+ * and no deploy move still owed its redirect.
+ */
+function isCurrent(
+  stored: Awaited<ReturnType<typeof storedGate>>,
+  fingerprint: string
+): boolean {
+  return (
+    stored.fingerprint === fingerprint &&
+    stored.siteTypes !== undefined &&
+    !stored.pending
+  );
+}
+
+/**
+ * Begin taking in what a process of the earlier version wrote: say so, and
+ * note here the moves it noted there, before the run, which makes their
+ * redirects with its own.
+ */
+async function beginTakingIn(
+  ctx: PluginContext,
+  earlier: EarlierShape
+): Promise<void> {
+  ctx.logger.info(
+    "The SEO plugin found addresses an earlier version recorded during a deploy, and brings its record up to date from the pages",
+    { earlier }
+  );
+  await takeEarlierPending(ctx);
 }
 
 /**

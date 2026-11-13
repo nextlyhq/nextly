@@ -582,14 +582,16 @@ const MOVED_KEY = noteKey("record-moved");
  * The note saying the record has taken in every write the earlier collection
  * showed: kept by the move, in its transaction, and again each time a start
  * brings the record up to date with what a process still running the earlier
- * version wrote there since. Its value is the collection's shape as last
- * taken in ({@link EarlierShape}). The release that stops declaring the
+ * version wrote there since. Its value is the collection's shape, and when it
+ * was read ({@link EarlierShape}). The release that stops declaring the
  * collection reads it as the record's drained marker.
  */
 const DRAINED_KEY = noteKey("record-drained");
 
 /** What the earlier collection's rows are, as this module moves them. */
 interface EarlierRow {
+  /** The row's id in the collection, which names it however it is keyed. */
+  id: string;
   claimKey: string;
   kind: string;
   locale: string;
@@ -597,8 +599,6 @@ interface EarlierRow {
   holderCollection: string | null;
   holderId: string | null;
   holderLabel: string | null;
-  /** When the row was last written, as ISO text, where it reads as a time. */
-  updatedAt: string | null;
 }
 
 function earlierRowOf(row: Record<string, unknown>): EarlierRow | undefined {
@@ -607,6 +607,7 @@ function earlierRowOf(row: Record<string, unknown>): EarlierRow | undefined {
   const kind = text(row.kind);
   if (claimKey === null || claimKey === "" || kind === null) return undefined;
   return {
+    id: String(row.id),
     claimKey,
     kind,
     locale: text(row.locale) ?? "",
@@ -614,7 +615,6 @@ function earlierRowOf(row: Record<string, unknown>): EarlierRow | undefined {
     holderCollection: text(row.holderCollection),
     holderId: text(row.holderId),
     holderLabel: text(row.holderLabel),
-    updatedAt: timeOf(row.updatedAt),
   };
 }
 
@@ -633,19 +633,22 @@ function timeOf(value: unknown): string | null {
 
 /**
  * The earlier collection's shape: how many rows it keeps, lock rows
- * included, and when the newest was last written. A process still running
- * the earlier version takes its page's lock row on every save of a page with
- * an address, which writes that row, and makes or deletes a row for each
- * address it claims or lets go of, so either changes after any such save.
+ * included, and when the newest was last written, by the clock of the
+ * process that wrote it. The earlier version changes what the record says
+ * only by making and deleting rows, and takes its page's lock row, an update
+ * that writes the row's time, on every save of a page with an address: so a
+ * save there after the shape was read changes the count or the newest time,
+ * on the conditions {@link SETTLE_MS} states.
  */
 export interface EarlierShape {
   rows: number;
   newest: string | null;
-}
-
-/** The shape kept in the drained note, and when it was read. */
-interface KeptShape extends EarlierShape {
-  checkedAt: string;
+  /**
+   * When the shape was read, by this process's clock, taken just before the
+   * read: what it says holds from then, however long the work it starts
+   * takes.
+   */
+  observedAt: string;
 }
 
 /** The token of a collection transaction, as the collection reads take it. */
@@ -654,14 +657,15 @@ type CollectionTransaction = Parameters<
 >[0];
 
 /**
- * The earlier collection's shape, in one read of its newest row: on the
- * transaction `transaction` where given, with no row lock, as the move reads
- * it; on the pool otherwise.
+ * The earlier collection's shape, in one read of its newest row and one of
+ * its count: on the transaction `transaction` where given, with no row lock,
+ * as the move reads it; on the pool otherwise.
  */
 async function readEarlierShape(
   ctx: PluginContext,
   transaction?: CollectionTransaction
 ): Promise<EarlierShape> {
+  const observedAt = new Date().toISOString();
   const options = {
     pagination: { limit: 1, page: 1 },
     sort: { field: "updatedAt", direction: "desc" as const },
@@ -679,53 +683,54 @@ async function readEarlierShape(
           { lock: "none" }
         );
   const [row] = data as Record<string, unknown>[];
-  return { rows: pagination.total, newest: timeOf(row?.updatedAt) };
+  return { rows: pagination.total, newest: timeOf(row?.updatedAt), observedAt };
 }
 
 /** The shape the drained note keeps, or undefined where it keeps none. */
-function keptShapeOf(value: string | null | undefined): KeptShape | undefined {
+function keptShapeOf(
+  value: string | null | undefined
+): EarlierShape | undefined {
   const parsed = value === null || value === undefined ? null : safeJson(value);
   if (typeof parsed !== "object" || parsed === null) return undefined;
-  const { rows, newest, checkedAt } = parsed as Record<string, unknown>;
-  if (typeof rows !== "number" || typeof checkedAt !== "string") {
+  const { rows, newest, observedAt } = parsed as Record<string, unknown>;
+  if (typeof rows !== "number" || typeof observedAt !== "string") {
     return undefined;
   }
   return {
     rows,
     newest: typeof newest === "string" ? newest : null,
-    checkedAt,
+    observedAt,
   };
 }
 
-/** The drained note's value for `shape`, read now. */
-function keptValueOf(shape: EarlierShape): string {
-  return JSON.stringify({ ...shape, checkedAt: new Date().toISOString() });
-}
-
 /**
- * How close to the newest write a shape may be read and still not be trusted
- * to have seen every write made around it. A row's time can be kept to the
- * second (SQLite, and MySQL's `datetime`), and processes' clocks differ a
- * little: a write a moment after the read can carry the same time as the
- * newest row, and changes no count when it rewrites a row already there.
+ * How far from the newest write a shape must have been read for a later
+ * write to be sure to change it. A write the shape did not see can carry a
+ * time no later than the newest it did: a time kept to the second (SQLite,
+ * MySQL's `datetime`) puts a write made a moment after the read in the same
+ * second; a process whose clock is behind stamps its writes earlier; and a
+ * save stamped before the read can commit after it. Each is far shorter
+ * than this on servers whose clocks are kept in step, and a save holds its
+ * transaction for seconds, not minutes. A shape read within it of the newest
+ * write is read again by a full catch-up at the next start, until one is
+ * read past it.
  */
-const SETTLE_MS = 5_000;
+const SETTLE_MS = 10 * 60 * 1000;
 
 /**
  * Whether `now` is the shape `kept` was, read far enough from the newest
- * write that a later write would have changed it. A shape read close to it is
- * read again by a catch-up, which keeps it with a later `checkedAt`; the time
- * apart is taken either way, so clocks set to different zones cannot keep
- * that from ever settling.
+ * write that any later write would have changed it. The time apart is taken
+ * either way, so a newest time far in the future, read back in another
+ * zone, cannot keep it from ever settling.
  */
 function settled(
-  kept: KeptShape,
+  kept: EarlierShape,
   now: EarlierShape,
   settleMs: number
 ): boolean {
   if (kept.rows !== now.rows || kept.newest !== now.newest) return false;
   if (kept.newest === null) return true;
-  const apart = Math.abs(Date.parse(kept.checkedAt) - Date.parse(kept.newest));
+  const apart = Math.abs(Date.parse(kept.observedAt) - Date.parse(kept.newest));
   return Number.isNaN(apart) || apart >= settleMs;
 }
 
@@ -735,70 +740,86 @@ function settled(
  */
 export const EARLIER_NOTE_KEYS: readonly string[] = [MOVED_KEY, DRAINED_KEY];
 
-/** What a process still running the earlier version wrote after the move. */
-export interface EarlierWrites {
-  /** The earlier collection's shape now, kept once the writes are taken in. */
-  shape: EarlierShape;
-  /**
-   * When the newest row was written as the record last took the collection
-   * in, from which pending moves are taken over: `""` for every one, where
-   * the collection was empty then, or where that is not known.
-   */
-  since: string;
-}
-
 /**
- * Whether anything wrote the earlier collection since the record last took
- * it in, judged by its shape against the one the drained note keeps (`notes`
- * holds the notes read under {@link EARLIER_NOTE_KEYS}): the writes to take
- * in, or undefined where there are none, or where the move has yet to run.
- * One read of the collection, its newest row and its count.
+ * Whether anything may have written the earlier collection since the record
+ * last took it in, judged by its shape against the one the drained note
+ * keeps (`notes` holds the notes read under {@link EARLIER_NOTE_KEYS}):
+ * answers the shape now, to keep once the writes are taken in, or undefined
+ * where there are none, or where the move has yet to run. One read of the
+ * collection's newest row and one of its count.
  *
  * Nothing in this version writes that collection. A process still running
  * the earlier version during a deploy does, and nothing here would read it
  * again after the move: the record would go on missing every page that
  * process saved. What the record should say is worked out again from the
- * pages themselves by a full catch-up, so the caller runs one.
+ * pages themselves by a full catch-up, so the caller runs one. A move made
+ * before the shape was kept leaves it unknown, which is taken as writes.
  */
 export async function earlierWritesSince(
   ctx: PluginContext,
   notes: ReadonlyMap<string, string | null>,
   settleMs: number = SETTLE_MS
-): Promise<EarlierWrites | undefined> {
+): Promise<EarlierShape | undefined> {
   if (notes.get(MOVED_KEY) !== "moved") return undefined;
   const kept = keptShapeOf(notes.get(DRAINED_KEY));
   const shape = await readEarlierShape(ctx);
   if (kept !== undefined && settled(kept, shape, settleMs)) return undefined;
-  // A move made before the shape was kept leaves it unknown: every pending
-  // move is taken over, since which were noted after the move cannot be
-  // told. One already redirected finds its redirect made and makes none.
-  return { shape, since: kept?.newest ?? "" };
+  return shape;
+}
+
+/** The key of the note saying the earlier pending row `id` was taken over. */
+function takenKey(id: string): string {
+  return noteKey(`earlier-pending-taken:${id}`);
 }
 
 /**
- * Take over the pending moves the earlier collection gained since `since`
- * (every one where it is `""`): a deploy's move a process running the
- * earlier version noted there is owed its redirect here. From the same
- * moment on, not after it, since a time kept to the second would otherwise
- * miss a move noted in that second; one already noted here is skipped by its
- * key, and one taken over twice finds its redirect made and makes none.
- * Answers how many were taken.
+ * Of `rows`, the earlier collection's pending moves, those not yet taken
+ * over here. Each row is judged by its own id, against a note kept when it
+ * was taken, and never by its time: a row noted by a process whose clock is
+ * behind, or committed after a read it was stamped before, is taken all the
+ * same.
  */
-export async function takeEarlierPending(
-  ctx: PluginContext,
-  since: string
-): Promise<number> {
-  const from = since === "" ? Number.NEGATIVE_INFINITY : Date.parse(since);
+async function untakenPending(
+  db: Db,
+  rows: readonly EarlierRow[]
+): Promise<EarlierRow[]> {
+  const untaken: EarlierRow[] = [];
+  for (let at = 0; at < rows.length; at += PAGE) {
+    const page = rows.slice(at, at + PAGE);
+    const { notes } = await notesOn(
+      db,
+      page.map(row => takenKey(row.id)),
+      false
+    );
+    untaken.push(...page.filter(row => !notes.has(takenKey(row.id))));
+  }
+  return untaken;
+}
+
+/**
+ * Take over the pending moves the earlier collection keeps that are not yet
+ * taken over: a deploy's move a process running the earlier version noted
+ * there is owed its redirect here. Each is noted here as pending, unless one
+ * is already noted under its key, and then marked taken, so it is taken once
+ * however often the collection is read; one taken before the marks were kept
+ * finds its redirect made and makes none. Answers how many were noted.
+ */
+export async function takeEarlierPending(ctx: PluginContext): Promise<number> {
+  await recordReady(ctx);
+  const rows = await readEarlier(ctx, ["pending"]);
   let taken = 0;
-  for (const row of await readEarlier(ctx, ["pending"])) {
-    const at = row.updatedAt === null ? Number.NaN : Date.parse(row.updatedAt);
-    // A row whose time does not read is taken: a redirect made twice is
-    // refused, and one never made is lost.
-    if (at < from) continue;
+  for (const row of await untakenPending(ctx.db, rows)) {
     const made = await insertUnlessTaken(ctx, ctx.db, addressNotes, {
       noteKey: row.claimKey,
       kind: "pending",
       value: noteValueOf(row),
+    });
+    // After the pending note: a start stopped between the two notes the
+    // move again, under its key, and marks it then.
+    await insertUnlessTaken(ctx, ctx.db, addressNotes, {
+      noteKey: takenKey(row.id),
+      kind: "meta",
+      value: row.claimKey,
     });
     if (made) taken += 1;
   }
@@ -810,7 +831,7 @@ export async function keepEarlierShape(
   ctx: PluginContext,
   shape: EarlierShape
 ): Promise<void> {
-  await putNote(ctx, DRAINED_KEY, keptValueOf(shape));
+  await putNote(ctx, DRAINED_KEY, JSON.stringify(shape));
 }
 
 /**
@@ -819,15 +840,16 @@ export async function keepEarlierShape(
  * pending moves to `seo__notes`. Lock rows are left: each is made again the
  * first time a save takes it. Answers how many rows moved.
  *
- * The copy, the drained note keeping the collection's shape, and the note
- * that the move is done commit together, under the move note's lock, so two
- * processes starting at once move the rows once: the second waits, then finds
- * the note. The collection is read on the move's transaction after that
- * lock, its shape before its rows, so a write between the two reads shows as
- * a change in the shape. Its rows are left in place rather than deleted, and
- * an address let go of here is never brought back from there; what a process
- * still running the earlier version writes there afterwards is taken in by a
- * catch-up (`earlierWritesSince`).
+ * The copy, the drained note keeping the collection's shape, the marks that
+ * its pending moves are taken, and the note that the move is done commit
+ * together, under the move note's lock, so two processes starting at once
+ * move the rows once: the second waits, then finds the note. The collection
+ * is read on the move's transaction after that lock, its shape before its
+ * rows, so a write between the two reads shows as a change in the shape. Its
+ * rows are left in place rather than deleted, and an address let go of here
+ * is never brought back from there; what a process still running the earlier
+ * version writes there afterwards is taken in by a catch-up
+ * (`earlierWritesSince`).
  */
 export async function moveEarlierRecord(ctx: PluginContext): Promise<number> {
   if (await moveDone(ctx.db, "none")) return 0;
@@ -941,15 +963,24 @@ function copyEarlier(ctx: PluginContext): Promise<number> {
           }))
         );
       }
-      for (let at = 0; at < notes.length; at += PAGE) {
-        await db.insert(
-          addressNotes,
-          notes.slice(at, at + PAGE).map(row => ({
-            noteKey: row.claimKey,
-            kind: row.kind,
-            value: noteValueOf(row),
-          }))
-        );
+      // Each pending move with the mark that it is taken, so a catch-up
+      // taking over later ones never takes it again.
+      const rows = [
+        ...notes.map(row => ({
+          noteKey: row.claimKey,
+          kind: row.kind,
+          value: noteValueOf(row),
+        })),
+        ...notes
+          .filter(row => row.kind === "pending")
+          .map(row => ({
+            noteKey: takenKey(row.id),
+            kind: "meta",
+            value: row.claimKey,
+          })),
+      ];
+      for (let at = 0; at < rows.length; at += PAGE) {
+        await db.insert(addressNotes, rows.slice(at, at + PAGE));
       }
       // Made again rather than updated: a note left from a move before this
       // one (on a database moved again from an older copy) is replaced.
@@ -959,7 +990,7 @@ function copyEarlier(ctx: PluginContext): Promise<number> {
       await db.insert(addressNotes, {
         noteKey: DRAINED_KEY,
         kind: "meta",
-        value: keptValueOf(shape),
+        value: JSON.stringify(shape),
       });
       await db.update(addressNotes, { value: "moved" }).where(byKey);
       return claims.length + notes.length;

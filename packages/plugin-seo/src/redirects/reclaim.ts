@@ -74,17 +74,24 @@ async function everyRedirect(
   }
 }
 
+/** Which half of a pass {@link reclaimOne} makes. */
+type Step = "release" | "claim";
+
 /**
- * Make the record hold, for the redirect `id`, what the redirect holds now:
- * read under the redirect's lock on the transaction that changes the record,
- * so a save or a removal of it running at the same moment lands wholly
- * before or after. Nothing where the record already says so. Answers
- * whether the record changed, or the address it refused, held by a page.
+ * Bring the record's holding for the redirect `id` towards what the
+ * redirect holds now: at the `release` step, let go of every address it no
+ * longer holds (all of them, where it is gone); at the `claim` step, hold
+ * what it does. Read under the redirect's lock on the transaction that
+ * changes the record, so a save or a removal of it running at the same
+ * moment lands wholly before or after. Nothing where the record already
+ * says so. Answers whether the record changed, or the address it refused
+ * and who holds it.
  */
 async function reclaimOne(
   ctx: PluginContext,
   slug: string,
-  id: string
+  id: string,
+  step: Step
 ): Promise<
   boolean | { refused: { address: HeldAddress; heldBy: AddressHolder } }
 > {
@@ -107,10 +114,13 @@ async function reclaimOne(
       id,
       ...(redirect === undefined ? {} : { label: redirect.source }),
     };
-    const holds = redirect === undefined ? [] : heldByRedirect(redirect);
-    if (sameHolds(await heldNow(ctx, transaction, holder), holds)) {
-      return false;
-    }
+    const wanted = redirect === undefined ? [] : heldByRedirect(redirect);
+    const now = await heldNow(ctx, transaction, holder);
+    const holds =
+      step === "claim"
+        ? wanted
+        : now.filter(held => wanted.some(each => sameHolds([each], [held])));
+    if (sameHolds(now, holds)) return false;
     const { refused } = await ctx.publicAddresses.move(
       [{ holder, holds }],
       transaction
@@ -120,17 +130,27 @@ async function reclaimOne(
   });
 }
 
+/** What {@link reclaimRedirectAddresses} did. */
+export interface ReclaimReport {
+  /** How many redirects the record changed for. */
+  changed: number;
+  /**
+   * False where a redirect's From address was refused because another
+   * redirect still holds it: two redirects never share a From address, so
+   * that holding is stale, and the next start is to try again.
+   */
+  settled: boolean;
+}
+
 /**
- * Bring every redirect's addresses in the record up to date: a redirect the
- * record does not hold as it is claims its From address, and one the record
- * holds that is gone lets go of it. A From address a page holds stays the
- * page's: the page is served there, as it would be had the redirect been
- * saved after it. Answers how many redirects the record changed for.
+ * The redirects whose holding in the record is not what they hold now: one
+ * the record holds differently, and one it holds that is not listed (gone,
+ * unless saved since the listing, which {@link reclaimOne} tells).
  */
-export async function reclaimRedirectAddresses(
-  ctx: PluginContext
-): Promise<number> {
-  const slug = redirectsSlug(ctx);
+async function staleRedirects(
+  ctx: PluginContext,
+  slug: string
+): Promise<Set<string>> {
   const recorded = await recordedByRedirect(ctx, slug);
   const stale = new Set<string>();
   for (const redirect of await everyRedirect(ctx, slug)) {
@@ -139,23 +159,38 @@ export async function reclaimRedirectAddresses(
     }
     recorded.delete(redirect.id);
   }
-  // What is left is held by a redirect not listed: gone, unless saved since
-  // the listing, which the read under its lock tells.
   for (const id of recorded.keys()) stale.add(id);
-  let changed = 0;
-  for (const id of stale) {
-    const outcome = await reclaimOne(ctx, slug, id);
-    if (outcome === true) changed += 1;
-    else if (outcome !== false) {
+  return stale;
+}
+
+/**
+ * Bring every redirect's addresses in the record up to date: a redirect the
+ * record does not hold as it is claims its From address, and one the record
+ * holds that is gone lets go of it. Every address no redirect holds any
+ * more is let go of before any is claimed, so a redirect removed and another
+ * saved from the same address meanwhile hands it over. A From address a page
+ * holds stays the page's: the page is served there, as it would be had the
+ * redirect been saved after it.
+ */
+export async function reclaimRedirectAddresses(
+  ctx: PluginContext
+): Promise<ReclaimReport> {
+  const slug = redirectsSlug(ctx);
+  const stale = await staleRedirects(ctx, slug);
+  const report: ReclaimReport = { changed: 0, settled: true };
+  for (const step of ["release", "claim"] as const) {
+    for (const id of stale) {
+      const outcome = await reclaimOne(ctx, slug, id, step);
+      if (typeof outcome === "boolean") {
+        if (outcome) report.changed += 1;
+        continue;
+      }
+      if (outcome.refused.heldBy.collection === slug) report.settled = false;
       ctx.logger.warn(
-        "A redirect's From address is held by a page, which is served there instead",
-        {
-          redirect: id,
-          address: outcome.refused.address,
-          heldBy: outcome.refused.heldBy,
-        }
+        "A redirect's From address is held by another page or redirect, which is served there instead",
+        { redirect: id, ...outcome.refused }
       );
     }
   }
-  return changed;
+  return report;
 }
