@@ -45,7 +45,8 @@ import {
   botCheckOptions,
   botTokensOf,
   judgeBotCheck,
-  warnUncheckedBotChecks,
+  warnSavedFormCheck,
+  warnUncheckedSiteDefault,
 } from "./handlers/bot-check";
 import { refuseBlankConsentText } from "./handlers/consent-text-check";
 import {
@@ -207,7 +208,7 @@ function resolveConfig(
     redirectRelationships: normalizeRedirectRelationships(
       options.redirectRelationships
     ),
-    // Filled at `init` from each collection's own metadata. Empty until then,
+    // Filled at `init` from each collection's own declaration. Empty until then,
     // and a slug that stays absent reads as unknown rather than as not
     // localized — see `ResolvedFormBuilderConfig`.
     redirectTargetLocalization: {},
@@ -536,15 +537,20 @@ export function formBuilder(
           .map(([name]) => name),
       });
 
-      // Ask each redirect target collection whether it is localized. The save
-      // rule and the submission path both need it and neither can reach the
+      // Whether each redirect target collection is localized. The save rule
+      // and the submission path both need it and neither can reach the
       // registry themselves: a collection hook is handed `req.nextly`, which
       // is the Direct API and carries no metadata accessor. Resolved once here
       // and written onto the config both of them already close over.
       //
-      // Per collection rather than in one call: a slug that cannot be read
-      // must stay ABSENT from the map, and a single failing lookup would
-      // otherwise take its readable siblings with it.
+      // A collection the site's code declares (or a plugin contributes) is
+      // answered from `ctx.config`, which carries its declaration: the
+      // registry row's `localized` is written from that same declaration
+      // (`collection.localized === true`), so reading the row back cost every
+      // start a round trip to learn what the configuration already says. Only
+      // a collection made in the Schema Builder, whose registry row is its one
+      // declaration, is asked of the registry.
+      //
       // Emptied first. `init` runs again on HMR and re-registration against the
       // SAME config object, so a lookup that succeeded on the previous boot and
       // fails on this one would leave its old answer standing while the catch
@@ -557,13 +563,30 @@ export function formBuilder(
         delete resolvedConfig.redirectTargetLocalization[slug];
       }
 
+      const declaredCollections: readonly unknown[] =
+        nextly.config?.collections ?? [];
+
       // AWAITED, not fired and forgotten: a write reaching the save rule before
       // this resolves would find the map empty and read every target as
-      // undecided, which is the refusal silently not happening.
+      // undecided, which is the refusal silently not happening. Per collection
+      // rather than in one call: a slug that cannot be read must stay ABSENT
+      // from the map, and a single failing lookup would otherwise take its
+      // readable siblings with it.
       await Promise.all(
         Object.keys(resolvedConfig.redirectRelationships).map(
           async declared => {
             const slug = nextly.self.collections[declared] ?? declared;
+            const declaration = declaredCollections.find(
+              (entry): entry is { slug: string; localized?: unknown } =>
+                typeof entry === "object" &&
+                entry !== null &&
+                (entry as { slug?: unknown }).slug === slug
+            );
+            if (declaration !== undefined) {
+              resolvedConfig.redirectTargetLocalization[declared] =
+                declaration.localized === true;
+              return;
+            }
             try {
               // `getCollection` reads registered metadata and does not consult
               // the context — its parameter is declared for a future ACL hook
@@ -662,26 +685,23 @@ export function formBuilder(
         return ctx.data;
       });
 
-      // A bot check in use with no secret accepts submissions unchecked:
-      // said once at start, naming the option, without holding the start up.
-      void warnUncheckedBotChecks({
-        spam: resolvedConfig.spamProtection,
-        forms: async () =>
-          (
-            await nextly.services.ownCollections.listEntries(formsSlug, {
-              pagination: { limit: 500 },
-            })
-          ).data ?? [],
-        readSettings: normalizeFormSettings,
-        warn: (message, context) => nextly.logger.warn?.(message, context),
-      });
+      // A bot check in use with no secret accepts submissions unchecked. Said
+      // at start for the site default, from the options alone and so with no
+      // read; a check a form names itself is said when that form is saved
+      // (the hook below) and when a submission is accepted unchecked
+      // (`judgeSubmission`), which is when it costs anything.
+      const warnLog = (message: string, context: Record<string, unknown>) =>
+        nextly.logger.warn?.(message, context);
+      warnUncheckedSiteDefault(resolvedConfig.spamProtection, warnLog);
 
       // A form saved to compare one response per email has an Email field
       // it can compare, and each consent has a text to agree to, however it
-      // is saved.
+      // is saved. And a form saved naming a bot check without its keys is
+      // said in the log, to the person who just chose it.
       nextly.hooks.on("beforeChange", formsSlug, (context: unknown) => {
         refuseOneResponseFieldProblem(context);
         refuseBlankConsentText(context);
+        warnSavedFormCheck(context, resolvedConfig.spamProtection, warnLog);
         return (context as { data?: unknown }).data;
       });
 
@@ -1717,6 +1737,12 @@ function rateLimitKeyFor(form: Record<string, unknown>): string {
   return typeof id === "string" && id.length > 0 ? id : "unidentified-form";
 }
 
+/** How a log line names `form`: its slug, else its id, else not at all. */
+function formNamed(form: Record<string, unknown>): { form?: string } {
+  const name = typeof form.slug === "string" ? form.slug : form.id;
+  return typeof name === "string" ? { form: name } : {};
+}
+
 /**
  * Whether this submission looks like a bot's, and why.
  *
@@ -1777,6 +1803,9 @@ async function judgeSubmission(
   return judgeBotCheck({
     settings: normalizeFormSettings(form.settings),
     spam: config.spamProtection,
+    // Named in the warning when its check is missing a key: by its slug, or
+    // its id where the form in hand carries no slug.
+    ...formNamed(form),
     // Handed over by the plugin's own handler, which keeps only the form's
     // fields in the row; read off the payload at every other door.
     tokens: marks?.botTokens ?? botTokensOf(payload),
