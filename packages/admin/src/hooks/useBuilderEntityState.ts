@@ -62,6 +62,13 @@ export interface UseBuilderEntityStateOptions<TEntity> {
    * was in flight, and pin baselines from the wrong record.
    */
   identity: (entity: TEntity) => string;
+  /**
+   * The entity was created in the editor and is not on the server yet. Its
+   * baseline is then no fields at all, so the fields it starts with are pending
+   * additions, and the create itself counts as one more pending change until a
+   * save brings the entity back from the server under its own identity.
+   */
+  unsaved?: boolean;
 }
 
 /** The Builder's pending changes, and what a person can do with them. */
@@ -120,6 +127,7 @@ export function useBuilderEntityState<TEntity>({
   isDirty,
   onLoad,
   identity,
+  unsaved = false,
 }: UseBuilderEntityStateOptions<TEntity>): BuilderEntityState {
   const [settings, setSettings] = useState<BuilderSettingsValues | null>(null);
   // Which entity was read in, rather than whether one was. A boolean cannot
@@ -155,7 +163,8 @@ export function useBuilderEntityState<TEntity>({
     ];
     // A load is no edit: the fields arrive with no history to undo into.
     resetFields(allFields);
-    setOriginalFields(allFields.filter(f => !f.isSystem));
+    // Nothing of an unsaved entity is saved, so none of its fields are either.
+    setOriginalFields(unsaved ? NO_FIELDS : allFields.filter(f => !f.isSystem));
 
     const loaded = toSettings(entity);
     setSettings(loaded);
@@ -170,6 +179,7 @@ export function useBuilderEntityState<TEntity>({
     toFields,
     toSettings,
     onLoad,
+    unsaved,
   ]);
 
   // False while a different entity's data is still on screen, so the page
@@ -190,7 +200,10 @@ export function useBuilderEntityState<TEntity>({
   // Derived from the change list, so the number shown and the changes listed
   // and marked cannot disagree.
   const unsavedCount =
-    pending.changes.length + (isDirty(originalSettings, settings) ? 1 : 0);
+    pending.changes.length +
+    (isDirty(originalSettings, settings) ? 1 : 0) +
+    // The create itself, for an entity the server does not have yet.
+    (unsaved && isInitialized ? 1 : 0);
 
   // Derived from the same baseline the unsaved count reads, so "saved" and
   // "changed since saved" cannot disagree about which fields were saved.
