@@ -188,7 +188,7 @@ contributes: {
 ```
 
 The admin asks it each time it loads its workspace. On a type that is off, the field is drawn
-nowhere on the type's pages, and your contributions that carry `extendedWith` naming it are not
+nowhere in the type's editors (its list columns are a later step), and your contributions that carry `extendedWith` naming it are not
 offered there. The column and every stored value stay, and the API still reads and writes them;
 switch the type on again and everything is back. What the field means while it is off, in your
 plugin's own outputs, is yours to decide. A switch that fails switches nothing off and is logged.

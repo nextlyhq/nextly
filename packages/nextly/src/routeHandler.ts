@@ -2219,7 +2219,7 @@ async function buildAdminMeta(
   // see; the login page's go to the public half alone.
   // What each plugin's extension switch has off now, read once: its
   // contributions that follow those fields are withheld there, and the
-  // fields themselves are drawn nowhere on those types' pages.
+  // fields themselves are drawn nowhere in those types' editors.
   // Asked for a signed-in reader only: the public branding route offers
   // nothing a switch narrows, and is never kept waiting on one.
   const switchedOff =

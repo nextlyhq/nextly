@@ -586,7 +586,7 @@ export type { ExtendedType } from "nextly";
 /**
  * A plugin's switch for the fields its `extend` added: a service named
  * `EXTENSION_SWITCH_SERVICE` whose `switchedOff(field)` says on which types
- * the field is off now. There the admin draws the field nowhere and offers
+ * the field is off now. There the admin's editors draw the field nowhere and offer
  * none of the plugin's `extendedWith` contributions; the column and every
  * stored value stay, and switching it on brings them back.
  *
