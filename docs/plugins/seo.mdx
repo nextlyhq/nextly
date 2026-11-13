@@ -413,6 +413,12 @@ These are requests. Well-behaved tools follow them; some ignore them. Asking Goo
 use your pages for AI training (`Google-Extended`) also limits what Gemini can use from
 them. Google Search and Bing are not affected by any choice.
 
+The crawler names come from each provider's own page (OpenAI, Anthropic, Google, Apple, Common
+Crawl, Meta, Amazon, Perplexity, DuckDuckGo and Mistral), last checked on 13 November 2026. Two crawlers are never asked to stay away, because they visit only what the site itself
+asked for: OpenAI's ads checker `OAI-AdsBot`, which visits only pages submitted as ads in
+ChatGPT, and `Google-CloudVertexBot`, which crawls only for a Vertex AI agent the site's owner
+set up.
+
 ### The site's address, and why it affects caching
 
 Both files name the site by one of its production addresses, read as the page's head reads
