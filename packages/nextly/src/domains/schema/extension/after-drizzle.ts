@@ -360,48 +360,64 @@ export async function runAfterDrizzle(args: {
       }
       refuseRemovedTable(name, args.foreignKeys ?? []);
     }
-    if (args.protectedTables.has(name)) {
-      refuse(
-        name,
-        "a change to a core, entity or adopted table",
-        "Nextly maintains core and entity tables (use contributes.extend for entity fields), and an adopted table is never migrated at all."
-      );
-    }
-    const owner = args.owners.get(name);
-    // A plugin's table is its own to describe. An app reshaping it would make
-    // the plugin's migrations disagree with the table they are meant to own.
-    if (owner?.kind === "plugin") {
-      refuse(
-        name,
-        `a change to a table owned by plugin "${owner.id}"`,
-        "An app may only shape its own tables here."
-      );
-    }
-    // A name no compile produced, and that no rule above claims, is a table
-    // the hook introduced. It is the app's, so it answers to the app's naming
-    // rule: a managed prefix
-    // (`dc_`, `single_`, `comp_`, `nextly_`) would be reconciled — and
-    // dropped — by the pipeline that owns it, a `_locales` suffix by the
-    // localization layer, and a plugin's namespace by that plugin.
-    if (!(name in args.tables)) {
-      assertUsableAppTableName(
-        name,
-        args.naming.coreTableNames,
-        args.naming.pluginPrefixes
-      );
-    }
-    assertColumnsConvertible(value as Table, name);
-    assertTableConvertible(value as Table, name, args.dialect);
-    if (getTableName(value as Table) !== name) {
-      refuse(
-        name,
-        `a table whose SQL name is "${getTableName(value as Table)}"`,
-        "The key and the table name must match."
-      );
-    }
+    assertReturnedTable(name, value as Table, args);
   }
 
   return tables;
+}
+
+/**
+ * The rules a table a hook returned in place of, or beside, the compiled ones
+ * is held to: never a core, entity, adopted or plugin's table, an introduced
+ * one named as an app table must be, and nothing the model cannot carry.
+ */
+function assertReturnedTable(
+  name: string,
+  table: Table,
+  args: Pick<
+    Parameters<typeof runAfterDrizzle>[0],
+    "dialect" | "tables" | "owners" | "protectedTables" | "naming"
+  >
+): void {
+  if (args.protectedTables.has(name)) {
+    refuse(
+      name,
+      "a change to a core, entity or adopted table",
+      "Nextly maintains core and entity tables (use contributes.extend for entity fields), and an adopted table is never migrated at all."
+    );
+  }
+  const owner = args.owners.get(name);
+  // A plugin's table is its own to describe. An app reshaping it would make
+  // the plugin's migrations disagree with the table they are meant to own.
+  if (owner?.kind === "plugin") {
+    refuse(
+      name,
+      `a change to a table owned by plugin "${owner.id}"`,
+      "An app may only shape its own tables here."
+    );
+  }
+  // A name no compile produced, and that no rule above claims, is a table
+  // the hook introduced. It is the app's, so it answers to the app's naming
+  // rule: a managed prefix
+  // (`dc_`, `single_`, `comp_`, `nextly_`) would be reconciled — and
+  // dropped — by the pipeline that owns it, a `_locales` suffix by the
+  // localization layer, and a plugin's namespace by that plugin.
+  if (!(name in args.tables)) {
+    assertUsableAppTableName(
+      name,
+      args.naming.coreTableNames,
+      args.naming.pluginPrefixes
+    );
+  }
+  assertColumnsConvertible(table, name);
+  assertTableConvertible(table, name, args.dialect);
+  if (getTableName(table) !== name) {
+    refuse(
+      name,
+      `a table whose SQL name is "${getTableName(table)}"`,
+      "The key and the table name must match."
+    );
+  }
 }
 
 /** A declared foreign key, with the table it is declared on. */
