@@ -266,6 +266,7 @@ in `optionalDependsOn`.
 | `socialCard`      | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                                        |
 | `pagePermissions` | `boolean`                                                        | `false`            | Gives a page's SEO a [permission of its own](#who-may-change-seo), per content type                              |
 | `nextBuildDir`    | `string`                                                         | `".next"`          | Where `next build` writes, if `next.config` sets `distDir`: read for [pages built in code](#pages-built-in-code) |
+| `gonePage`        | `string`                                                         | none               | Experimental. The site's own page shown with a [Gone (410)](#redirects) answer, such as `"/gone"`                |
 | `urlFor`          | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                                        |
 | `basePath`        | `string`, or a function                                          | none               | Deprecated, as `urlFor`                                                                                          |
 
@@ -1141,7 +1142,7 @@ A redirect's From address is held like a page's address, so a published page and
 
 ### The redirects screen
 
-**SEO › Redirects** in the admin lists every redirect: its From and To addresses, the status the site answers with (301 permanent, 302 temporary, or 410 Gone), who made it (a page that moved, a file imported, or the person, "You" for your own), how many requests it has answered and when it last did. **Add redirect** opens a form: type the From and To addresses as visitors open them (`/old-page`, or `/de/alt` on a site with language prefixes), with a pattern such as `/old/*` to `/new/*` for a whole section. A To address may also be a full `https://` address on another site. A redirect is permanent unless you choose Temporary, which tells search engines the page is coming back. Choose **Gone (410)** for a page removed for good with nothing to replace it: the address answers `410 Gone`, which search engines drop sooner than a 404, and needs no To address. Each row's menu edits or removes it.
+**SEO › Redirects** in the admin lists every redirect: its From and To addresses, the status the site answers with (301 permanent, 302 temporary, or 410 Gone), who made it (a page that moved, a file imported, or the person, "You" for your own), how many requests it has answered and when it last did. **Add redirect** opens a form: type the From and To addresses as visitors open them (`/old-page`, or `/de/alt` on a site with language prefixes), with a pattern such as `/old/*` to `/new/*` for a whole section. A To address may also be a full `https://` address on another site. A redirect is permanent unless you choose Temporary, which tells search engines the page is coming back. Choose **Gone (410)** for a page removed for good with nothing to replace it: the address answers `410 Gone`, which search engines drop sooner than a 404, and needs no To address. The visitor sees a one-line page saying the page is gone, or the site's own page where the site names one with the `gonePage` option (experimental): the Proxy reads that page and sends it with status 410, so search engines still read Gone. Where that page can't be read, or doesn't answer 200, the one-line page is sent. Hide the page itself from search on SEO › Pages. Each row's menu edits or removes it.
 
 Hits are counted by the site's Proxy as it answers each request, in the background, so no visitor waits on the count; a redirect saved before counting began shows none until its next request. Where the Proxy does not run, the list says the redirects are saved but not served, with a note to copy for a developer.
 
@@ -1311,6 +1312,32 @@ export default async function Missing(): Promise<never> {
 ```
 
 `notFoundLogged` reads the request before it answers, so the answer is made for each request and never kept from a build. With Cache Components on, Next.js then refuses to build the catch-all unless `Missing` renders inside `<Suspense>` from the page, as any part of a page that reads the request must. A not-found answered while the page renders is sent with status 200 and a `noindex` tag rather than a 404, as Next.js answers every request-time not-found under Cache Components; it is logged either way. A site with an optional catch-all at its root (`app/[[...slug]]`) has no addresses left for this one: pass the helper to that route instead.
+
+#### With Next.js's `global-not-found` page
+
+A site that turns on `experimental.globalNotFound` in `next.config` answers every address no route matches with `app/global-not-found.tsx`, so it needs no catch-all. Log there with `logNotFound`, from the package root, once the response is sent. Don't call `notFoundLogged` there: the page is the not-found answer already, and that helper answers not found again.
+
+```tsx
+// src/app/global-not-found.tsx
+import { logNotFound } from "@nextlyhq/plugin-seo";
+import { headers } from "next/headers";
+import { after } from "next/server";
+
+export default async function GlobalNotFound() {
+  // Read now, while the request is in hand; logged once the page is sent.
+  const requestHeaders = await headers();
+  after(() => logNotFound(requestHeaders));
+  return (
+    <html lang="en">
+      <body>
+        <h1>Page not found</h1>
+      </body>
+    </html>
+  );
+}
+```
+
+Reading the request makes the page answer each request, so each miss is logged. Next.js renders this page only for addresses no route matches. A miss a route decides itself, with `notFound()`, never reaches it, so log those with `notFoundLogged` in the route, as above.
 
 A request is counted once, though its page and its `generateMetadata` both answer it. A prefetch is not counted (the visit, if it comes, is), and neither is a request the Proxy did not pass on. `notFoundLogged` throws only Next.js's own errors, and on the Edge runtime, where the plugin does not run, it answers not found and logs nothing. `logNotFound(headers)`, from the package root, is what it calls once the response is sent.
 
@@ -1494,15 +1521,18 @@ it keeps working drafts can't be read from the plugin; change its SEO in its own
 
 2. **Match the fields.** Each field of a group, with an example of what it holds and how many
    pages have a value, goes to one place in the plugin, matched by its name for you to check, or
-   to **Don't import**. A file's fields are matched by the tool's own names. Values a page's own
-   code sets differently, such as a page whose route writes its own title, never reached that
-   page, so they are skipped as **never served**; **Include anyway** imports them too, which
-   changes what those pages show.
+   to **Don't import**. A file's fields are matched by the tool's own names. Where a page's code
+   now sets its own value, such as a page whose route writes its own title, a different stored
+   value is skipped: importing it would change what the page shows. The plugin can't know what
+   the page showed before it was installed, so if the page showed the stored values and should
+   again (for example, the site's own code read them until this release), tick
+   **Include anyway** to import them too.
 
 3. **Check the result.** A dry run, changing nothing: how many values it will set and on how many
    pages, how many are the same as the page's automatic value (left empty, so the automatic value
    keeps working), how many a person already typed in the SEO tab (kept as they are), and how many
-   are skipped as never served, then each page's title and description with what happens to each.
+   are skipped because the page's code sets its own, then each page's title and description with
+   what happens to each.
    A page in several languages, or with a draft beside its published version, gets one row per
    version (**English · published**, **English · draft**, **Deutsch · published**), each value
    with its own result. **Import** applies exactly that, in one step: every version and redirect,
