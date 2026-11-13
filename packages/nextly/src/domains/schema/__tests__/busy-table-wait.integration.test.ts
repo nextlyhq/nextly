@@ -477,6 +477,52 @@ describe.each(DIALECTS)(
     );
 
     it.runIf(dialect === "mysql")(
+      "names a row lock's holder where MySQL's metadata-lock instrument is off",
+      async () => {
+        const instrument = "wait/lock/metadata/sql/mdl";
+        await adapter.executeQuery(`INSERT INTO ${BUSY} (id) VALUES (5)`);
+        writeFile("20261113_000001_update_row_untraced", [
+          `UPDATE ${BUSY} SET id = 7 WHERE id = 5`,
+        ]);
+        await adapter.executeQuery(
+          `UPDATE performance_schema.setup_instruments SET ENABLED = 'NO' WHERE NAME = '${instrument}'`
+        );
+        try {
+          let held: () => void = () => {};
+          const isHeld = new Promise<void>(resolve => {
+            held = resolve;
+          });
+          const freed = new Promise<void>(resolve => {
+            free = resolve;
+          });
+          holding = holderAdapter.transaction(async ctx => {
+            await ctx.queryStatement(
+              sql.raw(`UPDATE ${BUSY} SET id = 6 WHERE id = 5`)
+            );
+            held();
+            await freed;
+          });
+          await isHeld;
+
+          const stopped = await migrate({ tryMs: 1_000, totalMs: 2_000 }).catch(
+            (error: unknown) => error
+          );
+
+          // The row's holder is read from InnoDB's lock waits, which the instrument does not gate.
+          expect(String((stopped as Error).message)).toMatch(
+            /held by session \d+/
+          );
+        } finally {
+          free();
+          await holding.catch(() => {});
+          await adapter.executeQuery(
+            `UPDATE performance_schema.setup_instruments SET ENABLED = 'YES' WHERE NAME = '${instrument}'`
+          );
+        }
+      }
+    );
+
+    it.runIf(dialect === "mysql")(
       "bounds a row change waiting on a row another session holds, not InnoDB's own 50 seconds",
       async () => {
         await adapter.executeQuery(`INSERT INTO ${BUSY} (id) VALUES (5)`);

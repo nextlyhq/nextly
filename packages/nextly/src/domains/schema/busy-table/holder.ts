@@ -172,18 +172,19 @@ async function mysqlHolders(
   waiting: number
 ): Promise<HolderReport> {
   try {
+    // Where metadata locks are not reported, a row lock's holder can still be read (below).
     const off = await mysqlLockReportingOff(adapter);
-    if (off !== undefined) {
-      return { kind: "named", sessions: [], unreadable: [off] };
-    }
     // The GRANTED owners of each object the waiting thread has PENDING, other than that thread
     // itself (which may hold a weaker lock on the same table while it waits to upgrade it).
-    const metadataRows = await adapter.queryStatement<{
-      id: unknown;
-      user: unknown;
-      host: unknown;
-    }>(
-      sql`SELECT DISTINCT ${id("holder")}.${id("PROCESSLIST_ID")} AS ${id("id")},
+    const metadataRows =
+      off !== undefined
+        ? []
+        : await adapter.queryStatement<{
+            id: unknown;
+            user: unknown;
+            host: unknown;
+          }>(
+            sql`SELECT DISTINCT ${id("holder")}.${id("PROCESSLIST_ID")} AS ${id("id")},
             ${id("holder")}.${id("PROCESSLIST_USER")} AS ${id("user")},
             ${id("holder")}.${id("PROCESSLIST_HOST")} AS ${id("host")}
           FROM ${id("performance_schema")}.${id("threads")} AS ${id("waiter")}
@@ -201,7 +202,7 @@ async function mysqlHolders(
           WHERE ${id("waiter")}.${id("PROCESSLIST_ID")} = ${waiting}
             AND ${id("holder")}.${id("PROCESSLIST_ID")} IS NOT NULL
           ORDER BY ${id("id")}`
-    );
+          );
     const unreadable: string[] = [];
     // A wait for an InnoDB row lock has no pending metadata lock: its holder is read from InnoDB's
     // own lock waits instead.
@@ -225,6 +226,8 @@ async function mysqlHolders(
       user: text(row.user),
       clientAddress: hostWithoutPort(text(row.host)),
     }));
+    // Named by neither: the metadata locks' silence is why, where they were not reported.
+    if (found.length === 0 && off !== undefined) unreadable.push(off);
     const ages = await mysqlTransactionAges(adapter, found).catch(
       (error: unknown) => {
         unreadable.push(

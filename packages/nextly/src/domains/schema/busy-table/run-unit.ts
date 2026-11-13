@@ -508,15 +508,15 @@ export async function runUnitInTries(
         // statement alone outside a transaction.
         // A try that sent none of its own still leaves the next on a new session, without the
         // state the statements kept before it made.
+        // The statements the next try sends again end at the waiting one where it was sent; a
+        // wait in its checkpoint, before it, leaves it unsent, and sending it is no repeat.
+        const sentUntil =
+          sentIndex === waiting
+            ? Math.min(waiting + 1, statements.length)
+            : waiting;
         const lasting = toldNone
           ? sessionStateBefore(statements, kept, dialect)
-          : firstNoRetryBetween(
-              statements,
-              kept,
-              Math.min(waiting + 1, statements.length),
-              dialect,
-              catalog
-            );
+          : firstNoRetryBetween(statements, kept, sentUntil, dialect, catalog);
         const waited = statements[Math.min(waiting, statements.length - 1)];
         return {
           kind: "ended",
