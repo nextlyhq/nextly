@@ -116,11 +116,24 @@ export function withBuilderForeignKeys(
       .filter(field => relationshipStoresJson(field))
       .map(field => lower(toSnakeCase(field.name)))
   );
-  const kept = (live?.foreignKeys ?? []).filter(
-    fk =>
-      fk.columns.every(column => columns.has(lower(column))) &&
-      !fk.columns.some(column => listColumns.has(lower(column)))
-  );
+  const kept = (live?.foreignKeys ?? [])
+    .filter(
+      fk =>
+        fk.columns.every(column => columns.has(lower(column))) &&
+        !fk.columns.some(column => listColumns.has(lower(column)))
+    )
+    .map(fk =>
+      recordedFields === undefined
+        ? fk
+        : withActionsTheSaveChanged(
+            fk,
+            spec.name,
+            fields,
+            recordedFields,
+            builder,
+            targetTables
+          )
+    );
   const keyed = new Set(kept.flatMap(fk => fk.columns.map(lower)));
 
   // Created: the key of each relationship whose column this push adds.
@@ -158,6 +171,51 @@ export function withBuilderForeignKeys(
   }
 
   return { ...spec, foreignKeys: [...kept, ...created] };
+}
+
+/**
+ * `fk` with the delete and update actions its relationship now declares, where this save changed
+ * them from what the registry records, as the save's migration file changes them; the key keeps
+ * its name and target. A relationship whose actions the save leaves as they were keeps its key
+ * exactly as the table holds it, whatever its field would describe today.
+ */
+function withActionsTheSaveChanged(
+  fk: ForeignKeySpec,
+  table: string,
+  fields: readonly FieldDefinition[],
+  recordedFields: readonly FieldDefinition[],
+  builder: DynamicCollectionSchemaService,
+  targetTables: CollectionTables | undefined
+): ForeignKeySpec {
+  if (fk.columns.length !== 1) return fk;
+  const column = fk.columns[0].toLowerCase();
+  const field = fields.find(f => toSnakeCase(f.name).toLowerCase() === column);
+  const before = recordedFields.find(f => f.name === field?.name);
+  if (field === undefined || before === undefined) return fk;
+  const now = builder.relationshipForeignKey(table, field, false, targetTables);
+  const was = builder.relationshipForeignKey(
+    table,
+    before,
+    false,
+    targetTables
+  );
+  if (
+    now === null ||
+    was === null ||
+    (now.onDelete === was.onDelete && now.onUpdate === was.onUpdate)
+  ) {
+    return fk;
+  }
+  // Judged, as a key this save creates is: what the save asks for has to be possible.
+  const judged = builder.relationshipForeignKey(
+    table,
+    field,
+    true,
+    targetTables
+  );
+  return judged === null
+    ? fk
+    : { ...fk, onDelete: judged.onDelete, onUpdate: judged.onUpdate };
 }
 
 /** A field's name as an author reads it: its label where it has one. */

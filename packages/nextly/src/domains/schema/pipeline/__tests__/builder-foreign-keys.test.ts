@@ -371,3 +371,38 @@ describe("withBuilderForeignKeys refuses to leave a key checking the wrong thing
     expect(() => keysWithTargets(collection(fields), keyed)).not.toThrow();
   });
 });
+
+describe("withBuilderForeignKeys, for a kept key's actions", () => {
+  const recorded = [TITLE, adminAuthor()];
+  const keyed = live(recorded, [LIVE_KEY]);
+
+  it("changes the actions a save changes, keeping the key's name and target", () => {
+    // Made required, the relationship now restricts the delete of its author.
+    expect(
+      keysWithTargets(
+        collection(
+          [TITLE, adminAuthor("authors", { required: true })],
+          true,
+          recorded
+        ),
+        keyed
+      )
+    ).toEqual([{ ...LIVE_KEY, onDelete: "restrict" }]);
+  });
+
+  it("keeps the key as the table holds it when the save leaves the actions alone", () => {
+    const heldElsewhere = live(recorded, [
+      { ...LIVE_KEY, name: "fk_custom", onDelete: "cascade" },
+    ]);
+    expect(
+      keysWithTargets(
+        collection(
+          [TITLE, adminAuthor("authors", { label: "Writer" })],
+          true,
+          recorded
+        ),
+        heldElsewhere
+      )
+    ).toEqual([{ ...LIVE_KEY, name: "fk_custom", onDelete: "cascade" }]);
+  });
+});

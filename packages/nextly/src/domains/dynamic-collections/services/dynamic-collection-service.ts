@@ -48,6 +48,7 @@ import {
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
 import { companionHasStatusColumn } from "../../i18n/runtime/companion-io";
+import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
 import type { ForeignKeySpec } from "../../schema/pipeline/diff/types";
 import { queryLiveColumnTypes } from "../../schema/pipeline/live-column-types";
@@ -2150,40 +2151,36 @@ export class DynamicCollectionService extends BaseService {
   }
 
   /**
-   * The relationship keys `tableName` holds, as the schema service describes them for `fields`:
-   * each described key whose column the live table carries a key on. A relationship made before
-   * the Builder keyed it has none, so it orders and drops nothing. With no table, none.
+   * The foreign keys `tableName` holds, as the database reports them: their names, columns,
+   * targets and actions. Which keys a Builder table holds depends on its history (a relationship
+   * made before the Builder keyed it has none, and an older key may point where its field no
+   * longer reads), so every reader of a table's keys reads them here rather than from its fields.
+   * With no table, none.
    */
-  async heldRelationshipKeys(
-    tableName: string,
-    fields: readonly FieldDefinition[],
-    targetTables?: CollectionTables
-  ): Promise<ForeignKeySpec[]> {
-    const described = this.relationshipForeignKeys(
-      tableName,
-      fields,
-      targetTables
-    );
-    if (described.length === 0) return described;
-    const keyed = await readForeignKeyColumns(
+  async heldRelationshipKeys(tableName: string): Promise<ForeignKeySpec[]> {
+    const live = await introspectLiveSnapshot(
       this.adapter.getDrizzle(),
       this.adapter.dialect,
-      tableName
+      [tableName]
     );
-    const liveKeyed = new Set([...keyed.keys()].map(c => c.toLowerCase()));
-    return described.filter(key =>
-      liveKeyed.has((key.columns[0] ?? "").toLowerCase())
+    return (
+      live.tables.find(
+        table => table.name.toLowerCase() === tableName.toLowerCase()
+      )?.foreignKeys ?? []
     );
   }
 
   /**
    * A save's relationship keys before and after, as the table holds them.
    *
-   * Which Builder relationships carry a key depends on when each was made: one made before the
-   * Builder keyed relationships named by `relationTo` has none, and an existing column is never
-   * given one. So `before` keeps only the keys the live table holds, and `after` keeps those plus
-   * the keys of relationships whose column this save adds. A key the table does not hold is never
-   * dropped, and a column it holds no key on is never keyed by a save that leaves it in place.
+   * `before` is each key the live table holds on one of the old fields' relationship columns,
+   * exactly as the database reports it. `after` is each new field's key as the schema service
+   * describes it where the table already holds a key on its column, under that key's name and to
+   * its target (so a changed delete or update action is the only thing a save changes about it),
+   * and where the save adds the column. A column the table holds no key on is never keyed by a save
+   * that leaves it in place, and a key the table does not hold is never dropped. A translated
+   * relationship keeps its column on the companion table, which carries no key, so none is
+   * described for the main table.
    */
   private async keysTheTableHolds(
     tableName: string,
@@ -2191,52 +2188,74 @@ export class DynamicCollectionService extends BaseService {
     newFields: FieldDefinition[],
     targetTables: CollectionTables | undefined
   ): Promise<{ before: ForeignKeySpec[]; after: ForeignKeySpec[] }> {
-    const before = this.relationshipForeignKeys(
+    const onMainTable = (field: FieldDefinition) => field.localized !== true;
+    const described = this.relationshipForeignKeys(
       tableName,
-      oldFields,
+      newFields.filter(onMainTable),
       targetTables
-    );
-    const after = this.relationshipForeignKeys(
-      tableName,
-      newFields,
-      targetTables
-    );
-    if (before.length === 0 && after.length === 0) return { before, after };
-    const keyed = await readForeignKeyColumns(
-      this.adapter.getDrizzle(),
-      this.adapter.dialect,
-      tableName
     );
     const lower = (name: string) => name.toLowerCase();
-    const liveKeyed = new Set([...keyed.keys()].map(lower));
+    const relationColumns = (fields: FieldDefinition[]) =>
+      new Set(
+        fields
+          .filter(
+            field =>
+              field.type === "relationship" &&
+              onMainTable(field) &&
+              fieldProducesColumn(field)
+          )
+          .map(field => lower(toSnakeCase(field.name)))
+      );
+    const oldRelationColumns = relationColumns(oldFields);
+    if (described.length === 0 && oldRelationColumns.size === 0) {
+      return { before: [], after: [] };
+    }
+    const live = (await this.heldRelationshipKeys(tableName)).filter(
+      key => key.columns.length === 1
+    );
+    const liveByColumn = new Map(
+      live.map(key => [lower(key.columns[0] ?? ""), key])
+    );
     const oldColumns = new Set(
       oldFields
         .filter(field => fieldProducesColumn(field))
         .map(field => lower(toSnakeCase(field.name)))
     );
     // A renamed field keeps its column under the new name, with the key its old column had or
-    // without one: it is an existing column, not one this save adds.
-    // Asked only when a key stands on a column the old fields had none of, the one case a rename
-    // decides.
-    const onNewColumn = after.some(
+    // without one: it is an existing column, not one this save adds. Asked only when a key stands
+    // on a column the old fields had none of, the one case a rename decides.
+    const onNewColumn = described.some(
       key => !oldColumns.has(lower(key.columns[0] ?? ""))
     );
     const rename = onNewColumn
       ? this.schemaService.detectFieldRename(oldFields, newFields)
       : null;
     if (rename !== null) {
+      const from = lower(toSnakeCase(rename.from.name));
       const to = lower(toSnakeCase(rename.to.name));
       oldColumns.add(to);
-      if (liveKeyed.has(lower(toSnakeCase(rename.from.name))))
-        liveKeyed.add(to);
+      const held = liveByColumn.get(from);
+      if (held !== undefined) liveByColumn.set(to, held);
     }
-    const held = (key: ForeignKeySpec) =>
-      liveKeyed.has(lower(key.columns[0] ?? ""));
     return {
-      before: before.filter(held),
-      after: after.filter(
-        key => held(key) || !oldColumns.has(lower(key.columns[0] ?? ""))
+      before: live.filter(key =>
+        oldRelationColumns.has(lower(key.columns[0] ?? ""))
       ),
+      after: described.flatMap(key => {
+        const column = lower(key.columns[0] ?? "");
+        const held = liveByColumn.get(column);
+        if (held !== undefined) {
+          return [
+            {
+              ...key,
+              name: held.name,
+              referencesTable: held.referencesTable,
+              referencesColumns: held.referencesColumns,
+            },
+          ];
+        }
+        return oldColumns.has(column) ? [] : [key];
+      }),
     };
   }
 

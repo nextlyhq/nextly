@@ -24,7 +24,6 @@ import { runReadsInTransaction } from "../../../shared/lib/read-transaction-scop
 import type { SupportedDialect } from "../../../types/database";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
-import { collectionTablesBySlug } from "../../dynamic-collections/services/collection-tables";
 import type { UnregisteredCollectionRow } from "../../dynamic-collections/services/dynamic-collection-registry-service";
 import type { CollectionArtifacts } from "../../dynamic-collections/services/dynamic-collection-service";
 import { teardownEntityComponentData } from "../../field-groups/services/teardown-entity-field-group-data";
@@ -1455,21 +1454,12 @@ export class CollectionMetadataService extends BaseService {
       // is removed, when no such order exists (`collection-drop-order`). A key
       // to a renamed member references the table it kept, which the registry
       // names, so the keys are described against the registry's tables.
-      // Read as Builder collections' own keys, then held to the keys each table really carries:
-      // a relationship the admin made now has one, and one made before it was keyed has none,
-      // which orders nothing and is no cycle.
-      const targetTables = await collectionTablesBySlug(
-        this.adapter,
-        collections.flatMap(collection => collection.fields ?? []),
-        { builder: true }
-      );
+      // The keys each table really carries, as the database reports them: a relationship the
+      // admin made now has one, one made before it was keyed has none (which orders nothing and
+      // is no cycle), and an older key points where the database says, whatever its field reads.
       const heldKeys = await Promise.all(
         collections.map(collection =>
-          this.collectionService.heldRelationshipKeys(
-            collection.tableName,
-            collection.fields ?? [],
-            targetTables
-          )
+          this.collectionService.heldRelationshipKeys(collection.tableName)
         )
       );
       const order = dropOrder(
