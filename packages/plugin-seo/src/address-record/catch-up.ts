@@ -52,7 +52,7 @@ import {
   type PendingMove,
 } from "./pending-moves";
 import type { RecordRow } from "./rows";
-import { heldRows, noteKey, putNote, readNotes } from "./store";
+import { forgetNotes, heldRows, noteKey, putNote, readNotes } from "./store";
 
 type Transaction = ParticipantTransaction["transaction"];
 
@@ -145,6 +145,20 @@ interface CatchUpOptions {
    */
   pageSize?: number;
   betweenPages?: (listed: readonly HeldDocument[]) => Promise<void>;
+}
+
+/**
+ * Forget the fingerprint of the last catch-up, so the next start runs the
+ * whole of it whatever else it finds. For an install, and an uninstall that
+ * keeps the plugin's tables: between the two the plugin is not running, so
+ * pages saved meanwhile are in no record, and nothing the fingerprint covers
+ * (the address templates, languages and site types) need have changed to say
+ * so.
+ */
+export async function forgetCatchUpFingerprint(
+  ctx: PluginContext
+): Promise<void> {
+  await forgetNotes(ctx, [FINGERPRINT_KEY]);
 }
 
 /** Run the catch-up again with the last context, as the next start would. */
@@ -521,7 +535,9 @@ async function runCatchUp(
   // site type by kind and name, so a type added or removed changes it; the
   // site-types row is written beside it in the same run, and one missing
   // means that run never finished. A full uninstall drops the record with
-  // both rows, so a reinstall runs the whole catch-up again.
+  // both rows, and one that keeps the data forgets the fingerprint, as an
+  // install does (`forgetCatchUpFingerprint`), so a reinstall runs the whole
+  // catch-up again.
   const stored = await storedGate(ctx);
   if (
     stored.fingerprint === fingerprint &&

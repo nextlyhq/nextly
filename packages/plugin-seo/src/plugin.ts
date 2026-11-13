@@ -22,7 +22,10 @@ import {
   type Secret,
 } from "@nextlyhq/plugin-sdk";
 
-import { startCatchUp } from "./address-record/catch-up";
+import {
+  forgetCatchUpFingerprint,
+  startCatchUp,
+} from "./address-record/catch-up";
 import { addressRecordCollection } from "./address-record/collection";
 import {
   ADDRESSES_MOVED,
@@ -993,6 +996,16 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         { readRules, ...siteOrigin },
         targets
       );
+    },
+    // Between an uninstall that keeps the data and the next install, the
+    // plugin does not run: pages saved meanwhile reach no record. Both
+    // forget the catch-up's fingerprint, so the first start after the
+    // install records them. A full uninstall drops the record instead.
+    async onInstall(ctx) {
+      await forgetCatchUpFingerprint(ctx);
+    },
+    async onUninstall(ctx, { keepData }) {
+      if (keepData) await forgetCatchUpFingerprint(ctx);
     },
     async destroy() {
       // What was noted is still sent: a notice is not lost to a shutdown.
