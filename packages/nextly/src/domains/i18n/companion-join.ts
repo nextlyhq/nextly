@@ -720,6 +720,19 @@ export async function populateCompanionFieldsAllLocales(
 }
 
 /**
+ * `column` in `states`: an equality for one, a set for several, and no row
+ * for none (an empty `IN ()` two dialects refuse).
+ */
+function statusIn(column: SQL, states: readonly string[]): SQL {
+  if (states.length === 0) return sql`1=0`;
+  if (states.length === 1) return sql`${column} = ${states[0]}`;
+  return sql`${column} IN (${sql.join(
+    states.map(state => sql`${state}`),
+    sql`, `
+  )})`;
+}
+
+/**
  * Build an ORDER BY expression for a localized field: a `COALESCE` of correlated subqueries,
  * one per fallback-chain locale, each pulling the companion value for that locale
  * (`NULLIF(...,'')` so a blank translation falls back in sort too). Used in-query so ORDER BY +
@@ -832,6 +845,12 @@ export function buildTranslationStatusCondition(args: {
   hasUpdatedAt?: boolean;
   defaultLocale: string;
   filter: TranslationStatusFilter;
+  /**
+   * The states the `published` filter counts as published: the workflow's
+   * public states, as a public read resolved them. Absent, the one state
+   * named `published`.
+   */
+  publicStates?: readonly string[];
 }): SQL | undefined {
   const {
     companionTableName,
@@ -886,7 +905,7 @@ export function buildTranslationStatusCondition(args: {
       // with non-blank content (spec §8's blank=untranslated rule), so a
       // status with nothing written is untranslated with a status attached,
       // not a draft translation.
-      return sql`EXISTS (${rowFor(sql`${t}.${sql.identifier("_status")} = ${state} AND (${nonBlank})`)})`;
+      return sql`EXISTS (${rowFor(sql`${statusIn(sql`${t}.${sql.identifier("_status")}`, state === "published" && args.publicStates ? args.publicStates : [state])} AND (${nonBlank})`)})`;
     case "stale":
       // Translated, but the source moved afterwards.
       //

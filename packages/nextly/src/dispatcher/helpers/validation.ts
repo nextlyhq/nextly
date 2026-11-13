@@ -8,6 +8,8 @@
  * logic.
  */
 
+import { z } from "zod";
+
 import {
   filterShapeProblems,
   refuseFilterProblems,
@@ -319,39 +321,39 @@ export const isTruthyParam = (value?: unknown): boolean => {
 };
 
 /**
- * `?fallback=`: `document` opts a read in to whole-document fallback, and
- * absent leaves it off. Any other value is refused rather than ignored, so a
- * read never goes ahead without the fallback its caller asked for.
+ * A query param that names one option or is absent, parsed at the boundary:
+ * any other value is refused rather than ignored, so a read never goes ahead
+ * without what its caller asked for. An empty value is read as absent, as a
+ * query string spells `?name=` with nothing after it.
  */
-export const parseFallbackParam = (value?: unknown): boolean => {
-  if (value === undefined || value === null || value === "") return false;
-  if (value === "document") return true;
+function oneOptionParam<T extends string>(
+  name: string,
+  option: T,
+  value: unknown
+): T | undefined {
+  const parsed = z
+    .enum([option])
+    .optional()
+    .safeParse(value === "" || value === null ? undefined : value);
+  if (parsed.success) return parsed.data;
   throw NextlyError.validation({
     errors: [
       {
-        path: "fallback",
+        path: name,
         code: "INVALID_VALUE",
-        message: 'fallback must be "document".',
+        message: `${name} must be "${option}".`,
       },
     ],
   });
-};
+}
+
+/** `?fallback=`: `document` opts a read in to whole-document fallback, and absent leaves it off. */
+export const parseFallbackParam = (value?: unknown): boolean =>
+  oneOptionParam("fallback", "document", value) === "document";
 
 /**
  * `?translations=`: `all` attaches every language's values beside a read's
- * own (`_allLocales`), and absent leaves them out. Any other value is refused
- * rather than ignored.
+ * own (`_allLocales`), and absent leaves them out.
  */
-export const parseTranslationsParam = (value?: unknown): "all" | undefined => {
-  if (value === undefined || value === null || value === "") return undefined;
-  if (value === "all") return "all";
-  throw NextlyError.validation({
-    errors: [
-      {
-        path: "translations",
-        code: "INVALID_VALUE",
-        message: 'translations must be "all".',
-      },
-    ],
-  });
-};
+export const parseTranslationsParam = (value?: unknown): "all" | undefined =>
+  oneOptionParam("translations", "all", value);

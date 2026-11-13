@@ -2359,20 +2359,24 @@ export class CollectionQueryService extends BaseService {
     // due release has made public as of this read's instant. Built here rather
     // than at each call site so the rows and the total beside them cannot
     // disagree about which documents a release has revealed.
+    const decisions = await this.releaseDecisions(
+      params.collectionName,
+      statusFilter,
+      params.releaseNow
+    );
     const releaseCondition = statusCondition({
       filter: statusFilter,
       statusColumn: schema.status,
       idColumn: schema.id,
-      decisions: await this.releaseDecisions(
-        params.collectionName,
-        statusFilter,
-        params.releaseNow
-      ),
+      decisions,
     });
     if (releaseCondition) conditions.push(releaseCondition);
+    // In the requested language too, by the same public states and the same
+    // due releases, so the two bounds cannot disagree about a document.
     const inLanguage = publishedInLanguageCondition({
       companion,
-      isPublicRead: statusFilter?.isPublicRead === true,
+      statusFilter,
+      revealed: decisions.reveal,
       localeChain,
       mainIdColumn: schema.id,
       defaultLocale: this.localization?.defaultLocale,
@@ -5252,17 +5256,18 @@ export class CollectionQueryService extends BaseService {
       // Named `lifecycleCondition` rather than shadowing the imported
       // `statusCondition` helper it now delegates to.
       const readNow = new Date();
+      const decisions = await this.releaseDecisions(
+        params.collectionName,
+        statusFilter,
+        readNow
+      );
       const lifecycleCondition = suppressDraftStatusFilter
         ? undefined
         : statusCondition({
             filter: statusFilter,
             statusColumn: schema.status,
             idColumn: schema.id,
-            decisions: await this.releaseDecisions(
-              params.collectionName,
-              statusFilter,
-              readNow
-            ),
+            decisions,
           });
       // The read rule's filter, in the language this read resolves through,
       // so an entry it does not match is not found: the same `404` a missing
@@ -5288,7 +5293,8 @@ export class CollectionQueryService extends BaseService {
       // entry, as a list in that language leaves it out.
       const inLanguageCondition = publishedInLanguageCondition({
         companion,
-        isPublicRead: statusFilter?.isPublicRead === true,
+        statusFilter,
+        revealed: decisions.reveal,
         localeChain,
         mainIdColumn: schema.id,
         defaultLocale: this.localization?.defaultLocale,

@@ -12,7 +12,9 @@
  *
  * @module domains/i18n/read-in-language
  */
-import type { SQL } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
+
+import type { StatusFilter } from "../../lib/status-filter";
 
 import {
   buildTranslationStatusCondition,
@@ -31,7 +33,14 @@ import type { CompanionSchema } from "./runtime/companion-io";
  */
 export function publishedInLanguageCondition(args: {
   companion: CompanionSchema | null | undefined;
-  isPublicRead: boolean;
+  /** The read's lifecycle bound, as its status filter resolved it. */
+  statusFilter: StatusFilter | null | undefined;
+  /**
+   * The documents a due release makes public as of this read: public in
+   * every language before the release's own rows are written, as the read's
+   * lifecycle bound already admits them.
+   */
+  revealed?: readonly string[];
   /** The read's language chain; its first language is the one requested. */
   localeChain: readonly string[] | null | undefined;
   mainIdColumn: unknown;
@@ -39,21 +48,28 @@ export function publishedInLanguageCondition(args: {
 }): SQL | undefined {
   const requested = args.localeChain?.[0];
   if (
-    !args.isPublicRead ||
+    args.statusFilter?.isPublicRead !== true ||
     args.companion?.hasStatus !== true ||
     requested === undefined ||
     args.defaultLocale === undefined
   ) {
     return undefined;
   }
-  return buildTranslationStatusCondition({
+  const inLanguage = buildTranslationStatusCondition({
     companionTableName: args.companion.companionTableName,
     mainIdColumn: args.mainIdColumn,
     localizedColumns: args.companion.localizedFields.map(field => field.column),
     hasStatus: true,
     defaultLocale: args.defaultLocale,
     filter: { locale: requested, state: "published" },
+    // Every state the workflow calls public, as the read's own bound does.
+    publicStates: args.statusFilter.values,
   });
+  if (inLanguage === undefined || !args.revealed?.length) return inLanguage;
+  return sql`(${inLanguage} OR ${args.mainIdColumn} IN (${sql.join(
+    args.revealed.map(id => sql`${id}`),
+    sql`, `
+  )}))`;
 }
 
 /** The parts of a read's answer whole-document fallback looks at. */

@@ -1357,7 +1357,10 @@ export class SingleQueryService extends BaseService {
       if (
         statusFilter &&
         translations &&
-        !(await this.publishedInRequestedLanguage(translations, statusFilter))
+        !(await this.publishedInRequestedLanguage(translations, statusFilter, {
+          slug,
+          now: readNow,
+        }))
       ) {
         return singleAbsentResult(slug);
       }
@@ -1581,11 +1584,25 @@ export class SingleQueryService extends BaseService {
    */
   private async publishedInRequestedLanguage(
     translations: JoinedTranslations,
-    statusFilter: StatusFilter
+    statusFilter: StatusFilter,
+    /** Which Single, and the instant this read resolves releases against. */
+    release: { slug: string; now: Date }
   ): Promise<boolean> {
+    // A due release makes the Single public in every language before its own
+    // rows are written, as `isSingleVisible` already admits it.
+    const revealed = statusFilter.isPublicRead
+      ? (
+          await this.releaseVisibility.decisions({
+            scopeKind: "single",
+            scopeSlug: release.slug,
+            now: release.now,
+          })
+        ).reveal
+      : [];
     const condition = publishedInLanguageCondition({
       companion: translations.companion,
-      isPublicRead: statusFilter.isPublicRead,
+      statusFilter,
+      revealed,
       localeChain: translations.localeChain,
       mainIdColumn: (translations.mainTable as { id?: unknown }).id,
       defaultLocale: this.localization?.defaultLocale,
