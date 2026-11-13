@@ -375,3 +375,14 @@ describe("judgeStatement on what drizzle-kit and the migration generator write",
     ).toBe("posts");
   });
 });
+
+describe("judgeStatement on a connection setting that runs code", () => {
+  it.each(["mysql", "postgresql"] as const)(
+    "stops with no retry on %s, since the next try would send it again first",
+    dialect => {
+      expect(
+        judgeStatement("SET @x = site_function()", dialect, () => false)
+      ).toEqual({ kind: "no-retry", reason: "unknown-code" });
+    }
+  );
+});

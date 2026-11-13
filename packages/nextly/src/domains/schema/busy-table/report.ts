@@ -129,7 +129,9 @@ function whatHappened(stop: BusyTableStop, why: string): string {
     case "part-way":
       return `${change} stopped part-way: ${why}.`;
     case "no-retry":
-      return `${change} stopped after one try: ${why}.`;
+      // The statement that may not be sent again was not; earlier tries, counted on the next
+      // line, may have run other statements again before it.
+      return `${change} stopped without trying again: ${why}.`;
   }
 }
 
@@ -193,7 +195,9 @@ function nextStep(stop: BusyTableStop): string {
     return (
       `Run it again once the holder ends or the holding session is ended: \`${stop.change}\` ` +
       "was undone whole and applies from its start. Check what the statement named above keeps " +
-      "(for `setval`, the sequence's position) before it runs again."
+      "(for `setval`, the sequence's position) before it runs again. If `nextly migrate` refuses " +
+      "the file for an unresolved attempt, clear it first with " +
+      `\`nextly migrate:resolve --failed-cleanup ${stop.change}\`.`
     );
   }
   return (

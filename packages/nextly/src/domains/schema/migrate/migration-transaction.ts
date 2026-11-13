@@ -84,6 +84,19 @@ export interface StatementTryBound {
    * reach a connection the pool has since handed to other work.
    */
   readonly settle?: () => Promise<void>;
+  /**
+   * Awaited before each statement is sent: the try's watch finishes a cancel under way first, so
+   * a cancel meant for the statement that waited can never end the next one.
+   */
+  readonly beforeStatement?: () => Promise<void>;
+  /**
+   * A statement whose failure this accepts is passed over, and the unit goes on to the next, as
+   * a runner that tolerates a statement already applied does; it counts as run. Honoured only
+   * where a refused statement leaves the unit able to go on: outside a transaction, and on MySQL,
+   * which rolls back the statement alone. In a PostgreSQL or SQLite transaction a refused
+   * statement aborts the transaction, so there it is never consulted.
+   */
+  readonly passOver?: (error: unknown, statement: string) => boolean;
 }
 
 /**
@@ -358,7 +371,7 @@ async function boundSqliteWait(
  * Whether `statement` sets something on its connection (`SET`): sent again before a try that
  * resumes past it, since the try may run on another connection than the one it was set on.
  */
-function isConnectionSetting(
+export function isConnectionSetting(
   statement: string,
   dialect: SupportedDialect
 ): boolean {
@@ -465,8 +478,19 @@ async function runUnitStatements(
           await checkpoint?.(tx.db, index);
           // A run that lost the lock starts no further statement (`assertSchemaLockHeld`).
           await assertSchemaLockHeld();
+          await bound?.beforeStatement?.();
           bound?.onStatement?.(index);
-          await tx.execute(sent(statement));
+          try {
+            await tx.execute(sent(statement));
+          } catch (error) {
+            // Only MySQL's transaction goes on after a refused statement (see `passOver`).
+            if (
+              dialect !== "mysql" ||
+              bound?.passOver?.(error, statement) !== true
+            ) {
+              throw error;
+            }
+          }
         }
         bound?.onStatement?.(statements.length);
         await bound?.settle?.();
@@ -503,10 +527,12 @@ async function runUnitStatements(
       await checkpoint?.(adapter.getDrizzle(), index);
       // Asked before the statement, outside the failure below: refused here, nothing of it ran.
       await assertSchemaLockHeld();
+      await bound?.beforeStatement?.();
       bound?.onStatement?.(index);
       try {
         await execute(sent(statement));
       } catch (error) {
+        if (bound?.passOver?.(error, statement) === true) continue;
         throw partialFailure(unit, index, statements.length, error);
       }
     }

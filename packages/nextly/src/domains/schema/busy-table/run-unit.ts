@@ -27,6 +27,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { leadingWords } from "../migrate/split-sql";
 
 import {
+  isConnectionSetting,
   runMigrationStatements,
   type MigrationUnit,
 } from "../migrate/migration-transaction";
@@ -51,6 +52,12 @@ export interface BusyTableRun {
   readonly notify: (line: string) => void;
   /** The units this run applied before the one about to run. */
   readonly appliedBefore: () => readonly string[];
+  /**
+   * A statement whose failure this accepts is passed over and counts as run (a runner that
+   * tolerates a statement already applied); see `StatementTryBound.passOver` for where it is
+   * honoured.
+   */
+  readonly passOver?: (error: unknown, statement: string) => boolean;
 }
 
 /** The tables of this database with a trigger a row change would fire. */
@@ -144,10 +151,11 @@ function keptUntil(
 /**
  * The first statement from `start` up to `end` (not included) that a later try may not send
  * again, by its position in the whole unit; `firstNoRetry`'s reading, with the tables the
- * statements before `start` renamed carried into it, since a renamed table keeps its triggers.
- * Only those renames are read before `start`: the statements there were kept and are not sent
- * again. A rename there that is itself one that may not run again (none is, as the statements
- * are read today) is named as the statement that stops the run, failing closed.
+ * statements before `start` renamed carried into it, since a renamed table keeps its triggers,
+ * and the connection settings before `start` judged too, since the next try sends them again
+ * first (`SET @x = site_fn()` would run its function twice). Only those are read before `start`:
+ * the other statements there were kept and are not sent again. A rename or a setting there that
+ * may not run again is named as the statement that stops the run, failing closed.
  */
 function firstNoRetryBetween(
   statements: readonly string[],
@@ -160,7 +168,13 @@ function firstNoRetryBetween(
   const renames: number[] = [];
   for (const [index, statement] of statements.slice(0, start).entries()) {
     const renamed = renamedTables(statement, dialect);
-    if (renamed === "unread" || renamed.length > 0) renames.push(index);
+    if (
+      renamed === "unread" ||
+      renamed.length > 0 ||
+      isConnectionSetting(statement, dialect)
+    ) {
+      renames.push(index);
+    }
   }
   const found = firstNoRetry(
     [
@@ -253,6 +267,8 @@ export async function runUnitInTries(
             settle: async () => {
               await watchdog.stop();
             },
+            beforeStatement: () => watchdog.idle(),
+            ...(run.passOver === undefined ? {} : { passOver: run.passOver }),
           }
         );
         await watchdog.stop();
