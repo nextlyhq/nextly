@@ -36,4 +36,6 @@ A field rewrite (`rewriteField`, `@experimental`) now reaches a Single as it rea
 - **History and events.** One `field-rewritten` event names the field, each copy and the reason, and the plugin that made it. A change to the live copy records `single.updated` and revalidates the Single; a change to drafts alone records neither. No save hooks run.
 - **Refusals and access.** The same fields and values are refused as for an entry. Made for a person, it needs their permission to update the Single and, where it has a publish lifecycle, to publish it.
 
-`RewriteFieldArgs` is now a union of the entry and the Single forms. For an entry as for a Single, a group or repeater that holds a password is now refused: a read gives it without the password, so writing it back would drop the stored hash, and a draft would keep a given password as written.
+`FieldRewriteRequest` and `RewriteFieldArgs` keep their entry shape. A Single's request is `SingleFieldRewriteRequest` (`RewriteSingleFieldArgs` on the Direct API), and `DocumentFieldRewriteRequest` names either, which the plugin service's `rewriteField` takes.
+
+For an entry as for a Single, a group or repeater that holds a password or a field group is now refused. A read gives a password-holding field without the password, so writing it back would drop the stored hash, and a draft would keep a given password as written. A field group held inline has its own write rules and type, which a value swap doesn't judge.

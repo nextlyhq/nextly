@@ -356,7 +356,7 @@ recorded exactly as an entry's are below.
   commits, and revalidates the entry's pages.
 - **What it refuses.** The id, status, slug and timestamps; a field whose values must be unique (a
   draft's value is never checked for that); a field stored in tables of its own (a field group, a
-  many-to-many relationship); a password, or a group or repeater holding one; a virtual field; and a value the field's own checks refuse,
+  many-to-many relationship); a password, or a group or repeater holding one or holding a field group; a virtual field; and a value the field's own checks refuse,
   on any copy. Made with `as: "user"`, it needs the person's permission to update the entry and,
   where the collection has a publish lifecycle, to publish it, plus every field rule of their own
   update.
