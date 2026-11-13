@@ -44,6 +44,7 @@ import {
   relationshipStoresJson,
   toSnakeCase,
 } from "../services/field-column-descriptor";
+import { movedForeignKeyName } from "../services/index-name";
 import { relationshipTargetSlug } from "../services/relationship-key-target";
 
 import type {
@@ -101,17 +102,29 @@ export function withBuilderForeignKeys(
     })
   );
 
-  // Refused before anything else is planned: a relationship whose column holds a key, pointed at
-  // another collection or made to hold a list by this save (`refuseKeyedRelationshipChanges`).
-  if (recordedFields !== undefined) {
-    refuseKeyedRelationshipChanges(fields, recordedFields, live);
-  }
+  // A keyed relationship this save points at another collection moves its key there
+  // (`keyedRelationshipMoves`): planned here, judged against the rows before anything runs.
+  const moves =
+    recordedFields === undefined
+      ? new Map<string, ForeignKeySpec>()
+      : keyedRelationshipMoves(
+          spec.name,
+          fields,
+          recordedFields,
+          live,
+          builder,
+          targetTables
+        );
 
   const kept = keptKeys(spec, fields, live, {
     builder,
     recordedFields,
     targetTables,
-  });
+  })
+    // A moved relationship's key is replaced by the one to its new target.
+    .map(fk =>
+      fk.columns.length === 1 ? (moves.get(lower(fk.columns[0])) ?? fk) : fk
+    );
   const keyed = new Set(kept.flatMap(fk => fk.columns.map(lower)));
 
   // Created: the key of each relationship whose column this push adds.
@@ -249,39 +262,53 @@ function fieldTitle(field: FieldDefinition): string {
 }
 
 /**
- * Refuses a save that would leave a relationship's key checking the wrong collection.
+ * The keys a save moves: each relationship whose live column holds a foreign key and that the save
+ * points at another collection, by its column, with the key it moves to.
  *
- * A relationship whose live column holds a foreign key has every value checked against its
- * target's table. Pointing it at another collection would keep that key checking the old target,
- * so every value of the new one would be refused. That is refused here, naming the field, before
- * any statement is planned, and the key stays as it is. Making it hold several entries is not:
- * that switch converts each value into a one-item list and takes the key with the conversion
- * (`keysDroppedBeforeConversions`), since no key can check a list. Judged against the fields the
- * registry records before this save, so only what the save changes is judged, and a relationship
- * whose column holds no key changes freely, as it always has.
+ * A relationship whose live column holds a key has every value checked against its target's
+ * table, so pointing it elsewhere moves the key there: the new key is described as the Builder
+ * describes one, under the name that lets it be added before the old one is dropped
+ * (`movedForeignKeyName`), and the values are judged against the new target before anything runs
+ * (`refuseKeysRowsWouldBreak`). A target with no table a key can point at (a Single, a slug that
+ * names nothing) is refused here, naming the field, and the key stays. Making a keyed relationship
+ * hold several entries is not a move: that switch converts each value into a one-item list and the
+ * key goes with the conversion (`keysDroppedBeforeConversions`). Judged against the fields the
+ * registry records before this save, so a relationship whose column holds no key changes freely.
  */
-function refuseKeyedRelationshipChanges(
+function keyedRelationshipMoves(
+  table: string,
   fields: readonly FieldDefinition[],
   recordedFields: readonly FieldDefinition[],
-  live: TableSpec | undefined
-): void {
-  const keyedColumns = new Set(
+  live: TableSpec | undefined,
+  builder: DynamicCollectionSchemaService,
+  targetTables: CollectionTables | undefined
+): Map<string, ForeignKeySpec> {
+  const lower = (name: string) => name.toLowerCase();
+  const moves = new Map<string, ForeignKeySpec>();
+  const liveKeys = new Map(
     (live?.foreignKeys ?? []).flatMap(fk =>
-      fk.columns.length === 1 ? [fk.columns[0].toLowerCase()] : []
+      fk.columns.length === 1 ? [[lower(fk.columns[0]), fk] as const] : []
     )
   );
-  if (keyedColumns.size === 0) return;
+  if (liveKeys.size === 0) return moves;
+  const keyedColumns = new Set(liveKeys.keys());
   const recordedByName = new Map(recordedFields.map(f => [f.name, f]));
   for (const field of fields) {
     const before = recordedByName.get(field.name);
-    if (before === undefined) continue;
+    const column = lower(toSnakeCase(field.name));
+    const liveKey = liveKeys.get(column);
+    if (before === undefined || liveKey === undefined) continue;
     if (!isKeyedRelationshipPair(field, before, keyedColumns)) continue;
     if (relationshipStoresJson(field)) continue;
     if (relationshipTargetSlug(field) === relationshipTargetSlug(before)) {
       continue;
     }
-    throw targetChangeRefusal(field, before);
+    moves.set(
+      column,
+      movedKey(table, field, liveKey, { fields, live, builder, targetTables })
+    );
   }
+  return moves;
 }
 
 /**
@@ -302,20 +329,82 @@ function isKeyedRelationshipPair(
   );
 }
 
-/** The refusal of pointing a keyed relationship at another collection, naming both. */
-function targetChangeRefusal(
+/**
+ * The key `field` moves to from `liveKey`: described as the Builder describes one, judged, under the
+ * name that lets it be added before the old one is dropped. A target with no table is refused.
+ */
+function movedKey(
+  table: string,
   field: FieldDefinition,
-  before: FieldDefinition
-): NextlyError {
-  const target = relationshipTargetSlug(before) ?? "its collection";
+  liveKey: ForeignKeySpec,
+  context: {
+    fields: readonly FieldDefinition[];
+    live: TableSpec | undefined;
+    builder: DynamicCollectionSchemaService;
+    targetTables: CollectionTables | undefined;
+  }
+): ForeignKeySpec {
+  const { fields, live, builder, targetTables } = context;
+  const moved = builder.relationshipForeignKey(
+    table,
+    field,
+    true,
+    targetTables
+  );
+  if (moved === null) throw targetWithoutTableRefusal(field);
+  const column = toSnakeCase(field.name).toLowerCase();
+  return {
+    ...moved,
+    name: movedForeignKeyName(
+      table,
+      column,
+      liveKey.name,
+      moved.referencesTable,
+      otherKeyNames(table, column, fields, live, builder, targetTables)
+    ),
+  };
+}
+
+/**
+ * The names the table's keys on columns other than `column` hold, live or as their relationships
+ * describe them, which a moved key's name must not take.
+ */
+function otherKeyNames(
+  table: string,
+  column: string,
+  fields: readonly FieldDefinition[],
+  live: TableSpec | undefined,
+  builder: DynamicCollectionSchemaService,
+  targetTables: CollectionTables | undefined
+): Set<string> {
+  const other = (columns: readonly string[]) =>
+    !columns.some(c => c.toLowerCase() === column);
+  return new Set([
+    ...(live?.foreignKeys ?? [])
+      .filter(fk => other(fk.columns))
+      .map(fk => fk.name),
+    ...fields.flatMap(field => {
+      const key = builder.relationshipForeignKey(
+        table,
+        field,
+        false,
+        targetTables
+      );
+      return key !== null && other(key.columns) ? [key.name] : [];
+    }),
+  ]);
+}
+
+/** The refusal of pointing a keyed relationship at a target with no table a key can check. */
+function targetWithoutTableRefusal(field: FieldDefinition): NextlyError {
   const next = relationshipTargetSlug(field);
-  const named = next === null ? "another collection" : `"${next}"`;
+  const target = next === null ? "another collection" : `"${next}"`;
   return keyedRelationshipRefusal(
     field,
-    "KEYED_RELATIONSHIP_CANNOT_CHANGE_TARGET",
-    `"${fieldTitle(field)}" can't be pointed at ${named}: the database checks every value it ` +
-      `holds against "${target}". Add a new relationship field for ${named} instead, then ` +
-      `remove this one.`
+    "KEYED_RELATIONSHIP_TARGET_HAS_NO_TABLE",
+    `"${fieldTitle(field)}" can't be pointed at ${target}: the database checks every value it ` +
+      `holds, and ${target} has no table to check them against. Add a new relationship field ` +
+      `for it instead, then remove this one.`
   );
 }
 

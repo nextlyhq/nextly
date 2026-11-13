@@ -1270,6 +1270,24 @@ function keyChanges(
   const same = (a: ForeignKeySpec, b: ForeignKeySpec) =>
     JSON.stringify(a) === JSON.stringify(b);
   const kept = keys.before.filter(k => keys.after.some(a => same(k, a)));
+  // A key that another on the same columns, under a new name, replaces: dropped with the adds,
+  // after its replacement, so the columns are never left unkeyed (MySQL commits each statement).
+  const replaced = (
+    from: readonly ForeignKeySpec[],
+    to: readonly ForeignKeySpec[]
+  ) =>
+    from.filter(
+      k =>
+        !kept.some(c => same(k, c)) &&
+        to.some(
+          a =>
+            !kept.some(c => same(a, c)) &&
+            a.name !== k.name &&
+            a.columns.join("\u0000") === k.columns.join("\u0000")
+        )
+    );
+  const upKept = [...kept, ...replaced(keys.before, keys.after)];
+  const downKept = [...kept, ...replaced(keys.after, keys.before)];
   const between = (
     from: readonly ForeignKeySpec[],
     to: readonly ForeignKeySpec[]
@@ -1283,10 +1301,13 @@ function keyChanges(
       []
     );
   return {
-    up: { first: between(keys.before, kept), last: between(kept, keys.after) },
+    up: {
+      first: between(keys.before, upKept),
+      last: between(upKept, keys.after),
+    },
     down: {
-      first: between(keys.after, kept),
-      last: between(kept, keys.before),
+      first: between(keys.after, downKept),
+      last: between(downKept, keys.before),
     },
   };
 }
