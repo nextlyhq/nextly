@@ -39,6 +39,7 @@ import {
 import { NextlyError } from "../../errors/nextly-error";
 import { emptyRetiredPermissionAnswers } from "../../init/retired-permission-answers";
 import { getAuthLogger } from "../../lib/logger";
+import { coalesce } from "../../shared/lib/coalesce";
 import { consoleLogger } from "../../shared/types";
 
 import {
@@ -383,6 +384,26 @@ const ACTOR_CACHE_MAX_ENTRIES = 10_000;
 const actorCache = new Map<string, KeptActor>();
 
 /**
+ * The resolutions under way, by user and the role version each began under.
+ *
+ * The requests of one admin screen arrive together, and when the user's
+ * actor is not kept (the first screen after a start, or the minute after it
+ * was kept) each of them would resolve it: sixteen walks of the same roles,
+ * four statements each, where one answers them all. A request arriving while
+ * a resolution for its user is under way is handed that one instead
+ * (`coalesce`), on the same rules as keeping:
+ * - the role version is in the key, so a request that read a newer version
+ *   than a resolution began under never joins it, and a role change made in
+ *   this process applies at once to every request after it;
+ * - while a retirement runs, nothing is joined, as nothing is kept;
+ * - a failed resolution rejects every request that joined it, each failing
+ *   closed, and is never kept, so the next request resolves again.
+ * Authorization state for one user, keyed by that user: never an answer, and
+ * never shared across users.
+ */
+const actorLoads = new Map<string, Promise<ResolvedActor>>();
+
+/**
  * Whether what this process kept under `key` may still be served: the role
  * version it was read under stands and it has not expired. When it may, the
  * request's memo of `key` is told when it expires, so a request that keeps
@@ -466,7 +487,13 @@ async function actorOnPool(userId: string): Promise<ResolvedActor> {
       return kept.actor;
     }
   }
-  const actor = await loadActor(userId);
+  // Joined only while the version this request read is still the one in
+  // force: checked here, after the kept actor, with no await before the join.
+  const actor = stampIsCurrent(resolvedUnder)
+    ? await coalesce(actorLoads, `${userId}\u0000${resolvedUnder}`, () =>
+        loadActor(userId)
+      )
+    : await loadActor(userId);
   const expiresAt = keptUntil(userId, actor.validUntil);
   if (stampIsCurrent(resolvedUnder)) {
     if (actorCache.size >= ACTOR_CACHE_MAX_ENTRIES) {
@@ -1090,6 +1117,7 @@ export async function inPermissionSweep<T>(run: () => Promise<T>): Promise<T> {
  */
 function clearInMemoryTiers(): void {
   actorCache.clear();
+  actorLoads.clear();
   publicGrantsKept = undefined;
 }
 
