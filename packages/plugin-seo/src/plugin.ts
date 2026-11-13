@@ -74,6 +74,7 @@ import { keepSeoContext } from "./not-found/report";
 import { plainCopyProxyHandler } from "./outputs/ai-outputs";
 import { listPages, type ListedPagesService } from "./outputs/listing";
 import type { AiCrawlerChoice } from "./outputs/robots";
+import { siteServesOwnRobots } from "./outputs/robots-owner";
 import {
   rootFileRoutes,
   sitemapResponse,
@@ -609,6 +610,11 @@ function ownRulesCheckRoute(
     readRules: readers.readRules,
     aiCrawlers: options.aiCrawlers,
     servesBoth: options.robots !== false && options.sitemap !== false,
+    siteServesOwnRobots: ctx =>
+      siteServesOwnRobots(ctx, {
+        readRules: readers.readRules,
+        baseUrl: options.baseUrl,
+      }),
     listPaths: async (ctx, readRules) => {
       const paths: string[] = [];
       // Each origin's sitemap, as the root sitemap answers on that host.
@@ -776,6 +782,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     ...sitemapScopeOf(options, sitemapSubset),
     // Whether the plugin serves robots.txt, so its rules can block a page.
     servesRobots: options.robots !== false,
+    // Whether a robots.txt of the site's own wins over the plugin's.
+    siteServesOwnRobots: (ctx: PluginContext) =>
+      siteServesOwnRobots(ctx, { readRules, baseUrl: options.baseUrl }),
     readers: {
       readRules,
       readStructuredDataRules: structuredDataFromSettings(

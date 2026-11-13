@@ -871,6 +871,13 @@ describe.each(getConfiguredTestDialects())(
       await checkSite(ctx, { ...listed, servesRobots: false });
       list = await problemList(ctx, listed, everything);
       expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
+      // Nor is a site whose own robots.txt file wins over the plugin's.
+      await checkSite(ctx, {
+        ...listed,
+        siteServesOwnRobots: () => Promise.resolve(true),
+      });
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
       // A page the sitemap does not list is not one it lists and blocks.
       await checkSite(ctx, { ...listed, sitemap: { collections: ["notes"] } });
       list = await problemList(ctx, listed, everything);

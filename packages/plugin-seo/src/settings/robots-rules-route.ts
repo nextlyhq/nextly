@@ -50,6 +50,11 @@ export interface RobotsRulesCheckSetup {
    * sitemap lists every page; the plugin's own unless a test says else.
    */
   recordReady?: () => boolean;
+  /**
+   * Whether the site serves a robots.txt of its own, which wins over the
+   * plugin's, so the rules typed here are not what crawlers read.
+   */
+  siteServesOwnRobots?: (ctx: PluginContext) => Promise<boolean>;
 }
 
 /**
@@ -137,6 +142,11 @@ export async function checkRobotsRules(
         "The site's pages are still being recorded. Try again in a minute.",
       logContext: { reason: "seo-robots-rules-check-record-behind" },
     });
+  }
+  // A site serving its own robots.txt serves none of these rules, so they
+  // block nothing its sitemap lists.
+  if ((await setup.siteServesOwnRobots?.(ctx)) === true) {
+    return { lines: [], pagesKey: blockedPagesKey([]) };
   }
   const rules = await setup.readRules(ctx, undefined);
   const groups = servedGroups({
