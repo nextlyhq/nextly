@@ -450,6 +450,7 @@ export default function UserTable(): JSX.Element {
                 headers={tableColumns.map(column => column.header)}
                 columnWidths={tableColumns.map(column => column.width)}
                 rows={outlineRowsFor(USERS_LIST)}
+                list={USERS_LIST}
               />
             </ScreenOutline>
           }

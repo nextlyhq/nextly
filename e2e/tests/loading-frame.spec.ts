@@ -821,6 +821,74 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
         });
       }
 
+      test.describe("a list's own outline", () => {
+        // A further account per width, as the history's above.
+        ownSeat(2 * WIDTHS.length + index + 1);
+
+        for (const slug of ["posts", "tags"] as const) {
+          test(`stands as tall as the ${slug} table and its pager`, async ({
+            page,
+          }) => {
+            test.setTimeout(90_000);
+            const path = await ownList(page, slug, 5, made);
+            // Only the list's rows are held: the list draws its own outline,
+            // with its columns' heads, and the parts it draws are held to the
+            // table's. Sizes, not places: a plugin's block above the posts
+            // list lands when it will.
+            let release = () => {};
+            const released = new Promise<void>(resolve => {
+              release = resolve;
+            });
+            await page.route(
+              url =>
+                url.pathname === entriesOf(slug) && url.searchParams.size > 0,
+              async route => {
+                try {
+                  await released;
+                  await route.continue();
+                } catch {
+                  // The page went away while the read was held.
+                }
+              }
+            );
+            await openHeld(page, path);
+            const sizes = (drawnBy: "outline" | "screen") =>
+              frameParts(page, drawnBy).then(parts =>
+                Object.fromEntries(
+                  Object.entries(parts).map(([name, box]) => [
+                    name,
+                    { width: box.width, height: box.height },
+                  ])
+                )
+              );
+            // The list's own outline: shown, and naming its columns.
+            await expect
+              .poll(
+                () =>
+                  page.evaluate(
+                    () =>
+                      document.querySelector(
+                        '[data-testid="screen-outline"][data-outline-shown] thead'
+                      )?.textContent ?? ""
+                  ),
+                { timeout: 60_000 }
+              )
+              .toMatch(/title/i);
+            const outlined = await sizes("outline");
+            expect(Object.keys(outlined).sort()).toEqual([
+              "list-pager",
+              "list-rows",
+            ]);
+            release();
+            await screenArrived(page);
+            const loaded = await sizes("screen");
+            for (const [name, size] of Object.entries(outlined)) {
+              expect(loaded[name], `the outline's ${name}`).toEqual(size);
+            }
+          });
+        }
+      });
+
       test.describe("a form's history", () => {
         // A further account per width: the screens above spend their own
         // account's request budget, and these loads would meet its limit.

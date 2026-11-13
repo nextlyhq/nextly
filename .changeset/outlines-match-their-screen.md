@@ -36,4 +36,9 @@ The admin's loading outlines now match the screens they stand for, so nothing mo
 - The users list lays its columns out by fixed widths, shared with its outline, so the columns no longer jump when the rows land, and its Columns control is drawn at once.
 - The release tabs hold their counts' place while the counts load, and the releases list waits for their first answer before it decides whether to show its search. A later recount, after a search or the filter, keeps the search box, its focus and its text, and empties only the counts.
 - A list's toolbar keeps its controls side by side on a narrow column, the search giving way first.
+- A list's outline lays its table out as the table does, as wide as its columns' content, so a column's head no longer wraps in the outline alone, and draws its pager piece by piece as the pager does, so neither is taller than what replaces it. Each list's pager is named for the outline's check.
+- The releases list's outline keeps the toolbar's place it drew until the list replaces it whole, even when the counts answer first.
+- The users list's outline draws the columns plugins add to it, from the same registrations the table is drawn with.
+- A collection's folded panel follows the signed-in metadata once it has answered, even when it lists no plugins at all; the prebuilt page answers only while that is on its way or could not be had.
+- A route whose code is on its way still says it is loading to assistive technology while it draws the screen's outline.
 - A signed-in screen whose code is still on its way draws its outline, the one the frame drew, instead of a loading state of its own.
