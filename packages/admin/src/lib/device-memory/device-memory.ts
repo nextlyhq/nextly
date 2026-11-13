@@ -189,7 +189,7 @@ const rememberedBrandingSchema = z.object({
 export type RememberedBranding = z.infer<typeof rememberedBrandingSchema>;
 
 /** The name of one part of the admin whose drawn size is kept. */
-const layoutPart = z.string().min(1).max(200);
+const layoutPart = z.string().check(z.minLength(1), z.maxLength(200));
 
 /**
  * How the admin's parts were last drawn: a whole number per part, and
@@ -197,10 +197,10 @@ const layoutPart = z.string().min(1).max(200);
  * never by what it shows, and holds a size, never a value read from it.
  */
 const rememberedLayoutSchema = z
-  .record(layoutPart, z.number().int().min(0).max(100_000))
-  .refine(parts => Object.keys(parts).length <= 500);
+  .record(layoutPart, z.int().check(z.gte(0), z.lte(100_000)))
+  .check(z.refine(parts => Object.keys(parts).length <= 500));
 
-export type RememberedLayout = z.infer<typeof rememberedLayoutSchema>;
+type RememberedLayout = z.infer<typeof rememberedLayoutSchema>;
 
 /**
  * The schema reads whose answers may be kept: one collection's, one Single's

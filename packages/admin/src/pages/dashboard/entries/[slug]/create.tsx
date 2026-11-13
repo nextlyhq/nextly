@@ -120,13 +120,21 @@ function CreateEntryPageSkeleton() {
  * @param props - Page props with route params
  * @returns Create entry page component
  */
-export default function CreateEntryPage({
+export default function CreateEntryPage(
+  props: CreateEntryPageProps
+): React.ReactElement {
+  // The panel folded, where the collection's plugin says its document
+  // screens start so, as the frame's outline of this address was drawn: for
+  // every state the page draws, so here, around them all.
+  useCollectionFoldedPanel(props.params?.slug);
+  return <CreateEntryScreen {...props} />;
+}
+
+/** The page's states: its outline, a failure, or the new entry's editor. */
+function CreateEntryScreen({
   params,
 }: CreateEntryPageProps): React.ReactElement {
   const slug = params?.slug;
-  // The panel folded, where the collection's plugin says its document
-  // screens start so, as the frame's outline of this address was drawn.
-  useCollectionFoldedPanel(slug);
 
   // Fetch enriched collection schema (component fields are populated)
   const { data: collection, isLoading, error } = useCollectionSchema(slug);

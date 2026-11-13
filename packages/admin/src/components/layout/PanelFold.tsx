@@ -16,7 +16,10 @@
  */
 import React from "react";
 
-import { useBranding } from "@admin/context/providers/BrandingProvider";
+import {
+  useBranding,
+  useBrandingStatus,
+} from "@admin/context/providers/BrandingProvider";
 import {
   recallPreference,
   rememberPreference,
@@ -134,7 +137,7 @@ export function useFoldedPanel(key: string): void {
  * nothing and folds nothing. A hook cannot be called conditionally, so a
  * screen whose fold depends on what it shows names it here.
  */
-export function useFoldedPanelWhere(key: string | null): void {
+function useFoldedPanelWhere(key: string | null): void {
   const { declare, declared, open } = React.useContext(PanelFoldContext);
   useDeclarationEffect(() => {
     if (key === null) return undefined;
@@ -159,7 +162,13 @@ export function useFoldedPanelWhere(key: string | null): void {
  */
 export function useCollectionFoldedPanel(slug: string | undefined): void {
   const { plugins } = useBranding();
-  const folds = slug !== undefined && collectionFoldsPanel(plugins, slug);
+  // The plugins' list is the admin metadata's signed-in half: until that half
+  // has answered, a list from elsewhere proves nothing, and the prebuilt page
+  // answers instead.
+  const { isPending } = useBrandingStatus();
+  const folds =
+    slug !== undefined &&
+    collectionFoldsPanel(isPending ? undefined : plugins, slug);
   useFoldedPanelWhere(
     folds && slug !== undefined ? collectionFoldKey(slug) : null
   );

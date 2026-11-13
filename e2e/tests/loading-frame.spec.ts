@@ -21,7 +21,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { ADMIN } from "./support/admin";
 import { mainColumnBox } from "./support/shell-geometry";
-import { freeDocumentAt, includingHidden, test } from "./support/test";
+import { freeDocumentAt, includingHidden, ownSeat, test } from "./support/test";
 
 /** The admin's record that this browser has signed in here before. */
 const SIGNED_IN_HERE_KEY = "nextly:admin:signed-in-here";
@@ -751,8 +751,11 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
     }
   });
 
-  for (const width of WIDTHS) {
+  WIDTHS.forEach((width, index) => {
     test.describe(`at ${width} px`, () => {
+      // An account of its own per width, so the loads below stay inside the
+      // per-person request budget.
+      ownSeat(index + 1);
       test.use({ viewport: { width, height: 900 } });
 
       for (const mode of ["held", "unheld"] as const) {
@@ -771,7 +774,7 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
             });
           });
 
-          test(`moves no part of a page of ten ${slug} on a revisit, ${mode}`, async ({
+          test(`moves no part of a list of eleven ${slug} on a revisit, ${mode}`, async ({
             page,
           }) => {
             test.setTimeout(90_000);
@@ -808,5 +811,5 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
         });
       }
     });
-  }
+  });
 });

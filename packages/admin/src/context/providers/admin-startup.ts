@@ -72,13 +72,12 @@ export function startupPathsForPage(
   const paths = common.slice(0, max);
   let screens: unknown = null;
   try {
-    screens = screensJson === null ? null : JSON.parse(screensJson);
+    // The pages' reads, beside what else the page says of its screens; text
+    // that is not JSON, or JSON with no object, throws here and names none.
+    screens = screensJson === null ? null : JSON.parse(screensJson).reads;
   } catch {
     screens = null;
   }
-  if (typeof screens !== "object" || screens === null) return paths;
-  // The pages' reads, beside what else the page says of its screens.
-  screens = (screens as { reads?: unknown }).reads;
   if (typeof screens !== "object" || screens === null) return paths;
   let address = pathname;
   try {

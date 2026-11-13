@@ -26,8 +26,17 @@ import {
 /** The plugins the admin metadata answered with, or none while it has not. */
 let answered: PluginMetadata[] | undefined;
 
+/** A list the metadata's public half or a remembered copy carries meanwhile. */
+let elsewhere: PluginMetadata[] | undefined;
+
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
-  useBranding: () => (answered === undefined ? {} : { plugins: answered }),
+  useBranding: () =>
+    answered !== undefined
+      ? { plugins: answered }
+      : elsewhere !== undefined
+        ? { plugins: elsewhere }
+        : {},
+  useBrandingStatus: () => ({ isPending: answered === undefined }),
 }));
 
 function FoldingPage({ id }: { id: string }): React.JSX.Element {
@@ -66,6 +75,7 @@ const released = () => screen.getByTestId("released").textContent;
 beforeEach(() => {
   window.localStorage.clear();
   answered = undefined;
+  elsewhere = undefined;
 });
 afterEach(cleanup);
 
@@ -173,6 +183,18 @@ describe("a collection whose plugin declares its screens folded", () => {
     );
     expect(released()).toBe("false");
     expect(screen.getByTestId("declared").textContent).toBe("none");
+  });
+
+  it("does not read a plugin list the signed-in metadata has not sent", () => {
+    // The prebuilt page names nothing here, so only the metadata could fold
+    // it; a list from elsewhere, sent before that half answers, is not it.
+    elsewhere = [forms];
+    render(
+      <Shell>
+        <CollectionScreen slug="forms" />
+      </Shell>
+    );
+    expect(released()).toBe("false");
   });
 
   it("stays folded as the screen replaces the frame's outline of it", () => {
