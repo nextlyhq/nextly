@@ -21,7 +21,7 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import type { UseAutosaveRecoveryResult } from "@admin/hooks/useAutosaveRecovery";
 import type { RefusedForm } from "@admin/hooks/useSharedFieldsRecovery";
 

@@ -13,11 +13,11 @@
  * @module components/features/notifications/NotificationBell
  */
 
+import { Popover, PopoverContent, PopoverTrigger } from "@nextlyhq/ui";
 import { Bell } from "lucide-react";
 import type { JSX } from "react";
 import { useState } from "react";
 
-import { Popover, PopoverContent, PopoverTrigger } from "@admin/components/ui";
 import { JOURNAL_PAGE_SIZE, useJournal } from "@admin/hooks/queries/useJournal";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { cn } from "@admin/lib/utils";

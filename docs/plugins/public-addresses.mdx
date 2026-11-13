@@ -54,6 +54,37 @@ Both functions run on the save's own transaction. `db` is your plugin's database
 - An exact address is held where it, or a range above it, is held. A range is held where anything at or below it is.
 - Make two saves of one address unable to both commit, for example with a unique key on language and path, and lock rows for each path above an address so a range and an address inside it meet.
 
+### Doing work once per save (`saveKey`)
+
+One save asks `holderOf` once for each address the document holds, and then calls `record`; a `move` does the same for its whole batch, asking again in rounds while updates are refused. The calls of one such question are handed the same `saveKey` (`@experimental`): a frozen, empty object that names the question and reaches nothing. The next save, or the next `move`, gets a new one, even on the same transaction. Keep by it the work a question needs only once, such as the lock rows you take before reading:
+
+```ts
+import type { PluginTransaction } from "@nextlyhq/plugin-sdk";
+
+// Your own lock row: one `UPDATE ... SET taken = taken + 1` on the row `key`.
+declare function takeLockRow(db: PluginTransaction, key: string): Promise<void>;
+
+const lockedFor = new WeakMap<object, Set<string>>();
+
+export async function holdLocks(
+  db: PluginTransaction,
+  keys: readonly string[],
+  saveKey: object
+): Promise<void> {
+  const taken = lockedFor.get(saveKey) ?? new Set<string>();
+  lockedFor.set(saveKey, taken);
+  for (const key of [...keys].sort()) {
+    if (taken.has(key)) continue;
+    await takeLockRow(db, key);
+    taken.add(key);
+  }
+}
+```
+
+The SEO plugin does this, and takes four lock rows for a save of a post at `/blog/x` rather than eight.
+
+`saveKey` is narrower than the `transactionKey` an in-transaction handler gets, which is one object for the whole transaction, and the difference matters for locks. A transaction can roll back to a savepoint between two saves, as when one entry of a batch is refused and the next goes on. PostgreSQL then lets go of the row locks taken after the savepoint, while MySQL keeps them, so a lock remembered by the transaction may no longer be held for the next save. Within one question Nextly opens no savepoint between the calls, so what a participant did earlier in it still stands. A participant that opens a savepoint of its own inside a call, and rolls it back, must forget what it did inside it.
+
 `ctx.publicAddresses.withdraw(participant)` stops the asking. A participant is withdrawn with the plugin's other subscriptions when the plugin is torn down.
 
 ## Moving addresses yourself
@@ -120,7 +151,7 @@ export const withCatchUp = definePlugin({
 });
 ```
 
-- `ctx.publicAddresses.fingerprint()` changes whenever an address template, the language list or the fallback settings do. Store it, and catch up when it differs.
+- `ctx.publicAddresses.fingerprint()` changes whenever an address template, the language list or the fallback settings do. Store it, and catch up when it differs. It does not change while your plugin is not running: pages saved between `nextly plugins uninstall --keep-data` and the next install reach no participant. Forget the stored fingerprint in `onInstall`, and in `onUninstall` when `keepData` is set, so the first start after the reinstall catches up (see [Install and uninstall hooks](/docs/plugins/lifecycle#install-and-uninstall-hooks)).
 - `ctx.publicAddresses.held({ type, after, limit })` pages through one type's documents in id order, each with every address it holds now and when it was made (`createdAt`), so a caller settling claims oldest first sorts by that. Pass the returned `next` as `after` for the following page.
 - `ctx.publicAddresses.defaultLanguage()` is the language an address is held in where a read names none: the site's default language as it is now, one chosen in Settings included, or `"en"` on a site with no languages. Look up a page read without a language under it, rather than under the `localization` block in code.
 - `ctx.publicAddresses.languages()` lists the languages an address is held in: the site's languages as they are now, a list set in Settings included, its default first; or `["en"]`, its one language, on a site with none. Walk a page's languages with it rather than with the `localization` block in code, which a list set in Settings never reaches.

@@ -143,6 +143,7 @@ export default function FieldGroupBuilderEditPage({
     setSettings,
     isInitialized,
     unsavedCount,
+    pending,
     savedFieldIds,
     pinFields,
     pinSettings,
@@ -266,6 +267,7 @@ export default function FieldGroupBuilderEditPage({
       ),
     onNoChanges: saveSettingsOnly,
     onApplied: onSchemaApplied,
+    previewedWith: { localized },
   });
 
   // ---------------------------- Loading / error guards ----------------------
@@ -298,6 +300,7 @@ export default function FieldGroupBuilderEditPage({
       locked={isLocked}
       configPath={fieldGroup?.configPath}
       unsavedCount={unsavedCount}
+      pending={pending}
       savedFieldIds={savedFieldIds}
       onSave={handleSave}
       settings={settings}
@@ -353,13 +356,10 @@ export default function FieldGroupBuilderEditPage({
             </Alert>
           ) : null}
           {/* Who a change here reaches, before any change is made. */}
-          <FieldGroupUsedBy
-            slug={fieldGroup.slug}
-            unsavedCount={unsavedCount}
-          />
+          <FieldGroupUsedBy slug={fieldGroup.slug} />
         </>
       }
-      isSaving={isSaving || confirmation.isApplying}
+      isSaving={isSaving || confirmation.isBusy}
       savingLabel="Saving field group changes…"
     >
       <ReconcileFieldGroupDialog

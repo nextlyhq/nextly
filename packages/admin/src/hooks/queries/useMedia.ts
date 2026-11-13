@@ -35,7 +35,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback } from "react";
 
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import type { BulkResponse, PerItemError } from "@admin/lib/api/response-types";
 import {
   bulkDeleteMedia,
