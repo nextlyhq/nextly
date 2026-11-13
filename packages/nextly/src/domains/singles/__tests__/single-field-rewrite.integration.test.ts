@@ -21,11 +21,13 @@ import {
   takeTransactionEscapes,
 } from "../../../__tests__/transaction-escapes";
 import {
+  defineCollection,
   defineFieldGroup,
   defineSingle,
   fieldGroup,
   group,
   password,
+  relationship,
   repeater,
   text,
 } from "../../../config";
@@ -53,6 +55,8 @@ const SECRET = "rwsecretsite";
 /** No translations of its own, versions kept, and a translated field group. */
 const BANNERED = "rwbannersite";
 const BANNER = "rwsitebanner";
+/** What the Single under test relates to. */
+const TARGETS = "rwtargets";
 const PLUGIN = "@test/single-rewriter";
 const REASON = "Layout 'Wide' was deleted";
 const EDITOR = { id: "rw-single-editor" };
@@ -82,6 +86,9 @@ async function boot(
     };
   current = await createTestNextly({
     dialect,
+    collections: [
+      defineCollection({ slug: TARGETS, fields: [text({ name: "title" })] }),
+    ],
     singles: [
       defineSingle({
         slug: SITE,
@@ -95,6 +102,7 @@ async function boot(
           text({ name: "title" }),
           text({ name: "layout", maxLength: 12 }),
           repeater({ name: "items", fields: [text({ name: "label" })] }),
+          relationship({ name: "featured", relationTo: TARGETS }),
         ],
       }),
       defineSingle({
@@ -380,6 +388,47 @@ describe.each(getConfiguredTestDialects())(
       expect(rows.map(r => r.label)).toEqual(["a", "b"]);
       for (const row of rows) expect(typeof row.id).toBe("string");
       expect(new Set(rows.map(r => r.id)).size).toBe(2);
+    });
+
+    it("stores a populated reference in the draft as the id it stands for", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: TARGETS,
+        data: { title: "Target" },
+      } as never);
+      const target = (created as { item: { id: string } }).item.id;
+      await save(t, SITE, { layout: "wide", status: "published" });
+      await save(t, SITE, { title: "Unfinished" });
+      await t.nextly.rewriteField({
+        single: SITE,
+        field: "featured",
+        expectedVersion: await versionOf(t, SITE),
+        // As a read at depth serves it: the whole related row.
+        set: { value: { id: target, title: "Target" } },
+        reason: REASON,
+      });
+      const rows = await t.adapter.select<{ snapshot: unknown }>(
+        "nextly_versions",
+        {
+          where: {
+            and: [
+              { column: "scopeKind", op: "=", value: "single" },
+              { column: "scopeSlug", op: "=", value: SITE },
+              { column: "isAutosave", op: "=", value: false },
+              { column: "versionNo", op: "IS NULL" },
+            ],
+          },
+        }
+      );
+      // POPULATION CONTROL: the Single's one working draft.
+      expect(rows).toHaveLength(1);
+      const draft = (
+        typeof rows[0].snapshot === "string"
+          ? JSON.parse(rows[0].snapshot)
+          : rows[0].snapshot
+      ) as Record<string, unknown>;
+      expect(draft.title).toBe("Unfinished");
+      expect(draft.featured).toBe(target);
     });
 
     it("changes the live copy of a Single that keeps no drafts", async () => {

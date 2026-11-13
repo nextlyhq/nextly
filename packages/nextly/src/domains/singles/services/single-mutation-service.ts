@@ -6349,7 +6349,9 @@ export class SingleMutationService extends BaseService {
         fields: singleMeta.fields,
         reach,
         slot,
-        value,
+        // Reduced to the references it stands for, as the live write and a
+        // held save store it: a later publish promotes the draft as stored.
+        value: singleRewritePayload(singleMeta.fields, field, value),
         liveAfter: copies.liveAfter,
         maxPerDoc: singleMeta.versions?.maxPerDoc,
         rewrittenBy: call.user?.id ?? null,
