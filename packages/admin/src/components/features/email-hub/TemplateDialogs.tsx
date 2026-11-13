@@ -14,7 +14,10 @@ import { useEffect, useState } from "react";
 
 import { Loader2 } from "@admin/components/icons";
 import { toast } from "@admin/components/ui";
-import { usePreviewEmailTemplate } from "@admin/hooks/queries/useEmailTemplates";
+import {
+  usePreviewEmailTemplate,
+  useTemplateSenders,
+} from "@admin/hooks/queries/useEmailTemplates";
 
 /** An email or layout a dialog acts on. */
 export interface TemplateRef {
@@ -51,22 +54,53 @@ export function TemplateDeleteDialog({
   onConfirm: () => void;
   isLoading: boolean;
 }): JSX.Element | null {
+  const { data: senders, isLoading: isSendersLoading } = useTemplateSenders(
+    open && template ? template.id : null
+  );
+
   if (!template) return null;
+
+  const affected = [
+    ...(senders?.referenced ?? []),
+    ...(senders?.declared ?? []),
+  ];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="sm:max-w-md"
-        aria-describedby="delete-template-description"
-        role="alertdialog"
-      >
+      <DialogContent className="sm:max-w-md" role="alertdialog">
         <DialogHeader>
           <DialogTitle>Delete this email?</DialogTitle>
-          <DialogDescription id="delete-template-description">
+          <DialogDescription>
             Are you sure you want to delete <strong>{template.name}</strong>?
             This action cannot be undone.
           </DialogDescription>
         </DialogHeader>
+
+        {isSendersLoading ? (
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Checking what sends this email...
+          </p>
+        ) : affected.length > 0 ? (
+          <div className="rounded-md border border-border bg-muted/60 p-3 text-xs space-y-1.5 text-foreground">
+            <p className="font-medium">
+              Deleting this template will affect what sends it:
+            </p>
+            <ul className="list-disc pl-4 space-y-0.5 text-muted-foreground">
+              {affected.map((item, index) => (
+                <li key={index}>{item}</li>
+              ))}
+            </ul>
+            <p className="text-muted-foreground">
+              These will stop sending emails once the template is deleted.
+            </p>
+          </div>
+        ) : null}
+        {senders && !senders.complete ? (
+          <p className="text-xs text-muted-foreground">
+            Some references couldn&apos;t be checked.
+          </p>
+        ) : null}
         <DialogFooter>
           <Button
             variant="outline"

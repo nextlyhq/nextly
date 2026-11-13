@@ -127,6 +127,11 @@ function StateLine({
   isActive: boolean;
 }) {
   const nameOwner = useOwnerName();
+  const senders = [
+    ...(record.sentBy?.declared ?? []),
+    ...(record.sentBy?.referenced ?? []),
+  ];
+  const summary = senders.length > 0 ? senders.join(", ") : record.description;
   return (
     <div className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs text-muted-foreground">
       <Badge variant="outline" className="shrink-0">
@@ -140,8 +145,8 @@ function StateLine({
       <span className="shrink-0" data-testid="workbench-owner">
         {nameOwner(record)}
       </span>
-      {tier === "desktop" && record.description ? (
-        <span className="truncate">· {record.description}</span>
+      {tier === "desktop" && summary ? (
+        <span className="truncate">· {summary}</span>
       ) : null}
     </div>
   );

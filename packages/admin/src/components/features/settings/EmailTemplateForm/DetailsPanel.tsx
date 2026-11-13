@@ -116,6 +116,7 @@ export function DetailsPanel({
   onInsert,
   ownsContent,
   carriesSecret,
+  sentBy,
 }: TemplateSettingsProps & {
   declared: TemplateFormVariable[];
   onInsert: (name: string) => void;
@@ -123,9 +124,27 @@ export function DetailsPanel({
   ownsContent: boolean;
   /** A template carrying a secret takes no copies. */
   carriesSecret: boolean;
+  /** What sends the template, if declared or referenced. */
+  sentBy?: { declared: string[]; referenced: string[] } | undefined;
 }): JSX.Element {
+  const senders = [...(sentBy?.declared ?? []), ...(sentBy?.referenced ?? [])];
+
   return (
     <div className="flex flex-col gap-6" data-testid="details-panel">
+      {senders.length > 0 && (
+        <section className="space-y-1.5" aria-label="What sends this email">
+          <span className={sectionLabel}>What sends this email</span>
+          <ul className="space-y-1 text-sm text-muted-foreground">
+            {senders.map((sender, idx) => (
+              <li key={idx} className="flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 shrink-0" />
+                <span>{sender}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <FormField
         control={control}
         name="description"

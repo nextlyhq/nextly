@@ -421,6 +421,7 @@ export function EmailTemplateForm({
               onInsert={insertVariable}
               ownsContent={owns}
               carriesSecret={template?.carriesSecret === true}
+              sentBy={template?.sentBy}
             />
           }
           phoneBar={
