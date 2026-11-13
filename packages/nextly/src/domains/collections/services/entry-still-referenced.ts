@@ -15,6 +15,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { querySqlRows } from "../../schema/pipeline/classifier/count-helpers";
 import { readReferencingKeys } from "../../schema/pipeline/live-table-facts";
 import { toSnakeCase } from "../../schema/services/field-column-descriptor";
 
@@ -35,13 +36,6 @@ interface RefusingKey {
 
 type Registry = Pick<DrizzleAdapter, "select" | "getDrizzle" | "dialect">;
 
-interface SqliteAll {
-  all: (query: ReturnType<typeof sql>) => Promise<unknown[]>;
-}
-interface Executes {
-  execute: (query: ReturnType<typeof sql>) => Promise<unknown>;
-}
-
 /** The single-column keys referencing `table` whose delete action refuses the delete. */
 async function refusingKeys(
   adapter: Registry,
@@ -52,18 +46,20 @@ async function refusingKeys(
   if (dialect === "sqlite") {
     // One join over `sqlite_master` reads every table's outgoing keys (as `readReferencingTables`
     // does); a key of several columns has a row per column, so only one-column keys are kept.
-    const rows = (await (db as unknown as SqliteAll).all(
+    const rows = await querySqlRows<{
+      child: string;
+      key_id: number;
+      column_name: string;
+      on_delete: string;
+    }>(
+      db,
+      dialect,
       sql`SELECT m.name AS child, fk.id AS key_id, fk."from" AS column_name,
                  fk.on_delete AS on_delete
           FROM sqlite_master AS m
           JOIN pragma_foreign_key_list(m.name) AS fk
           WHERE m.type = 'table' AND fk."table" = ${table}`
-    )) as Array<{
-      child: string;
-      key_id: number;
-      column_name: string;
-      on_delete: string;
-    }>;
+    );
     const byKey = new Map<string, typeof rows>();
     for (const row of rows) {
       const id = `${row.child}\u0000${row.key_id}`;
@@ -96,20 +92,13 @@ async function countPointing(
   key: RefusingKey,
   entryId: string
 ): Promise<number> {
-  const db = adapter.getDrizzle();
-  const query = sql`SELECT COUNT(*) AS n FROM ${sql.identifier(key.table)}
-                    WHERE ${sql.identifier(key.column)} = ${entryId}`;
-  const rows =
-    dialect === "sqlite"
-      ? await (db as unknown as SqliteAll).all(query)
-      : await (db as unknown as Executes).execute(query);
-  // PostgreSQL answers `{ rows }`; MySQL `[rows, fields]`; SQLite the rows.
-  const list = Array.isArray(rows)
-    ? Array.isArray(rows[0])
-      ? (rows[0] as unknown[])
-      : rows
-    : ((rows as { rows?: unknown[] }).rows ?? []);
-  return Number((list[0] as { n?: unknown } | undefined)?.n ?? 0);
+  const [row] = await querySqlRows<{ n: number | string }>(
+    adapter.getDrizzle(),
+    dialect,
+    sql`SELECT COUNT(*) AS n FROM ${sql.identifier(key.table)}
+        WHERE ${sql.identifier(key.column)} = ${entryId}`
+  );
+  return Number(row?.n ?? 0);
 }
 
 /** A stored JSON column, read whichever way the dialect hands it back. */
