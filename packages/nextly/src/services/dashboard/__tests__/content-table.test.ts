@@ -182,10 +182,10 @@ beforeEach(() => {
   narrowedSingles = {};
   containerGet.mockImplementation((name: string) => {
     if (name === "collectionRegistryService") {
-      return { getAllCollections: () => Promise.resolve(collections) };
+      return { getAllCollectionsForRead: () => Promise.resolve(collections) };
     }
     if (name === "singleRegistryService") {
-      return { getAllSingles: () => Promise.resolve(singles) };
+      return { getAllSinglesForRead: () => Promise.resolve(singles) };
     }
     if (name === "activityLogService") return { getRecentEdits };
     throw new Error(`unexpected container.get("${name}")`);

@@ -53,6 +53,7 @@ import type {
   PluginAdminPage,
   PluginCollectionView,
   PluginMenuItem,
+  PluginPageStartupRead,
 } from "@nextlyhq/plugin-sdk/admin";
 
 // The root entry also re-exports the contract types (node-safe, no React).
@@ -73,6 +74,15 @@ expectTypeOf(adminEntry.useCurrentUserId).returns.toEqualTypeOf<
 expectTypeOf<PluginAdminContributions>().toMatchTypeOf<{
   menu?: PluginMenuItem[];
   pages?: PluginAdminPage[];
+}>();
+// A page's startup reads are the reads of the plugin's own routes it makes as
+// it opens, named as `usePluginRoute` names them.
+expectTypeOf<PluginAdminPage["startupReads"]>().toEqualTypeOf<
+  readonly PluginPageStartupRead[] | undefined
+>();
+expectTypeOf<PluginPageStartupRead>().toEqualTypeOf<{
+  path: string;
+  mount?: "plugin" | "root";
 }>();
 expectTypeOf<PluginCollectionView>().toMatchTypeOf<{
   edit?: ComponentPath;
@@ -432,6 +442,25 @@ expectTypeOf(adminEntry.ChecklistItem)
 expectTypeOf<adminEntry.ChecklistStatus>().toEqualTypeOf<
   "open" | "done" | "skipped"
 >();
+// Two columns and struck-through done steps are opt-in, so a list that sets
+// neither draws as it always did.
+expectTypeOf<adminEntry.ChecklistProps["columns"]>().toEqualTypeOf<
+  1 | 2 | undefined
+>();
+expectTypeOf<adminEntry.ChecklistDoneStyle>().toEqualTypeOf<
+  "quiet" | "struck"
+>();
+expectTypeOf<adminEntry.ChecklistProps["doneStyle"]>().toEqualTypeOf<
+  adminEntry.ChecklistDoneStyle | undefined
+>();
+
+// A stat's dot takes a badge's status names, and its compact size is opt-in.
+expectTypeOf<adminEntry.StatProps["tone"]>().toEqualTypeOf<
+  "success" | "warning" | "destructive" | "info" | undefined
+>();
+expectTypeOf<adminEntry.StatProps["size"]>().toEqualTypeOf<
+  "default" | "compact" | undefined
+>();
 
 expectTypeOf(adminEntry.SettingsRowGroup)
   .parameter(0)
@@ -444,4 +473,70 @@ expectTypeOf<adminEntry.FieldLayout>().toEqualTypeOf<"stacked" | "row">();
 // The status variants a table cell draws are among the badge's variants.
 expectTypeOf<"success" | "warning" | "destructive" | "info">().toMatchTypeOf<
   NonNullable<adminEntry.BadgeProps["variant"]>
+>();
+
+// ---------------------------------------------------------------------------
+// Grouped rows, rows that open a region, the stepper and the save bar's own
+// message (@experimental). The grouping and the region are props of the
+// admin's table, so they are pinned on BOTH the table's and the list's props:
+// a prop dropped in the forwarding through two barrels fails here rather than
+// in a plugin's build.
+// ---------------------------------------------------------------------------
+
+expectTypeOf<adminEntry.DataTableViewProps<Row>["grouping"]>().toEqualTypeOf<
+  adminEntry.DataTableGrouping<Row> | undefined
+>();
+expectTypeOf<adminEntry.ListViewProps<Row>["grouping"]>().toEqualTypeOf<
+  adminEntry.DataTableGrouping<Row> | undefined
+>();
+expectTypeOf<adminEntry.DataTableViewProps<Row>["rowDetail"]>().toEqualTypeOf<
+  adminEntry.DataTableRowDetail<Row> | undefined
+>();
+expectTypeOf<adminEntry.ListViewProps<Row>["rowDetail"]>().toEqualTypeOf<
+  adminEntry.DataTableRowDetail<Row> | undefined
+>();
+expectTypeOf<adminEntry.DataTableGrouping<Row>>().toMatchTypeOf<{
+  groups: readonly adminEntry.DataTableGroup[];
+  groupOf: (row: Row) => string;
+  collapsible?: boolean;
+  collapsedIds?: readonly string[];
+  onCollapsedChange?: (collapsedIds: string[]) => void;
+}>();
+expectTypeOf<adminEntry.DataTableGroup>().toMatchTypeOf<{
+  id: string;
+  title: React.ReactNode;
+  badge?: React.ReactNode;
+  count?: React.ReactNode;
+  actions?: React.ReactNode;
+}>();
+expectTypeOf<adminEntry.DataTableRowDetail<Row>>().toMatchTypeOf<{
+  render: (row: Row) => React.ReactNode;
+  hasDetail?: (row: Row) => boolean;
+  expandedIds?: readonly string[];
+  onExpandedChange?: (expandedIds: string[]) => void;
+}>();
+
+expectTypeOf(adminEntry.Stepper)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.StepperProps>();
+expectTypeOf<adminEntry.StepperStep>().toMatchTypeOf<{
+  label: React.ReactNode;
+  href?: string;
+  onSelect?: () => void;
+}>();
+expectTypeOf<adminEntry.StepState>().toEqualTypeOf<
+  "complete" | "current" | "upcoming"
+>();
+
+expectTypeOf(adminEntry.FileDropArea)
+  .parameter(0)
+  .toEqualTypeOf<adminEntry.FileDropAreaProps>();
+expectTypeOf<adminEntry.FileDropAreaProps>().toMatchTypeOf<{
+  onFiles: (files: File[]) => void;
+  label: string;
+  title: React.ReactNode;
+}>();
+
+expectTypeOf<adminEntry.FormActionsProps["message"]>().toEqualTypeOf<
+  React.ReactNode | undefined
 >();

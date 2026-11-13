@@ -651,6 +651,80 @@ export { Badge } from "@nextlyhq/admin";
 export type { BadgeProps } from "@nextlyhq/admin";
 
 /**
+ * The parts a plugin page needs beyond a form (@experimental here): a notice
+ * above the content, a panel that slides in from the edge, tabs inside a card,
+ * a progress bar, a menu of row actions and a hint on hover. The same objects
+ * the admin's own pages draw, forwarded through `@nextlyhq/admin` like the
+ * controls above, so a plugin page needs no look of its own for any of them.
+ *
+ * - `Alert` takes `variant`: `info`, `success`, `warning` or `destructive`.
+ * - `Sheet` is the admin's side panel; `SheetContent` takes `side`.
+ * - `Tabs` switches between panels inside a page. For tabs that are routes,
+ *   use `PageTabs`.
+ * - `Progress` takes a `value` out of `max` (100 by default), and `variant`
+ *   `default`, `success` or `error`.
+ * - `DropdownMenu` is the menu behind a button, such as a row's actions.
+ * - `Tooltip` needs a `TooltipProvider` above it; the admin provides one, so a
+ *   plugin page adds its own only when it renders outside the admin.
+ */
+export {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  Progress,
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@nextlyhq/admin";
+export type {
+  AlertDescriptionProps,
+  AlertProps,
+  AlertTitleProps,
+  SheetCloseProps,
+  SheetContentProps,
+  SheetDescriptionProps,
+  SheetFooterProps,
+  SheetHeaderProps,
+  SheetProps,
+  SheetTitleProps,
+  SheetTriggerProps,
+  TabsContentProps,
+  TabsListProps,
+  TabsProps,
+  TabsTriggerProps,
+  ProgressProps,
+  DropdownMenuCheckboxItemProps,
+  DropdownMenuContentProps,
+  DropdownMenuItemProps,
+  DropdownMenuLabelProps,
+  DropdownMenuRadioItemProps,
+  DropdownMenuSeparatorProps,
+} from "@nextlyhq/admin";
+
+/**
  * Ask the admin to hide its own chrome while an immersive surface is mounted
  * (@experimental) — a full-bleed editor, a media browser, a preview mode.
  *
@@ -818,6 +892,28 @@ export type {
 } from "@nextlyhq/admin";
 
 /**
+ * Rows in groups and rows that open a region below them (@experimental),
+ * taken by `DataTableView` and `ListView` as `grouping` and `rowDetail`.
+ * `DataTableGrouping` places each row in a `DataTableGroup` and draws the
+ * group under a header row with its title, a badge, a count (by default its
+ * rows, in words) and actions; each group is a row group named by its title,
+ * and with `collapsible` its title is the button that folds its rows.
+ * `DataTableRowDetail` gives a row a toggle in its first column, a button with
+ * `aria-expanded` that opens a region below the row, named by the row's
+ * identifying cell. Either state is the list's, or the page's when it passes
+ * the ids. The narrow card view draws the same groups as sections and the
+ * same toggle inside each card.
+ *
+ * Intended to be stable: they are the table's own props, and they graduate
+ * with `ListView` once a first-party plugin's list exercises them.
+ */
+export type {
+  DataTableGroup,
+  DataTableGrouping,
+  DataTableRowDetail,
+} from "@nextlyhq/admin";
+
+/**
  * The admin's list surface around that table (@experimental): `ListView`
  * composes `DataTableView` with the one toolbar every admin list draws — the
  * search field, filters in a dropdown or inline, the columns menu and
@@ -889,8 +985,10 @@ export type {
  * your project" card draws: `Checklist` puts a progress bar over an ordered
  * list, and `ChecklistItem` is one step, marked open, done or skipped, with
  * its name, a hint line and its buttons. The bar is a picture only; say the
- * count in words beside the list's title ("4 of 6 done"). `ChecklistMark` and
- * `ChecklistProgress` are the parts, for a layout of its own.
+ * count in words beside the list's title ("4 of 6 done"). `columns={2}` lays
+ * the steps in two columns where the list is wide enough, and
+ * `doneStyle="struck"` strikes a done step's name through. `ChecklistMark`
+ * and `ChecklistProgress` are the parts, for a layout of its own.
  *
  * Intended to be stable once a first-party plugin's setup list exercises it.
  */
@@ -906,6 +1004,7 @@ export type {
   ChecklistMarkProps,
   ChecklistProgressProps,
   ChecklistStatus,
+  ChecklistDoneStyle,
 } from "@nextlyhq/admin";
 
 /**
@@ -920,6 +1019,29 @@ export type {
  */
 export { SettingsRowGroup } from "@nextlyhq/admin";
 export type { SettingsRowGroupProps } from "@nextlyhq/admin";
+
+/**
+ * Where a flow of a few steps is (@experimental): a numbered row of steps,
+ * each done, current or to come, the one the email provider setup draws.
+ * `current` is the current step's index from 0; it carries
+ * `aria-current="step"`, and a done step says "(done)" in words as well as
+ * with a tick. A done step with an `href` links back to its page, or with
+ * `onSelect` runs it from a button; a step not yet reached never does.
+ *
+ * Intended to be stable: the admin's own guided setup draws its steps with it.
+ */
+export { Stepper } from "@nextlyhq/admin";
+export type { StepperProps, StepperStep, StepState } from "@nextlyhq/admin";
+
+/**
+ * The admin's drop area for a file a plugin screen reads itself, rather than
+ * uploads to the media library (@experimental): drag a file onto it or press
+ * it to choose one, and it is handed to `onFiles` as it is; what the file
+ * must be is the screen's to judge and say. It looks as the Media library's
+ * upload area does, and is meant to stay part of this surface.
+ */
+export { FileDropArea } from "@nextlyhq/admin";
+export type { FileDropAreaProps } from "@nextlyhq/admin";
 
 /**
  * The field-UI kit (@experimental): controlled, form-library-agnostic
@@ -1264,6 +1386,7 @@ export type {
   JsonValue,
   PluginAdminContributions,
   PluginAdminPage,
+  PluginPageStartupRead,
   PluginCollectionView,
   OverridableDocumentAction,
   PluginDocumentActionOverride,

@@ -25,7 +25,6 @@ import {
 } from "../../api/response-shapes";
 import type { FieldConfig } from "../../collections/fields/types";
 import type { FieldOwner } from "../../domains/collections/services/collection-dependents";
-import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertSaveLeavesNoFieldGroupCycle } from "../../domains/field-groups/field-group-cycles";
 import { assertNotDiverged } from "../../domains/field-groups/services/assert-not-diverged";
 import {
@@ -69,6 +68,7 @@ import {
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
 import { readableSlugsOfKind } from "../../services/lib/readable-slug-allowlist";
 import type { Logger } from "../../shared/types";
+import { writeAppliedFieldsRow } from "../helpers/applied-fields-row";
 import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import {
   builderSaveDeps,
@@ -952,25 +952,20 @@ export const COMPONENTS_METHODS: Record<
           // whether it landed so the response never reports a version the DB did not
           // persist.
           try {
-            await adapter.update(
-              // The registry this database holds. The failure is otherwise silent
-              // in the worst way: the DDL has already committed, this write is
-              // treated as non-fatal, and the stale row rebuilds the pre-change
-              // runtime schema on the next restart.
-              await resolveFieldGroupRegistryName(adapter),
-              {
-                fields: JSON.stringify(fields),
-                schema_hash: calculateSchemaHash(fields as FieldConfig[]),
-                migration_status: "applied",
-                localized: isLocalized,
-                schema_version: newSchemaVersion,
-                updated_at: new Date(),
-              },
-              { and: [{ column: "slug", op: "=", value: slug }] }
-            );
-            // Written past the registry services, so the cached rows are cleared here: a read
-            // before or during the save may have cached the row from before it.
-            clearRegistryRowCache();
+            // The registry this database holds. The failure is otherwise silent
+            // in the worst way: the DDL has already committed, this write is
+            // treated as non-fatal, and the stale row rebuilds the pre-change
+            // runtime schema on the next restart.
+            const registryTable = await resolveFieldGroupRegistryName(adapter);
+            // The row and the stored schema version in one transaction, and the
+            // cached rows cleared after it (`writeAppliedFieldsRow`).
+            await writeAppliedFieldsRow(adapter, {
+              table: registryTable,
+              slug,
+              fields: fields as FieldConfig[],
+              localized: isLocalized,
+              schemaVersion: newSchemaVersion,
+            });
           } catch (err) {
             // 🔴 The DDL has ALREADY COMMITTED. Reporting success here is worse than the failure
             // itself: the tables hold the new shape, the row still describes the old one, and the

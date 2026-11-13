@@ -30,7 +30,13 @@ import {
   addressRecord,
   releaseOnCollectionDelete,
 } from "./address-record/participant";
-import { BULK_PAGE, BULK_PAGE_HREF } from "./bulk/contract";
+import {
+  ADDRESS_RECORD_CACHE_PART,
+  ADDRESS_RECORD_CHANGED,
+  prepareRecordMove,
+  recordReady,
+} from "./address-record/store";
+import { BULK_PAGE } from "./bulk/contract";
 import { bulkRoutes } from "./bulk/route";
 import { codePagesCollection } from "./code-pages/collection";
 import {
@@ -55,6 +61,7 @@ import { defaultSeoFields } from "./fields";
 import { importRoutes } from "./import/route";
 import { withLanguageLinks } from "./languages/head";
 import { notFoundCollection } from "./not-found/collection";
+import { moveLoggedRows } from "./not-found/log";
 import { keepSeoContext } from "./not-found/report";
 import { plainCopyProxyHandler } from "./outputs/ai-outputs";
 import { listPages, type ListedPagesService } from "./outputs/listing";
@@ -69,6 +76,13 @@ import {
   SITEMAP_LIMITS,
   type SitemapLimits,
 } from "./outputs/sitemap-files";
+import { checklistRoutes } from "./overview/checklist";
+import {
+  IMPORT_PAGE,
+  INSPECT_PAGE,
+  OVERVIEW_PAGE,
+  OVERVIEW_PAGE_HREF,
+} from "./overview/contract";
 import {
   CHECK_SEO_PERMISSION,
   holdsPageSeo,
@@ -81,10 +95,10 @@ import { watchSaves } from "./problems/hooks";
 import { singleKey } from "./problems/page-types";
 import { problemRoutes } from "./problems/route";
 import { problemsCollection } from "./problems/store";
-import { RECEIVED_PAGE, RECEIVED_PAGE_HREF } from "./received/contract";
+import { RECEIVED_PAGE } from "./received/contract";
 import { receivedRoutes } from "./received/route";
 import { redirectsCollection } from "./redirects/collection";
-import { REDIRECTS_PAGE } from "./redirects/contract";
+import { REDIRECTS_PAGE, REDIRECTS_PAGE_HREF } from "./redirects/contract";
 import { heldRedirectKeys } from "./redirects/held-keys";
 import { redirectsProxyHandler } from "./redirects/proxy-handler";
 import { redirectRoutes } from "./redirects/routes";
@@ -92,16 +106,18 @@ import { PAGE_BUILDER_PLUGIN } from "./resolver/design-level";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
 import { routeValuesCollection } from "./route-values/collection";
 import { withRouteValues } from "./route-values/record";
+import { seoSchema, seoSchemaPlugin } from "./schema/definition";
 import {
   contentTypesRoute,
   settingsDocumentRoute,
 } from "./settings/content-types-route";
+import { SETTINGS_PAGE, SETTINGS_PAGE_HREF } from "./settings/contract";
 import {
-  SETTINGS_PAGE,
-  SEO_ADMIN_SLUG,
-  SETTINGS_PAGE_HREF,
-} from "./settings/contract";
-import { readSeoRules, rememberSettingsSingle } from "./settings/rules";
+  readBrandFacts,
+  readSeoRules,
+  rememberSettingsSingle,
+  setupWaiting,
+} from "./settings/rules";
 import { seoSettingsSingle } from "./settings/single";
 import { socialCardFromSettings } from "./settings/social-card-rules";
 import { structuredDataFromSettings } from "./settings/structured-data-rules";
@@ -126,13 +142,14 @@ import {
 import { seoTabParts } from "./tab/install";
 import { PAGE_BUILDER_TAB } from "./template/contributions";
 import { seoTemplateRoute } from "./template/route";
-import { seoIssuesWidget, seoProblemsAttentionItem } from "./widget-card";
+import {
+  SEO_PROBLEMS_ATTENTION_ID,
+  seoIssuesWidget,
+  seoProblemsAttentionItem,
+} from "./widget-card";
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
-/** Where the redirects screen is, for the admin's menu. */
-const REDIRECTS_PAGE_HREF = `/admin/plugins/${SEO_ADMIN_SLUG}/${REDIRECTS_PAGE.path}`;
-
 const require = createRequire(import.meta.url);
 const { version: PLUGIN_VERSION } = require("../package.json") as {
   version: string;
@@ -293,7 +310,7 @@ export interface SeoPluginOptions {
    * @experimental Where `next build` writes, relative to the app's
    * directory: `.next` unless the app's `next.config` sets `distDir`. The
    * pages the site's routes render from their own code are read from it,
-   * for the Pages and addresses screen and the sitemap.
+   * for Pages and the sitemap.
    */
   nextBuildDir?: string;
   /**
@@ -622,6 +639,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     },
   };
 
+  // The SEO issues card and its Needs attention line, counting what the
+  // problem list finds as each person may read it, so the dashboard and the
+  // list never disagree; the line's count is the
+  // Problems menu item's badge too. Withheld where no collection carries SEO (see
+  // `widget-card`).
+  const issues = {
+    collections: targets,
+    problemsFor: problemsForCard(problemChecks),
+  };
+  const issuesCard = seoIssuesWidget(issues);
+  const issuesItem = seoProblemsAttentionItem(issues);
+
   // The site's sitemap and robots.txt, the action that makes a share image
   // of the right size, the settings and redirects screens' routes, the
   // check of what search engines received, the SEO tab's own and the
@@ -637,12 +666,19 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       types: [...targets, ...singleTargets],
       pagePermissions,
     }),
-    // The record that keeps each public address to one page, the redirects
-    // whose From addresses it holds, the log of addresses not found, and
-    // what the problem list's checks found.
+    // The redirects whose From addresses the address record holds, the log
+    // of addresses not found, and what the problem list's checks found.
     collections: [
+      // The collection the address record was kept in before it moved to the
+      // plugin's own tables. Still declared so the rows a site already has
+      // are kept, and moved to the tables at start (`recordReady`); nothing
+      // writes it any more.
       addressRecordCollection(),
       redirectsCollection(),
+      // The collection the not-found log was kept in before it moved to the
+      // plugin's own table. Still declared so the rows a site already has are
+      // kept, and moved to the table at start (`moveLoggedRows`); nothing
+      // writes it any more.
       notFoundCollection(),
       problemsCollection(),
       // The SEO of each page a route renders from its own code, by address.
@@ -651,6 +687,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // which the SEO tab, bulk edit and the problem list read.
       routeValuesCollection(),
     ],
+    // The plugin's own tables, for bookkeeping written in one statement:
+    // the log of addresses not found.
+    schema: seoSchema,
     // Every page's head, as worked out above, each page built in code
     // recorded as connected as its route asks for its head, and what each
     // entry's or Single's route supplies in code kept for the admin.
@@ -700,9 +739,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // settings route as through the plugin's.
     settingsPermission: MANAGE_SEO_PERMISSION,
     // The events the address record announces once a save commits: each
-    // page's addresses, which IndexNow takes its notes from, and that
-    // redirects changed, which the Proxy's kept addresses are dropped on.
-    events: [{ name: ADDRESSES_MOVED }, { name: REDIRECTS_CHANGED }],
+    // page's addresses, which IndexNow takes its notes from; that redirects
+    // changed, which the Proxy's kept addresses are dropped on; and that who
+    // holds an address changed, which expires the page heads built from it.
+    events: [
+      { name: ADDRESSES_MOVED },
+      { name: REDIRECTS_CHANGED },
+      { name: ADDRESS_RECORD_CHANGED },
+    ],
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
     // The SEO settings screen, for whoever may read the settings, told what
@@ -724,20 +768,37 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // Page Builder's Settings knows a page it has a group to edit.
         tabCollections: tab.tabCollections,
       },
+      // The section's menu, in the order the section is used: where it
+      // stands, its pages, what to fix, its redirects, its rules. Each
+      // screen's other addresses (`overview/contract`) are reached from these.
       menu: [
-        // Shown to everyone in the admin: the list answers each person with
-        // the pages of the types they may read, and says so where none.
-        { label: "Problems", to: PROBLEMS_PAGE_HREF, icon: "AlertTriangle" },
-        // The site-wide screens, gated on the plugin's own permissions,
+        {
+          label: "Overview",
+          to: OVERVIEW_PAGE_HREF,
+          icon: "LayoutDashboard",
+          requiredPermission: MANAGE_SEO_PERMISSION,
+        },
+        // The site-wide screens are gated on the plugin's own permissions,
         // whose names no host renames. The settings also need the Single's
         // own read, which an entry can't ask beside this one: someone
         // holding `manage-seo` without it opens the screen and is refused
         // its contents by the routes.
         {
-          label: "Pages and addresses",
+          label: "Pages",
           to: PAGES_PAGE_HREF,
           icon: "FileText",
           requiredPermission: MANAGE_SEO_PERMISSION,
+        },
+        // Shown to everyone in the admin: the list answers each person with
+        // the pages of the types they may read, and says so where none. Its
+        // badge is the errors and warnings they would find there.
+        {
+          label: "Problems",
+          to: PROBLEMS_PAGE_HREF,
+          icon: "AlertTriangle",
+          ...(issuesItem === undefined
+            ? {}
+            : { badge: { attention: SEO_PROBLEMS_ATTENTION_ID } }),
         },
         {
           label: "Redirects",
@@ -745,19 +806,6 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
           icon: "Route",
           requiredPermission: MANAGE_SEO_PERMISSION,
         },
-        // The check has the server fetch the site's own pages, so it is
-        // its own permission, and compares only the pages whose type the
-        // person may read.
-        {
-          label: "What search engines received",
-          to: RECEIVED_PAGE_HREF,
-          icon: "Eye",
-          requiredPermission: CHECK_SEO_PERMISSION,
-        },
-        // Shown to everyone in the admin: the table holds the pages of the
-        // types each person may read, the ones they may not change read-only,
-        // and its import asks for manage-seo itself.
-        { label: "Bulk edit", to: BULK_PAGE_HREF, icon: "Table" },
         {
           label: "Settings",
           to: SETTINGS_PAGE_HREF,
@@ -766,32 +814,41 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         },
       ],
       pages: [
-        PROBLEMS_PAGE,
-        { ...SETTINGS_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
-        { ...REDIRECTS_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
-        { ...RECEIVED_PAGE, requiredPermission: CHECK_SEO_PERMISSION },
+        // No startup reads: the startup request answers only when every part
+        // has, and the checklist can read every page while an earlier SEO
+        // field group waits to be imported, which would hold up the whole
+        // admin's first answer on a large site.
+        { ...OVERVIEW_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
         { ...PAGES_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
+        { ...IMPORT_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
+        { ...INSPECT_PAGE, requiredPermission: CHECK_SEO_PERMISSION },
+        PROBLEMS_PAGE,
+        { ...REDIRECTS_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
+        { ...SETTINGS_PAGE, requiredPermission: MANAGE_SEO_PERMISSION },
+        // Old addresses, each sending a bookmark on to the screen that
+        // replaced it: bulk edit to Pages in Edit mode, and the check of
+        // what search engines received to Inspect, or to Pages.
         BULK_PAGE,
+        RECEIVED_PAGE,
       ],
     },
   };
 
-  // The SEO issues card and its Needs attention line, counting what the
-  // problem list finds as each person may read it, so the dashboard and the
-  // list never disagree. Withheld where no collection carries SEO (see
-  // `widget-card`).
-  const issues = {
-    collections: targets,
-    problemsFor: problemsForCard(problemChecks),
-  };
-  const issuesCard = seoIssuesWidget(issues);
-  const issuesItem = seoProblemsAttentionItem(issues);
   if (issuesCard || issuesItem) {
     contributes.dashboard = {
       ...(issuesCard ? { widgets: [issuesCard] } : {}),
       ...(issuesItem ? { attention: [issuesItem] } : {}),
     };
   }
+
+  // What an import reads and writes with, from the Import screen and the
+  // Overview's checklist alike.
+  const importSetup = {
+    targets: pageTypeKeys,
+    readRules,
+    checks: problemChecks,
+    pagePermissions,
+  };
 
   routes.push(
     // The Connections tab's reads, and Search Console's sign-in.
@@ -804,19 +861,21 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     settingsDocumentRoute(),
     // What the redirects screen reads and writes.
     ...redirectRoutes(),
-    // What the "What search engines received" screen reads and checks.
+    // What Inspect checks.
     ...receivedRoutes({
       collections: targets,
       singles: singleTargets,
       ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
       readRules,
       pageMetadata,
+      structuredDataReaders: problemChecks.readers,
+      aiCrawlers: options.aiCrawlers,
     }),
     ...tab.routes,
     // What a Page Builder template's SEO panel reads.
     seoTemplateRoute({ readRules, baseUrl: options.baseUrl }),
     ...problemRoutes(problemChecks),
-    // The Pages and addresses screen's list, and its save of a page with no
+    // Pages' list, and its save of a page with no
     // entry's SEO.
     ...codePageRoutes({
       readRules,
@@ -834,11 +893,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       checks: problemChecks,
       pagePermissions,
     }),
-    ...importRoutes({
-      targets: pageTypeKeys,
+    ...importRoutes(importSetup),
+    // The Overview's setup checklist, read from what the plugin stores.
+    ...checklistRoutes({
+      types: pageTypeKeys,
       readRules,
-      checks: problemChecks,
-      pagePermissions,
+      readBrand: ctx => readBrandFacts(ctx),
+      readSetupWaiting: setupWaiting,
+      importSetup,
     })
   );
 
@@ -863,6 +925,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // and one that cannot fall behind, because it is the same string the
     // package already reads for its own `version`.
     nextly: `>=${PLUGIN_VERSION}`,
+    // The schema version its migrations bring the database to, read from the
+    // one declaration of its tables.
+    schemaVersion: seoSchemaPlugin.schemaVersion,
     author: "Nextly <contact@nextlyhq.com> (https://nextlyhq.com)",
     homepage: "https://nextlyhq.com",
     repository: "https://github.com/nextlyhq/nextly",
@@ -875,6 +940,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // Its own place in the admin's rail, after Media, as SEO.
       placement: "standalone",
       after: "media",
+      // The section opens on its Overview; someone who may not open it
+      // lands on the first menu item they may.
+      landing: OVERVIEW_PAGE_HREF,
       appearance: { icon: "Search", label: "SEO" },
       description:
         "Add an SEO meta field group to your collections, with title, description and social preview fields",
@@ -903,12 +971,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       }
       // The site-wide record that keeps each public address to one page:
       // asked on every save, and told what each document holds after it.
+      prepareRecordMove(ctx);
       ctx.publicAddresses.participate(addressRecord(ctx));
       releaseOnCollectionDelete(ctx);
+      // A page head reads who holds its address, so a change to that
+      // expires the heads, once it commits.
+      ctx.events.on(ADDRESS_RECORD_CHANGED, () =>
+        ctx.cache.expire(ADDRESS_RECORD_CACHE_PART)
+      );
       // A redirect saved here applies from this server's next request.
       ctx.events.on(REDIRECTS_CHANGED, () => redirectKeys.forget());
-      // Kept for the site's not-found page, which logs through it, and for
-      // the pages built in code, which read their SEO through it.
+      // Kept for the routes that answer not found, which log through it, and
+      // for the pages built in code, which read their SEO through it.
       keepSeoContext(ctx);
       // Each saved page checked again for the problem list.
       watchSaves(ctx, problemChecks);
@@ -926,11 +1000,24 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       stopIndexNow = undefined;
       await stop?.();
     },
-    onReady(ctx) {
+    async onReady(ctx) {
+      // Awaited, so the start waits for it: the address record an earlier
+      // version kept in a collection moves to the plugin's table before this
+      // process answers any save, or a page could take an address the
+      // collection says another holds. One read once it has moved.
+      await recordReady(ctx);
       // Started, not awaited: it waits for the boot to finish, and brings the
       // record up to date with content saved while the plugin was absent or
       // addresses a deploy moved.
       void startCatchUp(ctx);
+      // The not-found log an earlier version kept in a collection, moved to
+      // the plugin's table; one count once there is nothing left to move.
+      void moveLoggedRows(ctx).catch((error: unknown) => {
+        ctx.logger.error(
+          "The SEO plugin could not move its not-found log to its table",
+          { error }
+        );
+      });
       // Decided once, the first time the plugin starts on a site: whether a
       // site with no production address known is kept out of search.
       void decideStanding(ctx).catch((error: unknown) => {

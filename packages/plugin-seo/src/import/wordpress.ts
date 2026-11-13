@@ -11,10 +11,10 @@
  *
  * @module import/wordpress
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
-
 import type { ImportTarget } from "./contract";
 import {
+  ImportFileRefused,
+  originOfAddress,
   pathOfAddress,
   textValue,
   type ImportedRecord,
@@ -165,13 +165,29 @@ function itemOf(item: string): WordPressItem | undefined {
 /** Every post and page the export holds, or a refusal where it is not one. */
 export function wordPressItems(xml: string): WordPressItem[] {
   if (!/<rss[\s>]/i.test(xml) || !/xmlns:wp=/i.test(xml)) {
-    throw NextlyError.invalidInput({
-      message:
-        "This isn't a WordPress export. Make one in WordPress under Tools › Export, with All content chosen.",
-      logContext: { reason: "seo-import-not-wordpress" },
-    });
+    throw new ImportFileRefused(
+      "This isn't a WordPress export. Make one in WordPress under Tools › Export, with All content chosen.",
+      "seo-import-not-wordpress"
+    );
   }
   return blocks(xml, "item").flatMap(item => itemOf(item) ?? []);
+}
+
+/**
+ * Whose SEO values a WordPress export holds, read from its posts' stored
+ * keys alone, never from their content, which may quote another tool's: the
+ * tool with more keys in it, Yoast where neither has any.
+ */
+export function seoPluginOf(xml: string): "yoast" | "rankMath" {
+  let yoast = 0;
+  let rankMath = 0;
+  for (const item of wordPressItems(xml)) {
+    for (const key of item.meta.keys()) {
+      if (key.startsWith("_yoast_wpseo_")) yoast++;
+      else if (key.startsWith("rank_math_")) rankMath++;
+    }
+  }
+  return rankMath > yoast ? "rankMath" : "yoast";
 }
 
 /** A stored value read for one place, and what the plugin calls it. */
@@ -373,10 +389,12 @@ function recordOf(
   values: ImportedValues
 ): ImportedRecord {
   const path = addressOfItem(item.link);
+  const origin = path === undefined ? undefined : originOfAddress(item.link);
   return {
     label: item.title ?? path ?? item.slug ?? "Untitled",
     match: {
       ...(path === undefined ? {} : { path }),
+      ...(origin === undefined ? {} : { origin }),
       ...(item.slug === undefined ? {} : { slug: item.slug }),
     },
     values,

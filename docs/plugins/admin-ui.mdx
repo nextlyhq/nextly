@@ -181,6 +181,10 @@ import { Card, Stack, Grid, Stat } from "@nextlyhq/plugin-sdk/admin";
 </Card>;
 ```
 
+`Stat` also takes `tone` (`success`, `warning`, `destructive` or `info`), a dot in that
+status's colour before the value, and `size="compact"`, a smaller figure under a semibold
+label for one that leads a small card.
+
 **2. Use safelisted utility classes.** A curated, token-driven set of Tailwind utilities is
 always present in the admin sheet, so you can use them directly in your components with no
 build step: layout (`flex`, `grid`, `grid-cols-{1..6}`, `gap-{0..8}`, `items-*`,
@@ -252,7 +256,9 @@ contributes: {
     // Custom pages, namespaced under /admin/plugins/<slug>/<path>, RBAC-gated (D21).
     pages: [
       { path: "summary", component: "@acme/nextly-plugin-reports/admin#ReportsView",
-        requiredPermission: "read-reports" },
+        requiredPermission: "read-reports",
+        // Read as the page opens, in the admin's first request (experimental).
+        startupReads: [{ path: "/summary/totals" }] },
     ],
     // A settings panel rendered at /admin/plugins/<slug> (D21).
     settings: { component: "@acme/nextly-plugin-reports/admin#ReportsSettings" },
@@ -270,6 +276,27 @@ contributes: {
 `menu` and `pages` honour `requiredPermission` for client-side gating (see
 [Permissions](/docs/plugins/permissions)). View override slots are `list`, `edit`,
 `beforeList`, `afterList`, `beforeEdit`, `afterEdit`.
+
+### The data a page reads first
+
+> **Experimental.** `startupReads` may change before it is marked stable.
+
+A page can name the reads of your plugin's own routes it makes as it opens, with
+`startupReads`, as the `summary` page above does. Name each read as the page's
+`usePluginRoute` names it: `path`, and `mount: "root"` for a route mounted at the root.
+When a tab opens on that page, the admin asks for them in the same request as the
+session, the menu and the settings, before its own code has loaded. Your page's
+`usePluginRoute` read then takes that answer instead of waiting a round of its own.
+
+- Each read is answered by its route with the route's own permission check. A read the
+  person may not make is refused on its own, and your page then reads it as usual.
+- The whole request waits for its slowest part, so name only quick reads the page needs
+  first, never a count or a report. A page may name at most four.
+- The admin layout carries the reads in the prebuilt admin page, so they take effect
+  once the app is built again. The layout `create-nextly-app` scaffolds writes them with
+  `adminStartupScreensJson(config.plugins)`.
+- The app refuses to start if a page names more than four, or a path that isn't a
+  route path starting with `/`.
 
 ### Where your own item goes
 
@@ -413,18 +440,27 @@ a second time. To put something in the admin's top bar, such as a Save button, u
 plugin page draws the admin's own list, trail, checklist and settings rows rather than a
 copy of how they look.
 
-| Export                                             | What it draws                                                                                                                                         |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Breadcrumbs`                                      | The page's trail, in the admin's top bar. Pass it as `PageHeader`'s `breadcrumbs`; the last item is the page itself.                                  |
-| `ListView`                                         | `DataTableView` with the admin's list toolbar (search, filters, the columns menu, list actions), its empty state and slots above and below the table. |
-| `useTableColumns`, `useListColumns`                | The columns menu's control, with each reader's choice remembered per list.                                                                            |
-| `ListToolbar`, `ListColumnsMenu`, `ListEmptyState` | The parts of `ListView`, for a list laid out by hand.                                                                                                 |
-| `Badge`                                            | A status chip. `success`, `warning`, `destructive` and `info` draw a quiet chip with a status dot.                                                    |
-| `SegmentedChoice`                                  | A short choice kept in view, such as a View / Edit switch. `size="bordered"` for a setting in a form.                                                 |
-| `Checklist`, `ChecklistItem`                       | A setup list with a progress bar; each step is `open`, `done` or `skipped`.                                                                           |
-| `FieldShell` with `layout="row"`                   | A settings row: the label and its help on the left, the control on the right.                                                                         |
-| `SettingsRowGroup`                                 | The same row for a group of controls, named as one group.                                                                                             |
-| `FormActions`                                      | The form's one action bar, held at the bottom of the page, saying when there are unsaved changes.                                                     |
+| Export                                             | What it draws                                                                                                                                          |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Breadcrumbs`                                      | The page's trail, in the admin's top bar. Pass it as `PageHeader`'s `breadcrumbs`; the last item is the page itself.                                   |
+| `ListView`                                         | `DataTableView` with the admin's list toolbar (search, filters, the columns menu, list actions), its empty state and slots above and below the table.  |
+| `useTableColumns`, `useListColumns`                | The columns menu's control, with each reader's choice remembered per list.                                                                             |
+| `ListToolbar`, `ListColumnsMenu`, `ListEmptyState` | The parts of `ListView`, for a list laid out by hand.                                                                                                  |
+| `Badge`                                            | A status chip. `success`, `warning`, `destructive` and `info` draw a quiet chip with a status dot.                                                     |
+| `SegmentedChoice`                                  | A short choice kept in view, such as a View / Edit switch. `size="bordered"` for a setting in a form.                                                  |
+| `Checklist`, `ChecklistItem`                       | A setup list with a progress bar; steps are `open`, `done` or `skipped`. Takes `columns={2}` and `doneStyle="struck"`.                                 |
+| `FieldShell` with `layout="row"`                   | A settings row: the label and its help on the left, the control on the right.                                                                          |
+| `SettingsRowGroup`                                 | The same row for a group of controls, named as one group.                                                                                              |
+| `ListView` with `grouping`, `rowDetail`            | Rows in groups, each under a header row with its title, a badge, a count and actions; and rows that open a region below them.                          |
+| `Stepper`                                          | Where a flow of a few steps is: each step done, current or to come, with a way back from a done step.                                                  |
+| `FormActions`                                      | The form's one action bar, held at the bottom of the page, saying when there are unsaved changes, or the page's own `message`.                         |
+| `Alert`, `AlertTitle`, `AlertDescription`          | A notice above the content. `variant` is `info`, `success`, `warning` or `destructive`.                                                                |
+| `Sheet` and its parts                              | A panel that slides in from an edge of the screen (`side` on `SheetContent`).                                                                          |
+| `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent`   | Tabs inside a page. For tabs that are routes, use `PageTabs`.                                                                                          |
+| `Progress`                                         | A progress bar: `value` out of `max` (100 by default).                                                                                                 |
+| `DropdownMenu` and its parts                       | The menu behind a button, such as a row's actions.                                                                                                     |
+| `Tooltip` and its parts                            | A hint on hover or focus. The admin provides `TooltipProvider`.                                                                                        |
+| `FileDropArea`                                     | A drop area a file is dragged onto or chosen from, as the Media library draws it, for a screen that reads the file itself; `onFiles` gets it as it is. |
 
 A list page with a trail, a search, a status filter, the columns menu and row actions:
 
@@ -609,6 +645,138 @@ export function SetupCard() {
 }
 ```
 
+Rows in groups, each row opening a region that lists what it counts. Every listed group is
+drawn in its listed order, even one with no rows; its header counts its rows ("2 rows")
+unless you pass a `count`, such as a total when the list is paginated:
+
+```tsx
+// src/admin/ProblemsList.tsx
+import {
+  Badge,
+  Button,
+  ListView,
+  type DataTableGroup,
+  type NextlyColumn,
+} from "@nextlyhq/plugin-sdk/admin";
+
+interface Problem {
+  id: string;
+  severity: "error" | "warning";
+  title: string;
+  pages: { id: string; title: string; path: string }[];
+}
+
+const COLUMNS: NextlyColumn<Problem>[] = [
+  { name: "title", header: "Problem" },
+  {
+    name: "pages",
+    header: "Pages",
+    accessor: row => row.pages.length,
+  },
+];
+
+const GROUPS: DataTableGroup[] = [
+  {
+    id: "error",
+    title: "Errors",
+    badge: <Badge variant="destructive">Fix first</Badge>,
+  },
+  {
+    id: "warning",
+    title: "Warnings",
+    actions: (
+      <Button size="sm" variant="outline">
+        Check again
+      </Button>
+    ),
+  },
+];
+
+export function ProblemsList({ problems }: { problems: Problem[] }) {
+  return (
+    <ListView<Problem>
+      columns={COLUMNS}
+      rows={problems}
+      getRowId={row => row.id}
+      ariaLabel="Problems"
+      grouping={{
+        groups: GROUPS,
+        groupOf: row => row.severity,
+        collapsible: true,
+      }}
+      rowDetail={{
+        hasDetail: row => row.pages.length > 0,
+        toggleLabel: row => `Pages with ${row.title}`,
+        render: row => (
+          <ul>
+            {row.pages.map(page => (
+              <li key={page.id}>
+                {page.title} <code>{page.path}</code>
+              </li>
+            ))}
+          </ul>
+        ),
+      }}
+      empty={{ title: "No problems found" }}
+    />
+  );
+}
+```
+
+Each group is a row group named by its title, and with `collapsible` the title is the
+button that folds its rows. A row's toggle is a button in its first column that says
+whether its region is open; the region below the row is named by the row's identifying
+cell. Both states belong to the list unless you pass `collapsedIds` or `expandedIds`
+with their change handlers. In the narrow card view the groups are sections and each
+card carries its own toggle.
+
+A flow of a few steps, with the steps already done linking back, and a save bar that
+says what changed:
+
+```tsx
+// src/admin/ImportPage.tsx
+import {
+  Button,
+  FormActions,
+  PageFrame,
+  PageHeader,
+  Stepper,
+} from "@nextlyhq/plugin-sdk/admin";
+
+export function ImportPage({ changed }: { changed: number }) {
+  return (
+    <PageFrame type="form">
+      <PageHeader title="Import" />
+      <Stepper
+        aria-label="Import steps"
+        current={2}
+        steps={[
+          {
+            label: "Choose the source",
+            href: "/admin/plugins/my-plugin/import",
+          },
+          {
+            label: "Match the fields",
+            href: "/admin/plugins/my-plugin/import/fields",
+          },
+          { label: "Check the result" },
+        ]}
+      />
+      <FormActions
+        dirty={changed > 0}
+        message={changed === 1 ? "1 page changed" : `${changed} pages changed`}
+      >
+        <Button>Import</Button>
+      </FormActions>
+    </PageFrame>
+  );
+}
+```
+
+`current` is the current step's index from 0, marked `aria-current="step"`. A done step
+with an `href` links back to it, or with `onSelect` runs it from a button; a step not yet
+reached never does. `FormActions` shows its `message` only while `dirty` is true.
+
 ### Document views
 
 > **Experimental.** `documentViews` and `DocumentViewProps` may change before
@@ -716,7 +884,10 @@ To open a view from inside the admin, for example from a field editor, call
 `navigateTo(path)` from `@nextlyhq/plugin-sdk/admin`. It accepts a path
 starting `/admin/`, and refuses anything else by throwing. Moving between a
 document's edit form and its own views doesn't prompt about unsaved
-changes, because the same form stays mounted.
+changes, because the same form stays mounted. Pass `{ replace: true }` as its
+second argument to move without leaving the current address in the history,
+such as a page at an old address sending the reader on to its new one, so
+Back doesn't land on it and move them forward again.
 
 Startup is refused, naming the plugins involved, when a view's `path`:
 

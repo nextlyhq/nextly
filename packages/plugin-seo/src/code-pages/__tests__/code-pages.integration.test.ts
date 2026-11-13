@@ -23,20 +23,26 @@ import {
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
-import { defineCollection, text } from "nextly";
+import { defineCollection, defineSingle, text } from "nextly";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import { lastCatchUp } from "../../address-record/catch-up";
 import { SEO_SETTINGS_SLUG } from "../../settings/contract";
+import { DEFAULT_TITLE_PATTERN } from "../../settings/patterns";
 import { seoPlugin } from "../../plugin";
-import type { SiteAddress } from "../contract";
+import { coverageGroupOf, coverageOf, type SiteAddress } from "../contract";
 import { seoMetadata, seoStructuredData } from "../metadata";
 
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run.
 const PAGES = "seocp_pages";
 const LOCALIZED = "seocp_localized";
+const TEAM = "seocp_team";
+const PRIVATE = "seocp_private";
+const HOME = "seocp_home";
+const TEAM_LOCALIZED = "seocp_team_localized";
+const GERMAN_ONLY = "seocp_german_only";
 const SITE = "https://acme.example";
 const PLUGIN = "@nextlyhq/plugin-seo";
 const CSRF = "c".repeat(64);
@@ -202,7 +208,12 @@ describe.each(getConfiguredTestDialects())(
             labels: { singular: "Page", plural: "Pages" },
             status: true,
             access: { read: () => true },
-            fields: [text({ name: "title" }), text({ name: "slug" })],
+            // An excerpt, which a page's description is worked out from.
+            fields: [
+              text({ name: "title" }),
+              text({ name: "slug" }),
+              text({ name: "excerpt" }),
+            ],
             publicAddress: "/{slug}",
           }),
         ],
@@ -335,6 +346,145 @@ describe.each(getConfiguredTestDialects())(
       expect(types).toContain("AboutPage");
       expect(types).toContain("FAQPage");
       expect(text).toContain("Who are we?");
+    });
+
+    it("says where each page's title and description come from, grouped as the Overview counts them", async () => {
+      const t = await boot();
+      const owner = await personWith(t, "owner", "all");
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: {
+          _overwrite: true,
+          siteName: "Acme",
+          description: "Acme makes things.",
+        },
+      });
+      const entry = (slug: string, data: Record<string, unknown>) =>
+        t.nextly.create({
+          collection: PAGES,
+          data: { title: slug, slug, status: "published", ...data },
+        });
+      // Both typed for the page.
+      await entry("typed", {
+        seo: { metaTitle: "Typed", metaDescription: "Typed for it." },
+      });
+      // A typed title, and a description from the page's content.
+      await entry("half", {
+        seo: { metaTitle: "Half" },
+        excerpt: "From its content.",
+      });
+      // Nothing typed: the pattern's title, and the content's description.
+      await entry("excerpt", { excerpt: "Only an excerpt." });
+      // Hidden from search, whatever it has.
+      await entry("secret", {
+        seo: { metaTitle: "Secret", metaDescription: "Hidden.", noindex: true },
+      });
+      // Both from the route's code.
+      await seoMetadata("/contact", {
+        metadata: { title: "Contact us", description: "Write to us." },
+      });
+      // A typed title over the code's description.
+      await seoMetadata("/pricing", {
+        metadata: { description: "Plans, in code." },
+      });
+      expect(
+        await save(owner, typed("/pricing", { title: "Plans and prices" }))
+      ).toBe(200);
+
+      const { items } = await addressesFor(owner);
+      const byPath = Object.fromEntries(
+        (items ?? []).map(item => [item.path, item])
+      );
+      expect(byPath["/typed"]?.sources).toEqual({
+        title: "page",
+        description: "page",
+      });
+      expect(byPath["/half"]?.sources).toEqual({
+        title: "page",
+        description: "content",
+      });
+      expect(byPath["/about"]?.sources).toEqual({
+        title: "pattern",
+        description: "site",
+      });
+      expect(byPath["/contact"]?.sources).toEqual({
+        title: "code",
+        description: "code",
+      });
+      expect(byPath["/pricing"]?.sources).toEqual({
+        title: "page",
+        description: "code",
+      });
+      expect(
+        Object.fromEntries(
+          (items ?? []).map(item => [item.path, coverageGroupOf(item)])
+        )
+      ).toEqual({
+        "/about": "bothWorkedOut",
+        "/contact": "bothSet",
+        "/excerpt": "bothWorkedOut",
+        "/half": "oneOfEach",
+        "/integrations/webflow": "bothWorkedOut",
+        "/integrations/wordpress": "bothWorkedOut",
+        "/pricing": "bothSet",
+        "/secret": "hidden",
+        "/thank-you": "bothWorkedOut",
+        "/typed": "bothSet",
+      });
+      const coverage = coverageOf(items ?? []);
+      expect(coverage).toEqual({
+        total: 10,
+        hidden: 1,
+        bothSet: 3,
+        bothWorkedOut: 5,
+        oneOfEach: 1,
+      });
+      expect(
+        coverage.hidden +
+          coverage.bothSet +
+          coverage.bothWorkedOut +
+          coverage.oneOfEach
+      ).toBe(coverage.total);
+    });
+
+    it("lists the description each page is served, and the pattern a title was made from", async () => {
+      const t = await boot();
+      const owner = await personWith(t, "owner", "all");
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: {
+          _overwrite: true,
+          siteName: "Acme",
+          description: "Acme makes things.",
+        },
+      });
+      await t.nextly.create({
+        collection: PAGES,
+        data: {
+          title: "typed",
+          slug: "typed",
+          status: "published",
+          seo: { metaTitle: "Typed", metaDescription: "Typed for it." },
+        },
+      });
+      await seoMetadata("/contact", {
+        metadata: { title: "Contact us", description: "Write to us." },
+      });
+
+      const { items } = await addressesFor(owner);
+      const byPath = Object.fromEntries(
+        (items ?? []).map(item => [item.path, item])
+      );
+      // Typed for the entry: its own description, and no pattern.
+      expect(byPath["/typed"]?.description).toBe("Typed for it.");
+      expect(byPath["/typed"]?.titlePattern).toBeUndefined();
+      // Worked out: the site's description, and the pattern the title came from.
+      expect(byPath["/about"]?.description).toBe("Acme makes things.");
+      expect(byPath["/about"]?.title).toMatch(/ \| Acme$/);
+      expect(byPath["/about"]?.titlePattern).toBe(DEFAULT_TITLE_PATTERN);
+      // Set in the route's code, for a page built in code.
+      expect(byPath["/contact"]?.description).toBe("Write to us.");
+      expect(byPath["/contact"]?.titlePattern).toBeUndefined();
     });
 
     it("titles a page with nothing set by the site's pattern and the page's name", async () => {
@@ -555,6 +705,107 @@ describe.each(getConfiguredTestDialects())(
   }
 );
 
+describe.each(getConfiguredTestDialects())(
+  "pages a person may read (%s)",
+  (dialect: TestDialect) => {
+    it("lists only the entries whoever asks may read, and every page built in code", async () => {
+      const t = await createTestNextly({
+        dialect,
+        plugins: [
+          seoPlugin({
+            collections: [TEAM, PRIVATE],
+            singles: [HOME],
+            baseUrl: SITE,
+            nextBuildDir: BUILD,
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: TEAM,
+            status: true,
+            // Readers see only the open team's pages.
+            access: { read: () => ({ team: { equals: "open" } }) },
+            fields: [
+              text({ name: "title" }),
+              text({ name: "slug" }),
+              text({ name: "team" }),
+            ],
+            publicAddress: "/team/{slug}",
+          }),
+          // Read only by those granted its own read permission.
+          defineCollection({
+            slug: PRIVATE,
+            status: true,
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/private/{slug}",
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: HOME,
+            label: { singular: "Home" },
+            fields: [text({ name: "title" })],
+            publicAddress: "/",
+          }),
+        ],
+        seedPublic: true,
+      });
+      current = t;
+      await lastCatchUp();
+      const owner = await personWith(t, "owner", "all");
+      const page = (collection: string, data: Record<string, unknown>) =>
+        t.nextly.create({
+          collection,
+          data: { ...data, status: "published" },
+          overrideAccess: true,
+        });
+      await page(TEAM, { title: "Open plans", slug: "open", team: "open" });
+      await page(TEAM, {
+        title: "Closed plans",
+        slug: "closed",
+        team: "closed",
+      });
+      await page(PRIVATE, { title: "Salaries", slug: "salaries" });
+      await t.nextly.updateSingle({
+        slug: HOME,
+        data: { _overwrite: true, title: "Welcome" },
+      });
+      await lastCatchUp();
+      // Site-wide SEO, and the team's pages to read, which the collection's
+      // own rule narrows to the open team's.
+      const manager = await personWith(t, "manager", [
+        "manage-seo",
+        `read-${TEAM}`,
+      ]);
+
+      const all = (await addressesFor(owner)).items?.map(item => item.path);
+      const { status, items } = await addressesFor(manager);
+
+      // The owner reads every page, so each is there to leave out.
+      expect(all).toEqual(
+        expect.arrayContaining([
+          "/",
+          "/team/open",
+          "/team/closed",
+          "/private/salaries",
+        ])
+      );
+      expect(status).toBe(200);
+      const paths = items?.map(item => item.path) ?? [];
+      expect(paths).toContain("/team/open");
+      expect(paths).not.toContain("/team/closed");
+      expect(paths).not.toContain("/private/salaries");
+      expect(paths).not.toContain("/");
+      // Nothing of a left-out page is named, under any address.
+      expect(JSON.stringify(items)).not.toMatch(
+        /Closed plans|Salaries|Welcome/
+      );
+      // Pages built in code are site-wide SEO's, listed to whoever holds it.
+      expect(paths).toContain("/pricing");
+    });
+  }
+);
+
 /**
  * A site in English and German, each language under its own prefix, whose
  * catch-all route declared each page's address in each language.
@@ -586,6 +837,126 @@ afterAll(() => {
 describe.each(getConfiguredTestDialects())(
   "pages with no entry on a site in several languages (%s)",
   (dialect: TestDialect) => {
+    it("lists each language of an entry only where the person asking may read it in that language", async () => {
+      const t = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        languageAddresses: { by: "prefix" },
+        plugins: [
+          seoPlugin({
+            collections: [TEAM_LOCALIZED, GERMAN_ONLY],
+            baseUrl: SITE,
+            nextBuildDir: LANGUAGE_BUILD,
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: TEAM_LOCALIZED,
+            localized: true,
+            status: true,
+            // Readers see only the open team's pages, the team kept per
+            // language.
+            access: { read: () => ({ team: { equals: "open" } }) },
+            fields: [
+              text({ name: "slug", localized: true }),
+              text({ name: "title", localized: true }),
+              text({ name: "team", localized: true }),
+            ],
+            publicAddress: "/{slug}",
+          }),
+          defineCollection({
+            slug: GERMAN_ONLY,
+            localized: true,
+            status: true,
+            // Read in German alone, whoever asks.
+            access: { read: ({ locale }) => locale === "de" },
+            fields: [
+              text({ name: "slug", localized: true }),
+              text({ name: "title", localized: true }),
+            ],
+            publicAddress: "/notes/{slug}",
+          }),
+        ],
+        seedPublic: true,
+      });
+      current = t;
+      await lastCatchUp();
+      // Each page open in one language and closed in the other.
+      const page = async (
+        en: Record<string, unknown>,
+        de: Record<string, unknown>,
+        collection = TEAM_LOCALIZED
+      ) => {
+        const made = await t.nextly.create({
+          collection,
+          locale: "en",
+          data: { ...en, status: "published" },
+          overrideAccess: true,
+        });
+        await t.nextly.update({
+          collection,
+          id: String(made.item.id),
+          locale: "de",
+          data: { ...de, status: "published", _overwrite: true },
+          overrideAccess: true,
+        });
+      };
+      await page(
+        { slug: "open-en", title: "Open in English", team: "open" },
+        { slug: "closed-de", title: "Geschlossen", team: "closed" }
+      );
+      await page(
+        { slug: "closed-en", title: "Closed in English", team: "closed" },
+        { slug: "open-de", title: "Offen", team: "open" }
+      );
+      // Open in both, so a German version the reader may read is listed.
+      await page(
+        { slug: "both-en", title: "Open twice", team: "open" },
+        { slug: "both-de", title: "Zweimal offen", team: "open" }
+      );
+      await page(
+        { slug: "note-en", title: "A note" },
+        { slug: "note-de", title: "Eine Notiz" },
+        GERMAN_ONLY
+      );
+      await lastCatchUp();
+      const owner = await personWith(t, "owner", "all");
+      const manager = await personWith(t, "manager", [
+        "manage-seo",
+        `read-${TEAM_LOCALIZED}`,
+        `read-${GERMAN_ONLY}`,
+      ]);
+
+      const all = (await addressesFor(owner)).items?.map(item => item.path);
+      const paths = (await addressesFor(manager)).items?.map(item => item.path);
+
+      // The owner reads every version, so each is there to leave out.
+      expect(all).toEqual(
+        expect.arrayContaining([
+          "/en/open-en",
+          "/de/closed-de",
+          "/en/closed-en",
+          "/de/open-de",
+          "/en/notes/note-en",
+          "/de/notes/note-de",
+        ])
+      );
+      expect(paths).toEqual(
+        expect.arrayContaining([
+          "/en/open-en",
+          "/en/both-en",
+          "/de/both-de",
+          // A rule that reads the language admits the German version.
+          "/de/notes/note-de",
+        ])
+      );
+      expect(paths).not.toContain("/en/notes/note-en");
+      expect(paths).not.toContain("/de/closed-de");
+      expect(paths).not.toContain("/en/closed-en");
+      // Whether /de/open-de is listed is the collection's own German read's
+      // answer, asked as the reader; it is not pinned here.
+    });
+
     it("lists each published translation as its entry, in its language, and leaves a page built in code at another language's path its own", async () => {
       const t = await createTestNextly({
         dialect,

@@ -2,11 +2,13 @@
  * What the import's routes and the bulk edit screen's import panel agree on:
  * where the import is read, tried and applied, the places a value can go,
  * the sources it reads, and the shapes each route answers with. Plain data
- * only and import-free, so the admin's client bundle takes it without
+ * only, importing types alone, so the admin's client bundle takes it without
  * bringing server code along.
  *
  * @module import/contract
  */
+
+import type { ParsedSource } from "./records";
 
 /** Where the panel reads the field groups the site's content types hold. */
 export const IMPORT_GROUPS_PATH = "/import/groups";
@@ -17,8 +19,14 @@ export const IMPORT_DRY_RUN_PATH = "/import/dry-run";
 /** Where a tried import is applied. */
 export const IMPORT_APPLY_PATH = "/import/apply";
 
+/**
+ * The code an apply is refused with when it stopped part-way and a step it
+ * had already written could not be put back: part of it may be in place.
+ */
+export const IMPORT_PARTLY_APPLIED = "SEO_IMPORT_PARTLY_APPLIED";
+
 /** The most characters an export file may hold. */
-export const IMPORT_FILE_LIMIT: number = 20 * 1024 * 1024;
+export const IMPORT_FILE_LIMIT: number = 50 * 1024 * 1024;
 
 /** Where an imported value can go in a page's SEO. */
 export type ImportTarget =
@@ -80,13 +88,31 @@ export type ImportSource =
       fileName: string;
       /** The file's text. */
       text: string;
+    }
+  | {
+      /**
+       * A file read in the browser, by the same readers: only what it holds
+       * for each page is sent, so a large export is never sent whole.
+       */
+      kind: "records";
+      /** The tool whose export it is. */
+      tool: ImportFileSource;
+      /** The file's name, for the dry run to show. */
+      fileName: string;
+      /** What the file holds, as its reader read it. */
+      parsed: ParsedSource;
     };
 
 /** What a dry run and an apply are sent. */
 export interface ImportRequest {
   source: ImportSource;
-  /** The language the values are imported into, where the site has several. */
+  /**
+   * The language a file is read in, where the site has several: the default
+   * one. The import itself reaches every language a page is translated into.
+   */
   locale?: string;
+  /** Whether values a page's own code overrides are imported anyway. */
+  includeNeverServed?: boolean;
 }
 
 /** One field inside a group, with how many pages hold a value in it. */
@@ -97,6 +123,8 @@ export interface GroupField {
   filled: number;
   /** Where the panel suggests it goes. */
   suggested: ImportTarget;
+  /** One page's value, as an example of what the field holds; none where no page holds one. */
+  example?: string;
 }
 
 /** A group or component field the site's content types hold. */
@@ -108,14 +136,31 @@ export interface ImportGroup {
   types: { slug: string; label: string }[];
   /** How many pages were read. */
   pages: number;
+  /** How many of them hold a title or a description in the group. */
+  withText: number;
   fields: GroupField[];
   /** The plugin's own group, from an earlier version of the plugin. */
   own: boolean;
 }
 
 /** What the groups route answers. */
+/**
+ * A content type of the site's own with a field of its own named `seo`,
+ * which the plugin's group can't join until that field is renamed.
+ */
+export interface TypeWithOwnSeo {
+  slug: string;
+  label: string;
+  /** Where it is defined: the site's code, or the Schema Builder. */
+  definedIn: "code" | "admin";
+}
+
 export interface ImportGroupsBody {
   groups: ImportGroup[];
+  /** The site's types holding a field of their own named `seo`. */
+  ownSeo: TypeWithOwnSeo[];
+  /** The language an import reads and writes in: a file is read in it too. */
+  language: string;
 }
 
 /** A line of the dry run: where values go, from where, and how many. */
@@ -128,24 +173,57 @@ export interface DryRunLine {
 }
 
 /**
- * What an import does to one page, or to a record it passes over: sets
- * values (`set`), finds every value the same as the page's automatic one
- * (`same`), keeps values a person already typed (`kept`), or skips it, with
- * why (`skipped`).
+ * Which version of a page a row is about: what is published, or a draft,
+ * the working draft waiting beside a published page or a page never
+ * published.
+ */
+export type VersionForm = "published" | "draft";
+
+/**
+ * What an import does to one version of a page, or to a record it passes
+ * over: sets values (`set`), finds every value the same as the page's
+ * automatic one (`same`), keeps values a person already typed (`kept`), or
+ * skips it, with why (`skipped`). A page in several languages, or with a
+ * draft beside its published version, has one entry for each.
  */
 export interface ImportReportEntry {
   /** The page's content type key and id; none for a record matching no page. */
   type?: string;
   id?: string;
-  /** The page's name, or the record's as the source names it. */
+  /** The page's name in this version, or the record's as the source names it. */
   label: string;
+  /** The language of this version, where its type is translated. */
+  locale?: string;
+  /** That language's name. */
+  language?: string;
+  /** Which version of the page this is; none for a record matching no page. */
+  version?: VersionForm;
   outcome: "set" | "same" | "kept" | "skipped";
   /** The places it sets. */
   set: ImportTarget[];
   /** The places whose value is the same as the automatic one, left as they are. */
   same: ImportTarget[];
-  /** The places a person already filled with another value, which keep it. */
+  /** The places a person already filled, which keep what they hold, the same value or another. */
   kept: ImportTarget[];
+  /**
+   * The places whose value never reached the page, since its own code sets
+   * that value: left out unless the import includes them.
+   */
+  neverServed: ImportTarget[];
+  /**
+   * The places a published version would get that its waiting draft gets
+   * instead, to take live when it is published: writing the published
+   * version now would publish the draft with it.
+   */
+  withDraft?: ImportTarget[];
+  /**
+   * The places the version would get that are left as they are while a
+   * draft waits beside it, or in it, which can't take them: the import is
+   * run again once the draft is published or discarded.
+   */
+  waiting?: ImportTarget[];
+  /** The title and description the source holds for it, as imported. */
+  values: Partial<Record<"title" | "description", string>>;
   /** Why it is skipped. */
   reason?: string;
 }
@@ -156,13 +234,22 @@ export interface DryRunBody {
   checked: number;
   /** Whether `checked` counts a file's records rather than pages. */
   fromFile: boolean;
+  /** How many of the records read hold any value to import. */
+  held: number;
   lines: DryRunLine[];
   /** How many pages would change. */
   pages: number;
+  /** How many versions of them would change: each language, and each draft. */
+  versions: number;
   /** Values the same as the automatic one, left (or made) automatic. */
   same: number;
   /** Values a person already typed here, which the import keeps. */
   kept: number;
+  /**
+   * Values left out as never served: the page's own code sets them, so they
+   * never reached it. Zero where the import includes them.
+   */
+  neverServed: number;
   /** Redirects the import would add. */
   redirects: number;
   /** The source's fields the import leaves out. */

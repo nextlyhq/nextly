@@ -11,7 +11,9 @@
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import {
   checkbox,
+  date,
   defineCollection,
+  number,
   text,
   textarea,
   type CollectionConfig,
@@ -37,12 +39,21 @@ export function redirectsCollection(): CollectionConfig {
       // Long text, so an address of any length fits.
       textarea({ name: "source", label: "From", required: true }),
       text({ name: "locale", label: "Language", required: true, index: true }),
-      textarea({ name: "target", label: "To", required: true }),
+      // Empty for an address that is gone for good, which answers 410
+      // rather than sending the visitor anywhere.
+      textarea({ name: "target", label: "To" }),
       // The key of the To address where it is an exact path on this site, so
       // the redirects pointing at an address are found by an index when a
       // chain is joined.
       text({ name: "targetKey", label: "Target key", index: true }),
       checkbox({ name: "permanent", label: "Permanent", defaultValue: true }),
+      // The address is gone for good: the Proxy answers 410 Gone, so search
+      // engines drop it sooner than they would a 404, and sends no one on.
+      checkbox({ name: "gone", label: "Gone", defaultValue: false }),
+      // How many requests the redirect has answered, and when it last did,
+      // counted by the Proxy in the background (`redirects/hits`).
+      number({ name: "hits", label: "Hits", defaultValue: 0 }),
+      date({ name: "lastHit", label: "Last hit" }),
       // `automatic` for a page's own move, `person` from the screen,
       // `import` from a file.
       text({ name: "origin", label: "Added by", required: true }),
@@ -56,6 +67,10 @@ export function redirectsCollection(): CollectionConfig {
       delete: () => false,
       read: () => false,
     },
+    // The Proxy counts hits while it answers a request, where expiring a
+    // cache is refused; nothing caches a redirect's row, which the Proxy
+    // and the plugin's routes read straight from the database.
+    revalidate: { disable: true },
     webhooks: false,
     admin: {
       description: "Old addresses and where they now send people.",

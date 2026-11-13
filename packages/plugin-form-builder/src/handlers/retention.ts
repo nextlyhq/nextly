@@ -11,6 +11,11 @@
  * (`forget-sends`) and its one-response key is handed on. Age is read from
  * `createdAt`, which the system sets, never from what a caller sent.
  *
+ * Deleting a submission releases the uploads it held, and their files are
+ * deleted once the deletion commits (`upload-claims`, `upload-cleanup`).
+ * Last, the pass frees what an earlier deletion could not (a storage error,
+ * a file then in use) and the uploads no submission claimed within a day.
+ *
  * A pass stops at the deadline its jobs run gives it and queues a
  * continuation, so a large backlog is worked through on the next runs rather
  * than waiting a day.
@@ -26,6 +31,12 @@ import {
 } from "@nextlyhq/plugin-sdk";
 
 import { normalizeFormSettings } from "../utils/form-settings";
+
+import {
+  sweepUploads,
+  type UploadCleanupDeps,
+  type UploadSweepCursor,
+} from "./upload-cleanup";
 
 /** The retention job's slug. */
 export const RETENTION_JOB = "form-builder:retention";
@@ -51,6 +62,8 @@ export interface RetentionDeps {
   jobs: Pick<PluginContext["services"]["jobs"], "queue">;
   formsSlug: string;
   submissionsSlug: string;
+  /** What the uploads' files are freed with; none frees no files. */
+  uploads?: UploadCleanupDeps;
   /** The time the pass judges ages against; the clock when absent. */
   now?: () => Date;
 }
@@ -82,23 +95,34 @@ function pastDeadline(deadline: Date): boolean {
 }
 
 /**
- * Where a run carries on from: past the spam, and past the forms already
- * done, by id. Handed to the continuation, so a run that stops partway does
- * not spend the next one re-reading the forms it finished.
+ * Where a run carries on from: past the spam, past the forms already done,
+ * by id, past every form, and how far through the uploads' sweep. Handed to
+ * the continuation, so a run that stops partway does not spend the next one
+ * re-reading what it finished.
  */
-export interface RetentionCursor {
+export interface RetentionCursor extends UploadSweepCursor {
   spamDone?: boolean;
   afterForm?: string;
+  formsDone?: boolean;
 }
+
+/** The cursor's yes-or-no parts, and its by-id parts. */
+const CURSOR_FLAGS = ["spamDone", "formsDone", "releasedDone"] as const;
+const CURSOR_IDS = ["afterForm", "afterUpload"] as const;
 
 /** A continuation's cursor, read from its job input; none starts afresh. */
 export function retentionCursorOf(input: unknown): RetentionCursor {
   if (!input || typeof input !== "object") return {};
-  const { spamDone, afterForm } = input as Record<string, unknown>;
-  return {
-    ...(spamDone === true ? { spamDone } : {}),
-    ...(typeof afterForm === "string" ? { afterForm } : {}),
-  };
+  const raw = input as Record<string, unknown>;
+  const cursor: RetentionCursor = {};
+  for (const flag of CURSOR_FLAGS) {
+    if (raw[flag] === true) cursor[flag] = true;
+  }
+  for (const key of CURSOR_IDS) {
+    const value = raw[key];
+    if (typeof value === "string") cursor[key] = value;
+  }
+  return cursor;
 }
 
 /**
@@ -122,9 +146,16 @@ export async function runRetention(
       return continueFrom(deps, {});
     }
   }
-  const stoppedAt = await deleteAgedPerForm(deps, now, deadline, cursor);
-  if (stoppedAt === "done") return "done";
-  return continueFrom(deps, { spamDone: true, ...stoppedAt });
+  if (!cursor.formsDone) {
+    const stoppedAt = await deleteAgedPerForm(deps, now, deadline, cursor);
+    if (stoppedAt !== "done") {
+      return continueFrom(deps, { spamDone: true, ...stoppedAt });
+    }
+  }
+  if (!deps.uploads) return "done";
+  const swept = await sweepUploads(deps.uploads, now, deadline, cursor);
+  if (swept === "done") return "done";
+  return continueFrom(deps, { spamDone: true, formsDone: true, ...swept });
 }
 
 /** Queue the continuation, with where this run stopped. */
