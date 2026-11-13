@@ -14,12 +14,10 @@
  * Each must create the index and plan nothing else for `user_roles`, and a
  * second run must plan nothing at all.
  *
- * MySQL needs the earlier shape rebuilt rather than the index dropped: the
- * foreign key on `role_id` needs an index leading on that column, and with the
- * declared index present MySQL keeps no other. Before this index, the one
- * serving the key was the index MySQL made on its own, named after the
- * constraint. So the test makes that index first, and then drops the declared
- * one, which is the exact catalog an older MySQL install holds.
+ * On every dialect the earlier shape is the table with this one index
+ * dropped. MySQL's `user_roles` declares no foreign key, so it has no index
+ * MySQL made on its own to back one, and an older MySQL install had nothing
+ * on `role_id` at all.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -68,29 +66,13 @@ async function liveIndexes(adapter: DrizzleAdapter): Promise<string[]> {
     .sort();
 }
 
-/** The name of MySQL's foreign key on `user_roles.role_id`. */
-async function roleForeignKeyName(adapter: DrizzleAdapter): Promise<string> {
-  const rows = rowsOf(
-    await adapter.executeQuery(
-      `SELECT constraint_name AS name FROM information_schema.key_column_usage
-       WHERE table_schema = DATABASE() AND table_name = 'user_roles'
-         AND column_name = 'role_id' AND referenced_table_name IS NOT NULL`
-    )
-  );
-  const name = String(rows[0]?.name ?? rows[0]?.NAME ?? "");
-  if (name === "") throw new Error("user_roles.role_id has no foreign key");
-  return name;
-}
-
 /** Put the database back in the shape a release before the index left. */
 async function removeTheIndex(adapter: DrizzleAdapter): Promise<void> {
-  if (adapter.dialect === "mysql") {
-    const key = await roleForeignKeyName(adapter);
-    await adapter.executeQuery(`CREATE INDEX \`${key}\` ON user_roles (role_id)`);
-    await adapter.executeQuery(`DROP INDEX ${INDEX} ON user_roles`);
-    return;
-  }
-  await adapter.executeQuery(`DROP INDEX "${INDEX}"`);
+  await adapter.executeQuery(
+    adapter.dialect === "mysql"
+      ? `DROP INDEX ${INDEX} ON user_roles`
+      : `DROP INDEX "${INDEX}"`
+  );
 }
 
 /** What the core reconcile would run now, without running it. */
