@@ -31,6 +31,13 @@
  * one), one a plugin's install added or its uninstall orphaned, and one live
  * before the rolled-back migrations applied that none of them orphaned.
  *
+ * A rollback to any other point, whose own snapshot records the registry,
+ * undoes the same way against that snapshot: the rows the rolled-back
+ * migrations changed, and their orphan marks (`orphanMarksUndone`). For each
+ * plugin the point records, the point alone says what it declares, so
+ * rolling back the migration that recorded a plugin release's new permission
+ * orphans it; a plugin the point does not know keeps what its install wrote.
+ *
  * @module domains/schema/migrate/rollback-to-record
  */
 import { readFile } from "node:fs/promises";
@@ -49,7 +56,10 @@ import {
 import type { PluginDefinition } from "../../../plugins/plugin-context";
 import { canonicalJson } from "../../../shared/lib/canonical-json";
 import { adapterForReads } from "../../../shared/lib/read-transaction-scope";
-import type { OrphanPassRow } from "../../auth/services/permission-seed-service";
+import {
+  ownersOfHeld,
+  type OrphanPassRow,
+} from "../../auth/services/permission-seed-service";
 import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
@@ -78,7 +88,11 @@ import {
   snapshotMetadataOf,
   type AppMigrationStanding,
 } from "./first-run";
-import { permissionsDeclaredBy } from "./permission-orphans";
+import {
+  declarationsOf,
+  permissionsDeclaredBy,
+  type SnapshotDeclarations,
+} from "./permission-orphans";
 import { pluginCollectionSources } from "./plugin/plugin-collection-sources";
 import {
   addedEntities,
@@ -171,29 +185,78 @@ function keyOf(p: { action: string; resource: string }): string {
 }
 
 /**
- * The orphan marks a rollback to the record's point sets (true) and clears
- * (false), by permission id, judged by declaration alone: what the point it
- * returns to declares, and what each writer that is not a migration declares
- * now. No time a mark was set is read.
+ * What the point a rollback returns to declares, as its marks are judged: the
+ * registry baseline's permissions not orphaned, by slug, where the point is
+ * the record's; or the point's own snapshot, by owner, where it records them.
+ */
+export type PointDeclarations =
+  | { kind: "baseline"; slugs: readonly string[] }
+  | { kind: "snapshot"; declared: SnapshotDeclarations };
+
+/** The orphan mark judgement's reading of `point`. */
+interface PointReading {
+  /** Whether the point declares `row`, whoever declares it there. */
+  declares: (row: OrphanPassRow, key: string) => boolean;
+  /** Whether the point speaks for `plugin`: it says what the plugin declares there. */
+  speaksFor: (plugin: string) => boolean;
+}
+
+/**
+ * `point` read for the judgement. A baseline keeps slugs and no owner, so it
+ * holds what it keeps by slug and speaks for each owner of a permission it
+ * holds (`ownersOfHeld`, as an applied migration's orphan pass reads it); a
+ * snapshot declares what it records, whoever it records it under, and speaks
+ * for each plugin it records.
+ */
+function readPoint(
+  point: PointDeclarations,
+  rows: readonly OrphanPassRow[]
+): PointReading {
+  if (point.kind === "baseline") {
+    const held = new Set(point.slugs);
+    const spoken = ownersOfHeld(rows, held);
+    return {
+      declares: row => held.has(row.slug),
+      speaksFor: plugin => spoken.has(plugin),
+    };
+  }
+  const declared = new Set(point.declared.declared.map(keyOf));
+  return {
+    declares: (_row, key) => declared.has(key),
+    speaksFor: plugin => point.declared.plugins.has(plugin),
+  };
+}
+
+/**
+ * The orphan marks a rollback sets (true) and clears (false), by permission
+ * id, judged by declaration alone: what the point it returns to declares
+ * (`point`), and what each writer that is not a migration declares now. No
+ * time a mark was set is read.
+ *
+ * A plugin's permission is told apart by what each configured plugin declares
+ * (`pluginDeclared`), never by the owner key the app's own share with a plugin
+ * named `app`; a row owned by any other key is a plugin's too, one no longer
+ * configured. The point speaks for each plugin it records (a baseline, each
+ * owner of a permission it holds): for those, the point says what the plugin
+ * declares there, so rolling back the migration that recorded a plugin
+ * release's new permission withdraws it, though that release is still
+ * configured. A plugin the point does not know (installed after it) keeps
+ * what its install declared: what it declares now, while recorded installed
+ * (`installed`).
  *
  * - Made live by a rolled-back migration: a permission its snapshot declares
- *   that the baseline does not hold and no plugin still recorded installed
- *   declares (`installed`). Orphaned, or left orphaned, whatever else marked
- *   it since. An entity's built-in permissions are declared with it, so they
- *   leave with the row of an entity the baseline does not hold.
- * - Marked, and declared at the point it returns to: cleared. A plugin's
- *   permission is told apart by what each configured plugin declares
- *   (`pluginDeclared`), never by the owner key the app's own share with a
- *   plugin named `app`; a row owned by any other key is a plugin's too, one
- *   no longer configured. A plugin's is declared there only where the plugin
- *   is recorded installed and its current release declares it (`installed`),
- *   so a mark its uninstall set, or one its reinstalled release no longer
- *   lifts, stays. Any other permission (the app's own, an entity's, core's)
- *   is declared there where the baseline holds it.
+ *   that is not declared at the point. Orphaned, or left orphaned, whatever
+ *   else marked it since. An entity's built-in permissions are declared with
+ *   it, so they leave with the row of an entity the point does not hold.
+ * - Marked, and declared at the point: cleared. A plugin's is cleared only
+ *   where the plugin is recorded installed and its current release declares
+ *   it too (`installed`), so a mark its uninstall set, or one its reinstalled
+ *   release no longer lifts, stays. No snapshot declares a core permission,
+ *   so only a baseline clears one.
  */
 export function orphanMarksUndone(args: {
   rows: readonly OrphanPassRow[];
-  baseline: readonly string[];
+  point: PointDeclarations;
   rolledBack: readonly RolledBackMigration[];
   installed: readonly { action: string; resource: string }[];
   pluginDeclared: readonly {
@@ -202,27 +265,39 @@ export function orphanMarksUndone(args: {
     owner: string;
   }[];
 }): Map<string, boolean> {
-  const held = new Set(args.baseline);
   const installed = new Set(args.installed.map(keyOf));
   const pluginOf = new Map(args.pluginDeclared.map(p => [keyOf(p), p.owner]));
+  const point = readPoint(args.point, args.rows);
   const declared = new Set(
     args.rolledBack.flatMap(m =>
       (permissionsDeclaredBy(m.snapshot) ?? []).map(keyOf)
     )
   );
-  /** Whether the point the rollback returns to declares `row`. */
-  const declaredAtPoint = (row: OrphanPassRow, key: string): boolean => {
+  /** Whether the point declares `row`, and whether its mark may be cleared. */
+  const judged = (
+    row: OrphanPassRow,
+    key: string
+  ): { atPoint: boolean; clearable: boolean } => {
     const plugin =
       pluginOf.get(key) ??
       (row.owner !== null && row.owner !== APP_OWNER ? row.owner : undefined);
-    return plugin === undefined ? held.has(row.slug) : installed.has(key);
+    if (plugin !== undefined && !point.speaksFor(plugin)) {
+      // A plugin the point does not know keeps what its install declared.
+      return { atPoint: installed.has(key), clearable: installed.has(key) };
+    }
+    const atPoint = point.declares(row, key);
+    return {
+      atPoint,
+      clearable: atPoint && (plugin === undefined || installed.has(key)),
+    };
   };
   const marks = new Map<string, boolean>();
   for (const row of args.rows) {
     const key = keyOf(row);
-    if (declared.has(key) && !held.has(row.slug) && !installed.has(key)) {
+    const { atPoint, clearable } = judged(row, key);
+    if (declared.has(key) && !atPoint) {
       marks.set(String(row.id), true);
-    } else if (row.orphanedAt !== null && declaredAtPoint(row, key)) {
+    } else if (row.orphanedAt !== null && clearable) {
       marks.set(String(row.id), false);
     }
   }
@@ -543,6 +618,8 @@ export async function planRollbackBookkeeping(args: {
     rolledBack: args.rolledBack,
     deps: writeDeps,
   });
+  // Read only where a rollback has marks to judge.
+  const judge = () => marksJudgeFor(adapter, args.config);
   if (judged.kind === "own-source") {
     return {
       perFile,
@@ -552,6 +629,7 @@ export async function planRollbackBookkeeping(args: {
         remaining: remaining.map(m => m.name),
         targets,
         deps: writeDeps,
+        judge,
       })),
     };
   }
@@ -560,6 +638,7 @@ export async function planRollbackBookkeeping(args: {
     summary: `The registry would go back to the baseline the database's registry record keeps at ${pointNamed(point)}.`,
     restore: await baselineRestore({
       ...args,
+      judge,
       point,
       baseline: judged.baseline,
       ...(await rolledBackMigrations(metaDir, targets, judged.baseline)),
@@ -607,9 +686,11 @@ async function typeChangedRowsPerDown(args: {
 
 /**
  * What a rollback to `point`, whose own snapshot records the registry, does
- * with the rows with its last DOWN (`RollbackBookkeeping.restore`):
- * nothing where the point's snapshot records nothing (an earlier release's,
- * or none), so such a point's rows stay as they are.
+ * with the rows and the orphan marks with its last DOWN
+ * (`RollbackBookkeeping.restore`): the rolled-back migrations' own changes
+ * undone against that snapshot (`orphanMarksUndone` for the marks, every grant
+ * kept); nothing where the point's snapshot records nothing (an earlier
+ * release's, or none), so such a point's rows and marks stay as they are.
  */
 async function undoToOwnSource(args: {
   metaDir: string;
@@ -617,6 +698,7 @@ async function undoToOwnSource(args: {
   remaining: readonly string[];
   targets: ReadonlySet<string>;
   deps: RegistryWriteDeps;
+  judge: () => Promise<MarksJudge>;
 }): Promise<Pick<RollbackBookkeeping, "restore" | "summary">> {
   if (args.point === null) return {};
   const at = await readMigrationSnapshot(args.metaDir, args.point);
@@ -632,12 +714,22 @@ async function undoToOwnSource(args: {
     earlier.push(snapshot.entities);
   }
   const undone: EntitySettingsRecord[] = [];
+  const rolledBack: RolledBackMigration[] = [];
   for (const name of args.targets) {
     const snapshot = await readMigrationSnapshot(args.metaDir, name);
+    rolledBack.push({ snapshot });
     if (snapshot !== null && carriesRegistryMetadata(snapshot)) {
       undone.push(snapshot.entities);
     }
   }
+  // The rolled-back migrations' own orphan marks, undone against what the
+  // point declares; a point whose snapshot predates the permissions' record
+  // says nothing of them, so every mark stays as it is.
+  const declared = declarationsOf(at);
+  const decide =
+    declared === undefined
+      ? undefined
+      : (await args.judge())({ kind: "snapshot", declared }, rolledBack);
   const source = {
     kind: "snapshot" as const,
     file: `${args.point}.snapshot.json`,
@@ -654,12 +746,26 @@ async function undoToOwnSource(args: {
   };
   const named = pointNamed(args.point);
   return {
-    summary: `The registry rows would go back to what ${named} records.`,
+    summary:
+      decide === undefined
+        ? `The registry rows would go back to what ${named} records.`
+        : `The registry rows and the permissions' orphan marks would go back to what ${named} records.`,
     restore: async (inFileTransaction: boolean) => {
       if (inFileTransaction) writesInFileTransaction(args.deps, named);
       const outcome = await writeRegistryRows(
         args.deps.adapter,
-        () => writeRegistryFromSource(source, args.deps, plan),
+        async () => ({
+          ...(await writeRegistryFromSource(source, args.deps, plan)),
+          // On the same registry write, so the marks commit with the rows.
+          marks:
+            decide === undefined
+              ? 0
+              : await rewriteOrphanMarksOnCommandConnection(
+                  args.deps.adapter,
+                  decide,
+                  args.deps.logger
+                ),
+        }),
         {
           wrote: written =>
             written.removed.length > 0 ||
@@ -682,10 +788,43 @@ async function undoToOwnSource(args: {
       }
       args.deps.logger.info(
         `The registry rows are back to what ${named} records: ` +
-          `${rewritten} row(s) written back, ${outcome.removed.length} removed.`
+          `${rewritten} row(s) written back, ${outcome.removed.length} removed, ` +
+          `${outcome.marks} orphan mark(s) set or cleared.`
       );
     },
   };
+}
+
+/** The orphan marks a rollback to `point` undoes, judged over the permission rows as they stand. */
+type MarksJudge = (
+  point: PointDeclarations,
+  rolledBack: readonly RolledBackMigration[]
+) => (rows: readonly OrphanPassRow[]) => Map<string, boolean>;
+
+/**
+ * The judgement of a rollback's orphan marks (`orphanMarksUndone`), with what
+ * it reads besides the point read now, before the DOWN's transaction opens: a
+ * plugin's lifecycle is written under the lock this run holds, so it cannot
+ * change before the marks are judged, and a table probe inside the
+ * transaction would abort it on PostgreSQL where the table is missing.
+ */
+async function marksJudgeFor(
+  adapter: DrizzleAdapter,
+  config: PermissionConfigSource & { plugins?: PluginDefinition[] }
+): Promise<MarksJudge> {
+  const notInstalled = await pluginsRecordedNotInstalled(adapter);
+  const plugins = config.plugins ?? [];
+  // Each configured plugin's declarations, told from the app's own by their
+  // source, and those of the plugins still declaring theirs.
+  const pluginDeclared = collectCustomPermissions(config, plugins).filter(
+    p => p.source === "plugin"
+  );
+  const installed = collectCustomPermissions(
+    config,
+    pluginsStillDeclaring(plugins, notInstalled)
+  ).filter(p => p.source === "plugin");
+  return (point, rolledBack) => rows =>
+    orphanMarksUndone({ rows, point, rolledBack, installed, pluginDeclared });
 }
 
 /**
@@ -700,7 +839,7 @@ async function undoToOwnSource(args: {
 async function baselineRestore(args: {
   adapter: DrizzleAdapter;
   dialect: SupportedDialect;
-  config: PermissionConfigSource & { plugins?: PluginDefinition[] };
+  judge: () => Promise<MarksJudge>;
   logger: ServiceLogger;
   point: string | null;
   baseline: RegistryBaseline;
@@ -708,29 +847,14 @@ async function baselineRestore(args: {
   added: Record<RegistryKey, ReadonlySet<string>>;
 }): Promise<() => Promise<void>> {
   const { adapter, baseline } = args;
-  const notInstalled = await pluginsRecordedNotInstalled(adapter);
-  const plugins = args.config.plugins ?? [];
-  // Each configured plugin's declarations, told from the app's own by their
-  // source, and those of the plugins still declaring theirs.
-  const pluginDeclared = collectCustomPermissions(args.config, plugins).filter(
-    p => p.source === "plugin"
-  );
-  const installed = collectCustomPermissions(
-    args.config,
-    pluginsStillDeclaring(plugins, notInstalled)
-  ).filter(p => p.source === "plugin");
   const tables: DashboardTables = {
     dashboardPinsPresent: await dashboardPinsPresent(adapter),
     mediaUsagePresent: await mediaUsageTablePresent(adapter),
   };
-  const decide = (rows: readonly OrphanPassRow[]) =>
-    orphanMarksUndone({
-      rows,
-      baseline: baseline.permissions,
-      rolledBack: args.rolledBack,
-      installed,
-      pluginDeclared,
-    });
+  const decide = (await args.judge())(
+    { kind: "baseline", slugs: baseline.permissions },
+    args.rolledBack
+  );
   return async () => {
     const outcome = await writeRegistryRows(
       adapter,

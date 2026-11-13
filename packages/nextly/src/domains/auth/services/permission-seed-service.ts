@@ -87,6 +87,23 @@ function orphanPassKey(p: { action: string; resource: string }): string {
 }
 
 /**
+ * Each owner of a permission `held` names by slug, read from `rows`: the
+ * owners a registry baseline speaks for, since it keeps slugs and no owner.
+ * The one reading of it, for an applied migration's orphan pass and for a
+ * rollback to the baseline's point.
+ */
+export function ownersOfHeld(
+  rows: readonly OrphanPassRow[],
+  held: ReadonlySet<string>
+): Set<string> {
+  const owners = new Set<string>();
+  for (const row of rows) {
+    if (row.owner && held.has(String(row.slug))) owners.add(row.owner);
+  }
+  return owners;
+}
+
+/**
  * The owners a pass speaks for: those `scope` names, and each owner of a
  * permission the point before held, read from the same rows the pass walks.
  */
@@ -94,13 +111,10 @@ function ownersSpokenFor(
   rows: readonly OrphanPassRow[],
   scope: OrphanMarkScope
 ): Set<string> {
-  const spokenFor = new Set(scope.owners);
-  for (const row of rows) {
-    if (row.owner && scope.heldSlugs?.has(String(row.slug))) {
-      spokenFor.add(row.owner);
-    }
-  }
-  return spokenFor;
+  return new Set([
+    ...scope.owners,
+    ...ownersOfHeld(rows, scope.heldSlugs ?? new Set()),
+  ]);
 }
 
 /**
