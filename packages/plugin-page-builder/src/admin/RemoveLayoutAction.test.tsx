@@ -502,6 +502,8 @@ describe("moving the pages to the site default first", () => {
         "40 pages moved to the site default, Main, and the Layout was deleted."
       )
     ).toBeTruthy();
+    // Every live version moved, so nothing is left for a publisher.
+    expect(screen.queryByText(/still name this Layout/)).toBeNull();
     // The outcome is marked by an icon beside the title, not by colouring
     // the sentence.
     expect(
@@ -512,6 +514,46 @@ describe("moving the pages to the site default first", () => {
     expect(navigated).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(navigated).toEqual(["/admin/collections/layouts"]);
+  });
+
+  it("names the published pages whose live version still uses it, when the person may not publish them", async () => {
+    moveAnswers(forty(), async body =>
+      body.token === undefined
+        ? moving(25, "q20")
+        : {
+            state: "done",
+            moved: 15,
+            liveLeft: {
+              pages: [
+                { id: "p1", title: "Pricing" },
+                { id: "p3", title: "Home" },
+              ],
+              unreadable: 1,
+            },
+          }
+    );
+    openDialog();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Move 40 pages, then delete" })
+    );
+
+    expect(
+      await screen.findByText(
+        "37 pages moved to the site default, Main, and the Layout was deleted."
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        "The published versions of 3 pages still name this Layout, because changing them needs permission to publish them. Visitors see the site default's header and footer there until someone who can publish them chooses another Layout."
+      )
+    ).toBeTruthy();
+    // Each named page opens in a new tab, for whoever can publish it.
+    expect(
+      screen.getByRole("link", { name: "Pricing" }).getAttribute("href")
+    ).toBe("/admin/collections/pages/p1");
+    expect(screen.getByRole("link", { name: "Home" })).toBeTruthy();
+    expect(screen.getAllByText("Published version kept")).toHaveLength(2);
+    expect(screen.getByText("And 1 page you can't view.")).toBeTruthy();
   });
 
   it("names a page it could not move, with why, and offers to try again", async () => {

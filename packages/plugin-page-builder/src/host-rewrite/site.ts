@@ -15,6 +15,8 @@ import {
   NextlyError,
   readStoredFields,
   updateIfUnchanged,
+  type FieldRewriteRequest,
+  type FieldRewriteResult,
   type PluginConditionalWriteIdentity,
   type PluginStoredDocument,
   type PluginStoredFields,
@@ -36,7 +38,9 @@ import { layoutReferencesOf } from "../layout-component-usage";
 
 import { documentKeyOf, type HostAddress, type LeftHost } from "./contract";
 import type {
+  CopiesResult,
   HostCandidate,
+  HostCopiesWriter,
   HostDocument,
   HostRead,
   HostReader,
@@ -1012,6 +1016,92 @@ export function systemHostWriter(
     ...site,
     identity: () => Promise.resolve({ overrideAccess: true as const }),
   });
+}
+
+/**
+ * The plugin's field rewrite (`ctx.services.collections.rewriteField`), bound
+ * to the plugin so each document's history names the Page Builder, made with
+ * `opts` as given.
+ */
+export type SiteFieldRewrite<TOpts> = (
+  request: FieldRewriteRequest,
+  opts?: TOpts
+) => Promise<FieldRewriteResult>;
+
+/**
+ * Rewrites a collection entry's host on its live copy and every pending draft
+ * holding its field, through core's field rewrite, as `as` resolves the
+ * person the run belongs to (their update and publish rights both judged), or
+ * as the system where it resolves none. Each copy's new value is the step's
+ * answer for that copy's own stored value; a copy holding nothing is left. A
+ * copy the step refuses aborts the rewrite with nothing written, and is
+ * answered as `step-refused` with the step's words.
+ */
+export function siteCopiesWriter<TOpts>(site: {
+  readonly rewriteField: SiteFieldRewrite<TOpts>;
+  readonly as: () => Promise<TOpts | undefined>;
+  /** Why, as each rewritten document's history keeps it. */
+  readonly reason: string;
+  /** What follows a committed rewrite: the work save hooks would have done. */
+  readonly afterRewrite?: (document: {
+    readonly slug: string;
+    readonly id: string;
+  }) => Promise<void>;
+}): HostCopiesWriter {
+  return async write => {
+    const field = write.host.path[0];
+    if (field === undefined || write.host.path.length !== 1) {
+      return {
+        kind: "refused",
+        detail: "This value has no address a write can name.",
+      };
+    }
+    let refused: string | undefined;
+    try {
+      await site.rewriteField(
+        {
+          collection: write.host.slug,
+          id: write.host.id ?? "",
+          field,
+          // Only a value stored per language is read in one (`maybeShared`
+          // hosts take no copies write), so this names a translated field's
+          // language and nothing else.
+          ...(write.host.locale === undefined
+            ? {}
+            : { locale: write.host.locale }),
+          expectedVersion: write.rev,
+          set: {
+            from: async (current, copy) => {
+              if (current === null || current === undefined) return null;
+              const outcome = await write.step(current, {
+                host: write.host,
+                form: copy.form === "live" ? write.liveForm : "draft",
+              });
+              if (outcome.kind === "refuse") {
+                refused = outcome.reason;
+                throw NextlyError.conflict({
+                  logContext: { reason: "host-rewrite-copy-refused" },
+                });
+              }
+              return outcome.kind === "rewritten" ? outcome.value : current;
+            },
+          },
+          reason: site.reason,
+        },
+        await site.as()
+      );
+    } catch (error) {
+      if (refused !== undefined) {
+        return { kind: "step-refused", detail: refused } satisfies CopiesResult;
+      }
+      return writeFailure(error);
+    }
+    await site.afterRewrite?.({
+      slug: write.host.slug,
+      id: write.host.id ?? "",
+    });
+    return { kind: "written" };
+  };
 }
 
 /**

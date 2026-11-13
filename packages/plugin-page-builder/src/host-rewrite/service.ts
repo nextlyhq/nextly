@@ -3,6 +3,11 @@
  * fences the component), rewrite its hosts as the person who started it, read
  * its progress, close it.
  *
+ * A collection entry with a pending draft is rewritten through the plugin's
+ * field rewrite, its live copy and its drafts together, so a published page
+ * no longer keeps the component until its author publishes; where the person
+ * may update it but not publish it, its draft alone is converted, as before.
+ *
  * The job that deletes a used component drives this a tick at a time; the
  * route that starts it opens the run. Bound to the installed plugin through a
  * holder, for the reason the usage health service is: the service is
@@ -22,6 +27,7 @@ import {
   NextlyError,
   type PluginRouteContext,
   type PluginRouteIdentity,
+  type ServiceOpts,
 } from "@nextlyhq/plugin-sdk";
 import type { PluginDatabase } from "@nextlyhq/plugin-sdk/schema";
 
@@ -30,6 +36,7 @@ import {
   AS_THE_SYSTEM,
   publishedStoreSource,
 } from "../component-store-source";
+import { asServiceCaller } from "../library-route";
 
 import {
   componentDeleteStep,
@@ -50,17 +57,24 @@ import {
 } from "./progress";
 import { rewriteHosts, type HostSource, type RunStore } from "./rewrite";
 import {
+  siteCopiesWriter,
   siteHostReader,
   siteHostSource,
   siteHostWriter,
   type RewriteSite,
+  type SiteFieldRewrite,
 } from "./site";
 
 /** The name the service is contributed under. */
 export const COMPONENT_DELETE_REWRITE_SERVICE = "componentDeleteRewrite";
 
 /** The person a rewrite runs as: the caller of the route that started it. */
-export type RewriteCaller = Pick<PluginRouteContext, "caller" | "user">;
+export type RewriteCaller = Pick<PluginRouteContext, "caller" | "user"> &
+  Partial<Pick<PluginRouteContext, "authenticatedScope">>;
+
+/** Why a document's copies changed, as its history keeps it. */
+export const COMPONENT_DELETED_REASON =
+  "A component it used was deleted, so each copy of it became plain blocks.";
 
 /** One call of the rewrite. */
 export interface ComponentDeleteRewriteArgs {
@@ -170,6 +184,20 @@ export interface RewriteInstall {
   /** Where component definitions are stored. */
   readonly store: { readonly collection: string; readonly field: string };
   readonly limits: () => DocumentLimits;
+  /**
+   * The plugin's own field rewrite, which names the Page Builder in each
+   * document's history. Absent, a document with a pending draft has its
+   * draft converted alone.
+   */
+  readonly rewriteField?: SiteFieldRewrite<ServiceOpts>;
+  /**
+   * What follows a committed field rewrite of a document: the work its save
+   * hooks would have done, which a rewrite runs none of (the usage indexes).
+   */
+  readonly afterRewrite?: (document: {
+    readonly slug: string;
+    readonly id: string;
+  }) => Promise<void>;
 }
 
 /**
@@ -202,6 +230,20 @@ function identityOf(caller: RewriteCaller): Promise<PluginRouteIdentity> {
     });
   }
   return caller.caller.identity();
+}
+
+/**
+ * The caller as the plugin's collection service takes them, for the field
+ * rewrite (`asServiceCaller`). Refused for a request with no person, as a
+ * run's every other write is.
+ */
+function serviceCallerOf(caller: RewriteCaller): ServiceOpts {
+  if (caller.caller === null || caller.user === null) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "host-rewrite-no-caller" },
+    });
+  }
+  return asServiceCaller(caller);
 }
 
 /** The signed-in user's id, which a route's caller always carries. */
@@ -364,6 +406,7 @@ function rewriteAsCaller(
     identity: () => identityOf(args.caller),
   };
   const limits = installed.limits();
+  const { rewriteField } = installed;
   return rewriteHosts(
     {
       fence: runs,
@@ -371,6 +414,19 @@ function rewriteAsCaller(
       source: narrow(siteHostSource(site)),
       read: siteHostReader(site),
       write: siteHostWriter(site),
+      ...(rewriteField === undefined
+        ? {}
+        : {
+            writeCopies: siteCopiesWriter({
+              rewriteField,
+              as: () =>
+                Promise.resolve().then(() => serviceCallerOf(args.caller)),
+              reason: COMPONENT_DELETED_REASON,
+              ...(installed.afterRewrite === undefined
+                ? {}
+                : { afterRewrite: installed.afterRewrite }),
+            }),
+          }),
     },
     {
       runId,

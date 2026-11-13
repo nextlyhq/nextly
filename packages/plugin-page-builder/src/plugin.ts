@@ -1535,7 +1535,9 @@ function removalDocumentsOn(
 function rewriteInstallFor(
   ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
   opts: PageBuilderOptions,
-  composition: CompositionSetup
+  composition: CompositionSetup,
+  /** The usage indexes' reconciler, read per call: `init` registers it. */
+  reconcile: () => CommittedWriteReconciler | undefined
 ): RewriteInstall {
   // The booted instance through the SDK, the plugin's stable surface, imported
   // at call time for the reason `defaultLayoutDeps` gives.
@@ -1577,6 +1579,19 @@ function rewriteInstallFor(
     },
     store: composition.store,
     limits: () => opts.limits ?? DEFAULT_LIMITS,
+    // The plugin's own service, so a converted document's history names the
+    // Page Builder beside the person who deleted the component.
+    rewriteField: (request, as) =>
+      ctx.services.collections.rewriteField(request, as),
+    // A field rewrite runs no save hooks, the usage indexes' among them, so
+    // each rewritten document is brought in line once the rewrite commits.
+    afterRewrite: async document => {
+      await reconcile()?.({
+        slug: document.slug,
+        documentId: document.id,
+        nextly: await nextly(),
+      });
+    },
   };
 }
 
@@ -3665,7 +3680,12 @@ export const pageBuilder = (
           lifecycle,
         });
       }
-      rewriteInstall = rewriteInstallFor(ctx, opts, composition);
+      rewriteInstall = rewriteInstallFor(
+        ctx,
+        opts,
+        composition,
+        () => usage.reconcile
+      );
       // The "Bindings to fix" report: each committed write's document judged
       // again, and every document by the sweep once the schema changes.
       bindingReportCtx = ctx;

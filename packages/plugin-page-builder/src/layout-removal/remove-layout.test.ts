@@ -12,7 +12,11 @@
  *
  * @module layout-removal/remove-layout.test
  */
-import { NextlyError } from "@nextlyhq/plugin-sdk";
+import {
+  NextlyError,
+  type FieldRewriteCopy,
+  type FieldRewriteRequest,
+} from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
 import type { DefaultLayoutDirectApi } from "../default-layout/store";
@@ -41,6 +45,7 @@ import {
   KEPT_AS_DEFAULT,
   NOT_PUBLISHED,
   NO_USABLE_DEFAULT,
+  PAGE_KEPT_CHANGING,
 } from "./words";
 
 type Row = Record<string, unknown> & { id: string };
@@ -162,6 +167,12 @@ interface Site {
   readOnly?: Set<string>;
   /** Every page write, as the Direct API was asked for it. */
   pageWrites?: Record<string, unknown>[];
+  /** Pages the remover may edit but not publish: their rewrite is refused. */
+  mayNotPublish?: Set<string>;
+  /** How many more rewrites of a page meet a save made since their read. */
+  savedSinceRead?: Map<string, number>;
+  /** Every field rewrite, as it was asked for. */
+  rewrites?: FieldRewriteRequest[];
 }
 
 function site(): Site {
@@ -260,10 +271,16 @@ function directApi(s: Site): DefaultLayoutDirectApi {
       const drafts =
         args.collection === "layouts" ? s.layoutDrafts : s.pageDrafts;
       const draft = drafts.get(args.id);
-      if (draft !== undefined) return { ...draft, _isWorkingDraft: true };
-      return args.collection === "layouts"
-        ? (s.layouts.get(args.id) ?? null)
-        : (s.pages.find(page => page.id === args.id) ?? null);
+      // A page's version, as every read gives it; a Layout's is not asked.
+      const rev = args.collection === "layouts" ? {} : { _rev: "7" };
+      if (draft !== undefined) {
+        return { ...draft, ...rev, _isWorkingDraft: true };
+      }
+      const row =
+        args.collection === "layouts"
+          ? s.layouts.get(args.id)
+          : s.pages.find(page => page.id === args.id);
+      return row === undefined ? null : { ...row, ...rev };
     },
     findSingle: async () => {
       s.onDefaultRead?.();
@@ -327,6 +344,58 @@ const PERSON = {
   user: { id: "author", role: "editor" },
 };
 
+/**
+ * Core's field rewrite over `s`, as the person: refused for a page they may
+ * not edit or not publish, and for one saved since its read while
+ * `savedSinceRead` says so; otherwise each copy, the live row and the
+ * working draft, takes `set.from`'s answer for its own value, and the copies
+ * whose value moved are answered.
+ */
+function rewriteOver(s: Site): MoveDeps["rewrite"] {
+  return async request => {
+    s.rewrites?.push(request);
+    const { id } = request;
+    if (s.readOnly?.has(id) === true || s.mayNotPublish?.has(id) === true) {
+      throw NextlyError.forbidden();
+    }
+    const stale = s.savedSinceRead?.get(id) ?? 0;
+    if (stale > 0) {
+      s.savedSinceRead?.set(id, stale - 1);
+      throw new NextlyError({
+        code: "STALE_VERSION",
+        publicMessage: "Someone else saved this.",
+        logContext: { reason: "test" },
+      });
+    }
+    if (!("from" in request.set)) throw new Error("the move gives set.from");
+    const { from } = request.set;
+    const copies: FieldRewriteCopy[] = [];
+    const index = s.pages.findIndex(page => page.id === id);
+    const live = s.pages[index];
+    if (live === undefined) throw NextlyError.notFound();
+    const liveValue = await from(live[request.field] ?? null, {
+      form: "live",
+      locale: null,
+    });
+    if (liveValue !== live[request.field]) {
+      s.pages[index] = { ...live, [request.field]: liveValue };
+      copies.push({ form: "live", locale: null });
+    }
+    const draft = s.pageDrafts.get(id);
+    if (draft !== undefined) {
+      const value = await from(draft[request.field] ?? null, {
+        form: "draft",
+        locale: null,
+      });
+      if (value !== draft[request.field]) {
+        s.pageDrafts.set(id, { ...draft, [request.field]: value });
+        copies.push({ form: "draft", locale: null });
+      }
+    }
+    return { version: "8", copies };
+  };
+}
+
 function deps(
   s: Site,
   store = memoryStore()
@@ -345,6 +414,7 @@ function deps(
     person: { userId: "author", as: PERSON as never },
     // The author holds the removal's grants unless a test says otherwise.
     mayRemove: async () => true,
+    rewrite: rewriteOver(s),
     warn: message => warned.push(message),
     warned,
     now: () => new Date(),
@@ -1443,6 +1513,7 @@ describe("Move pages, then remove", () => {
     s.layouts.set("main", { id: "main", title: "Main", status: "published" });
     s.defaultLayout = "main";
     s.pageWrites = [];
+    s.rewrites = [];
     for (let i = 0; i < count; i += 1) {
       s.pages.push({
         id: `u${String(i).padStart(3, "0")}`,
@@ -1511,51 +1582,165 @@ describe("Move pages, then remove", () => {
     });
   });
 
-  it("moves every unpublished page and working draft, in bounded ticks, as the person, then deletes the Layout", async () => {
+  it("moves every page, live copies and drafts alike, in bounded ticks, through the rewrite, then deletes the Layout", async () => {
     const s = movingSite(60);
     s.pages.push(
       { id: "live", title: "Live", status: "published", layout: "landing" },
       { id: "edited", title: "Edited", status: "published", layout: "landing" }
     );
-    s.pageDrafts.set("edited", { id: "edited", layout: "landing" });
+    s.pageDrafts.set("edited", {
+      id: "edited",
+      title: "Unfinished",
+      layout: "landing",
+    });
     const d = deps(s);
 
     const ticks = await run(d);
 
-    expect(ticks.at(-1)?.state).toBe("done");
+    expect(ticks.at(-1)).toEqual({ state: "done", moved: expect.any(Number) });
     // Each tick answers what it moved; the dialog adds them up.
-    expect(ticks.reduce((sum, progress) => sum + progress.moved, 0)).toBe(61);
-    // No tick moved more than its bound, so the 61 took three of them.
+    expect(ticks.reduce((sum, progress) => sum + progress.moved, 0)).toBe(62);
+    // No tick moved more than its bound, so the 62 took three of them.
     expect(Math.max(...ticks.map(progress => progress.moved))).toBe(
       PAGES_PER_TICK
     );
     expect(ticks).toHaveLength(3);
     expect(s.layouts.has("landing")).toBe(false);
-    const unpublished = s.pages.filter(page => page.id.startsWith("u"));
-    expect(unpublished.map(page => page.layout)).toEqual(
-      unpublished.map(() => null)
-    );
-    // The working draft moved; both live rows still name the Layout, and
-    // draw the site default now that it is gone.
-    expect(s.pageDrafts.get("edited")).toMatchObject({ layout: null });
-    const live = s.pages.filter(page => page.status === "published");
-    expect(live.map(page => [page.id, page.layout])).toEqual([
-      ["live", "landing"],
-      ["edited", "landing"],
-    ]);
-    // Every page write was the person's own, their access enforced.
-    expect(s.pageWrites).toEqual(
-      Array.from({ length: 61 }, () =>
-        expect.objectContaining({ overrideAccess: false, user: PERSON.user })
-      )
-    );
+    // Every page is off the Layout: each unpublished row, both live copies,
+    // and the working draft, which is still a draft holding its own edit.
+    expect(s.pages.map(page => page.layout)).toEqual(s.pages.map(() => null));
+    expect(s.pageDrafts.get("edited")).toEqual({
+      id: "edited",
+      title: "Unfinished",
+      layout: null,
+    });
+    expect(s.pages.find(page => page.id === "edited")).toMatchObject({
+      status: "published",
+    });
+    // One rewrite of `layout` per page, from the version read, with the
+    // reason the page's history keeps; no page was saved.
+    expect(s.rewrites).toHaveLength(62);
+    expect(s.rewrites?.[0]).toMatchObject({
+      collection: "pages",
+      field: "layout",
+      expectedVersion: "7",
+      reason:
+        'Layout "Landing" is being deleted, so this page was moved to the site default.',
+    });
+    expect(s.pageWrites).toEqual([]);
     expect(d.store.rows.get("landing")).toMatchObject({
       step: "removed",
       pagesLeft: 0,
     });
   });
 
-  it("unpublishes the Layout after moving, a page's live row naming it notwithstanding", async () => {
+  it("keeps a copy that names another Layout", async () => {
+    const s = movingSite(0);
+    s.pages.push({
+      id: "edited",
+      title: "Edited",
+      status: "published",
+      layout: "landing",
+    });
+    s.pageDrafts.set("edited", { id: "edited", layout: "main" });
+    const d = deps(s);
+
+    const ticks = await run(d);
+
+    expect(ticks.at(-1)).toEqual({ state: "done", moved: 1 });
+    expect(s.pages[0]?.layout).toBeNull();
+    expect(s.pageDrafts.get("edited")?.layout).toBe("main");
+  });
+
+  it("moves the draft of a page the person may not publish, leaves its live copy, finishes, and names it", async () => {
+    const s = movingSite(1);
+    s.pages.push(
+      { id: "edited", title: "Edited", status: "published", layout: "landing" },
+      { id: "live", title: "Live", status: "published", layout: "landing" },
+      { id: "theirs", title: "Theirs", status: "published", layout: "landing" }
+    );
+    s.pageDrafts.set("edited", { id: "edited", layout: "landing" });
+    // The person may publish "theirs", and only edit the other two.
+    s.mayNotPublish = new Set(["edited", "live"]);
+    const d = deps(s);
+
+    const ticks = await run(d);
+
+    // The draft moved as a save of it, as the person; both live copies were
+    // left, and the removal finished all the same.
+    expect(s.pageDrafts.get("edited")).toMatchObject({ layout: null });
+    expect(
+      s.pages
+        .filter(page => page.status === "published")
+        .map(page => [page.id, page.layout])
+    ).toEqual([
+      ["edited", "landing"],
+      ["live", "landing"],
+      ["theirs", null],
+    ]);
+    expect(s.pageWrites).toEqual([
+      expect.objectContaining({
+        id: "edited",
+        overrideAccess: false,
+        user: PERSON.user,
+        data: expect.objectContaining({ layout: null }),
+      }),
+    ]);
+    expect(s.layouts.has("landing")).toBe(false);
+    // The pages whose live copy still names it, by the titles the person
+    // reads, for someone who may publish them.
+    expect(ticks.at(-1)).toEqual({
+      state: "done",
+      moved: 3,
+      liveLeft: {
+        pages: [
+          { id: "edited", title: "Edited" },
+          { id: "live", title: "Live" },
+        ],
+        unreadable: 0,
+      },
+    });
+  });
+
+  it("reads a page again when it was saved since its read, and moves it", async () => {
+    const s = movingSite(2);
+    s.savedSinceRead = new Map([["u001", 2]]);
+    const d = deps(s);
+
+    const ticks = await run(d);
+
+    expect(ticks.at(-1)).toEqual({ state: "done", moved: 2 });
+    expect(layoutOf(s, "u001")).toBeNull();
+    // Two refused from a read the page had moved on from, the third applied.
+    expect(s.rewrites?.filter(request => request.id === "u001")).toHaveLength(
+      3
+    );
+  });
+
+  it("stops reading a page that keeps being saved, names it with why, and keeps the Layout", async () => {
+    const s = movingSite(2);
+    s.savedSinceRead = new Map([["u001", 10]]);
+    const d = deps(s);
+
+    const ticks = await run(d);
+
+    expect(ticks.at(-1)).toEqual({
+      state: "refused",
+      moved: 1,
+      pages: [{ id: "u001", title: "Page 1", reason: PAGE_KEPT_CHANGING }],
+      unreadable: 0,
+      complete: true,
+    });
+    // A bounded number of reads, then the page is reported.
+    expect(s.rewrites?.filter(request => request.id === "u001")).toHaveLength(
+      3
+    );
+    expect(layoutOf(s, "u001")).toBe("landing");
+    expect(s.layouts.has("landing")).toBe(true);
+    expect(d.store.rows.size).toBe(0);
+  });
+
+  it("unpublishes the Layout after moving, a live copy the person may not publish notwithstanding", async () => {
     const s = movingSite(2);
     s.pages.push({
       id: "live",
@@ -1563,11 +1748,16 @@ describe("Move pages, then remove", () => {
       status: "published",
       layout: "landing",
     });
+    s.mayNotPublish = new Set(["live"]);
     const d = deps(s);
 
     const ticks = await run(d, "unpublish");
 
-    expect(ticks.at(-1)).toEqual({ state: "done", moved: 2 });
+    expect(ticks.at(-1)).toEqual({
+      state: "done",
+      moved: 2,
+      liveLeft: { pages: [{ id: "live", title: "Live" }], unreadable: 0 },
+    });
     expect(s.layouts.get("landing")?.status).toBe("draft");
     expect(d.store.rows.get("landing")).toMatchObject({
       step: "removed",
