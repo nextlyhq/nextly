@@ -359,8 +359,9 @@ export interface PluginAdminPage {
 }
 
 /**
- * @experimental One read a plugin page makes as it opens: a route of the
- * plugin's own, named as `usePluginRoute` names it.
+ * @experimental One read a plugin page, or a component a plugin adds to an
+ * admin place, makes as it opens: a route of the plugin's own, named as
+ * `usePluginRoute` names it.
  */
 export interface PluginPageStartupRead {
   /** The route's path within the plugin's namespace, starting with `/`. */
@@ -610,6 +611,28 @@ interface AdminContributionBase {
    * Single's when absent.
    */
   singles?: string[];
+  /**
+   * @experimental The reads of the plugin's own routes the component makes
+   * as it opens, each named as its `usePluginRoute` names it (`path`, and
+   * `mount` for a root route), as a plugin page's `startupReads` are. A path
+   * may name the place's ids in braces, which the page fills in from its
+   * address, each one URI-component encoded:
+   * `/templates/entry-designs?collection={collection}&entry={entryId}` at
+   * `collection.edit`. The ids are those of `AdminPlaces[place]["context"]`
+   * other than `userId`. Taken at `collection.edit`, `single.edit` and
+   * `entry.form` only, whose pages start them; boot refuses them elsewhere.
+   *
+   * The page starts them as it first renders, beside its own reads, rather
+   * than after the component has mounted, and the component's first read
+   * takes the started one instead of asking again. An edit page shows its
+   * editor once they have answered, for a short while at most, so a section
+   * drawn from them stands in its place from the first frame. A read naming
+   * an id the page does not have (a new entry has no `entryId`) is not
+   * started. Name only quick reads; at most four, and boot refuses more, a
+   * path the startup request could not carry, or an id the place does not
+   * have.
+   */
+  startupReads?: readonly PluginPageStartupRead[];
   /**
    * @experimental On a collection's list or edit page or a Single's edit
    * page: offered only on the content types where this plugin's

@@ -8,9 +8,11 @@
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 
 import { isRecord } from "../plain-values";
+import { SEO_SETTINGS_SLUG } from "../settings/contract";
 
 import { forgetDeleted, recheckSaved, type ProblemChecks } from "./check";
 import { singleKey } from "./page-types";
+import { markOutOfDate } from "./store";
 
 /** What a hook the checks are started from is handed, as far as they read it. */
 export interface SavedContext {
@@ -67,6 +69,21 @@ export function watchSaves(ctx: PluginContext, checks: ProblemChecks): void {
       onceDurable(context, () => recheckSaved(ctx, checks, key, id));
     }
   };
+  // A save of the SEO settings can change many pages' results at once, such
+  // as an own robots.txt rule that comes to block pages the sitemap lists:
+  // the full check is marked out of date, so the list says so and the next
+  // full check finds them.
+  const settings = ctx.self.singles[SEO_SETTINGS_SLUG] ?? SEO_SETTINGS_SLUG;
+  ctx.hooks.on("afterUpdate", singleKey(settings), (context: SavedContext) => {
+    onceDurable(context, () => {
+      void markOutOfDate(ctx).catch((error: unknown) => {
+        ctx.logger.error(
+          "The SEO plugin could not mark the problem list out of date",
+          { error }
+        );
+      });
+    });
+  });
   // A Single is never created or deleted by a person: its save is an
   // update, its hooks named by its key.
   ctx.hooks.on("afterCreate", "*", saved);
