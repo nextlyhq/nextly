@@ -21,7 +21,7 @@ import type { SQL } from "drizzle-orm";
 import type { SupportedDialect } from "../../../database/schema-registry";
 
 /** What `pg_stat_activity` names the watch's own connection, so an operator can tell what it is. */
-export const WATCH_APPLICATION_NAME = "nextly busy-table watch";
+const WATCH_APPLICATION_NAME = "nextly busy-table watch";
 
 /** The default pool sizes of node-postgres and mysql2, used where a pool does not state one. */
 const PG_DEFAULT_POOL_MAX = 10;
