@@ -1405,11 +1405,11 @@ function resolveRelations(
  * composite key carries none and a declared relation is the way to query
  * through it. None either where a declared relation or a `ref()` column's
  * edge already joins that column to that table, or already holds the name:
- * the author's own edge wins, as it does over a `ref()` column's. The
- * target's `id` is left implied, as a `ref()` column's is; any other target
- * column is named. Derived by the compiler (`relationsOf`), once the keys'
- * targets are checked, rather than by `defineTable`: whether an edge to a
- * column other than `id` can be checked depends on what the target is.
+ * the author's own edge wins, as it does over a `ref()` column's. Each edge
+ * names the referenced column. Derived by the compiler (`relationsOf`),
+ * once the keys' targets are checked, rather than by `defineTable`: which
+ * edges the registry can resolve depends on what the target is
+ * (`keyRelationsOf`).
  */
 export function foreignKeyRelations(
   foreignKeys: readonly DeclaredForeignKey[],
@@ -1444,7 +1444,7 @@ export function foreignKeyRelations(
       kind: "one",
       targetTable: fk.referencesTable,
       fromColumn,
-      ...(toColumn !== "id" ? { toColumn } : {}),
+      toColumn,
     });
   }
   return edges;

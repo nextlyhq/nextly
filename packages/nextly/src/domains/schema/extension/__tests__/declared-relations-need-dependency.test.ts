@@ -20,6 +20,7 @@ import { loadDialectTables } from "../../../../database/dialect-tables";
 import { staticRelationTables } from "../../../../database/schema-registry";
 import { NextlyError } from "../../../../errors/nextly-error";
 import { buildExtensionSchema } from "../build-extension-schema";
+import { toDrizzleTable } from "../compile";
 import { col, defineTable, type TableDefinition } from "../dsl";
 
 beforeAll(async () => {
@@ -282,6 +283,90 @@ describe("a table's own foreign key", () => {
     );
     const built = await compile([table]);
     expect(built.relations.get("rp__rows")).toBeUndefined();
+  });
+
+  it("carries none to a table the registry will not hold", async () => {
+    // A table outside Nextly: the key is the database's to judge, and an edge
+    // to it would fail the boot's check that every relation resolves.
+    const table = defineTable(
+      "rows",
+      { id: col.id(), accountId: col.shortText() },
+      {
+        foreignKeys: [
+          {
+            columns: ["accountId"],
+            references: { table: "legacy_accounts", columns: ["id"] },
+          },
+        ],
+      }
+    );
+    const built = await compile([table]);
+    expect(built.relations.get("rp__rows")).toBeUndefined();
+    expect(
+      built.specs.find(spec => spec.name === "rp__rows")?.foreignKeys
+    ).toHaveLength(1);
+  });
+
+  it("follows a target an afterDrizzle hook re-keyed, by the column it names", async () => {
+    const customers = defineTable("app_customers", { id: col.id() });
+    const orders = defineTable(
+      "app_orders",
+      { id: col.id(), customerId: col.shortText() },
+      {
+        foreignKeys: [
+          {
+            columns: ["customerId"],
+            references: { table: "app_customers", columns: ["id"] },
+          },
+        ],
+      }
+    );
+    const build = (
+      afterDrizzle: Parameters<typeof buildExtensionSchema>[0]["afterDrizzle"]
+    ) =>
+      buildExtensionSchema({
+        dialect: "postgresql",
+        coreTableNames: [],
+        entities: [],
+        pluginPrefixes: new Map(),
+        plugins: [],
+        app: {
+          owner: { kind: "app" },
+          extend: [
+            ({ schema }) => {
+              schema.addTable(customers);
+              schema.addTable(orders);
+            },
+          ],
+        },
+        afterDrizzle,
+      });
+    const declared = (await build([])).tables.find(
+      t => t.name === "app_customers"
+    )!;
+    // The same SQL column, held under another property.
+    const built = await build([
+      () => ({
+        app_customers: toDrizzleTable(
+          {
+            ...declared,
+            columns: declared.columns.map(c =>
+              c.name === "id" ? { ...c, key: "pk" } : c
+            ),
+          },
+          "postgresql"
+        ),
+      }),
+    ]);
+    expect(built.relations.get("app_orders")).toEqual([
+      {
+        key: "customer",
+        kind: "one",
+        fromColumn: "customerId",
+        targetTable: "app_customers",
+        toColumn: "pk",
+      },
+    ]);
   });
 
   it("carries none to a column other than id on a collection, which the compile cannot check", async () => {

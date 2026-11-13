@@ -229,11 +229,12 @@ function fingerprintOf(
 function relationEdgesOf(
   table: ExtensionTable,
   byName: ReadonlyMap<string, ExtensionTable>,
-  coreTables: Readonly<Record<string, unknown>>
+  coreTables: Readonly<Record<string, unknown>>,
+  entityTables: ReadonlySet<string> = new Set()
 ): DynamicRelationEdge[] {
   return [
     ...(table.relations ?? []),
-    ...keyRelationsOf(table, byName, coreTables),
+    ...keyRelationsOf(table, byName, coreTables, entityTables),
   ].map((rel, position) => {
     const path = `${table.name}.relations[${String(position)}]`;
     if (rel.fromColumn === undefined) {
@@ -271,30 +272,46 @@ function relationEdgesOf(
  *
  * Its own keys only: a key another owner added to this table is that
  * owner's, and an edge for it would take a name on a table the contributor
- * does not own. A key to a column other than `id` on a table whose columns
- * this compile does not know (a collection's, a Single's) carries none, since
- * the edge could not be checked and would fail the first query; the key
- * itself is still the database's to judge, as any such key is.
+ * does not own. And only to a table the registry will hold, since an edge to
+ * any other fails the boot's check that every relation resolves, where the
+ * key itself is the database's to judge:
+ *
+ * - a table this compile declares or adopts, or a core table, with the
+ *   referenced column named, so it is checked and carried through an
+ *   `afterDrizzle` hook's re-keying like a declared `toColumn`;
+ * - a seeded collection's, Single's or field group's table, by its `id`
+ *   only and left implied, as a `ref()` column's is: the compile does not
+ *   know such a table's other columns, and no hook may reshape it.
+ *
+ * A key to anything else (a table outside Nextly, or a Builder-made
+ * collection's) carries none.
  */
 function keyRelationsOf(
   table: ExtensionTable,
   byName: ReadonlyMap<string, ExtensionTable>,
-  coreTables: Readonly<Record<string, unknown>>
+  coreTables: Readonly<Record<string, unknown>>,
+  entityTables: ReadonlySet<string>
 ): TableRelationInput[] {
   const own = (table.foreignKeys ?? []).filter(
     fk => fk.contributedBy === undefined
   );
-  return foreignKeyRelations(own, table.columns, table.relations ?? [])
-    .map(rel => ({
-      ...rel,
-      targetTable: relationTargetKey(rel.targetTable, byName, coreTables),
-    }))
-    .filter(
-      rel =>
-        rel.toColumn === undefined ||
-        byName.has(rel.targetTable) ||
-        isTable(coreTables[rel.targetTable])
-    );
+  return foreignKeyRelations(own, table.columns, table.relations ?? []).flatMap(
+    (rel): TableRelationInput[] => {
+      const targetTable = relationTargetKey(
+        rel.targetTable,
+        byName,
+        coreTables
+      );
+      if (byName.has(targetTable) || isTable(coreTables[targetTable])) {
+        return [{ ...rel, targetTable }];
+      }
+      if (entityTables.has(targetTable) && rel.toColumn === "id") {
+        const { toColumn: _implied, ...edge } = rel;
+        return [{ ...edge, targetTable }];
+      }
+      return [];
+    }
+  );
 }
 
 /**
@@ -501,11 +518,12 @@ function collectElementOwners(
 function relationsOf(
   tables: readonly ExtensionTable[],
   byName: ReadonlyMap<string, ExtensionTable>,
-  coreTables: Readonly<Record<string, unknown>>
+  coreTables: Readonly<Record<string, unknown>>,
+  entityTables: ReadonlySet<string>
 ): Map<string, DynamicRelationEdge[]> {
   const relations = new Map<string, DynamicRelationEdge[]>();
   for (const table of tables) {
-    const edges = relationEdgesOf(table, byName, coreTables);
+    const edges = relationEdgesOf(table, byName, coreTables, entityTables);
     if (edges.length > 0) relations.set(table.name, edges);
   }
   return relations;
@@ -956,7 +974,12 @@ export async function buildExtensionSchema(
   // After the keys' targets are judged: a key's own edge names its target
   // column, and a key to a column its target lacks is refused as a key, by
   // the check above, rather than as the edge it carries.
-  const relations = relationsOf(tables, byName, coreTables);
+  const relations = relationsOf(
+    tables,
+    byName,
+    coreTables,
+    new Set(input.entities.map(entity => entity.name))
+  );
   // Each table whole, its own columns and every one a hook added, so a row
   // only MySQL cannot hold is refused on every dialect alike.
   for (const table of tables) assertMysqlRowFits(table);
