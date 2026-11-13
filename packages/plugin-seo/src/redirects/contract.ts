@@ -1,11 +1,12 @@
 /**
  * What the redirects screen and the routes behind it agree on: where the
  * screen is, the routes it reads and writes, and the shapes they answer
- * with. It imports nothing, so the admin's client bundle reads it without
- * bringing any server code along.
+ * with. It imports only the settings' contract, which imports nothing, so
+ * the admin's client bundle reads it without bringing any server code along.
  *
  * @module redirects/contract
  */
+import { SEO_ADMIN_SLUG } from "../settings/contract";
 
 /** The redirects screen: its path under the plugin, and its component. */
 export const REDIRECTS_PAGE: {
@@ -15,6 +16,22 @@ export const REDIRECTS_PAGE: {
   path: "redirects",
   component: "@nextlyhq/plugin-seo/admin#SeoRedirectsPage",
 };
+
+/** Where the redirects screen is, for a link: the menu's and every screen's. */
+export const REDIRECTS_PAGE_HREF: string = `/admin/plugins/${SEO_ADMIN_SLUG}/${REDIRECTS_PAGE.path}`;
+
+/** Where the screen's Not found tab is. */
+export const NOT_FOUND_TAB_HREF: string = `${REDIRECTS_PAGE_HREF}?tab=notfound`;
+
+/**
+ * Where a new redirect from `from` is added: the screen opens its form with
+ * From filled in, and To where `to` names one.
+ */
+export function newRedirectHref(from: string, to?: string | null): string {
+  const query = new URLSearchParams({ from });
+  if (to !== undefined && to !== null) query.set("to", to);
+  return `${REDIRECTS_PAGE_HREF}?${query.toString()}`;
+}
 
 /** The routes the screen reads and writes, under the plugin's routes. */
 export const REDIRECT_ROUTES: {
