@@ -135,6 +135,14 @@ export interface PopulateCompanionArgs {
    */
   statusValues?: readonly string[];
   /**
+   * The documents a due release has made public that this read admits (the
+   * release decisions' `reveal`). A release publishes each language's row as
+   * it stands, so a revealed document's rows are read whatever their status,
+   * as the release will publish them. Left out, a document the read admits
+   * shows no translated value until the release is applied.
+   */
+  revealed?: ReadonlySet<unknown>;
+  /**
    * Also attach, on each row, the language each translatable value came from
    * (`_sources`, {@link SOURCE_LOCALES_KEY}): `null` for a value no language
    * holds.
@@ -233,6 +241,7 @@ export async function populateCompanionFieldsByLanguage(
     fillCompanionFields({
       localizedFields,
       statusValues: args.statusValues,
+      revealed: args.revealed,
       idKey: args.idKey,
       rows: language.rows,
       localeChain: language.localeChain,
@@ -479,6 +488,8 @@ export function fillCompanionFields(args: {
   localizedFields: LocalizedFieldRef[];
   localeChain: string[];
   statusValues?: readonly string[];
+  /** See `revealed` on {@link PopulateCompanionArgs}. */
+  revealed?: ReadonlySet<unknown>;
   idKey?: string;
   /** Also attach each value's source language (`PopulateCompanionArgs.sources`). */
   sources?: boolean;
@@ -486,7 +497,8 @@ export function fillCompanionFields(args: {
   const idKey = args.idKey ?? "id";
   const byParent = indexCompanionRowsByParent(
     args.companionRows,
-    args.statusValues
+    args.statusValues,
+    args.revealed
   );
 
   // A unique field is read in the requested language alone (`LocalizedFieldRef.unique`).
@@ -674,6 +686,8 @@ export interface PopulateCompanionAllArgs {
    * draft translation. Undefined = no filter (admin / no per-locale status).
    */
   statusValues?: readonly string[];
+  /** See `revealed` on {@link PopulateCompanionArgs}. */
+  revealed?: ReadonlySet<unknown>;
   /** See `readiness` on {@link PopulateCompanionArgs}. */
   readiness: CompanionReadiness | undefined;
   /** See {@link CompanionReadBudget.maxParams}. */
@@ -711,7 +725,11 @@ export async function populateCompanionFieldsAllLocales(
   });
   if (companionRows === undefined) return;
 
-  const byParent = indexCompanionRowsByParent(companionRows, args.statusValues);
+  const byParent = indexCompanionRowsByParent(
+    companionRows,
+    args.statusValues,
+    args.revealed
+  );
 
   for (const row of rows) {
     const perLocaleRows = byParent.get(row[idKey]) ?? {};
@@ -1358,13 +1376,16 @@ export async function populateTranslationStatus(
  */
 function indexCompanionRowsByParent(
   companionRows: readonly Record<string, unknown>[],
-  statusValues: readonly string[] | undefined
+  statusValues: readonly string[] | undefined,
+  /** Parents a due release reveals: their rows are taken whatever their status. */
+  revealed?: ReadonlySet<unknown>
 ): Map<unknown, Record<string, Record<string, unknown>>> {
   const byParent = new Map<unknown, Record<string, Record<string, unknown>>>();
   for (const cr of companionRows) {
     if (
       statusValues !== undefined &&
-      !statusValues.includes(cr._status as string)
+      !statusValues.includes(cr._status as string) &&
+      revealed?.has(cr._parent) !== true
     ) {
       continue;
     }

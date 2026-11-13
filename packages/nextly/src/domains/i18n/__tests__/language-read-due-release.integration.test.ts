@@ -130,6 +130,36 @@ describe.each(getConfiguredTestDialects())(
       expect(await inSpanish(t, id)).toEqual({ found: true, listed: [id] });
     }, 90_000);
 
+    // A due release publishes each language's row as it stands, so the read
+    // it admits shows those values, in its own language, beside it and in a
+    // list, not the nothing a published-only filter leaves.
+    it("shows the translated values a due release publishes", async () => {
+      const t = await boot(dialect);
+      const id = await draftInRelease(t, PAST);
+      const handler = handlerOf(t);
+      const one = await handler.getEntry({
+        collectionName: SLUG,
+        entryId: id,
+        locale: "es",
+        translations: "all",
+      });
+      expect(one.success, JSON.stringify(one)).toBe(true);
+      const read = one.data as Record<string, unknown>;
+      expect(read.title).toBe("Puerto");
+      expect(read._allLocales).toMatchObject({
+        title: { en: "Harbour", es: "Puerto" },
+      });
+      const list = await handler.listEntries({
+        collectionName: SLUG,
+        locale: "es",
+        limit: 50,
+      });
+      const titles = ((list.data?.docs ?? []) as { title?: unknown }[]).map(
+        row => row.title
+      );
+      expect(titles).toEqual(["Puerto"]);
+    }, 90_000);
+
     // The control: a release not yet due reveals nothing, so the draft is not
     // found in Spanish.
     it("does not find it before the release is due", async () => {

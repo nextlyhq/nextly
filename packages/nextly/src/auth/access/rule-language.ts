@@ -76,13 +76,19 @@ function oneLanguage(
  * (`translationStatus`) reads every language's state, and a language filter
  * (`_translated` in `where`) picks its rows by another language's. Every
  * language rather than the one a filter names, so the filter is read in one
- * place only, by the query that applies it.
+ * place only, by the query that applies it. A read that carries every
+ * language's values beside its own (`translations: "all"`) is told every
+ * language too: each one's content is in its answer.
  */
 export function readLanguagesFor(
   cfg: SanitizedLocalizationConfig | undefined,
   requested: string | undefined,
   fallbackLocale?: string | false,
-  asked: { translationStatus?: boolean; where?: unknown } = {}
+  asked: {
+    translationStatus?: boolean;
+    where?: unknown;
+    translations?: "all";
+  } = {}
 ): RuleLanguage {
   if (!cfg) return NO_LANGUAGE;
   if (requested === EVERY_TRANSLATION) return everyLanguageOf(cfg);
@@ -93,6 +99,7 @@ export function readLanguagesFor(
       : { locale: chain[0], locales: chain };
   const readsStates =
     asked.translationStatus === true ||
+    asked.translations === "all" ||
     (isPlainObject(asked.where) && TRANSLATED_KEY in asked.where);
   return readsStates
     ? { locale: read.locale, locales: everyLanguageOf(cfg).locales }

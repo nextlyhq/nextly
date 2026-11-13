@@ -329,6 +329,7 @@ export class CollectionEntryService extends BaseService {
     fallbackLocale?: string | false;
     translationStatus?: boolean;
     where?: unknown;
+    translations?: "all";
   }) {
     return readLanguagesFor(
       this.localization,

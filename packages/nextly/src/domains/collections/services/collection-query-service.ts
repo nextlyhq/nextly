@@ -1280,7 +1280,9 @@ export class CollectionQueryService extends BaseService {
     rows: Record<string, unknown>[],
     translations: "all" | undefined,
     preloaded?: CompanionSchema | null,
-    statusFilterValues?: readonly string[] | null
+    statusFilterValues?: readonly string[] | null,
+    /** The documents a due release reveals (`PopulateCompanionArgs.revealed`). */
+    revealed?: ReadonlySet<unknown>
   ): Promise<void> {
     if (!this.localization || translations !== "all" || rows.length === 0)
       return;
@@ -1304,6 +1306,7 @@ export class CollectionQueryService extends BaseService {
         companion.hasStatus && statusFilterValues
           ? statusFilterValues
           : undefined,
+      revealed,
     });
     for (const [index, row] of rows.entries()) {
       const values: Record<string, unknown> = everyLanguage[index] ?? {};
@@ -1792,7 +1795,9 @@ export class CollectionQueryService extends BaseService {
      */
     withRevisions = false,
     /** Also attach each value's source language (`_sources`). */
-    sources = false
+    sources = false,
+    /** The documents a due release reveals (`PopulateCompanionArgs.revealed`). */
+    revealed?: ReadonlySet<unknown>
   ): Promise<Record<string, unknown>[] | undefined> {
     if (!localeChain || rows.length === 0) return undefined;
     const companion =
@@ -1811,6 +1816,7 @@ export class CollectionQueryService extends BaseService {
           : undefined,
       withRevisions,
       sources,
+      revealed,
     });
   }
 
@@ -3049,12 +3055,15 @@ export class CollectionQueryService extends BaseService {
         this.accessService.fieldRuleVisitor
       ),
     };
-    for (const row of finalData) {
+    // One row's field pipeline, for the row and for each language's values
+    // beside it alike, so a language's value is withheld or reshaped exactly
+    // as the row's own would be.
+    const finishFields = async (entry: Record<string, unknown>) => {
       const sourceRedactions: ReadAccessRedactions = new WeakMap();
       const target = {
         kind: "collection" as const,
         slug: collectionName,
-        entry: row,
+        entry,
         user: params.fieldAccessUser ?? params.user,
         overrideAccess: skipFieldRules,
         grants: fieldGroupCaller.grants,
@@ -3070,48 +3079,35 @@ export class CollectionQueryService extends BaseService {
         ...fieldGroupCaller,
         redactions: fieldGroupRedactions,
       };
-      await fieldGroupPass?.(row, rowFieldGroupCaller);
+      await fieldGroupPass?.(entry, rowFieldGroupCaller);
       if (!params.hooksWaived) {
         await runFieldHooks({
           kind: "collection",
           slug: collectionName,
           phase: "afterRead",
-          data: row,
+          data: entry,
           operation: "read",
           user: params.user,
         });
       }
       // Judged against the stored field groups, not the instances the first
       // field-group pass cut: a collection rule may read a value inside one.
-      await withFieldGroupEvidence(row, fieldGroupRedactions, () =>
+      await withFieldGroupEvidence(entry, fieldGroupRedactions, () =>
         applyFieldReadAccess(target, sourceRedactions)
       );
-      await fieldGroupPass?.(row, rowFieldGroupCaller);
-    }
-
-    // Every language's values beside a row go through the same field rules,
-    // asked in that language, as the row itself did: a rule answering by
-    // value or by language withholds each language's value as it would the
-    // row's.
-    if (!skipFieldRules) {
-      for (const row of finalData) {
-        await judgeEachLanguage(row, (inLanguage, locale) =>
-          withRuleLanguage({ locale, locales: [locale] }, async () => {
-            await applyFieldReadAccess({
-              kind: "collection",
-              slug: collectionName,
-              entry: inLanguage,
-              user: params.fieldAccessUser ?? params.user,
-              overrideAccess: false,
-              grants: fieldGroupCaller.grants,
-            });
-            await fieldGroupPass?.(inLanguage, {
-              ...fieldGroupCaller,
-              redactions: new WeakMap(),
-            });
-          })
-        );
-      }
+      await fieldGroupPass?.(entry, rowFieldGroupCaller);
+    };
+    for (const row of finalData) {
+      await finishFields(row);
+      // Every language's values beside the row go through the same pipeline,
+      // asked in that language: a rule answering by value or by language,
+      // and a field hook that masks a value, act on each language's value as
+      // they act on the row's.
+      await judgeEachLanguage(row, (inLanguage, locale) =>
+        withRuleLanguage({ locale, locales: [locale] }, () =>
+          finishFields(inLanguage)
+        )
+      );
     }
 
     // Authoritative related-row sanitization over the assembled response, after
@@ -4024,6 +4020,18 @@ export class CollectionQueryService extends BaseService {
       // Resolve localized fields for the whole page from the companion table
       // (batch — one query for all rows), with fallback, BEFORE relationship/component
       // expansion and hooks. Reuses the companion loaded above. No-op when non-localized.
+      // The documents a due release reveals, as the read's bound admitted
+      // them at this read's instant: their translations are read as the
+      // release will publish them.
+      const revealed = new Set<unknown>(
+        (
+          await this.releaseDecisions(
+            params.collectionName,
+            statusFilter,
+            readNow
+          )
+        ).reveal
+      );
       const translationRows = await this.overlayLocalized(
         params.collectionName,
         "translation-load-failed",
@@ -4035,7 +4043,8 @@ export class CollectionQueryService extends BaseService {
             companion,
             statusFilter?.values ?? null, // the per-locale published filter
             countersWithContent,
-            params.sourceLocales === true
+            params.sourceLocales === true,
+            revealed
           )
       );
       const joinedRevisions =
@@ -4059,7 +4068,8 @@ export class CollectionQueryService extends BaseService {
             entries,
             params.translations,
             companion,
-            statusFilter?.values ?? null // the per-locale published filter
+            statusFilter?.values ?? null, // the per-locale published filter
+            revealed
           )
       );
       // A per-locale translation-status map for the admin overview (opt-in).
@@ -5443,6 +5453,7 @@ export class CollectionQueryService extends BaseService {
               companion.hasStatus && statusFilter?.values
                 ? statusFilter.values
                 : undefined,
+            revealed: new Set<unknown>(decisions.reveal),
             sources: params.sourceLocales === true,
           });
         }
@@ -5488,7 +5499,8 @@ export class CollectionQueryService extends BaseService {
               companion,
               statusFilter?.values ?? null, // the per-locale published filter
               false,
-              params.sourceLocales === true
+              params.sourceLocales === true,
+              new Set<unknown>(decisions.reveal)
             )
         );
       }
@@ -5502,7 +5514,8 @@ export class CollectionQueryService extends BaseService {
             [entry],
             params.translations,
             companion,
-            statusFilter?.values ?? null // the per-locale published filter
+            statusFilter?.values ?? null, // the per-locale published filter
+            new Set<unknown>(decisions.reveal)
           )
       );
       // A per-locale translation-status map for the admin per-language pills (opt-in).

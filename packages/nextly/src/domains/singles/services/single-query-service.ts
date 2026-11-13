@@ -1010,6 +1010,8 @@ export class SingleQueryService extends BaseService {
     enforceRelatedFieldAccess: boolean;
     /** The document's translations, when they were read with it. */
     translations?: JoinedTranslations;
+    /** The documents a due release reveals (`PopulateCompanionArgs.revealed`). */
+    revealed?: ReadonlySet<unknown>;
   }): Promise<SingleDocument> {
     const {
       slug,
@@ -1034,7 +1036,8 @@ export class SingleQueryService extends BaseService {
         options.fallbackLocale,
         statusFilterValues,
         params.translations,
-        options.sourceLocales === true
+        options.sourceLocales === true,
+        params.revealed
       );
       // `translations: "all"`: every language's values beside the read's own,
       // read as stored, so the decoding below reaches them with the row's.
@@ -1043,7 +1046,8 @@ export class SingleQueryService extends BaseService {
           slug,
           singleMeta,
           doc,
-          statusFilterValues
+          statusFilterValues,
+          params.revealed
         );
       }
     } catch (error) {
@@ -1183,51 +1187,52 @@ export class SingleQueryService extends BaseService {
     const fieldGroupPass = skipFieldRules
       ? undefined
       : await liveFieldGroupReadPass(fields, this.fieldGroupDataService);
-    const sourceRedactions: ReadAccessRedactions = new WeakMap();
-    // The field groups' own store, so the Single's second pass can be shown
-    // what their first pass removed; see `withFieldGroupEvidence`.
-    const fieldGroupRedactions: ReadAccessRedactions = new WeakMap();
-    const fieldGroupCaller = {
-      user: fieldAccessUser,
-      authenticatedScope: options.authenticatedScope,
-      grants: fieldAccess.grants,
-      redactions: fieldGroupRedactions,
-    };
-    await applyFieldReadAccess(fieldAccess, sourceRedactions);
-    await fieldGroupPass?.(doc, fieldGroupCaller);
+    // One document's field pipeline, for the document and for each
+    // language's values beside it alike, so a language's value is withheld
+    // or reshaped exactly as the document's own would be.
+    const finishFields = async (entry: Record<string, unknown>) => {
+      const target = { ...fieldAccess, entry };
+      const sourceRedactions: ReadAccessRedactions = new WeakMap();
+      // The field groups' own store, so the Single's second pass can be shown
+      // what their first pass removed; see `withFieldGroupEvidence`.
+      const fieldGroupRedactions: ReadAccessRedactions = new WeakMap();
+      const fieldGroupCaller = {
+        user: fieldAccessUser,
+        authenticatedScope: options.authenticatedScope,
+        grants: fieldAccess.grants,
+        redactions: fieldGroupRedactions,
+      };
+      await applyFieldReadAccess(target, sourceRedactions);
+      await fieldGroupPass?.(entry, fieldGroupCaller);
 
-    // The fields' own afterRead hooks are read hooks like the Single's, and
-    // waived with them for the plugin that declared it.
-    if (!readHooksWaived(options.hookExemptRead, slug)) {
-      await runFieldHooks({
-        kind: "single",
-        slug,
-        phase: "afterRead",
-        data: doc,
-        operation: "read",
-        user: options.user,
-      });
-    }
+      // The fields' own afterRead hooks are read hooks like the Single's, and
+      // waived with them for the plugin that declared it.
+      if (!readHooksWaived(options.hookExemptRead, slug)) {
+        await runFieldHooks({
+          kind: "single",
+          slug,
+          phase: "afterRead",
+          data: entry,
+          operation: "read",
+          user: options.user,
+        });
+      }
 
-    await withFieldGroupEvidence(doc, fieldGroupRedactions, () =>
-      applyFieldReadAccess(fieldAccess, sourceRedactions)
-    );
-    await fieldGroupPass?.(doc, fieldGroupCaller);
-    // Every language's values beside the document go through the same field
-    // rules, asked in that language, as the document itself did: a rule
-    // answering by value or by language withholds each language's value as
-    // it would the document's.
-    if (!skipFieldRules) {
-      await judgeEachLanguage(doc, (inLanguage, locale) =>
-        withRuleLanguage({ locale, locales: [locale] }, async () => {
-          await applyFieldReadAccess({ ...fieldAccess, entry: inLanguage });
-          await fieldGroupPass?.(inLanguage, {
-            ...fieldGroupCaller,
-            redactions: new WeakMap(),
-          });
-        })
+      await withFieldGroupEvidence(entry, fieldGroupRedactions, () =>
+        applyFieldReadAccess(target, sourceRedactions)
       );
-    }
+      await fieldGroupPass?.(entry, fieldGroupCaller);
+    };
+    await finishFields(doc);
+    // Every language's values beside the document go through the same
+    // pipeline, asked in that language: a rule answering by value or by
+    // language, and a field hook that masks a value, act on each language's
+    // value as they act on the document's.
+    await judgeEachLanguage(doc, (inLanguage, locale) =>
+      withRuleLanguage({ locale, locales: [locale] }, () =>
+        finishFields(inLanguage)
+      )
+    );
     // The side keys say only what the document says: a withheld field's
     // source language is withheld with it.
     narrowToRowFields(doc);
@@ -1419,6 +1424,10 @@ export class SingleQueryService extends BaseService {
         statusFilterValues: statusFilter ? statusFilter.values : undefined,
         enforceRelatedFieldAccess: true,
         translations,
+        // Read as a due release will publish them, as the read admitted it.
+        revealed: new Set<unknown>(
+          await this.revealedBy(slug, statusFilter, readNow)
+        ),
       });
 
       // On a trusted draft-view read, surface this Single's pending change in
@@ -1607,6 +1616,25 @@ export class SingleQueryService extends BaseService {
   }
 
   /**
+   * The Single ids a due release reveals to this read at `now`; none for a
+   * read of pending work, which a release has nothing to reveal to.
+   */
+  private async revealedBy(
+    slug: string,
+    statusFilter: StatusFilter | null | undefined,
+    now: Date
+  ): Promise<readonly string[]> {
+    if (!statusFilter?.isPublicRead) return [];
+    return (
+      await this.releaseVisibility.decisions({
+        scopeKind: "single",
+        scopeSlug: slug,
+        now,
+      })
+    ).reveal;
+  }
+
+  /**
    * Whether the Single, read with `translations`, is published in the
    * requested language, judged by the one rule collection reads apply
    * (`publishedInLanguageCondition`); true where that rule keeps nothing out.
@@ -1619,15 +1647,11 @@ export class SingleQueryService extends BaseService {
   ): Promise<boolean> {
     // A due release makes the Single public in every language before its own
     // rows are written, as `isSingleVisible` already admits it.
-    const revealed = statusFilter.isPublicRead
-      ? (
-          await this.releaseVisibility.decisions({
-            scopeKind: "single",
-            scopeSlug: release.slug,
-            now: release.now,
-          })
-        ).reveal
-      : [];
+    const revealed = await this.revealedBy(
+      release.slug,
+      statusFilter,
+      release.now
+    );
     const condition = publishedInLanguageCondition({
       companion: translations.companion,
       statusFilter,
@@ -1758,7 +1782,9 @@ export class SingleQueryService extends BaseService {
     /** The document's translations, when they were read with it: resolved, not read again. */
     translations?: JoinedTranslations,
     /** Also attach each value's source language (`_sources`). */
-    sources = false
+    sources = false,
+    /** The documents a due release reveals (`PopulateCompanionArgs.revealed`). */
+    revealed?: ReadonlySet<unknown>
   ): Promise<void> {
     if (translations) {
       fillCompanionFields({
@@ -1771,6 +1797,7 @@ export class SingleQueryService extends BaseService {
           translations.companion.hasStatus && statusFilterValues
             ? statusFilterValues
             : undefined,
+        revealed,
         sources,
       });
       return;
@@ -1804,6 +1831,7 @@ export class SingleQueryService extends BaseService {
       // A pooled read, so this may resolve rather than only read what is remembered.
       readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
       sources,
+      revealed,
     });
   }
 
@@ -1817,7 +1845,9 @@ export class SingleQueryService extends BaseService {
     slug: string,
     singleMeta: DynamicSingleRecord,
     doc: Record<string, unknown>,
-    statusFilterValues: readonly string[] | undefined
+    statusFilterValues: readonly string[] | undefined,
+    /** The documents a due release reveals (`PopulateCompanionArgs.revealed`). */
+    revealed?: ReadonlySet<unknown>
   ): Promise<void> {
     if (!this.localization || !storesPerLanguage(singleMeta)) return;
     const companion = this.companionOf(slug, singleMeta);
@@ -1836,6 +1866,7 @@ export class SingleQueryService extends BaseService {
         companion.hasStatus && statusFilterValues
           ? statusFilterValues
           : undefined,
+      revealed,
     });
     doc[ALL_LOCALES_KEY] = Object.fromEntries(
       companion.localizedFields.map(field => [

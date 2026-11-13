@@ -25,6 +25,8 @@ const SITE = "rlang_site";
 // withheld from a read in Spanish.
 const DATA = "rlang_data";
 const SITE_DATA = "rlang_site_data";
+// A collection whose read rule refuses a read that carries Spanish content.
+const GUARDED = "rlang_guarded";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -65,7 +67,26 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [
           text({ name: "title" }),
           json({ name: "meta", localized: true }),
+          // Left out by a Direct API read that leaves hidden fields out.
+          text({ name: "internal", admin: { hidden: true } }),
+          // Masked by its read hook in every language.
+          text({
+            name: "code",
+            hooks: {
+              afterRead: [
+                ({ value }: { value: unknown }) =>
+                  typeof value === "string" ? "masked" : value,
+              ],
+            },
+          }),
         ],
+      }),
+      defineCollection({
+        slug: GUARDED,
+        localized: true,
+        status: true,
+        access: { read: ({ locales }) => !(locales ?? []).includes("es") },
+        fields: [text({ name: "title" })],
       }),
     ],
     singles: [
@@ -624,6 +645,108 @@ describe.each(getConfiguredTestDialects())(
       expect(await ids("?locale=es&search=Harbour")).toEqual([fallsBack]);
       // Spanish's own value is matched where it is the one shown.
       expect(await ids("?locale=es&search=Bah")).toEqual([ownTitle]);
+    }, 90_000);
+
+    // A field's read hook acts on every language's value beside a read, as on
+    // the row's: a value it masks is masked in each language.
+    it("runs a field's read hook on each language's value beside a read", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: DATA,
+        locale: "en",
+        data: { title: "One", code: "en-secret", status: "published" },
+      });
+      const id = String(created.item.id);
+      await t.nextly.update({
+        collection: DATA,
+        id,
+        locale: "es",
+        data: {
+          title: "Uno",
+          code: "es-secret",
+          status: "published",
+          _overwrite: true,
+        },
+      });
+      const read = (await t.nextly.findByID({
+        collection: DATA,
+        id,
+        locale: "en",
+        translations: "all",
+      })) as Record<string, unknown>;
+      // The row's own value is masked, so the side map is the one in question.
+      expect(read.code).toBe("masked");
+      expect(read._allLocales).toMatchObject({
+        code: { en: "masked", es: "masked" },
+      });
+    }, 90_000);
+
+    // A read carrying every language's values is judged by the read rule in
+    // every language, as `locale=all` is: a rule refusing Spanish refuses it.
+    it("judges a read carrying every language by its read rule in every language", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: GUARDED,
+        locale: "en",
+        data: { title: "Harbour", status: "published" },
+      });
+      const id = String(created.item.id);
+      await t.nextly.update({
+        collection: GUARDED,
+        id,
+        locale: "es",
+        data: { title: "Puerto", status: "published", _overwrite: true },
+      });
+      // English alone is readable, so a refusal below is Spanish's doing.
+      const english = await restGet(
+        ["collections", GUARDED, "entries", id],
+        "?locale=en"
+      );
+      expect(english.status, JSON.stringify(english.json)).toBe(200);
+      const every = await restGet(
+        ["collections", GUARDED, "entries", id],
+        "?locale=en&translations=all"
+      );
+      expect(every.status).not.toBe(200);
+      expect(JSON.stringify(every.json)).not.toContain("Puerto");
+    }, 90_000);
+
+    // A read that leaves hidden fields out leaves them out of every
+    // language's values and of the sources beside it too.
+    it("leaves hidden fields out of the values and sources beside a read", async () => {
+      const t = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: DATA,
+        locale: "en",
+        data: { title: "One", internal: "en-hidden", status: "published" },
+      });
+      const id = String(created.item.id);
+      await t.nextly.update({
+        collection: DATA,
+        id,
+        locale: "es",
+        data: {
+          title: "Uno",
+          internal: "es-hidden",
+          status: "published",
+          _overwrite: true,
+        },
+      });
+      const read = (await t.nextly.findByID({
+        collection: DATA,
+        id,
+        locale: "en",
+        translations: "all",
+        sourceLocales: true,
+        showHiddenFields: false,
+      })) as Record<string, unknown>;
+      // Present, so the missing field is the strip's doing.
+      expect(read._allLocales).toMatchObject({
+        title: { en: "One", es: "Uno" },
+      });
+      expect(read).not.toHaveProperty("internal");
+      expect(read._allLocales).not.toHaveProperty("internal");
+      expect(read._sources).not.toHaveProperty("internal");
     }, 90_000);
 
     // Every language's structured values beside a read are the field's own
