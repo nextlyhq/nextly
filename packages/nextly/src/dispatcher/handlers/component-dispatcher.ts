@@ -74,7 +74,6 @@ import {
   builderSaveDeps,
   checkBuilderSaveHistory,
   reviewBuilderSchemaChange,
-  writeBuilderDelete,
   writeBuilderSchemaChange,
 } from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
@@ -1203,30 +1202,9 @@ export const COMPONENTS_METHODS: Record<
         });
       }
 
-      // The field group as it stood, and the history checks a save makes, before its table goes.
-      // Read only where a writer is set up; a field group no row describes is left to the
-      // registry's delete, which refuses it as before.
-      const builderSave = builderSaveDeps();
-      const removed =
-        builderSave === undefined
-          ? null
-          : await svc.registry.getComponentForWrite(slug);
-      if (removed === null) {
-        await svc.registry.deleteComponent(slug);
-      } else {
-        await checkBuilderSaveHistory(builderSave);
-        // The delete, written as the field group's migration, so no snapshot after it still
-        // records the table.
-        await writeBuilderDelete(
-          builderSave,
-          () => svc.registry.deleteComponent(slug),
-          {
-            kind: "fieldGroup",
-            slug,
-            stored: fieldGroupEntity(removed),
-          }
-        );
-      }
+      // The registry's delete writes it as the field group's migration where a writer is set up,
+      // so every entry point that deletes one leaves no snapshot still recording its table.
+      await svc.registry.deleteComponent(slug);
 
       return respondAction(`Component "${slug}" deleted successfully.`, {
         slug,

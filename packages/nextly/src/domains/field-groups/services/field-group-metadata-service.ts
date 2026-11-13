@@ -53,6 +53,12 @@ import {
   type BuilderSaveSetup,
   type CollectionSaveDeps,
 } from "../../schema/builder-save/collection-save";
+import {
+  checkEntitySaveHistory,
+  entitySaveDeps,
+  previousEntity,
+  writeEntitySave,
+} from "../../schema/builder-save/entity-save";
 import { fieldGroupEntity } from "../../schema/builder-save/stored-entity";
 import { writeRegistryRowsWith } from "../../schema/schema-version";
 import { identifierBytes } from "../../schema/services/index-name";
@@ -166,17 +172,7 @@ export class FieldGroupMetadataService {
 
   /** The writer's dependencies for a save here, when a writer is set up. */
   private saveDeps(): CollectionSaveDeps | undefined {
-    if (this.builderSave === undefined || this.adapter === undefined) {
-      return undefined;
-    }
-    return {
-      ...this.builderSave,
-      adapter: this.adapter,
-      logger: this.logger,
-      // Development runs each file and records it applied, as the Builder
-      // does for a collection; elsewhere the deploy's `nextly migrate` does.
-      applies: process.env.NODE_ENV === "development",
-    };
+    return entitySaveDeps(this.builderSave, this.adapter, this.logger);
   }
 
   /**
@@ -478,6 +474,13 @@ export class FieldGroupMetadataService {
     // turns a silent wrong result into an actionable error.
     await this.assertNoUnappliableSchemaChange({ existing, fields, localized });
 
+    // Where a Builder save writer is set up, this edit is written as the field group's migration
+    // (`writeUpdate`), whichever entry point made it: the history checks a save makes run here,
+    // before the first write (the archive of a field leaving translation, just below). A
+    // code-first sync writes none: its migrations are the developer's.
+    const deps = input.source === "code" ? undefined : this.saveDeps();
+    await checkEntitySaveHistory(deps);
+
     // A field leaving, joining or replaced in translation has preconditions of its own, asked by
     // the same preflight as the collection and Single settings saves, before the companion changes.
     // The check above judges only fields that render a companion column, so a translated field
@@ -500,14 +503,28 @@ export class FieldGroupMetadataService {
     // was and remains non-localized reaches the reconciler and moves nothing — this path emits no
     // main-table DDL at all — so inferring a physical transition from the request shape would mark a
     // row diverged and tell a caller not to retry an edit that changed nothing.
-    const movedSchema =
-      (input.fields !== undefined || localized !== wasLocalized) &&
-      (await this.reconcileCompanion({
-        existing,
-        fields,
-        localized,
-        wasLocalized,
-      }));
+    // Held in an object, as the move below may run from inside the writer.
+    const ran = { moved: false };
+    const move = async (): Promise<void> => {
+      ran.moved =
+        (input.fields !== undefined || localized !== wasLocalized) &&
+        (await this.reconcileCompanion({
+          existing,
+          fields,
+          localized,
+          wasLocalized,
+        }));
+    };
+    if (deps === undefined) {
+      await move();
+    } else {
+      await this.writeUpdate(
+        deps,
+        { existing, input, fields, localized },
+        move
+      );
+    }
+    const movedSchema = ran.moved;
 
     // 3. RECORD, after the physical change succeeded.
     try {
@@ -567,6 +584,71 @@ export class FieldGroupMetadataService {
         requestedLocalized,
         existing,
         error
+      );
+    }
+  }
+
+  /**
+   * An edit written as the field group's migration through the Builder save writer, then made by
+   * `move` (the companion reconcile): its label, description, admin options, translation and
+   * fields as the definition file spells them, so the table any entry point changes stays on
+   * record for the migrations after it. A metadata-only edit writes its settings-only migration,
+   * as a collection's does.
+   *
+   * A failure before `move`, or in it, is thrown as before, with nothing written. Once `move` has
+   * run the tables have moved, and the row must still record it: where the writer then refuses to
+   * record the files applied (the database does not stand as their snapshot says), the files are
+   * kept for `nextly migrate` to name, and the edit goes on to its registry write.
+   */
+  private async writeUpdate(
+    deps: CollectionSaveDeps,
+    edit: {
+      existing: DynamicFieldGroupRecord;
+      input: UpdateFieldGroupInput;
+      fields: FieldDefinition[];
+      localized: boolean;
+    },
+    move: () => Promise<void>
+  ): Promise<void> {
+    const { existing, input } = edit;
+    const stored = fieldGroupEntity(existing);
+    // Held in an object, as `move` runs from inside the writer.
+    const ran = { moved: false };
+    try {
+      await writeEntitySave(
+        deps,
+        {
+          kind: "fieldGroup",
+          slug: input.slug,
+          previous: await previousEntity(
+            deps,
+            "fieldGroup",
+            input.slug,
+            stored
+          ),
+          entity: fieldGroupEntity({
+            ...existing,
+            ...(input.label !== undefined ? { label: input.label } : {}),
+            ...(input.description !== undefined
+              ? { description: input.description }
+              : {}),
+            ...(input.admin !== undefined ? { admin: input.admin } : {}),
+            localized: edit.localized,
+            fields: edit.fields,
+          }),
+          change: "update",
+        },
+        async () => {
+          await move();
+          ran.moved = true;
+        }
+      );
+    } catch (error) {
+      if (!ran.moved) throw error;
+      this.logger.error(
+        `[FieldGroups] The edit of "${input.slug}" ran, but its migration could not be recorded applied: ${
+          error instanceof Error ? error.message : String(error)
+        }`
       );
     }
   }

@@ -86,6 +86,13 @@ import {
   type BuilderSaveSetup,
   type CollectionSaveDeps,
 } from "../../schema/builder-save/collection-save";
+import {
+  checkEntitySaveHistory,
+  entitySaveDeps,
+  previousEntity,
+  writeEntityDelete,
+  writeEntitySave,
+} from "../../schema/builder-save/entity-save";
 import { singleRelations } from "../../schema/builder-save/single-relations";
 import { singleEntity } from "../../schema/builder-save/stored-entity";
 import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
@@ -399,17 +406,7 @@ export class SingleMetadataService {
 
   /** The writer's dependencies for a save here, when a writer is set up. */
   private saveDeps(): CollectionSaveDeps | undefined {
-    if (this.builderSave === undefined || this.adapter === undefined) {
-      return undefined;
-    }
-    return {
-      ...this.builderSave,
-      adapter: this.adapter,
-      logger: this.logger,
-      // Development runs each file and records it applied, as the Builder
-      // does for a collection; elsewhere the deploy's `nextly migrate` does.
-      applies: process.env.NODE_ENV === "development",
-    };
+    return entitySaveDeps(this.builderSave, this.adapter, this.logger);
   }
 
   /**
@@ -677,22 +674,51 @@ export class SingleMetadataService {
     }
 
     const adapter = this.adapter;
-    if (tableName && adapter) {
-      await this.dropSingleStorage(slug, tableName, adapter);
-    }
+    const remove = async (): Promise<void> => {
+      if (tableName && adapter) {
+        await this.dropSingleStorage(slug, tableName, adapter);
+      }
 
-    // A row a concurrent delete already took is the state this method exists to reach, so it
-    // completes rather than failing.
-    //
-    // The tolerance covers this one call and nothing above it. A teardown or a drop that fails has
-    // to surface even when its message mentions something missing, because answering "deleted" to
-    // it would leave the registry row present and the storage half removed — the exact state the
-    // ordering above is arranged to prevent.
-    try {
-      await this.registry.deleteSingle(slug, { force: true });
-    } catch (error) {
-      if (!NextlyError.isNotFound(error)) throw error;
+      // A row a concurrent delete already took is the state this method exists to reach, so it
+      // completes rather than failing.
+      //
+      // The tolerance covers this one call and nothing above it. A teardown or a drop that fails
+      // has to surface even when its message mentions something missing, because answering
+      // "deleted" to it would leave the registry row present and the storage half removed — the
+      // exact state the ordering above is arranged to prevent.
+      try {
+        await this.registry.deleteSingle(slug, { force: true });
+      } catch (error) {
+        if (!NextlyError.isNotFound(error)) throw error;
+      }
+    };
+
+    // Where a Builder save writer is set up, the delete is written as the Single's migration,
+    // inside this same exclusion, with its junction tables and relationship keys, so no snapshot
+    // after it still records its tables. A Single whose row is already gone has nothing to write
+    // from, and finishes its delete alone.
+    const deps = current ? this.saveDeps() : undefined;
+    if (deps === undefined || !current) {
+      await remove();
+      return;
     }
+    await checkEntitySaveHistory(deps);
+    await writeEntityDelete(
+      deps,
+      {
+        kind: "single",
+        slug,
+        stored: singleEntity(current),
+        ...(await singleRelations(
+          deps.adapter,
+          this.logger,
+          current.tableName,
+          (current.fields ?? []) as unknown as FieldDefinition[],
+          []
+        )),
+      },
+      remove
+    );
   }
 
   /**
@@ -858,6 +884,10 @@ export class SingleMetadataService {
     // save makes.
     await this.refuseRenameOntoTakenColumn(input);
 
+    // The history checks a Builder save makes, before that first write, where a writer is set up.
+    const deps = this.saveDeps();
+    await checkEntitySaveHistory(deps);
+
     await this.assertFieldsMayLeaveTranslation(input);
 
     // 1. PLAN. May reject; nothing is persisted and no statement has run.
@@ -869,12 +899,15 @@ export class SingleMetadataService {
     const updateData = { ...input.updateData };
     let refusedSettings: UpdateSingleSchemaResult["refusedSettings"] = [];
 
-    if (plan) {
-      // 2. APPLY. Returns a status rather than throwing, except for a refusal (see below).
-      const { status: applied, refused } = await this.applyUpdateDdl(
-        input,
-        plan
-      );
+    // 2. APPLY. Returns a status rather than throwing, except for a refusal (see below). Where a
+    // writer is set up, written first as the Single's migration (`writeUpdate`).
+    const outcome =
+      deps === undefined
+        ? plan && (await this.applyUpdateDdl(input, plan))
+        : await this.writeUpdate(deps, input, plan, updateData);
+
+    if (outcome) {
+      const { status: applied, refused } = outcome;
       if (applied !== undefined) {
         updateData.migrationStatus = applied;
         migrationStatus = applied;
@@ -919,6 +952,73 @@ export class SingleMetadataService {
    * SQLite cannot detach — and refusing here, before the apply, is what leaves the table untouched
    * and the caller's field list unsaved.
    */
+  /**
+   * An update written as the Single's migration through the Builder save writer, then applied
+   * (`applyUpdateDdl`): its fields, translation, status and settings as the definition file
+   * spells them, with its junction tables, relationship keys and renamed field, so the table any
+   * entry point changes stays on record for the migrations after it. A save that asks nothing of
+   * the schema writes its settings-only migration, as a collection's does.
+   *
+   * A failure before the apply, or in its main migration, is thrown as before, with nothing
+   * written. Past the main migration the apply reports rather than throws, and so does this: where
+   * the writer then refuses to record the files applied (the database does not stand as their
+   * snapshot says), the files are kept and the outcome is recorded as a failed migration, so the
+   * registry row is still written.
+   */
+  private async writeUpdate(
+    deps: CollectionSaveDeps,
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan | null,
+    updateData: Record<string, unknown>
+  ): Promise<
+    Awaited<ReturnType<SingleMetadataService["applyUpdateDdl"]>> | undefined
+  > {
+    const existing = input.existing;
+    const before = (existing.fields ?? []) as unknown as FieldDefinition[];
+    const after =
+      plan?.fields ??
+      (updateData.fields as FieldDefinition[] | undefined) ??
+      before;
+    const stored = singleEntity(existing);
+    const rename = await this.detectedFieldRename(before, after);
+    // Held in an object, as the apply below sets it from inside the writer.
+    const ran: {
+      outcome?: Awaited<ReturnType<SingleMetadataService["applyUpdateDdl"]>>;
+    } = {};
+    try {
+      await writeEntitySave(
+        deps,
+        {
+          kind: "single",
+          slug: input.slug,
+          previous: await previousEntity(deps, "single", input.slug, stored),
+          entity: singleEntity({ ...existing, ...updateData, fields: after }),
+          change: "update",
+          ...(rename ? { renamedFields: [rename] } : {}),
+          ...(await singleRelations(
+            deps.adapter,
+            this.logger,
+            existing.tableName,
+            before,
+            after
+          )),
+        },
+        async () => {
+          if (plan) ran.outcome = await this.applyUpdateDdl(input, plan);
+        }
+      );
+    } catch (error) {
+      if (ran.outcome === undefined) throw error;
+      this.logger.error(
+        `[Singles] The update of "${input.slug}" ran, but its migration could not be recorded applied: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return { ...ran.outcome, status: "failed" };
+    }
+    return ran.outcome;
+  }
+
   /**
    * Read the Single again inside the exclusion, and re-check what the caller checked outside it.
    *

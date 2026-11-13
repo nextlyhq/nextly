@@ -25,7 +25,18 @@ export function registerComponentServices(ctx: RegistrationContext): void {
   // FieldGroupRegistryService — registry for component definitions
   container.registerSingleton<FieldGroupRegistryService>(
     "fieldGroupRegistryService",
-    () => new FieldGroupRegistryService(adapter, logger)
+    () => {
+      const registry = new FieldGroupRegistryService(adapter, logger);
+      // A field group's delete writes its migration as a collection's does,
+      // whichever entry point deletes it, so no snapshot after it still
+      // records its tables.
+      if (container.has("builderSaveSetup")) {
+        registry.setBuilderSave(
+          container.get<BuilderSaveSetup>("builderSaveSetup")
+        );
+      }
+      return registry;
+    }
   );
 
   // FieldGroupSchemaService — utility for generating component table schemas.

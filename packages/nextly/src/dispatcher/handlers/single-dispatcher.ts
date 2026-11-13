@@ -104,7 +104,6 @@ import {
   builderSaveDeps,
   checkBuilderSaveHistory,
   reviewBuilderSchemaChange,
-  writeBuilderDelete,
   writeBuilderSchemaChange,
 } from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
@@ -931,31 +930,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // registry row another request took as the outcome asked for. Everything else it raises —
       // storage that would not go away — is a failed delete and has to reach the caller, whatever
       // words the driver chose for it.
-      // The history checks a save makes, before the Single's table goes.
-      const builderSave = builderSaveDeps();
-      await checkBuilderSaveHistory(builderSave);
-
-      // The delete, written as the Single's migration, so no snapshot after it still records the
-      // table.
-      await writeBuilderDelete(
-        builderSave,
-        () => svc.metadata.deleteSingle(slug, single.tableName),
-        {
-          kind: "single",
-          slug,
-          stored: singleEntity(single),
-          // Its junction tables and relationship keys, as they go with it.
-          ...(builderSave === undefined
-            ? {}
-            : await singleRelations(
-                builderSave.adapter,
-                getLoggerFromDI() ?? consoleLogger,
-                single.tableName,
-                (single.fields ?? []) as unknown as FieldDefinition[],
-                []
-              )),
-        }
-      );
+      // The metadata service's delete writes it as the Single's migration where a writer is set
+      // up, inside the same exclusion as its drops.
+      await svc.metadata.deleteSingle(slug, single.tableName);
 
       // Spec divergence: spec §5.1 / §7.4 strictly maps delete to
       // respondMutation, but registry.deleteSingle returns void (no

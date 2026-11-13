@@ -13,6 +13,11 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  DELETE as deleteFieldGroupRoute,
+  PATCH as patchFieldGroupRoute,
+} from "../../../../api/field-groups-detail";
+import { resetSessionStandingForTests } from "../../../../auth/session/session-standing";
 import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import {
@@ -20,6 +25,7 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import { superAdminSession } from "../../../collections/__tests__/helpers/collection-dependents-fixtures";
 import type { CollectionService } from "../../../collections/services/collection-service";
 import { FieldGroupMetadataService } from "../../../field-groups/services/field-group-metadata-service";
 import { SingleMetadataService } from "../../../singles/services/single-metadata-service";
@@ -28,6 +34,7 @@ import { resolveBuilderVersions } from "../../../versions/builder-versions";
 let instance: TestNextly | undefined;
 afterEach(async () => {
   vi.unstubAllEnvs();
+  resetSessionStandingForTests();
   await instance?.destroy();
   instance = undefined;
 });
@@ -49,6 +56,72 @@ function latestSnapshotTables(t: TestNextly): string[] {
     tables?: { name: string }[];
   };
   return (parsed.snapshot?.tables ?? parsed.tables ?? []).map(t => t.name);
+}
+
+/** The three entry points that change or delete a field group. */
+const WAYS = ["builder", "route", "direct"] as const;
+type Way = (typeof WAYS)[number];
+
+/** The field group as the definition file lists it, if it does. */
+function definedFieldGroup(
+  t: TestNextly,
+  slug: string
+): { labels?: { singular?: string } } | undefined {
+  const file = join(t.basePath, "schema", "builder.json");
+  if (!existsSync(file)) return undefined;
+  const parsed = JSON.parse(readFileSync(file, "utf-8")) as {
+    components?: { slug: string; labels?: { singular?: string } }[];
+  };
+  return parsed.components?.find(entry => entry.slug === slug);
+}
+
+/** Relabel the field group `slug` the way `way` does, as its caller would. */
+async function relabelVia(
+  way: Way,
+  t: TestNextly,
+  slug: string,
+  label: string
+): Promise<void> {
+  if (way === "builder") {
+    await dispatchComponents("updateComponent", { slug }, { label });
+    return;
+  }
+  if (way === "direct") {
+    await t.nextly.fieldGroups.update({ slug, data: { label } });
+    return;
+  }
+  const response = await patchFieldGroupRoute(
+    new Request(`http://localhost/api/field-groups/${slug}`, {
+      method: "PATCH",
+      headers: {
+        ...(await superAdminSession(t)),
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ label }),
+    }),
+    { params: Promise.resolve({ slug }) }
+  );
+  expect(response.status).toBe(200);
+}
+
+/** Delete the field group `slug` the way `way` does, as its caller would. */
+async function deleteVia(way: Way, t: TestNextly, slug: string): Promise<void> {
+  if (way === "builder") {
+    await dispatchComponents("deleteComponent", { slug }, undefined);
+    return;
+  }
+  if (way === "direct") {
+    await t.nextly.fieldGroups.delete({ slug });
+    return;
+  }
+  const response = await deleteFieldGroupRoute(
+    new Request(`http://localhost/api/field-groups/${slug}`, {
+      method: "DELETE",
+      headers: await superAdminSession(t),
+    }),
+    { params: Promise.resolve({ slug }) }
+  );
+  expect(response.status).toBe(204);
 }
 
 /** The migration files written, by name. */
@@ -233,6 +306,83 @@ describe.each(getConfiguredTestDialects())(
         true
       );
       expect(latestSnapshotTables(t)).not.toContain("single_notice");
+    });
+
+    it.each(WAYS)(
+      "writes a field group's edit made through the %s, on record",
+      async way => {
+        const t = await boot();
+        await dispatchComponents(
+          "createComponent",
+          {},
+          {
+            slug: "card",
+            label: "Card",
+            fields: [{ name: "note", type: "text" }],
+          }
+        );
+
+        await relabelVia(way, t, "card", "Edited");
+
+        expect(migrationFiles(t).some(f => /_card_update\.sql$/.test(f))).toBe(
+          true
+        );
+        expect(definedFieldGroup(t, "card")?.labels?.singular).toBe("Edited");
+        expect(latestSnapshotTables(t)).toContain("comp_card");
+      }
+    );
+
+    it.each(WAYS)(
+      "writes a field group's delete made through the %s, on record",
+      async way => {
+        const t = await boot();
+        await dispatchComponents(
+          "createComponent",
+          {},
+          {
+            slug: "card",
+            label: "Card",
+            fields: [{ name: "note", type: "text" }],
+          }
+        );
+
+        await deleteVia(way, t, "card");
+
+        expect(migrationFiles(t).some(f => /_card_delete\.sql$/.test(f))).toBe(
+          true
+        );
+        expect(latestSnapshotTables(t)).not.toContain("comp_card");
+        expect(definedFieldGroup(t, "card")).toBeUndefined();
+      }
+    );
+
+    it("writes a Single's schema edit made through its PATCH, on record", async () => {
+      const t = await boot();
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          fields: [{ name: "heading", type: "text" }],
+        }
+      );
+
+      await dispatchSingles(
+        "updateSingleSchema",
+        { slug: "notice" },
+        {
+          fields: [
+            { name: "heading", type: "text" },
+            { name: "body", type: "text" },
+          ],
+        }
+      );
+
+      expect(migrationFiles(t).some(f => /_notice_update\.sql$/.test(f))).toBe(
+        true
+      );
+      expect(latestColumns(t, "single_notice")).toContain("body");
     });
 
     it("records a field group made before its saves wrote migrations, once it is saved", async () => {

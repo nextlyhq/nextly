@@ -18,11 +18,11 @@ import { container } from "../../di/container";
 import {
   checkSaveHistory,
   previewCollectionSave,
-  writeCollectionSave,
   type BuilderSaveSetup,
   type CollectionSave,
   type CollectionSaveDeps,
 } from "../../domains/schema/builder-save/collection-save";
+import { writeEntitySave } from "../../domains/schema/builder-save/entity-save";
 import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
@@ -107,7 +107,7 @@ export async function writeBuilderSchemaChange(
       uiSchemaFile: deps.config.db.uiSchemaFile,
     }),
   });
-  await writeThenApply(deps, save, apply);
+  await writeEntitySave(deps, save, apply);
 }
 
 /**
@@ -134,77 +134,4 @@ export async function reviewBuilderSchemaChange(
     }),
   });
   return (await previewCollectionSave(deps, save)).notices;
-}
-
-/**
- * The save written, and `apply` run: by the writer in development, which then
- * records the files applied; after the writer elsewhere.
- */
-async function writeThenApply(
-  deps: CollectionSaveDeps,
-  save: Parameters<typeof writeCollectionSave>[1],
-  apply: () => Promise<unknown>
-): Promise<void> {
-  if (deps.applies) {
-    await writeCollectionSave(deps, save, {
-      historyChecked: true,
-      // What `apply` answers is the caller's; the writer only waits on it.
-      appliedBy: async () => {
-        await apply();
-      },
-    });
-    return;
-  }
-  await writeCollectionSave(deps, save, { historyChecked: true });
-  await apply();
-}
-
-/**
- * Delete through `apply` (the Builder's own delete) and write it as the
- * entity's migration: its table dropped, as the definition and snapshots then
- * record it. Without it the snapshots would still hold the table, and the
- * next migration's drift check would find it missing. The history was
- * checked first.
- */
-export async function writeBuilderDelete(
-  deps: CollectionSaveDeps | undefined,
-  apply: () => Promise<unknown>,
-  removed: {
-    kind: "single" | "fieldGroup";
-    slug: string;
-    /** The entity as the registry stored it, every setting included. */
-    stored: UiSchemaEntity;
-    /** A Single's junction statements and relationship keys, as they go. */
-    junctions?: NonNullable<CollectionSave["junctions"]>;
-    keys?: NonNullable<CollectionSave["keys"]>;
-  }
-): Promise<void> {
-  if (deps === undefined) {
-    await apply();
-    return;
-  }
-  const definition = await loadUiSchema({
-    projectRoot: deps.projectRoot,
-    uiSchemaFile: deps.config.db.uiSchemaFile,
-  });
-  const listed =
-    removed.kind === "single" ? definition.singles : definition.components;
-  const previous =
-    listed.find(entity => entity.slug === removed.slug) ?? removed.stored;
-
-  await writeThenApply(
-    deps,
-    {
-      kind: removed.kind,
-      slug: removed.slug,
-      previous,
-      entity: null,
-      change: "delete",
-      ...(removed.junctions === undefined
-        ? {}
-        : { junctions: removed.junctions }),
-      ...(removed.keys === undefined ? {} : { keys: removed.keys }),
-    },
-    apply
-  );
 }
