@@ -117,9 +117,10 @@ function OutlineBar({
  * since the frame's status line is what speaks for a long wait.
  *
  * Before 0.4 s the outline is laid out but not drawn, so it holds the place its
- * parts will take from the first paint: a part of a screen that answers late
- * (a list's rows) keeps what sits under it where it will stay, rather than
- * drawing it up into the empty place and pushing it back down.
+ * parts will take from the first paint: whatever a page draws after a part
+ * that answers late (a plugin's block after the dashboard's cards, a plugin's
+ * content after a list) stands where it will stay, rather than being drawn up
+ * into the empty place and pushed back down when the part arrives.
  */
 export function ScreenOutline({
   children,
