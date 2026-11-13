@@ -51,7 +51,7 @@ interface Road {
   /** Creates the entity with `fields`. */
   create(t: TestNextly, fields: Field[]): Promise<void>;
   /** The Builder's save of `fields`, `renamed` naming a rename of `heading`. */
-  save(fields: Field[], renamed?: string): Promise<unknown>;
+  save(t: TestNextly, fields: Field[], renamed?: string): Promise<unknown>;
 }
 
 const ROADS: Road[] = [
@@ -68,7 +68,7 @@ const ROADS: Road[] = [
           {}
         );
     },
-    save: (fields, renamed) =>
+    save: (_t, fields, renamed) =>
       dispatchCollections(
         {} as ServiceContainer,
         "applySchemaChanges",
@@ -96,19 +96,17 @@ const ROADS: Road[] = [
     name: "a translated collection's shared field (the push)",
     table: "dc_posts",
     async create(t, fields) {
-      await t
-        .getService("collectionService")
-        .createCollection(
-          {
-            name: "posts",
-            label: "Post",
-            localized: true,
-            fields,
-          } as Parameters<CollectionService["createCollection"]>[0],
-          {}
-        );
+      await t.getService("collectionService").createCollection(
+        {
+          name: "posts",
+          label: "Post",
+          localized: true,
+          fields,
+        } as Parameters<CollectionService["createCollection"]>[0],
+        {}
+      );
     },
-    save: (fields, renamed) =>
+    save: (_t, fields, renamed) =>
       dispatchCollections(
         {} as ServiceContainer,
         "applySchemaChanges",
@@ -143,7 +141,7 @@ const ROADS: Road[] = [
         { slug: "hero", label: "Hero", fields }
       );
     },
-    save: fields =>
+    save: (_t, fields) =>
       dispatchSingles("updateSingleSchema", { slug: "hero" }, { fields }),
   },
   {
@@ -156,14 +154,17 @@ const ROADS: Road[] = [
         { slug: "card", label: "Card", fields }
       );
     },
-    save: (fields, renamed) =>
+    save: async (t, fields, renamed) =>
       dispatchComponents(
         "applyComponentSchemaChanges",
         { slug: "card" },
         {
           fields,
           confirmed: true,
-          schemaVersion: 1,
+          // The version the field group stands at, as the Builder sends it.
+          schemaVersion: (
+            await t.getService("fieldGroupRegistryService").getComponent("card")
+          ).schemaVersion,
           ...(renamed === undefined
             ? {}
             : {
@@ -332,7 +333,7 @@ for (const dialect of getConfiguredTestDialects()) {
       it("renames the column and changes nothing else", async () => {
         const before = await seeded();
 
-        await road.save(fieldsWith("title2"), "title2");
+        await road.save(t, fieldsWith("title2"), "title2");
 
         await expectOnly(before, { rename: { from: "heading", to: "title2" } });
       });
@@ -341,7 +342,7 @@ for (const dialect of getConfiguredTestDialects()) {
         const before = await seeded();
 
         const refused = await road
-          .save(fieldsWith("title2", { required: true }), "title2")
+          .save(t, fieldsWith("title2", { required: true }), "title2")
           .then(
             () => undefined,
             (error: unknown) => error
@@ -364,7 +365,7 @@ for (const dialect of getConfiguredTestDialects()) {
       it("adds an unrelated field and leaves the column as it was", async () => {
         const before = await seeded();
 
-        await road.save([
+        await road.save(t, [
           ...fieldsWith("heading"),
           { name: "extra", type: "text", localized: false },
         ]);
@@ -379,7 +380,7 @@ for (const dialect of getConfiguredTestDialects()) {
       it("adds an unrelated field and keeps a default given to the column by hand", async () => {
         const before = await seeded("kept");
 
-        await road.save([
+        await road.save(t, [
           ...fieldsWith("heading"),
           { name: "extra", type: "text", localized: false },
         ]);
