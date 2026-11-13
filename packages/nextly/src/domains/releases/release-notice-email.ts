@@ -68,18 +68,11 @@ const RELEASE_NOTICE_EMAIL: NoticeEmail = {
  * transaction, so the job exists only if the notice does.
  */
 export async function enqueueReleaseNoticeEmail(
-  tx: Pick<TransactionContext, "getDrizzle">,
-  dialect: string,
+  tx: Pick<TransactionContext, "insert">,
   noticeId: string,
   now: Date
 ): Promise<void> {
-  await enqueueNoticeEmail(
-    tx,
-    dialect,
-    RELEASE_NOTICE_EMAIL_JOB,
-    noticeId,
-    now
-  );
+  await enqueueNoticeEmail(tx, RELEASE_NOTICE_EMAIL_JOB, noticeId, now);
 }
 
 /**

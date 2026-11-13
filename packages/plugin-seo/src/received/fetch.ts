@@ -20,27 +20,14 @@ import type { LookupFunction } from "node:net";
 import type { Readable } from "node:stream";
 import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
 
-import {
-  mayConnect,
-  refusedAt,
-  type Refusal,
-  type RefusalReason,
-} from "./addresses";
+import { mayConnect, refusedAt, type Refusal } from "./addresses";
+import { FETCH_LIMITS, type FetchLimits, type FetchStop } from "./contract";
 import { kindOfIp } from "./ip";
 
-/** How far one fetch may go. */
-export interface FetchLimits {
-  timeoutMs: number;
-  maxBytes: number;
-  maxRedirects: number;
-}
+export type { FetchLimits } from "./contract";
 
 /** Ten seconds, five megabytes and five redirects. */
-export const LIMITS: FetchLimits = {
-  timeoutMs: 10_000,
-  maxBytes: 5 * 1024 * 1024,
-  maxRedirects: 5,
-};
+export const LIMITS: FetchLimits = FETCH_LIMITS;
 
 /** A network address a name resolves to. */
 export interface ResolvedAddress {
@@ -75,13 +62,7 @@ export type TransportAnswer =
 export type Transport = (request: TransportRequest) => Promise<TransportAnswer>;
 
 /** Why a fetch did not end in a page. */
-export type FailReason =
-  | RefusalReason
-  | "too-slow"
-  | "too-large"
-  | "too-many-redirects"
-  | "no-answer"
-  | "unreachable";
+export type FailReason = FetchStop;
 
 /** What one crawler received, or why it received nothing. */
 export type Fetched =

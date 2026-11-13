@@ -444,9 +444,12 @@ export function searchConsoleRoutes(setup: SearchConsoleSetup): PluginRoute[] {
       path: CONNECTIONS_ROUTE_PATH,
       handler: async (_req, ctx) => {
         const stored = await readConnections(ctx);
+        // Switched on in the settings, as every notice reads it.
+        const rules = await setup.readRules(ctx, undefined);
         const body: ConnectionsBody = {
           searchConsole: searchConsoleState(stored, setup),
           indexNow: {
+            switchedOn: rules.indexNow === true,
             ...(stored.indexNowLast === undefined
               ? {}
               : { last: stored.indexNowLast }),

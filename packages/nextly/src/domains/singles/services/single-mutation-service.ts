@@ -294,6 +294,7 @@ import {
   readsSingleInEveryLanguage,
   type PromoteGateContext,
 } from "./promote-gate";
+import { readSingleForCreation } from "./single-first-row";
 import type { SingleMediaUsageDeps } from "./single-media-usage";
 import {
   SingleQueryService,
@@ -3109,17 +3110,18 @@ export class SingleMutationService extends BaseService {
           let didSeedCompanionDefaults = false;
           // First-write auto-create, atomic with the update: a failed write
           // rolls the insert back, with no compensating delete. Idempotent: a
-          // hook's read (`get`) may have auto-created the row, and a retry
-          // re-enters here; either way the existing row is reused. A
-          // conditional write reads it under locks (see `firstWriteRead`).
+          // hook's read (`get`) may have auto-created the row, another request
+          // may be creating it at this moment, and a retry re-enters here; in
+          // each case the existing row is reused. It is read under the
+          // Single's creation lock (see `readSingleForCreation`), so a row
+          // another request is inserting is waited for rather than inserted
+          // a second time, and a conditional write's expectation is judged
+          // against the row read under that lock.
           if (autoCreated && pendingAutoCreateValues) {
-            const committed =
-              await storedFieldRead.firstWriteRead<SingleDocument>(
-                tx,
-                singleMeta,
-                options.context,
-                () => tx.selectOne<SingleDocument>(singleMeta.tableName, {})
-              );
+            const committed = await readSingleForCreation<SingleDocument>(
+              tx,
+              singleMeta
+            );
             if (committed) {
               existingDoc = committed;
             } else {

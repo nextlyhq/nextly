@@ -14,6 +14,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import { inArray } from "drizzle-orm";
 
 import type { AccessTarget } from "../auth/access/decide";
@@ -343,9 +344,6 @@ async function commandPublicRoleDeps(
 /** How long after a failure to make the Public role it is tried again. */
 const RETRY_AFTER_FAILURE_MS = 60_000;
 
-/** The value Next.js gives `NEXT_PHASE` while `next build` runs. */
-const NEXT_PRODUCTION_BUILD_PHASE = "phase-production-build";
-
 /**
  * The seeding in flight in this process, on `globalThis` for the reason the
  * rest of the boot state is: Next.js and Turbopack can evaluate this module in
@@ -403,7 +401,7 @@ export function seedPermissionsAndRolePresets(): Promise<void> {
   // deployments share, from a config older or newer than theirs, so its writes
   // would reach data it never serves. Next sets this phase for the build, and
   // skips `instrumentation.register()` in it for the same reason.
-  if (process.env.NEXT_PHASE === NEXT_PRODUCTION_BUILD_PHASE) {
+  if (isNextBuildPhase()) {
     return Promise.resolve();
   }
 

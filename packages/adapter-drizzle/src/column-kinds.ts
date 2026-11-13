@@ -38,6 +38,36 @@ export function isJsonColumn(column: ColumnKindInput): boolean {
 }
 
 /**
+ * The value a JSON column's encoder is handed for `value`: a string is taken
+ * for a document that arrives already serialized and parsed, so the encoder
+ * serializes it once rather than wrapping it as a JSON string; a string that
+ * does not parse is kept, and stored as a JSON string. Every write path that
+ * binds a JSON column goes through this, so they store the same bytes.
+ */
+export function valueForJsonColumn(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * The JSON text a JSON column stores for `value`, for a write that binds it
+ * to the driver itself rather than through a Drizzle query. It is what the
+ * query path binds for the same value: MySQL's JSON column encoder and
+ * node-postgres's JSON codec both send it serialized. A driver handed the bare
+ * value makes something else of it: mysql2 spells an object as
+ * `[object Object]` and an array as a value list, and node-postgres an array
+ * as a PostgreSQL array literal. `null` stays SQL NULL, as on the query path.
+ */
+export function jsonColumnText(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  return JSON.stringify(valueForJsonColumn(value));
+}
+
+/**
  * Whether a value is a structured document — a plain object or an array —
  * rather than a scalar, a date, or binary. What a driver does with one of
  * these when the column is not modelled differs (node-postgres spells an

@@ -49,6 +49,7 @@ import {
 import type { Logger } from "../../../shared/types";
 import type { SingleConfig } from "../../../singles/config/types";
 import {
+  fieldSettingsChanged,
   withUnsaidKept,
   type RecordedWriteOptions,
 } from "../../collections/services/collection-registry-service";
@@ -1246,6 +1247,9 @@ export class SingleRegistryService extends BaseRegistryService<
         existing,
         !schemaHashesMatch(schemaHash, existing.schemaHash)
       ) ||
+      // Field settings the hash omits (help text, placeholder, hidden): the
+      // stored field list carries them, so a change to one alone rewrites it.
+      fieldSettingsChanged(config.fields, existing.fields) ||
       // A Single's physical table, which a changed `dbName` moves: the row
       // follows it, or reads address a table that is gone.
       declaredSingleTable(config) !== existing.tableName
@@ -1285,7 +1289,7 @@ export class SingleRegistryService extends BaseRegistryService<
         : options.existing;
     const config =
       options.leavesUnsaid === true
-        ? withUnsaidKept(recorded, existing)
+        ? withUnsaidKept(recorded, existing, options.cleared)
         : recorded;
     const decision = this.codeFirstSyncStep(config, existing);
     const { schemaHash } = decision;

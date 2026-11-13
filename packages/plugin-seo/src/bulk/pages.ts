@@ -1,5 +1,5 @@
 /**
- * Reading a content type's pages for the bulk edit screen and the import:
+ * Reading a content type's pages for Pages' Edit mode and the import:
  * each page's name, address and version, what a person typed in its `seo`
  * group, and what its title and description are without anything typed,
  * worked out by the resolver's own reading of a page, so the table's grey
@@ -46,7 +46,7 @@ import {
   type SingleAccess,
 } from "./singles";
 
-/** One page as the bulk edit screen and the import read it. */
+/** One page as Pages' Edit mode and the import read it. */
 export interface ReadPage {
   type: string;
   id: string;

@@ -12,6 +12,7 @@
 import type { BaseSyntheticEvent } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
+import type { EditorRestore } from "@admin/components/features/versions/editor-restore";
 import { recordingsSettled } from "@admin/hooks/useSnapshotAutosave";
 
 import { adoptStoredValues } from "./adopt-stored";
@@ -22,6 +23,12 @@ import {
   submitMoved,
   type SubmitOutcome,
 } from "./submit-outcome";
+
+/**
+ * The key a save names its restored fields under, which the server reads at
+ * the write's boundary and never stores.
+ */
+const RESTORED_FROM_KEY = "_restoredFrom";
 
 /** What one write came to, for the form to start from. */
 export interface DocumentWrite {
@@ -60,6 +67,12 @@ export async function submitDocument(args: {
    * a document not created yet.
    */
   recordingsFor: string | null;
+  /**
+   * The values a restore put into the form: the save names, for each field
+   * still holding one, the version it came from (`_restoredFrom`), and forgets
+   * them once the save is stored.
+   */
+  restore?: Pick<EditorRestore, "restoredFromForSave" | "saved">;
 }): Promise<SubmitOutcome> {
   const { form, toPayload, write, onFailure, mayWrite, stillShown } = args;
   // The values this save is made from, as the form held them, before
@@ -85,8 +98,15 @@ export async function submitDocument(args: {
         return;
       }
       const payload = toPayload(validated);
+      // Judged against what the form held when the save began, the values a
+      // restore set, before validation's transforms.
+      const sources = args.restore?.restoredFromForSave(submitted);
       try {
-        const written = await write(payload);
+        const written = await write(
+          sources ? { ...payload, [RESTORED_FROM_KEY]: sources } : payload
+        );
+        // Stored: the next save restores nothing unless another restore does.
+        args.restore?.saved();
         // Only where the editor still shows what was written: after a move
         // the form holds another document's or language's values, which
         // these would replace for its next Save to write.
