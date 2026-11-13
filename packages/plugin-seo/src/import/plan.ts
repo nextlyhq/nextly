@@ -1789,6 +1789,31 @@ interface StepReads {
   findSingle(args: Record<string, unknown>): Promise<unknown>;
 }
 
+/**
+ * Whether a working draft waits beside a published version now: a write of
+ * its live row outside the transaction would publish it.
+ */
+async function draftWaitsNow(page: PlannedPage): Promise<boolean> {
+  const api = (await getCachedNextly()) as unknown as StepReads;
+  const type = pageTypeOf(page.type);
+  const read = {
+    ...SINGLE_AS_STORED,
+    status: "all",
+    depth: 0,
+    draft: true,
+    ...(page.locale === undefined ? {} : { locale: page.locale }),
+  };
+  const document: unknown =
+    type.kind === "single"
+      ? await api.findSingle({
+          slug: type.slug,
+          createIfMissing: false,
+          ...read,
+        })
+      : await api.findByID({ collection: type.slug, id: page.id, ...read });
+  return isRecord(document) && document._isWorkingDraft === true;
+}
+
 /** A version as the site stores it, in its own language and form. */
 async function storedVersion(page: PlannedPage): Promise<unknown> {
   const api = (await getCachedNextly()) as unknown as StepReads;
@@ -1920,6 +1945,13 @@ async function writeStep(
   revs: Revs,
   written: Written
 ): Promise<void> {
+  // A draft made since the dry run would be published by this write.
+  if (page.write === "live" && (await draftWaitsNow(page))) {
+    throw NextlyError.conflict({
+      reason: "state",
+      message: `A draft of “${page.label}” was saved after the dry run, and importing into its published version now would publish it. Nothing was imported. Do the dry run again.`,
+    });
+  }
   // Noted before it is made: a save can be stored and still be refused as
   // its answer is drawn, and putting back undoes only what is there. A
   // refusal made before anything is stored takes the note back, so a value
@@ -1953,6 +1985,16 @@ async function putBack(plan: ImportPlan, written: Written): Promise<boolean> {
       // Read again, as stored: put back at the revision it is at now, and
       // only while it still holds what the import wrote, so a save someone
       // made since is never undone.
+      // A draft made since waits beside it: putting its live row back would
+      // publish the draft, so it is left, and said to be left.
+      if (page.write === "live" && (await draftWaitsNow(page))) {
+        plan.engine.ctx.logger.warn(
+          "An imported version has a draft waiting now, so it is not put back",
+          { type: page.type, id: page.id, locale: page.locale }
+        );
+        restored = false;
+        continue;
+      }
       const now = await storedVersion(page);
       const rev = isRecord(now) ? now._rev : undefined;
       const back = undoneGroup(now, page);

@@ -365,7 +365,9 @@ function versionOf(
 
 /** Whether `locale` is read with nothing to fill in from another language. */
 function readsAsStored(read: LanguageRead): boolean {
-  return read.locale.code === undefined || read.locale.code === read.first;
+  // The default language can fall back to another too, so only a read
+  // naming no language at all is its own values.
+  return read.locale.code === undefined;
 }
 
 /** A working draft waiting beside a page: as served, its own, and as stored. */

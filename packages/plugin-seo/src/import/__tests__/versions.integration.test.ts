@@ -10,7 +10,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { group } from "@nextlyhq/plugin-sdk";
+import { group, type PluginContext } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -24,6 +24,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { MANAGE_SEO_PERMISSION } from "../../permissions";
 import { seoPlugin } from "../../plugin";
 import { SEO_SETTINGS_SLUG } from "../../settings/contract";
+import { readSeoRules } from "../../settings/rules";
+import { structuredDataFromSettings } from "../../settings/structured-data-rules";
+import { noSocialCardRules } from "../../social/card";
+import { rulesFromOptions } from "../../structured-data/rules";
+import { siteActor } from "../actor";
+import { applyImport, planImport, type ImportEngine } from "../plan";
 import type { DryRunBody, ImportReportEntry, ImportSource } from "../contract";
 
 /** The old SEO group each type keeps, translated where `localized` is set. */
@@ -59,6 +65,21 @@ function counted({ data }: { data?: unknown }) {
 }
 
 let current: TestNextly | undefined;
+/** The SEO plugin's context, as it started. */
+const seen: { ctx?: PluginContext } = {};
+
+/** The SEO plugin, its context noted as it starts. */
+function noted(
+  plugin: ReturnType<typeof seoPlugin>
+): ReturnType<typeof seoPlugin> {
+  return {
+    ...plugin,
+    init(ctx: PluginContext) {
+      seen.ctx = ctx;
+      return plugin.init?.(ctx);
+    },
+  };
+}
 
 afterEach(async () => {
   failing = undefined;
@@ -140,30 +161,32 @@ async function boot(
       : {}),
     seedPublic: true,
     plugins: [
-      seoPlugin(
-        options.languages
-          ? {
-              collections: ["articles", "pages"],
-              singles: ["home"],
-              sitemap: false,
-            }
-          : {
-              collections: ["notes"],
-              singles: ["about"],
-              sitemap: false,
-              // A title the importer may write but never read, where asked.
-              ...(options.titleUnread === true
-                ? {
-                    fields: [
-                      text({
-                        name: "metaTitle",
-                        access: { read: () => false },
-                      }),
-                      textarea({ name: "metaDescription" }),
-                    ],
-                  }
-                : {}),
-            }
+      noted(
+        seoPlugin(
+          options.languages
+            ? {
+                collections: ["articles", "pages"],
+                singles: ["home"],
+                sitemap: false,
+              }
+            : {
+                collections: ["notes"],
+                singles: ["about"],
+                sitemap: false,
+                // A title the importer may write but never read, where asked.
+                ...(options.titleUnread === true
+                  ? {
+                      fields: [
+                        text({
+                          name: "metaTitle",
+                          access: { read: () => false },
+                        }),
+                        textarea({ name: "metaDescription" }),
+                      ],
+                    }
+                  : {}),
+              }
+        )
       ),
     ],
     collections: options.languages
@@ -375,6 +398,32 @@ async function save(
     data: { ...data, _overwrite: true },
     ...(locale === undefined ? {} : { locale }),
   } as never);
+}
+
+/** The import engine as the site, for a step a route can't reach. */
+function engineOf(): ImportEngine {
+  const ctx = seen.ctx;
+  if (ctx === undefined) throw new Error("the SEO plugin never started");
+  return {
+    ctx,
+    actor: siteActor(ctx),
+    setup: {
+      targets: ["articles", "pages", "single:home"],
+      readRules: readSeoRules,
+      checks: {
+        targets: ["articles", "pages"],
+        singles: ["home"],
+        readers: {
+          readRules: readSeoRules,
+          readStructuredDataRules: structuredDataFromSettings(
+            rulesFromOptions(undefined, undefined)
+          ),
+          readSocialCardRules: noSocialCardRules,
+        },
+      },
+      pagePermissions: false,
+    },
+  };
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -837,6 +886,44 @@ describe.each(getConfiguredTestDialects())(
         outcome: "set",
         set: ["canonical"],
       });
+    });
+
+    it("refuses to write a published version a draft was saved beside after the dry run, publishing nothing", async () => {
+      const { t } = await boot(dialect, { languages: true });
+      const roadmap = await create(
+        t,
+        "articles",
+        { title: "Roadmap", slug: "roadmap", status: "published" },
+        "en"
+      );
+      await save(
+        t,
+        "articles",
+        roadmap,
+        {
+          title: "Fahrplan",
+          status: "published",
+          meta: { seoTitle: "Was als Nächstes kommt" },
+        },
+        "de"
+      );
+      const plan = await planImport(engineOf(), { source: SOURCE });
+      expect(
+        plan.pages.find(page => page.id === roadmap && page.locale === "de")
+      ).toMatchObject({ write: "live", inTransaction: false });
+      // An editor saves a German draft before the import is applied.
+      await save(t, "articles", roadmap, { title: "Fahrplan (neu)" }, "de");
+
+      await expect(applyImport(plan)).rejects.toThrow(
+        /saved after the dry run/
+      );
+      const live = await version(t, "articles", roadmap, { locale: "de" });
+      // The draft was not published, and nothing was imported.
+      expect(live.title).toBe("Fahrplan");
+      expect(typedTitle(live)).toBe("");
+      expect(
+        await version(t, "articles", roadmap, { locale: "de", draft: true })
+      ).toMatchObject({ title: "Fahrplan (neu)", _isWorkingDraft: true });
     });
 
     it("leaves every version as it was when a save fails part-way", async () => {
