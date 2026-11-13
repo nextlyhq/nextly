@@ -38,9 +38,17 @@ export async function refuseKeysRowsWouldBreak(args: {
 }): Promise<void> {
   const lower = (name: string) => name.toLowerCase();
   const renames = renamesOf(args.operations);
+  // What this apply creates: whole tables, and columns on tables that stand.
   const created = new Set(
     args.operations.flatMap(op =>
       op.type === "add_table" ? [lower(op.table.name)] : []
+    )
+  );
+  const addedColumns = new Set(
+    args.operations.flatMap(op =>
+      op.type === "add_column"
+        ? [`${lower(op.tableName)}.${lower(op.column.name)}`]
+        : []
     )
   );
   const liveColumns = new Map(
@@ -64,9 +72,15 @@ export async function refuseKeysRowsWouldBreak(args: {
     }
     // The target's table and column as they stand before this apply, which may rename either.
     const target = liveNames(renames, referencesTable, referencesColumns[0]);
-    // A target this apply creates holds no rows yet, so every value the column holds breaks it.
-    // Any other target is read as it stands, a core table such as `users` among them.
-    const targetIsLive = !created.has(lower(referencesTable));
+    // A target table or column this apply creates holds no value yet, so every value the source
+    // holds breaks it. Any other target is read as it stands, a core table such as `users` among
+    // them.
+    // A column the apply adds holds no value any source row could match yet either.
+    const targetIsLive =
+      !created.has(lower(referencesTable)) &&
+      !addedColumns.has(
+        `${lower(referencesTable)}.${lower(referencesColumns[0])}`
+      );
     const [row] = await querySqlRows<{ n: number | string }>(
       args.db,
       args.dialect,

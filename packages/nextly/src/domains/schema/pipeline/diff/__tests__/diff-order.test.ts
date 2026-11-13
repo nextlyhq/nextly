@@ -323,3 +323,46 @@ describe("diffSnapshots — a key renamed while its column is retyped", () => {
     ).toBeLessThan(at(op => op.type === "change_column_type"));
   });
 });
+
+describe("diffSnapshots — a key renamed while its referenced column is dropped", () => {
+  it("drops the old key before the column it references", () => {
+    const authors: TableSpec = {
+      ...table("authors"),
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+        { name: "code", type: "varchar(36)", nullable: true },
+      ],
+    };
+    const authorsAfter: TableSpec = { ...table("authors") };
+    const posts: TableSpec = {
+      ...table("posts", ["authors"]),
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+        { name: "author", type: "varchar(36)", nullable: true },
+      ],
+      foreignKeys: [
+        { ...key("posts", "author", "authors"), referencesColumns: ["code"] },
+      ],
+    };
+    const moved: TableSpec = {
+      ...posts,
+      foreignKeys: [
+        { ...key("posts", "author", "authors"), name: "fk_posts_author_2" },
+      ],
+    };
+    const ops = diffSnapshots(
+      { tables: [authors, posts] },
+      { tables: [authorsAfter, moved] }
+    );
+    const at = (pred: (op: Operation) => boolean) => ops.findIndex(pred);
+    expect(
+      at(
+        op =>
+          op.type === "drop_foreign_key" &&
+          op.foreignKey.name === "fk_posts_author"
+      )
+    ).toBeLessThan(
+      at(op => op.type === "drop_column" && op.columnName === "code")
+    );
+  });
+});

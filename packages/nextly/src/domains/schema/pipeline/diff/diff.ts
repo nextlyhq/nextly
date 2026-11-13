@@ -206,12 +206,13 @@ export function diffSnapshots(
   const dropIndexBeforeColumns: Operation[] = [];
   const dropIndexAfterAdds: Operation[] = [];
   // A replaced key that something in this diff needs gone is dropped first after all: kept until
-  // its replacement is added, it would block the drop of the table it points at, or (MySQL) a
-  // change of type of a column at either end.
+  // its replacement is added, it would block the drop of the table it points at, or of a column
+  // at either end, or (MySQL) a change of type of one.
   const droppedNames = new Set(droppedTables.map(table => table.name));
+  // Every column this diff retypes or drops, at either end of a key: neither runs under it.
   const retyped = new Set(
     columnOps.flatMap(op =>
-      op.type === "change_column_type"
+      op.type === "change_column_type" || op.type === "drop_column"
         ? [`${op.tableName}\u0000${op.columnName}`]
         : []
     )

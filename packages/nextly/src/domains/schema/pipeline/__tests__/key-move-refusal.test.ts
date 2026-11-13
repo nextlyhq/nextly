@@ -122,4 +122,34 @@ describe("refuseKeysRowsWouldBreak", () => {
     expect(asked[0]).toContain('"code"');
     expect(asked[0]).not.toContain('"external_code"');
   });
+
+  it("counts every value against a target column this apply adds, which holds none yet", async () => {
+    const { db, asked } = counting(1);
+    const operations: Operation[] = [
+      {
+        type: "add_column",
+        tableName: "dc_codes",
+        column: { name: "external_code", type: "text", nullable: true },
+      },
+      {
+        type: "add_foreign_key",
+        tableName: "dc_notes",
+        foreignKey: {
+          ...key,
+          referencesTable: "dc_codes",
+          referencesColumns: ["external_code"],
+        },
+      },
+    ];
+    await expect(
+      refuseKeysRowsWouldBreak({
+        db,
+        dialect: "sqlite",
+        desired,
+        live,
+        operations,
+      })
+    ).rejects.toThrow();
+    expect(asked[0]).not.toContain('"external_code"');
+  });
 });
