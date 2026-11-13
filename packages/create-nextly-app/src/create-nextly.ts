@@ -32,7 +32,7 @@ import {
   writesInitialMigration,
 } from "./installers/initial-migration";
 import { recordLaunchingPackageManager } from "./installers/package-manager-field";
-import { DATABASES } from "./lib/choices";
+import { DATABASES, connectionMismatch } from "./lib/choices";
 import { holdsCredentials, redactConnection } from "./lib/connection-string";
 import {
   resolveTemplateSource,
@@ -179,6 +179,18 @@ export async function createNextly(
   const existingProject =
     options.projectType !== "plugin" && (await isExistingNextProject(cwd));
 
+  // --- The connection string agrees with the database ---
+  //
+  // Here, not only in the command line, so a direct call cannot write a URL
+  // beside another database's dialect and adapter.
+  if (options.databaseUrl !== undefined) {
+    const mismatch = connectionMismatch(options.database, options.databaseUrl);
+    if (mismatch) {
+      p.cancel(mismatch);
+      process.exit(1);
+    }
+  }
+
   // --- Without a terminal, every answer comes from a flag ---
   //
   // Checked before any prompt, install or write, so a run in CI that lacks
@@ -224,19 +236,35 @@ export async function createNextly(
   // leaves two lockfiles, or is refused part-way by Corepack where the app
   // declares its manager, so it is refused here with nothing written.
   if (existingProject && options.packageManager) {
-    const installedWith =
-      (await installedAppPackageManager(cwd)) ??
-      (await declaredAppPackageManager(cwd));
-    if (installedWith && installedWith !== options.packageManager) {
+    // Each signal on its own: a stale lockfile beside a declaration for
+    // another manager is as mixed as either disagreeing with the flag.
+    const signals = [
+      { manager: await installedAppPackageManager(cwd), what: "its lockfile" },
+      {
+        manager: await declaredAppPackageManager(cwd),
+        what: "its package.json",
+      },
+    ].filter(signal => signal.manager !== undefined);
+    const disagreeing = signals.filter(
+      signal => signal.manager !== options.packageManager
+    );
+    if (disagreeing.length > 0) {
       telemetry.capture("scaffold_failed", {
         stage: "detect",
         error_code: "unknown",
         duration_ms: Date.now() - overallStartedAt,
       });
+      const setUp = signals
+        .map(signal => `${signal.manager} (${signal.what})`)
+        .join(" and ");
+      const managers = [...new Set(signals.map(signal => signal.manager))];
+      const remedy =
+        managers.length === 1
+          ? `Leave out --package-manager, or pass --package-manager ${managers[0]}.`
+          : "Make the app use one manager, then pass that one to --package-manager, or leave the flag out.";
       p.cancel(
-        `This app is set up for ${installedWith}; installing it with ${options.packageManager} ` +
-          `would mix two package managers. Leave out --package-manager, or pass --package-manager ${installedWith}. ` +
-          "Nothing was written."
+        `This app is set up for ${setUp}; installing it with ${options.packageManager} ` +
+          `would mix package managers. ${remedy} Nothing was written.`
       );
       process.exit(1);
     }

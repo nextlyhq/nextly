@@ -11,9 +11,9 @@ import {
   APPROACHES,
   DATABASES,
   PACKAGE_MANAGERS,
-  databaseOfUrl,
+  connectionMismatch,
 } from "./lib/choices";
-import { redactConnection } from "./lib/connection-string";
+import { redactConnection, redactUrlsIn } from "./lib/connection-string";
 import { packageVersion } from "./lib/package-version";
 import { invalidChoiceMessage } from "./lib/suggest";
 import { getAvailableTemplateNames } from "./lib/templates";
@@ -51,7 +51,8 @@ interface CliOptions {
 
 /** Stop with a one-line refusal, before anything is written. */
 function refuse(message: string): never {
-  console.error(`Error: ${message}`);
+  // A value echoed back may be a connection string given to the wrong flag.
+  console.error(`Error: ${redactUrlsIn(message)}`);
   process.exit(1);
 }
 
@@ -76,8 +77,13 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
       "Scaffold a new Nextly CMS project or add Nextly to an existing Next.js app"
     )
     .version(packageVersion())
-    // A misspelt flag is refused, with the nearest one named.
+    // A misspelt flag is refused, with the nearest one named. Commander
+    // quotes the whole argument, so `--database-urll=postgresql://user:pw@…`
+    // would print the password: every error it writes is scrubbed of URLs.
     .showSuggestionAfterError(true)
+    .configureOutput({
+      outputError: (text, write) => write(redactUrlsIn(text)),
+    })
     // No default value here on purpose: when the user omits the argument we
     // want `directory` to arrive as `undefined` so the interactive prompt
     // can ask for a folder name. The earlier default of "." caused no-arg
@@ -227,28 +233,12 @@ A connection string with a password, kept out of the command line:
           if (!databaseUrl) refuse("--database-url was given an empty value.");
         }
 
-        // A connection string is for one database, and the scaffold writes
-        // the dialect beside it, so the two must agree. Asked for together
-        // rather than inferred, so a URL never silently picks the database.
         if (databaseUrl !== undefined) {
-          const urlDatabase = databaseOfUrl(databaseUrl);
-          if (!urlDatabase) {
-            refuse(
-              `--database-url is not a connection string for ${DATABASES.join(", ")}: ` +
-                "it should start with postgresql://, mysql:// or file:."
-            );
-          }
-          if (!options.database) {
-            refuse(
-              `--database-url needs --database too. Pass -d ${urlDatabase}.`
-            );
-          }
-          if (urlDatabase !== options.database) {
-            refuse(
-              `--database-url is a ${urlDatabase} connection string, but --database is ${options.database}. ` +
-                `Pass -d ${urlDatabase}, or a ${options.database} URL.`
-            );
-          }
+          const mismatch = connectionMismatch(
+            options.database as DatabaseType | undefined,
+            databaseUrl
+          );
+          if (mismatch) refuse(mismatch);
         }
 
         telemetry.capture("scaffold_started", {

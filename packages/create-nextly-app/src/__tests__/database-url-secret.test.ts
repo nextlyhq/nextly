@@ -13,12 +13,17 @@ import {
   connectionSecrets,
   holdsCredentials,
   redactConnection,
+  redactUrlsIn,
+  safeConnection,
 } from "../lib/connection-string";
+
+import { createNextly } from "../create-nextly";
 
 import { ui } from "./clack-recorder";
 import {
   type FakeRun,
   HERMETIC,
+  TEMPLATES,
   USER_AGENTS,
   captureConsole,
   installFakeManagers,
@@ -178,6 +183,42 @@ describe("the connection string is kept secret", () => {
     expect(allOutput()).toContain("Pass -d postgresql");
   });
 
+  it("a misspelt --database-url=<url> is refused without printing the URL's secrets", async () => {
+    const code = await runCli(
+      ["my-app", "-d", "postgresql", `--database-urll=${URL_WITH_SECRETS}`],
+      { cwd: work }
+    );
+
+    expect(code).toBe(1);
+    expect(await readdir(work)).toEqual([]);
+    expect(allOutput()).toContain(
+      "unknown option '--database-urll=postgresql://***@db.example.com:5432/app?***'"
+    );
+    for (const secret of SECRETS) expect(allOutput()).not.toContain(secret);
+  });
+
+  it("a direct createNextly call with a URL for another database is refused, nothing written", async () => {
+    vi.spyOn(process, "exit").mockImplementation(code => {
+      throw new Error(`process.exit(${String(code)})`);
+    });
+
+    await expect(
+      createNextly({
+        cwd: work,
+        defaults: true,
+        projectNameFromArg: "my-app",
+        database: "postgresql",
+        databaseUrl: "mysql://host/app",
+        skills: false,
+        localTemplatePath: TEMPLATES,
+      })
+    ).rejects.toThrow("process.exit(1)");
+    expect(await readdir(work)).toEqual([]);
+    expect(allOutput()).toContain(
+      "is a mysql connection string, but --database is postgresql"
+    );
+  });
+
   it("--database-url - with nothing on standard input is refused, nothing written", async () => {
     const code = await runCli([...FLAGS, "--database-url", "-", ...HERMETIC], {
       cwd: work,
@@ -250,6 +291,33 @@ describe("scrubbing printed text", () => {
     );
     expect(redactConnection('SSL is required for user "postgres"', url)).toBe(
       'SSL is required for user "***"'
+    );
+  });
+
+  it("masks a one- or two-character user name and password", () => {
+    const url = "postgresql://ab:xy@host/db";
+    expect(
+      redactConnection(
+        'authentication failed for user "ab" (password "xy")',
+        url
+      )
+    ).toBe('authentication failed for user "***" (password "***")');
+  });
+
+  it("masks the whole of an ambiguous URL, whose host may be the password's end", () => {
+    const url = "postgresql://user:pa@ss?word@db.example/app";
+    expect(safeConnection(url)).toBe("postgresql://***");
+    const said = redactConnection(`cannot reach ${url}; user:pa@ss?word`, url);
+    expect(said).not.toMatch(/pa@ss|ss\?word|word@/);
+  });
+
+  it("reduces every URL in a message to its safe form", () => {
+    expect(
+      redactUrlsIn(
+        `error: unknown option '--database-urll=${URL_WITH_SECRETS}'`
+      )
+    ).toBe(
+      "error: unknown option '--database-urll=postgresql://***@db.example.com:5432/app?***'"
     );
   });
 

@@ -178,6 +178,35 @@ describe("create-nextly-app without a terminal", () => {
     expect(allOutput()).toContain("--package-manager pnpm");
   });
 
+  it("a stale lockfile beside another declared manager is refused either flag, untouched", async () => {
+    const app = path.join(dir, "app");
+    await mkdir(path.join(app, "src", "app"), { recursive: true });
+    const manifest = JSON.stringify({
+      name: "app",
+      packageManager: "yarn@4.9.2",
+      dependencies: { next: "16.0.0", react: "19.2.0", "react-dom": "19.2.0" },
+    });
+    await writeFile(path.join(app, "package.json"), manifest);
+    await writeFile(
+      path.join(app, "pnpm-lock.yaml"),
+      "lockfileVersion: '9.0'\n"
+    );
+    await writeFile(path.join(app, "next.config.ts"), "export default {};\n");
+    const before = (await readdir(app)).sort();
+
+    const code = await runCli(
+      [".", "--package-manager", "pnpm", "--yes", ...HERMETIC],
+      { cwd: app }
+    );
+
+    expect(code).toBe(1);
+    expect((await readdir(app)).sort()).toEqual(before);
+    expect(await fakes.calls()).toEqual([]);
+    expect(allOutput()).toContain(
+      "pnpm (its lockfile) and yarn (its package.json)"
+    );
+  });
+
   it("an app whose package.json declares pnpm is refused --package-manager yarn, untouched", async () => {
     const app = path.join(dir, "app");
     await mkdir(path.join(app, "src", "app"), { recursive: true });

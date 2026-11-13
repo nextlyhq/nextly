@@ -6,14 +6,17 @@
  */
 
 const MASK = "***";
-// Shorter fragments would match ordinary words in a message ("db", "1"), and
-// the whole URL and its query string are scrubbed regardless.
-const SHORTEST_SCRUBBED = 3;
+// A query value shorter than this is masked only as `key=value`: alone, it
+// would match ordinary words in a message (`ssl=1` and "exit code 1"). The
+// user name and password are masked at any length, being the credentials.
+const SHORTEST_BARE_QUERY_VALUE = 3;
 
 /**
  * The connection string's parts, read by hand rather than by `URL`, which
  * refuses a password holding an unencoded `#`, `/` or `?`: the credentials run
  * from `//` to the last `@` before the query, and the query from there on.
+ * `ambiguous` when an `@` also follows the query's start, as in a password
+ * holding both `@` and `?`: where the credentials end cannot then be told.
  */
 function splitConnection(url: string) {
   const slashes = url.indexOf("//");
@@ -25,9 +28,11 @@ function splitConnection(url: string) {
   const at = firstAt < 0 ? -1 : rest.lastIndexOf("@", authorityEnd);
   return {
     scheme,
+    rest,
     userinfo: at > 0 ? rest.slice(0, at) : "",
     hostAndPath: rest.slice(at + 1, authorityEnd),
     query: queryFrom < 0 ? "" : rest.slice(queryFrom + 1),
+    ambiguous: rest.lastIndexOf("@") > authorityEnd,
   };
 }
 
@@ -35,14 +40,16 @@ function splitConnection(url: string) {
 export function connectionSecrets(url: string | undefined): string[] {
   if (!url) return [];
   const secrets = new Set<string>([url]);
-  const { userinfo, query } = splitConnection(url);
-  if (userinfo) {
-    secrets.add(userinfo);
-    const colon = userinfo.indexOf(":");
+  const { rest, userinfo, query, ambiguous } = splitConnection(url);
+  // Where the credentials' end is ambiguous, both readings are secret.
+  const userinfos = ambiguous
+    ? [userinfo, rest.slice(0, rest.lastIndexOf("@"))]
+    : [userinfo];
+  for (const info of userinfos.filter(Boolean)) {
+    secrets.add(info);
+    const colon = info.indexOf(":");
     const parts =
-      colon < 0
-        ? [userinfo]
-        : [userinfo.slice(0, colon), userinfo.slice(colon + 1)];
+      colon < 0 ? [info] : [info.slice(0, colon), info.slice(colon + 1)];
     for (const part of parts) {
       secrets.add(part);
       secrets.add(safeDecode(part));
@@ -52,12 +59,16 @@ export function connectionSecrets(url: string | undefined): string[] {
     secrets.add(query);
     for (const pair of query.split("&")) {
       const equals = pair.indexOf("=");
-      const value = equals < 0 ? pair : pair.slice(equals + 1);
-      for (const form of [pair, value, safeDecode(value)]) secrets.add(form);
+      secrets.add(pair);
+      if (equals < 0) continue;
+      const value = pair.slice(equals + 1);
+      for (const form of [value, safeDecode(value)]) {
+        if (form.length >= SHORTEST_BARE_QUERY_VALUE) secrets.add(form);
+      }
     }
   }
   return [...secrets]
-    .filter(secret => secret.length >= SHORTEST_SCRUBBED)
+    .filter(secret => secret.length > 0)
     .sort((a, b) => b.length - a.length);
 }
 
@@ -83,11 +94,28 @@ export function redactConnection(
   return out.split(placeholder).join(safeConnection(url));
 }
 
-/** `postgresql://***@db.example.com:5432/app?***`: no user, password or query. */
+/**
+ * `postgresql://***@db.example.com:5432/app?***`: no user, password or query.
+ * An ambiguous URL keeps its scheme only, since what reads as its host may be
+ * the end of the password.
+ */
 export function safeConnection(url: string): string {
-  const { scheme, userinfo, hostAndPath, query } = splitConnection(url);
+  const { scheme, userinfo, hostAndPath, query, ambiguous } =
+    splitConnection(url);
   if (!scheme) return MASK;
+  if (ambiguous) return `${scheme}//${MASK}`;
   return `${scheme}//${userinfo ? `${MASK}@` : ""}${hostAndPath}${query ? `?${MASK}` : ""}`;
+}
+
+/**
+ * `text` with every URL in it reduced to its safe form. For messages printed
+ * before the connection string is known, such as a parse error quoting a
+ * misspelt `--database-urll=postgresql://user:password@host/db`.
+ */
+export function redactUrlsIn(text: string): string {
+  return text.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s'"`]+/gi, url =>
+    safeConnection(url)
+  );
 }
 
 function standingAlone(fragment: string): RegExp {

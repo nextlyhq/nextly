@@ -36,3 +36,33 @@ export function databaseOfUrl(url: string): DatabaseType | undefined {
   if (scheme === "file") return "sqlite";
   return undefined;
 }
+
+/**
+ * Why `url` cannot be `database`'s connection string, or undefined when it
+ * can. A connection string is for one database, and the scaffold writes the
+ * dialect beside it, so the two must agree; the database is asked for rather
+ * than inferred, so a URL never silently picks it. One check for the command
+ * line and a direct `createNextly` call alike.
+ */
+export function connectionMismatch(
+  database: DatabaseType | undefined,
+  url: string
+): string | undefined {
+  const urlDatabase = databaseOfUrl(url);
+  if (!urlDatabase) {
+    return (
+      `--database-url is not a connection string for ${DATABASES.join(", ")}: ` +
+      "it should start with postgresql://, mysql:// or file:."
+    );
+  }
+  if (!database) {
+    return `--database-url needs --database too. Pass -d ${urlDatabase}.`;
+  }
+  if (urlDatabase !== database) {
+    return (
+      `--database-url is a ${urlDatabase} connection string, but --database is ${database}. ` +
+      `Pass -d ${urlDatabase}, or a ${database} URL.`
+    );
+  }
+  return undefined;
+}
