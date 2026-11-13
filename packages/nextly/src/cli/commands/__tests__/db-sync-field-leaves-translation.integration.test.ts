@@ -20,6 +20,7 @@ import { readRecordedEntities } from "../../../domains/i18n/migration/recorded-b
 import { defineFieldGroup } from "../../../field-groups/config/define-field-group";
 import { clearCachedSnapshot } from "../../../init/schema-snapshot-cache";
 import type { LoadConfigResult } from "../../utils/config-loader";
+import { planDbSync } from "../db-sync-dry-run";
 import { syncSchemaInOrder } from "../sync-schema";
 
 import {
@@ -339,5 +340,43 @@ describe("db:sync making a translated field shared (sqlite)", () => {
         await query(`SELECT "body" FROM "${table}" WHERE "id" = 'a'`)
       ).toEqual([{ body: "Hello" }]);
     }
+  });
+  // The dry run asks what the sync asks before it changes anything, in the same words.
+  it("has the dry run report the refusal the sync would stop on, changing nothing", async () => {
+    await seed({ a: { en: "Hello", es: "Hola" }, b: {} });
+    const before = await columnsOf(TABLE);
+
+    const plan = await planDbSync(
+      {
+        config: configWith({ localized: false, required: true }),
+      } as LoadConfigResult,
+      target!.cli,
+      target!.options,
+      target!.context
+    );
+
+    expect(plan.refusals?.join("\n")).toMatch(
+      /would have no body once it is shared/
+    );
+    expect(await columnsOf(TABLE)).toEqual(before);
+    expect(await columnsOf(COMPANION)).toContain("body");
+  });
+
+  it("has the dry run name the move it would make, without making it", async () => {
+    await seed({ a: { en: "Hello", es: "Hola" } });
+
+    const plan = await planDbSync(
+      { config: configWith({ localized: false }) } as LoadConfigResult,
+      target!.cli,
+      target!.options,
+      target!.context
+    );
+
+    expect(plan.refusals ?? []).toEqual([]);
+    expect(plan.notes?.join("\n")).toMatch(
+      new RegExp(`moves the values of body in ${SLUG}`)
+    );
+    expect(await columnsOf(COMPANION)).toContain("body");
+    expect(await archived()).toEqual([]);
   });
 });

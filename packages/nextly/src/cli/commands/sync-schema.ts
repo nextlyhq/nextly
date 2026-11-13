@@ -86,28 +86,33 @@ function translationsStayPut(
 }
 
 /**
- * Steps 1 to 4 of the module, under the run's `--no-auto-sync` and production rules. Called inside
- * the run's pinned field-type scope: a companion holds the translated subset of the same fields,
- * so it resolves plugin types against the config being materialized, as the pushes do.
+ * Step 1 of the module, read only: the registry as it is before the run, and from it the fields a
+ * translated entity makes shared (`fieldsLeavingUnder`), with those that can't be moved reported
+ * through `report.error` and named in `refused`. The sync stops on a refusal before changing
+ * anything, and its dry run (`db-sync-dry-run.ts`) reports the same refusals and plans its push
+ * with the same settings held, so the two cannot disagree about whether the sync can go ahead.
  */
-export async function syncSchemaInOrder(
+export async function fieldsLeavingForSync(
   configResult: LoadConfigResult,
   adapter: CLIDatabaseAdapter,
   options: ResolvedDevOptions,
-  context: CommandContext
-): Promise<void> {
-  const { logger } = context;
+  report: Pick<CommandContext["logger"], "warn" | "error">
+): Promise<{
+  recordedBefore: Awaited<ReturnType<typeof readRecordedEntities>>;
+  mover: typeof LeavingMove | undefined;
+  leaving: Awaited<ReturnType<typeof LeavingMove.fieldsLeavingUnder>>;
+}> {
   const { config } = configResult;
   const live = adapter as unknown as DrizzleAdapter;
   const autoSync = options.autoSync !== false;
   // The pushes and the companion passes change nothing in production, so nothing is moved there.
   const moves = autoSync && process.env.NODE_ENV !== "production";
 
-  // Every entity as the registry records it before the syncs below rewrite it, so the companion
-  // passes can tell a field this run newly translates, and the move a field it makes shared.
+  // Every entity as the registry records it before the syncs rewrite it, so the companion passes
+  // can tell a field this run newly translates, and the move a field it makes shared.
   const recordedBefore = autoSync
     ? await readRecordedEntities(live, config, error =>
-        logger.warn(
+        report.warn(
           `The registry could not be read, so no translations column is judged this run: ${describeError(error)}`
         )
       )
@@ -125,9 +130,33 @@ export async function syncSchemaInOrder(
         config,
         new Map(),
         recordedBefore,
-        m => logger.error(m)
+        m => report.error(m)
       )
     : { entries: [], refused: [] };
+  return { recordedBefore, mover, leaving };
+}
+
+/**
+ * Steps 1 to 4 of the module, under the run's `--no-auto-sync` and production rules. Called inside
+ * the run's pinned field-type scope: a companion holds the translated subset of the same fields,
+ * so it resolves plugin types against the config being materialized, as the pushes do.
+ */
+export async function syncSchemaInOrder(
+  configResult: LoadConfigResult,
+  adapter: CLIDatabaseAdapter,
+  options: ResolvedDevOptions,
+  context: CommandContext
+): Promise<void> {
+  const { logger } = context;
+  const { config } = configResult;
+  const live = adapter as unknown as DrizzleAdapter;
+  const autoSync = options.autoSync !== false;
+  const { recordedBefore, mover, leaving } = await fieldsLeavingForSync(
+    configResult,
+    adapter,
+    options,
+    logger
+  );
   if (leaving.refused.length > 0) {
     translationsStayPut(leaving.refused, false);
   }
