@@ -13,6 +13,7 @@ import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
+import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import {
   ownSessionId,
   ownSessionIdText,
@@ -451,6 +452,9 @@ async function runUnitStatements(
         await tx.execute(sent(statement));
       }
       bound?.onStatement?.(statements.length);
+      // A unit may rewrite registry rows (a schema save's upsert of its own
+      // row): what the transaction read of them before is read again.
+      clearRegistryRowCache();
       if (after !== undefined) {
         await tx.restoreSession();
         await after(tx.db, statements.length);

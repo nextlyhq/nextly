@@ -128,6 +128,12 @@ export interface EntryFormContextValue {
    * and then no row's field has an address.
    */
   fields?: readonly FieldConfig[];
+
+  /**
+   * Whether the document keeps recovery points, as its editor read the
+   * autosave setting. Absent where the surface did not say.
+   */
+  keepsRecoveryPoints?: boolean;
 }
 
 /**
@@ -269,6 +275,13 @@ export interface EntryFormContextProviderProps {
   fields?: readonly FieldConfig[];
 
   /**
+   * Whether the document keeps recovery points: its autosave setting, as the
+   * editor read it. Omitted where the surface does not know, and a recorder
+   * then records as it always has, leaving the server to refuse.
+   */
+  keepsRecoveryPoints?: boolean;
+
+  /**
    * Child components.
    */
   children: ReactNode;
@@ -310,6 +323,7 @@ export function EntryFormContextProvider({
   renderEntryFields,
   openPreview,
   fields,
+  keepsRecoveryPoints,
   children,
 }: EntryFormContextProviderProps): JSX.Element {
   /*
@@ -343,6 +357,8 @@ export function EntryFormContextProvider({
       ...(openPreview === undefined ? {} : { preview: { open: openPreview } }),
       // Spread for the same reason: absent means the surface did not say.
       ...(fields === undefined ? {} : { fields }),
+      // Spread for the same reason: absent means the editor did not say.
+      ...(keepsRecoveryPoints === undefined ? {} : { keepsRecoveryPoints }),
     }),
     [
       entryId,
@@ -354,6 +370,7 @@ export function EntryFormContextProvider({
       renderEntryFields,
       openPreview,
       fields,
+      keepsRecoveryPoints,
     ]
   );
 
@@ -456,6 +473,25 @@ export function useDocumentIdentity(): DocumentIdentity | null {
     slug: context.collectionSlug,
     documentId: context.entryId,
   };
+}
+
+/**
+ * Whether a recorder inside the surrounding document may store recovery points.
+ *
+ * The editor reads the document's autosave setting once and hands the answer
+ * down, so a field that records its own state (the page builder's canvas)
+ * stays quiet exactly where the editor's own recording does. Without it, every
+ * editing session on a document with autosave off would send recordings the
+ * server refuses. Where nothing said, recording stays on: the server still
+ * enforces the setting.
+ *
+ * Kept off the plugin-facing {@link DocumentIdentity}, which names a document
+ * and nothing about how it is configured.
+ *
+ * @returns `false` only when the editor said the document keeps none
+ */
+export function useDocumentKeepsRecoveryPoints(): boolean {
+  return useContext(EntryFormContext)?.keepsRecoveryPoints !== false;
 }
 
 /**

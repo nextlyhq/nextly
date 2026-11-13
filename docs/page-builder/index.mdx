@@ -516,6 +516,16 @@ holds is not found, and so is an entry with neither a published template nor a
 published own design (below). `createPublicContentPage` is the cached, pre-rendered
 form.
 
+To do something for each address the route does not find, such as logging it, pass
+your own `notFound` beside `pages`: a function that answers the miss as Next.js's
+`notFound()` does. The route calls it in place of `notFound()`, from the page and
+from `generateMetadata` alike, for a page and an entry; a handler that returns is
+followed by `notFound()`. `createBlocksPage` and `createSinglePage` take the same
+option. It is experimental: its name and shape may change before 1.0. The public forms
+(`createPublicContentPage`, `createPublicBlocksPage`, `createPublicSinglePage`) call it
+only with Cache Components on: without them a public page's answer is rendered once and
+kept, so a miss there is answered by `notFound()` and the handler is not called.
+
 An entry with its own design ([An entry's own design](/docs/page-builder/compose-through-the-api#an-entrys-own-design))
 is drawn with that design instead, and takes its SEO settings from it, once the design
 is published. Until then, and after it is removed, the entry keeps its collection's

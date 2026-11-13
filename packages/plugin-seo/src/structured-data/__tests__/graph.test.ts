@@ -54,6 +54,13 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   },
 }));
 
+// The address record, holding no address here.
+vi.mock("../../address-record/store", async importOriginal => ({
+  ...(await importOriginal()),
+  ...(await import("../../address-record/__tests__/record-double"))
+    .recordDouble,
+}));
+
 /** An author as a route reads it populated, at `depth: 1`. */
 const SARA = { id: "a1", name: "Sara Khan", slug: "sara-khan" };
 

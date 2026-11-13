@@ -116,6 +116,23 @@ describe("ListView empty states", () => {
   });
 
   /**
+   * A listed group is drawn even with no rows, since its header carries a
+   * count and actions of its own, so a list of groups is not an empty list.
+   */
+  it("shows the groups, and no empty state, when there are groups but no rows", () => {
+    renderList({
+      rows: [],
+      empty: { title: "No users yet" },
+      grouping: {
+        groups: [{ id: "site", title: "Whole site" }],
+        groupOf: () => "site",
+      },
+    });
+    expect(screen.getByRole("rowgroup", { name: "Whole site" })).toBeTruthy();
+    expect(screen.queryByText("No users yet")).toBeNull();
+  });
+
+  /**
    * The positive control for the assertion above: with rows present the table
    * renders and the empty state does not. Without it, a ListView that rendered
    * NOTHING would satisfy "no table" just as well.

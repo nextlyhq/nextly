@@ -210,6 +210,12 @@ export interface SubmissionDocument {
   userAgent?: string;
   /** Which spam check flagged this, when one did. */
   spamReason?: string | null;
+  /**
+   * What it was asked, as the write seam stored it (`utils/asked-fields`):
+   * its fields' labels and option labels at the time. Absent on a
+   * submission stored before submissions kept it.
+   */
+  asked?: unknown;
   submittedAt: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -1299,9 +1305,10 @@ export interface ResolvedFormBuilderConfig {
   /**
    * Whether each redirect target collection is localized, keyed by slug.
    *
-   * Resolved at `init` from the collection's own registered metadata rather
-   * than asked for in options, because the collection already declares it and
-   * a second declaration drifts.
+   * Resolved at `init` from the collection's own declaration rather than
+   * asked for in options, because the collection already declares it and a
+   * second declaration drifts: the configuration's for a collection code
+   * declares, the registry row's for one made in the Schema Builder.
    *
    * It decides whether a target's main-row `status` answers for the document:
    * a localized collection publishes on a locale companion, so the row reads

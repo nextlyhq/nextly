@@ -20,12 +20,19 @@ import { defineCollection, text } from "nextly";
 import { createNextlyProxy } from "nextly/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ADDRESS_RECORD_SLUG } from "../../address-record/collection";
+import { statementsOf, writesAmong } from "../../__tests__/count-statements";
+import { lastCatchUp } from "../../address-record/catch-up";
+import { claimRows } from "../../address-record/__tests__/record-tables";
 import { keptSeoContext } from "../../not-found/report";
 import { seoPlugin } from "../../plugin";
 import { REDIRECTS_SLUG } from "../collection";
 import { redirectsProxyHandler } from "../proxy-handler";
-import { PROXY_QUIET_MS, readProxyStatus } from "../proxy-seen";
+import {
+  PROXY_QUIET_MS,
+  proxySeenNotes,
+  readProxyStatus,
+  recordProxySeen,
+} from "../proxy-seen";
 import { putRedirect, removeRedirect, type RedirectInput } from "../store";
 
 let current: TestNextly | undefined;
@@ -115,13 +122,9 @@ async function redirects(t: TestNextly) {
 }
 
 /** The record's held rows, as `locale|path` → holder collection. */
-async function holders(t: TestNextly) {
-  const { items } = await t.nextly.find({
-    collection: ADDRESS_RECORD_SLUG,
-    limit: 500,
-  });
+async function holders(_t: TestNextly) {
   return Object.fromEntries(
-    (items as Record<string, unknown>[])
+    (await claimRows())
       .filter(row => row.kind === "address" || row.kind === "range")
       .map(row => [
         `${row.locale}|${row.path}${row.kind === "range" ? "/*" : ""}`,
@@ -502,6 +505,73 @@ describe.each(getConfiguredTestDialects())("redirects (%s)", dialect => {
     expect(await ask("/gone")).toBe("served");
   });
 
+  it("answers 410 for an address gone for good, and a redirect sent there ends there", async () => {
+    const { seo } = await boot(dialect);
+    const gone = await put(seo, { source: "/retired", target: "", gone: true });
+    expect(gone).toMatchObject({ saved: { gone: true, target: "" } });
+
+    const response = await proxy(new Request("https://example.com/retired"));
+    expect(response?.status).toBe(410);
+    expect(response?.headers.get("location")).toBeNull();
+
+    // One hop to the gone address, which answers it: not a chain to join.
+    expect(
+      await put(seo, { source: "/older", target: "/retired" })
+    ).toMatchObject({ saved: { target: "/retired" }, chain: ["/retired"] });
+    expect(await ask("/older")).toBe("301 https://example.com/retired");
+
+    // Made a redirect again, it sends visitors on.
+    if (!("saved" in gone)) throw new Error("the address was not saved");
+    await seo.services.collections.withTransaction(tx =>
+      putRedirect(
+        seo,
+        tx,
+        { locale: "en", origin: "person", source: "/retired", target: "/now" },
+        gone.saved.id
+      )
+    );
+    expect(await ask("/retired")).toBe("301 https://example.com/now");
+  });
+
+  it("counts each request a redirect answers, in the background, with when it last did", async () => {
+    const { t, seo } = await boot(dialect);
+    await put(seo, { source: "/counted", target: "/here" });
+    await put(seo, { source: "/removed-for-good", target: "", gone: true });
+
+    const before = Date.now();
+    await ask("/counted");
+    await ask("/counted?ref=1");
+    await proxy(new Request("https://example.com/removed-for-good"));
+    await ask("/not-redirected");
+
+    await vi.waitFor(async () => {
+      const { items } = await t.nextly.find({
+        collection: REDIRECTS_SLUG,
+        limit: 10,
+      });
+      const counted = Object.fromEntries(
+        (items as Record<string, unknown>[]).map(row => [
+          String(row.source),
+          Number(row.hits),
+        ])
+      );
+      expect(counted).toEqual({ "/counted": 2, "/removed-for-good": 1 });
+    });
+    const { items } = await t.nextly.find({
+      collection: REDIRECTS_SLUG,
+      limit: 10,
+    });
+    const counted = (items as Record<string, unknown>[]).find(
+      row => row.source === "/counted"
+    );
+    const lastHit = counted?.lastHit;
+    expect(
+      Date.parse(
+        lastHit instanceof Date ? lastHit.toISOString() : String(lastHit)
+      )
+    ).toBeGreaterThanOrEqual(before - 1000);
+  });
+
   it("notes that the Proxy runs, which a site that never wired it has no note of", async () => {
     const { seo } = await boot(dialect);
     expect(await readProxyStatus(seo)).toEqual({
@@ -524,5 +594,35 @@ describe.each(getConfiguredTestDialects())("redirects (%s)", dialect => {
         )
       ).state
     ).toBe("quiet");
+  });
+
+  it("a new server's first request writes nothing where the Proxy was noted within the hour", async () => {
+    const { seo } = await boot(dialect);
+    // The start's own catch-up writes its notes first, outside the count.
+    await lastCatchUp();
+    const noted = new Date(Date.now() - 10 * 60 * 1000);
+    await recordProxySeen(seo, noted);
+
+    // A new process: its own note-taker has noted nothing yet, and the note
+    // it would make is read against the one stored.
+    const statements = await statementsOf(dialect, async () => {
+      await proxySeenNotes().note(seo);
+      await recordProxySeen(seo);
+    });
+
+    expect(writesAmong(statements)).toEqual([]);
+    expect((await readProxyStatus(seo)).lastSeen).toBe(noted.toISOString());
+  });
+
+  it("notes the Proxy again where its last note is over an hour old", async () => {
+    const { seo } = await boot(dialect);
+    await recordProxySeen(seo, new Date(Date.now() - 2 * 60 * 60 * 1000));
+    const at = Date.now();
+
+    await proxySeenNotes(() => at).note(seo);
+
+    expect((await readProxyStatus(seo)).lastSeen).toBe(
+      new Date(at).toISOString()
+    );
   });
 });

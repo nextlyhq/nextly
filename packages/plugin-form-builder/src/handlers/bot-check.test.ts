@@ -1,7 +1,7 @@
 /**
  * Bot checks: which provider a form uses, what a provider's answer means,
  * the request it is asked with, the options it is configured from, and what
- * a visitor's form and the start-up log are told.
+ * a visitor's form and the log is told when a check has no keys.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -15,7 +15,8 @@ import {
   botTokensOf,
   judgeBotToken,
   publicBotCheck,
-  warnUncheckedBotChecks,
+  warnUncheckedFormCheck,
+  warnUncheckedSiteDefault,
 } from "./bot-check";
 import { sendVerification, type VerifyFetch } from "./bot-check-send";
 
@@ -204,30 +205,87 @@ describe("what a visitor's form is told", () => {
   });
 });
 
-describe("the start-up warning", () => {
-  it("names the option for each check in use without a secret, once", async () => {
+describe("the warning that a check has no keys", () => {
+  it("is said at start for the site default, from the options alone", () => {
     const warn = vi.fn();
-    await warnUncheckedBotChecks({
-      spam: spam({
-        recaptcha: { enabled: true },
-        turnstile: { enabled: false, ...keys },
-      }),
-      forms: async () => [
-        { settings: { botCheck: "recaptcha" } },
-        { settings: {} },
-        { settings: { botCheck: "turnstile" } },
-      ],
-      readSettings: settings => settings as { botCheck?: "recaptcha" },
-      warn,
-    });
+    warnUncheckedSiteDefault(spam({ recaptcha: { enabled: true } }), warn);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]?.[0]).toMatch(
       /spamProtection\.recaptcha\.secretKey/
     );
-    expect(warn.mock.calls[0]?.[1]).toEqual({
-      provider: "recaptcha",
-      forms: 2,
+    expect(warn.mock.calls[0]?.[1]).toEqual({ provider: "recaptcha" });
+  });
+
+  it("is not said at start when the site default is off or ready", () => {
+    const warn = vi.fn();
+    warnUncheckedSiteDefault(spam(), warn);
+    warnUncheckedSiteDefault(
+      spam({ turnstile: { enabled: true, ...keys } }),
+      warn
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("is said when a form is saved naming a check without its keys", () => {
+    const warn = vi.fn();
+    const site = spam({ turnstile: { enabled: false, ...keys } });
+    warnUncheckedFormCheck({ botCheck: "recaptcha" }, site, "contact", warn);
+    expect(warn.mock.calls).toEqual([
+      [
+        expect.stringMatching(/spamProtection\.recaptcha\.secretKey/),
+        { provider: "recaptcha", form: "contact" },
+      ],
+    ]);
+  });
+
+  it("is not said for a saved form whose check is off, ready or the site's", () => {
+    const warn = vi.fn();
+    // The site default here has no keys: said at start, not at every save.
+    const site = spam({
+      recaptcha: { enabled: true },
+      turnstile: { enabled: false, ...keys },
     });
+    warnUncheckedFormCheck({ botCheck: "off" }, site, "a", warn);
+    warnUncheckedFormCheck({ botCheck: "turnstile" }, site, "b", warn);
+    warnUncheckedFormCheck({ botCheck: "default" }, site, "c", warn);
+    warnUncheckedFormCheck({}, site, "d", warn);
+    // A form's own legacy reCAPTCHA site key makes its check ready.
+    warnUncheckedFormCheck(
+      { botCheck: "recaptcha", captchaSiteKey: "legacy" },
+      spam({ recaptcha: { enabled: false, secretKey: "secret" } }),
+      "e",
+      warn
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("is said once when a submission is accepted unchecked, and again after a start", async () => {
+    const warn = vi.fn();
+    const site = spam({ turnstile: { enabled: false, siteKey: "site" } });
+    const judge = (form: string) =>
+      judgeBotCheck({
+        settings: { botCheck: "turnstile" },
+        spam: site,
+        tokens: {},
+        ip: undefined,
+        fetch: provider({ success: false }).fetch,
+        form,
+        warn,
+      });
+
+    expect(await judge("contact")).toBeUndefined();
+    expect(await judge("other")).toBeUndefined();
+    expect(warn.mock.calls).toEqual([
+      [
+        expect.stringMatching(/spamProtection\.turnstile\.secretKey/),
+        { provider: "turnstile", form: "contact" },
+      ],
+    ]);
+
+    // A start (or a reload) says what it finds afresh.
+    warnUncheckedSiteDefault(site, () => undefined);
+    await judge("other");
+    expect(warn).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -257,14 +315,12 @@ describe("a check missing a key", () => {
     expect(verdict).toEqual({ isSpam: true, reason: "recaptcha" });
   });
 
-  it("is named in the start-up warning", async () => {
+  it("is named in the start-up warning", () => {
     const warn = vi.fn();
-    await warnUncheckedBotChecks({
-      spam: spam({ turnstile: { enabled: true, secretKey: "secret" } }),
-      forms: async () => [],
-      readSettings: () => ({}),
-      warn,
-    });
+    warnUncheckedSiteDefault(
+      spam({ turnstile: { enabled: true, secretKey: "secret" } }),
+      warn
+    );
     expect(warn.mock.calls[0]?.[0]).toMatch(
       /spamProtection\.turnstile\.siteKey/
     );

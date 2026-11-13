@@ -12,6 +12,22 @@
  */
 import type { ImportTarget } from "./contract";
 
+/**
+ * Why a file can't be read as the export it was chosen as, in one sentence a
+ * person can act on. Thrown by the file readers, which run in the browser as
+ * well as on the server and so import nothing from the server; the import's
+ * routes answer it as invalid input.
+ */
+export class ImportFileRefused extends Error {
+  /** What kind of refusal it is, for the server's log. */
+  readonly reason: string;
+  constructor(message: string, reason: string) {
+    super(message);
+    this.name = "ImportFileRefused";
+    this.reason = reason;
+  }
+}
+
 /** A share image as a source names it: an id here, or an address. */
 export type ImageRef = { id: string } | { url: string };
 
@@ -32,10 +48,19 @@ export type Variables = "yoast" | "rankMath";
 
 /** How a record is matched to a page here. */
 export interface RecordMatch {
-  /** The page itself, where the record was read from it. */
-  page?: { type: string; id: string };
+  /**
+   * The page itself, where the record was read from it, and the version of
+   * it (`import/versions`) it was read from, where it was read from one.
+   */
+  page?: { type: string; id: string; version?: string };
   /** The address the record was served at, from the root. */
   path?: string;
+  /**
+   * The origin that address was served on, where the source wrote it in
+   * full: on a site whose languages have domains of their own, it says
+   * which language the address is in.
+   */
+  origin?: string;
   /** Its slug, where the source gives one. */
   slug?: string;
 }
@@ -77,6 +102,19 @@ export function textValue(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed === "" ? undefined : trimmed;
+}
+
+/** The origin of an address written in full, or none for a path alone. */
+export function originOfAddress(
+  address: string | undefined
+): string | undefined {
+  const text = textValue(address);
+  if (text === undefined || !/^https?:\/\//i.test(text)) return undefined;
+  try {
+    return new URL(text).origin;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

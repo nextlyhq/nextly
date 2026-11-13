@@ -424,9 +424,11 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     const id = await seedCollection();
     const dialog = PATHS.find(p => p.path.includes("schema dialog"));
     if (!dialog) throw new Error("the collection dialog path is missing");
+    // Matched anywhere in the statement: on PostgreSQL and MySQL a schema
+    // statement carries the run's lock claim ahead of it (`markedForSchemaLock`).
     const injected = failStatementsMatching(
       statement =>
-        statement.startsWith("INSERT INTO") &&
+        statement.includes("INSERT INTO") &&
         statement.includes("dc_posts_locales")
     );
 
@@ -486,21 +488,41 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     const id = await seedCollection();
     const dialog = PATHS.find(p => p.path.includes("schema dialog"));
     if (!dialog) throw new Error("the collection dialog path is missing");
-    // The registry write after the apply is refused, once.
-    const adapter = current.adapter as unknown as {
-      update(...args: unknown[]): Promise<unknown>;
-    };
-    const original = adapter.update.bind(adapter);
+    // The registry write after the apply is refused, once. It runs on the
+    // transaction it shares with the stored schema version, so the refusal
+    // sits on that transaction's `update` of the registry row.
+    const adapter = current.adapter;
+    const original = adapter.transaction.bind(adapter);
     let refusedOnce = false;
-    const injected = vi
-      .spyOn(adapter, "update")
-      .mockImplementation((...args: unknown[]) => {
-        if (!refusedOnce && args[0] === "dynamic_collections") {
-          refusedOnce = true;
-          return Promise.reject(new Error("injected registry failure"));
-        }
-        return original(...args);
-      });
+    const injected = vi.spyOn(adapter, "transaction").mockImplementation(((
+      work: Parameters<typeof original>[0],
+      options?: Parameters<typeof original>[1]
+    ) =>
+      original(
+        tx =>
+          work(
+            new Proxy(tx, {
+              get(target, property) {
+                const value: unknown = Reflect.get(target, property);
+                if (property !== "update" || typeof value !== "function") {
+                  return typeof value === "function"
+                    ? (value as (...a: unknown[]) => unknown).bind(target)
+                    : value;
+                }
+                return (...args: Parameters<typeof tx.update>) => {
+                  if (!refusedOnce && args[0] === "dynamic_collections") {
+                    refusedOnce = true;
+                    return Promise.reject(
+                      new Error("injected registry failure")
+                    );
+                  }
+                  return tx.update(...args);
+                };
+              },
+            })
+          ),
+        options
+      )) as typeof original);
 
     // The registry write is not fatal to the apply, so it reports the change made.
     await dialog.change(TRANSLATED).catch(() => undefined);
