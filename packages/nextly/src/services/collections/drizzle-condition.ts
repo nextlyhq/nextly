@@ -41,6 +41,7 @@ import {
 } from "drizzle-orm";
 import { SQLiteTimestamp } from "drizzle-orm/sqlite-core";
 
+import { referenceListCondition } from "../../domains/collections/query/reference-list-membership";
 import type { LocalizedFieldRef } from "../../domains/i18n/companion-join";
 import { buildCompanionExists } from "../../domains/i18n/companion-join";
 import { NextlyError } from "../../errors/nextly-error";
@@ -366,6 +367,87 @@ function comparisonOperand(
   return Array.isArray(value) ? value.map(bound) : bound(value);
 }
 
+/** The plain comparisons, each one Drizzle operator over the column and its operand. */
+const COMPARE_WITH: Partial<
+  Record<string, (column: Column, operand: unknown) => SQL>
+> = {
+  "=": (column, operand) => eq(column, operand),
+  "!=": (column, operand) => ne(column, operand),
+  ">": (column, operand) => gt(column, operand),
+  ">=": (column, operand) => gte(column, operand),
+  "<": (column, operand) => lt(column, operand),
+  "<=": (column, operand) => lte(column, operand),
+};
+
+/**
+ * The condition `op` with `value` makes on a main-table column, `column` being the filter key a
+ * refusal names. Split from the builder so each operator's rule reads on its own.
+ */
+function columnCondition(
+  schemaColumn: Column,
+  column: string,
+  op: string,
+  value: unknown,
+  dialect: SupportedDialect
+): SQL {
+  // Read once, for every comparison, so a date column's operand is the same
+  // instant whichever operator compares it.
+  const operand = COMPARISONS.has(op)
+    ? comparisonOperand(schemaColumn, column, value)
+    : value;
+
+  const compare = COMPARE_WITH[op];
+  if (compare) return compare(schemaColumn, operand);
+
+  switch (op) {
+    case "LIKE":
+      // The pattern the operator map built, wildcards and escapes included.
+      return like(schemaColumn, String(value));
+    case "ILIKE":
+      // Case-folded on both sides, as the adapter compiles ILIKE: only PostgreSQL has the
+      // keyword, a bare LIKE follows the column's collation, and SQLite's lower() folds
+      // ASCII letters only.
+      return sql`${caseFolded(dialect, schemaColumn)} like ${caseFolded(dialect, sql`${value}`)}`;
+    case "ICONTAINS":
+      return caseInsensitiveContains(dialect, schemaColumn, String(value));
+    case "IN":
+      // The filter shape refuses an empty `in` and drops an empty
+      // `not_in` before this point; refused again here rather than skipped,
+      // because a skipped `in` matched every row.
+      if (Array.isArray(operand) && operand.length > 0) {
+        return inArray(schemaColumn, operand);
+      }
+      return refuseKey(
+        column,
+        "FILTER_EMPTY_IN",
+        `"in" on "${column}" needs a list with at least one value.`
+      );
+    case "NOT IN":
+      if (Array.isArray(operand) && operand.length > 0) {
+        return notInArray(schemaColumn, operand);
+      }
+      // An empty list excludes nothing. Rendered as true rather than left
+      // out, so it reaches here and its column is resolved first, and so an
+      // `or` holding it is true as written.
+      if (Array.isArray(value)) return sql`1 = 1`;
+      return refuseKey(
+        column,
+        "FILTER_INVALID_OPERAND",
+        `"not_in" on "${column}" needs a list.`
+      );
+    case "IS NULL":
+      return isNull(schemaColumn);
+    case "IS NOT NULL":
+      return isNotNull(schemaColumn);
+    default:
+      return refuseKey(
+        column,
+        "FILTER_UNKNOWN_OPERATOR",
+        `"${String(op)}" is not an operator this builder can apply to "${column}".`
+      );
+  }
+}
+
 export function buildDrizzleCondition(
   whereClause: ReturnType<typeof buildWhereClause>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
@@ -373,7 +455,12 @@ export function buildDrizzleCondition(
   // The dialect the condition runs on, which decides how the operators that ignore case fold it.
   dialect: SupportedDialect,
   localizedCtx?: LocalizedQueryContext | null,
-  localizedExists?: LocalizedExistsBuilder
+  localizedExists?: LocalizedExistsBuilder,
+  /**
+   * The fields that keep a list of related entries' ids in their column
+   * (`holdsReferenceList`), filtered by membership rather than compared whole.
+   */
+  referenceLists?: ReadonlySet<string>
 ): ReturnType<typeof and> | undefined {
   if (!whereClause) {
     return undefined;
@@ -389,7 +476,8 @@ export function buildDrizzleCondition(
         schema,
         dialect,
         localizedCtx,
-        localizedExists
+        localizedExists,
+        referenceLists
       );
     }
 
@@ -464,70 +552,17 @@ export function buildDrizzleCondition(
     }
 
     const schemaColumn = resolveColumn(schema, columnParts[0]);
-    // Read once, for every comparison, so a date column's operand is the same
-    // instant whichever operator compares it.
-    const operand = COMPARISONS.has(op)
-      ? comparisonOperand(schemaColumn, column, value)
-      : value;
-
-    switch (op) {
-      case "=":
-        return eq(schemaColumn, operand);
-      case "!=":
-        return ne(schemaColumn, operand);
-      case ">":
-        return gt(schemaColumn, operand);
-      case ">=":
-        return gte(schemaColumn, operand);
-      case "<":
-        return lt(schemaColumn, operand);
-      case "<=":
-        return lte(schemaColumn, operand);
-      case "LIKE":
-        return like(schemaColumn, value);
-      case "ILIKE":
-        // Case-folded on both sides, as the adapter compiles ILIKE: only PostgreSQL has the
-        // keyword, a bare LIKE follows the column's collation, and SQLite's lower() folds
-        // ASCII letters only.
-        return sql`${caseFolded(dialect, schemaColumn)} like ${caseFolded(dialect, sql`${value}`)}`;
-      case "ICONTAINS":
-        return caseInsensitiveContains(dialect, schemaColumn, String(value));
-      case "IN":
-        // The filter shape refuses an empty `in` and drops an empty
-        // `not_in` before this point; refused again here rather than skipped,
-        // because a skipped `in` matched every row.
-        if (Array.isArray(operand) && operand.length > 0) {
-          return inArray(schemaColumn, operand);
-        }
-        return refuseKey(
-          column,
-          "FILTER_EMPTY_IN",
-          `"in" on "${column}" needs a list with at least one value.`
-        );
-      case "NOT IN":
-        if (Array.isArray(operand) && operand.length > 0) {
-          return notInArray(schemaColumn, operand);
-        }
-        // An empty list excludes nothing. Rendered as true rather than left
-        // out, so it reaches here and its column is resolved first, and so an
-        // `or` holding it is true as written.
-        if (Array.isArray(value)) return sql`1 = 1`;
-        return refuseKey(
-          column,
-          "FILTER_INVALID_OPERAND",
-          `"not_in" on "${column}" needs a list.`
-        );
-      case "IS NULL":
-        return isNull(schemaColumn);
-      case "IS NOT NULL":
-        return isNotNull(schemaColumn);
-      default:
-        return refuseKey(
-          column,
-          "FILTER_UNKNOWN_OPERATOR",
-          `"${String(op)}" is not an operator this builder can apply to "${column}".`
-        );
+    // A list of ids matches by membership, and refuses the text operators.
+    if (referenceLists?.has(columnParts[0])) {
+      return referenceListCondition({
+        dialect,
+        column: schemaColumn,
+        name: column,
+        op,
+        value,
+      });
     }
+    return columnCondition(schemaColumn, column, op, value, dialect);
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle SQL condition accumulator
