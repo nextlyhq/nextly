@@ -14,7 +14,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
-import { busyTableBounds } from "../../../domains/schema/busy-table/bounds";
+import {
+  busyTableBounds,
+  type BusyTableBounds,
+} from "../../../domains/schema/busy-table/bounds";
 import { runStatementsInTries } from "../../../domains/schema/busy-table/run-on-session";
 import {
   mapJournalRow,
@@ -134,6 +137,7 @@ function sessionAdapterOf(adapter: UpgradeAdapter): DrizzleAdapter | undefined {
  */
 async function runSchemaStatements(
   context: UpgradeStepContext,
+  bounds: BusyTableBounds,
   statements: readonly string[],
   name: (index: number) => string,
   appliedBefore: readonly string[]
@@ -147,7 +151,7 @@ async function runSchemaStatements(
   }
   return runStatementsInTries(adapter, statements, {
     change: UPGRADE_CHANGE,
-    bounds: busyTableBounds({ env: process.env }),
+    bounds,
     notify: context.warn,
     appliedBefore,
     name,
@@ -261,6 +265,9 @@ async function backfillJournal(
 
 /** Create the events table, backfill it and drop the legacy tables. */
 async function run(context: UpgradeStepContext): Promise<number> {
+  // Read before anything else, so a bound outside its range is refused with the database as it
+  // was: the backfill below writes rows that a run stopped after it would write again.
+  const bounds = busyTableBounds({ env: process.env });
   const { adapter, db, dialect, log } = context;
   const eventsTable = eventsTableOf(context);
   const legacy = await detectLegacyBookkeeping(adapter);
@@ -272,6 +279,7 @@ async function run(context: UpgradeStepContext): Promise<number> {
     applied.push(
       ...(await runSchemaStatements(
         context,
+        bounds,
         ddl,
         index =>
           `the creation of ${eventsTable}, statement ${String(index + 1)} of ${String(ddl.length)}`,
@@ -302,6 +310,7 @@ async function run(context: UpgradeStepContext): Promise<number> {
     applied.push(
       ...(await runSchemaStatements(
         context,
+        bounds,
         [`DROP TABLE IF EXISTS ${quoteIdent(table, dialect)}`],
         () => `the drop of table ${JSON.stringify(table)}`,
         applied

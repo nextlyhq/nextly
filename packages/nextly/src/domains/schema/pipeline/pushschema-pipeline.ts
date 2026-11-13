@@ -460,7 +460,8 @@ export interface PushSchemaPipelineTestHooks {
     txOrDb: unknown,
     ops: Operation[],
     dialect: SupportedDialect,
-    leadingStatements?: readonly string[]
+    leadingStatements?: readonly string[],
+    onFinished?: () => void
   ) => Promise<number>;
   // Test seam: inject a pre-built resolvedOps array to bypass the diff +
   // resolution pipeline. Lets unit tests exercise the scope-reduction and
@@ -1390,14 +1391,22 @@ export class PushSchemaPipeline {
           liftedKeysOwed = constraints.liftRestores;
           try {
             const leading = [...constraints.before, ...moves.statements];
+            // Counted as each statement finishes: on MySQL and SQLite each commits as it runs, so a
+            // try that ends waiting part-way names the ones that stay applied.
+            let told = 0;
             const preResolved = await preResExecutor(
               tx,
               withoutSqliteDropsLeftToRebuild(resolvedOps, dialect),
               dialect,
-              leading
+              leading,
+              () => {
+                told += 1;
+                finishedThisTry += 1;
+              }
             );
-            // Counted once the phase finishes, as it reports itself: each rename or drop once.
-            finishedThisTry += leading.length + preResolved;
+            // An executor that does not tell each one (a stand-in) is counted once it returns, as
+            // it reports itself: each rename or drop once.
+            finishedThisTry += Math.max(0, leading.length + preResolved - told);
           } catch (err) {
             // A refusal is not a failed statement. The pre-resolution phase can decline to start —
             // when the stored values would not survive a conversion, for instance — and that answer

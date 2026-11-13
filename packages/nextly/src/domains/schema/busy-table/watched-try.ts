@@ -12,6 +12,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { endedWaiting } from "./ended-waiting";
 import { readHolders } from "./holder";
 import type { HolderReport } from "./types";
+import { poolCanSpareOne } from "./watch-connection";
 import { prepareTryWatchdog } from "./watchdog";
 
 /** One try's watch. */
@@ -36,6 +37,19 @@ export interface WatchedTry {
 // before the next statement, and stopping awaits a cancel under way, so a cancel can never reach
 // a later statement. A runner that sends several statements in one try must tell the watch which
 // one runs (`moveTo`) and await `idle` before each, as `runUnitInTries` does.
+/** How long naming the holder may wait for a pooled connection while the try holds its own. */
+const HOLDER_READ_MS = 2000;
+
+const NO_SPARE =
+  "The sessions holding the table could not be read: the pool has no connection to spare while this statement holds its own.";
+const READ_TOO_LONG =
+  "The sessions holding the table could not be read: no pooled connection was free in time.";
+
+/** A holder report that names no session, saying why. */
+function unreadableHolder(reason: string): HolderReport {
+  return { kind: "named", sessions: [], unreadable: [reason] };
+}
+
 export function watchTry(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,
@@ -61,7 +75,21 @@ export function watchTry(
     ended: async error => {
       const { fired } = await watchdog.stop();
       if (!endedWaiting(error, dialect, fired)) return undefined;
-      return holder ?? (await readHolders(adapter, dialect, session));
+      if (holder !== undefined) return holder;
+      // The try's session still holds its connection here. A pool that cannot spare a second one
+      // would make a read through it wait behind that session for good, so the holder is named
+      // unreadable instead; a pool that can is asked, for a short while at most, since every one
+      // of its connections may be in use.
+      if (!poolCanSpareOne(adapter, dialect)) return unreadableHolder(NO_SPARE);
+      return Promise.race([
+        readHolders(adapter, dialect, session),
+        new Promise<HolderReport>(settle =>
+          setTimeout(
+            () => settle(unreadableHolder(READ_TOO_LONG)),
+            HOLDER_READ_MS
+          ).unref?.()
+        ),
+      ]);
     },
   };
 }
