@@ -60,19 +60,25 @@ function segment(value: string): string {
   return encodeURIComponent(value);
 }
 
+/** The values of a `[...name]` part, or of an optional `[[...name]]` one. */
+function catchAllWith(
+  value: StaticParams[string],
+  optional: boolean
+): string[] | undefined {
+  const values = typeof value === "string" ? [value] : (value ?? []);
+  if (values.length === 0 && !optional) return undefined;
+  return values.some(each => each === "") ? undefined : values.map(segment);
+}
+
 /**
  * What one part of a route's address is with `params`: the part itself, the
  * value of a `[name]`, or the values of a `[...name]` or `[[...name]]`; none
  * where a part that needs a value has none.
  */
 function partWith(part: string, params: StaticParams): string[] | undefined {
-  const optional = /^\[\[\.\.\.([^\]]+)\]\]$/.exec(part);
-  const catchAll = optional ?? /^\[\.\.\.([^\]]+)\]$/.exec(part);
+  const catchAll = /^(\[)?\[\.\.\.([^\]]+)\]\]?$/.exec(part);
   if (catchAll !== null) {
-    const value = params[catchAll[1] ?? ""];
-    const values = typeof value === "string" ? [value] : (value ?? []);
-    if (values.length === 0 && optional === null) return undefined;
-    return values.some(each => each === "") ? undefined : values.map(segment);
+    return catchAllWith(params[catchAll[2] ?? ""], catchAll[1] === "[");
   }
   const single = /^\[([^\]]+)\]$/.exec(part);
   if (single === null) return [part];

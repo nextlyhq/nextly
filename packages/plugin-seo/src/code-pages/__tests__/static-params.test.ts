@@ -73,6 +73,22 @@ describe("seoStaticParams", () => {
     expect(paths()).toContain("dynamic /docs/en/intro");
   });
 
+  it("fills an optional catch-all, with and without its values", async () => {
+    writeFileSync(
+      join(appDir, ".next/server/app-paths-manifest.json"),
+      JSON.stringify({ "/(site)/guide/[[...path]]/page": "app/page.js" })
+    );
+    await seoStaticParams(
+      "/guide/[[...path]]",
+      () => [{}, { path: ["setup", "first steps"] }, { path: [""] }],
+      { appDir }
+    )();
+    expect(paths()).toEqual([
+      "dynamic /guide",
+      "dynamic /guide/setup/first%20steps",
+    ]);
+  });
+
   it("lists the declared pages while the build runs, before the prerender manifest exists", async () => {
     await seoStaticParams(
       "/blog/[topic]",

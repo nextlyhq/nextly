@@ -439,14 +439,14 @@ function ownImages(
   const site =
     also.siteImage === undefined ? null : absolute(also.siteImage, origin);
   const share = answer.image?.from === "site" ? undefined : answer.image?.value;
-  const found: string[] = [];
-  for (const image of [share, also.mapped]) {
-    if (image === undefined) continue;
-    const url = absolute(image.url, origin);
-    if (url === null || url === site || found.includes(url)) continue;
-    found.push(url);
-  }
-  return found;
+  const urls = [share, also.mapped].map(image =>
+    image === undefined ? null : absolute(image.url, origin)
+  );
+  return [
+    ...new Set(
+      urls.filter((url): url is string => url !== null && url !== site)
+    ),
+  ];
 }
 
 /** The site's default share image in `language`, where its rules name one. */

@@ -578,6 +578,26 @@ describe.each(getConfiguredTestDialects())(
       expect(await entryOf(`${SITE}/tags/news`)).not.toContain("<image:");
     });
 
+    it("lists a cover mapped for a type a route chooses, which the listing can't see", async () => {
+      // Only the route's code says these posts are tech articles, while it
+      // renders; the listing reads the field the type maps an image from.
+      const { t } = await boot(dialect, {
+        structuredData: {
+          types: { posts: { details: { techArticle: { image: "picture" } } } },
+        },
+      });
+      const cover = await image(t, "seo-tech-cover.png");
+      await create(t, "posts", {
+        title: "Hooks",
+        slug: "hooks",
+        status: "published",
+        picture: cover.id,
+      });
+      expect(await entryOf(`${SITE}/blog/hooks`)).toContain(
+        `<image:loc>${new URL(cover.url, SITE).href}</image:loc>`
+      );
+    });
+
     // Each limit crossed on its own: two addresses a file, or room in a file
     // for its wrapper and two of these entries but not three.
     it.each([
