@@ -9,6 +9,8 @@
  * @packageDocumentation
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import {
   insideAccessMemo,
   runWithAccessMemo,
@@ -120,14 +122,22 @@ export async function runAsCaller<
 }
 
 /**
+ * The Direct API call this one runs inside, once it has checked the stored schema version: a call
+ * made inside it (from a hook, say) keeps the definitions it started with.
+ */
+const servedForCall = new AsyncLocalStorage<true>();
+
+/**
  * Brings this process's definitions up to the stored schema version before a Direct API call, as
  * a request's start does (`servedSchemaVersion`), so a change made on another server copy is
- * served by a process no request reaches. A call made inside a request or another call keeps the
- * definitions that one started with: they are never reloaded under it.
+ * served by a process no request reaches. A call made inside a request (`insideAccessMemo`) or
+ * inside another call that checked already keeps the definitions that one started with: they are
+ * never reloaded under it.
  */
 async function withServedSchema<T>(operation: () => Promise<T>): Promise<T> {
-  if (!insideAccessMemo()) await servedSchemaVersion();
-  return operation();
+  if (insideAccessMemo() || servedForCall.getStore()) return operation();
+  await servedSchemaVersion();
+  return servedForCall.run(true, operation);
 }
 
 /**
