@@ -33,6 +33,16 @@ export type NoRetryReason =
   | "trigger"
   /** A write that leaves the database's own transaction: another session, another database. */
   | "outside-write"
+  /**
+   * A row change on MySQL where the account cannot see every trigger: MySQL lists a table's
+   * triggers only to an account holding `TRIGGER` on it, while a row change still fires them.
+   */
+  | "hidden-trigger"
+  /**
+   * A statement an earlier try kept that made state of its session alone (a temporary table, a
+   * prepared statement, a cursor): the next try runs on a new session, which does not have it.
+   */
+  | "session-state"
   /** A statement of a kind no row of the table names. */
   | "unread";
 
@@ -45,6 +55,12 @@ const MAY_RUN_AGAIN: StatementJudgement = { kind: "may-run-again" };
 function noRetry(reason: NoRetryReason): StatementJudgement {
   return { kind: "no-retry", reason };
 }
+
+/**
+ * The tables of the database with a trigger a row change would fire, lower-cased; or `"unseen"`
+ * where the account cannot see every trigger, so any table may have one.
+ */
+export type TriggerTables = ReadonlySet<string> | "unseen";
 
 /** A bare word: what the tokenizer gives an unquoted keyword or name, upper-cased. */
 const WORD = /^[A-Z_][A-Z0-9_$]*$/;
@@ -574,20 +590,32 @@ export function judgeStatement(
 export function firstNoRetry(
   statements: readonly string[],
   dialect: SupportedDialect,
-  triggerTables: ReadonlySet<string>
+  triggerTables: TriggerTables
 ):
   | {
       readonly statementNumber: number;
       readonly judgement: Extract<StatementJudgement, { kind: "no-retry" }>;
     }
   | undefined {
-  const triggered = new Set(triggerTables);
+  // Where the triggers could not all be seen, every table may have one, so a row change counts as
+  // one that fires a trigger: the cautious answer, failing closed.
+  const unseen = triggerTables === "unseen";
+  const triggered = new Set(unseen ? [] : triggerTables);
   let renameUnread = false;
-  const hasTrigger = (table: string) => renameUnread || triggered.has(table);
+  const hasTrigger = (table: string) =>
+    unseen || renameUnread || triggered.has(table);
   for (const [index, statement] of statements.entries()) {
     const judgement = judgeStatement(statement, dialect, hasTrigger);
     if (judgement.kind === "no-retry") {
-      return { statementNumber: index + 1, judgement };
+      // Named for what was not known, so the report does not claim the table has a trigger.
+      const reason =
+        judgement.reason === "trigger" && unseen
+          ? "hidden-trigger"
+          : judgement.reason;
+      return {
+        statementNumber: index + 1,
+        judgement: { kind: "no-retry", reason },
+      };
     }
     const renames = renamedTables(statement, dialect);
     if (renames === "unread") {

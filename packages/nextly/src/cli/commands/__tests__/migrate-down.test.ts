@@ -199,7 +199,7 @@ const quietFacts = async () => ({
 });
 
 describe("a DOWN that stopped waiting for a busy table", () => {
-  const busy = (outcome: { kind: string; committed?: number[] }) =>
+  const busy = (outcome: { kind: string; committed?: readonly number[] }) =>
     new NextlyError({
       code: "NEXTLY_TABLE_BUSY",
       publicMessage: "`a.sql` stopped: table busy.",
@@ -240,6 +240,68 @@ describe("a DOWN that stopped waiting for a busy table", () => {
     await expect(
       migrateDownCore(deps as Parameters<typeof migrateDownCore>[0])
     ).rejects.toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
+  });
+
+  /**
+   * Runs a DOWN outside a transaction, so its start is recorded first, that stops busy with
+   * `outcome`; notes every start row removed. The start row is the only trace of a DOWN that
+   * committed part of itself when its failed outcome is not recorded.
+   */
+  async function runBusyAttempt(
+    outcome: { kind: string; committed?: readonly number[] },
+    recordFailed: () => Promise<void>
+  ) {
+    const ended: string[] = [];
+    const { deps } = baseDeps({
+      readDownSql: async () => ({
+        sql: 'ALTER TABLE "t" ADD COLUMN "c" integer;',
+        transaction: false,
+      }),
+      execDown: async () => {
+        throw busy(outcome);
+      },
+      recordFailed,
+      recordDownStarted: async () => "attempt-1",
+      endDownAttempt: async (id: string) => {
+        ended.push(id);
+      },
+    });
+    await expect(
+      migrateDownCore(deps as Parameters<typeof migrateDownCore>[0])
+    ).rejects.toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
+    return ended;
+  }
+
+  it("keeps the start row of a part-way DOWN whose failed outcome could not be recorded", async () => {
+    // Statement 1 committed and no failed row says so: removing the start row would leave the
+    // migration recorded applied with no trace, and the next DOWN would send statement 1 again.
+    const ended = await runBusyAttempt(
+      { kind: "part-way", committed: [1] },
+      async () => {
+        throw new Error("Lock wait timeout exceeded");
+      }
+    );
+    expect(ended).toEqual([]);
+  });
+
+  it("ends the start row of a part-way DOWN once its failed outcome is recorded", async () => {
+    const ended = await runBusyAttempt(
+      { kind: "part-way", committed: [1] },
+      async () => undefined
+    );
+    expect(ended).toEqual(["attempt-1"]);
+  });
+
+  it("ends the start row of a busy DOWN that changed nothing, recording no failure", async () => {
+    let recordedFailure = false;
+    const ended = await runBusyAttempt(
+      { kind: "nothing-changed" },
+      async () => {
+        recordedFailure = true;
+      }
+    );
+    expect(recordedFailure).toBe(false);
+    expect(ended).toEqual(["attempt-1"]);
   });
 });
 

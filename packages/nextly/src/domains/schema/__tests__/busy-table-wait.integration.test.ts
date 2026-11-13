@@ -26,6 +26,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runFileMigrations } from "../../../cli/commands/migrate";
 import { createLogger } from "../../../cli/utils/logger";
 import type { BusyTableBounds } from "../busy-table/bounds";
+import { triggerTables } from "../busy-table/run-unit";
 import { getSchemaEventsDdl } from "../events/schema-events-ddl";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import {
@@ -435,6 +436,54 @@ describe.each(DIALECTS)(
       // Named by position only: a statement's text can hold a literal value.
       expect(message).not.toMatch(/ALTER|ADD COLUMN|extra/i);
     });
+
+    it.runIf(dialect !== "sqlite")(
+      "stops after one try where a statement it kept made a temporary table the next try's session would not have",
+      async () => {
+        const stage = `${PREFIX}_stage`;
+        writeFile(
+          "20261112_000001_staged",
+          [
+            `CREATE TEMPORARY TABLE ${stage} (id integer)`,
+            `INSERT INTO ${stage} (id) VALUES (1)`,
+            `ALTER TABLE ${BUSY} ADD COLUMN late integer`,
+          ],
+          { outside: true }
+        );
+        await holdTheTable();
+
+        const stopped = await migrate({ tryMs: 1_000, totalMs: 20_000 }).catch(
+          (error: unknown) => error
+        );
+
+        // Resumed on a new session, the third statement would run without the staged rows, or a
+        // later statement reading them would fail: the run stops instead, naming the first.
+        expect(stopped).toMatchObject({
+          code: "NEXTLY_TABLE_BUSY",
+          logContext: {
+            stop: {
+              tries: 1,
+              outcome: {
+                kind: "no-retry",
+                statementNumber: 1,
+                reason: "session-state",
+              },
+            },
+          },
+        });
+        expect(notices).toHaveLength(0);
+        expect(await columnsOf(BUSY)).toEqual(["id"]);
+      }
+    );
+
+    it.runIf(dialect === "mysql")(
+      "trusts the trigger list of an account that may see every trigger of the database",
+      async () => {
+        // The test account holds every privilege: the grant must be found, or every row change
+        // would stop a run as one whose triggers could not be seen.
+        expect(await triggerTables(adapter, dialect)).toBeInstanceOf(Set);
+      }
+    );
 
     it.runIf(dialect === "postgresql")(
       "stops after one try where the waiting statement builds an index concurrently",

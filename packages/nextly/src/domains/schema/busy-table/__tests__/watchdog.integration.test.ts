@@ -205,6 +205,40 @@ describe.each(SERVERS)("a try's watchdog on %s", dialect => {
     expect(elapsed).toBeLessThan(FIRST_WAIT_MS + TRY_MS);
   });
 
+  it("bounds the try on a pool of one connection, which the watched session holds", async () => {
+    // The holder is on the suite's adapter; the watched session and the watch share an adapter
+    // whose pool has one connection, which the session's transaction takes. A watch asking
+    // through that pool would wait behind the session until it ended, so it must ask elsewhere.
+    const lone = await world.connect({ poolMax: 1 });
+    try {
+      const holder = await holdTable(adapter, FIRST);
+      holders.push(holder);
+      // Lets the table go well past a try, so a watch that never asks still ends the case: the
+      // statement then completes, unended, rather than waiting until the case times out.
+      const letGo = setTimeout(() => holder.free(), 3 * TRY_MS);
+      const run = runOnOneSession(lone, dialect, [
+        `ALTER TABLE ${FIRST} ADD COLUMN late integer`,
+      ]);
+      const session = await run.session;
+      const started = Date.now();
+      const watchdog = startTryWatchdog(lone, dialect, session, TRY_MS);
+
+      const error = await run.outcome;
+      const elapsed = Date.now() - started;
+      clearTimeout(letGo);
+      const { fired } = await watchdog.stop();
+
+      expect(fired).toBe(true);
+      expect(endedWaiting(error, dialect, true)).toBe(true);
+      // A whole try was waited, and not much more, although the pool had nothing to spare.
+      expect(elapsed).toBeGreaterThanOrEqual(TRY_MS);
+      expect(elapsed).toBeLessThan(1_500);
+      expect(await columnsOf(adapter, dialect, FIRST)).toEqual(["id"]);
+    } finally {
+      await lone.disconnect();
+    }
+  });
+
   it("does not count time the statement spends working", async () => {
     const run = runOnOneSession(adapter, dialect, [
       dialect === "postgresql" ? "SELECT pg_sleep(1.5)" : "SELECT SLEEP(1.5)",
