@@ -282,3 +282,38 @@ describe("accepts input on its bounds", () => {
     }
   );
 });
+
+// The column counts characters, so the 255 bound counts code points: an emoji is one character,
+// though two UTF-16 units.
+describe("a subject's length", () => {
+  it("accepts 255 characters of emoji, and refuses 256", async () => {
+    const { adapter } = recordingAdapter();
+    const secrets = secretsOver(adapter);
+    await expect(
+      secrets.mintToken({ ...token, subject: "\u{1F600}".repeat(255) })
+    ).resolves.toMatchObject({ token: expect.any(String) });
+    const refused = await secrets
+      .mintToken({ ...token, subject: "\u{1F600}".repeat(256) })
+      .catch((error: unknown) => error);
+    expect(JSON.stringify(refused)).toMatch(/subject must be/);
+  });
+});
+
+// SQLite keeps a date to the second, so the expiry is held to the second everywhere: the one a
+// mint returns is the one stored and compared.
+describe("a secret's expiry", () => {
+  it("is the whole second below the creation time plus the lifetime", async () => {
+    const { adapter } = recordingAdapter();
+    const secrets = createOneTimeSecrets({
+      owner: "@test/secrets",
+      adapter: () =>
+        adapter as unknown as ReturnType<
+          Parameters<typeof createOneTimeSecrets>[0]["adapter"]
+        >,
+      secrets: () => ["a-secret-that-is-long-enough-for-the-tests"],
+      now: () => new Date("2026-01-01T00:00:00.999Z"),
+    });
+    const { expiresAt } = await secrets.mintToken(token);
+    expect(expiresAt.toISOString()).toBe("2026-01-01T00:01:00.000Z");
+  });
+});
