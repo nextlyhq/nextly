@@ -763,6 +763,31 @@ describe.each(getConfiguredTestDialects())(
       expect((await read(t, LOCALIZED, id, { locale: "de" })).title).toBe("DE");
     });
 
+    it("keeps a draft publishable when the live shared value moves under its own different value", async () => {
+      const t = await boot(dialect, true);
+      const id = await withDrafts(t);
+      // The German draft holds its own layout, which the rewrite leaves.
+      await save(t, LOCALIZED, id, { layout: "full" }, "de");
+      const done = await t.nextly.rewriteField({
+        collection: LOCALIZED,
+        id,
+        field: "layout",
+        expectedVersion: (await read(t, LOCALIZED, id, { locale: "en" }))
+          ._rev as string,
+        set: { from: current => (current === "wide" ? "narrow" : current) },
+        reason: REASON,
+      });
+      expect(done.item.copies).toContainEqual({ form: "live", locale: null });
+      expect(done.item.copies).not.toContainEqual({
+        form: "draft",
+        locale: "de",
+      });
+      await save(t, LOCALIZED, id, { status: "published" }, "de");
+      expect((await read(t, LOCALIZED, id, { locale: "de" })).layout).toBe(
+        "full"
+      );
+    });
+
     it("changes a translated field in the named language only", async () => {
       const t = await boot(dialect, true);
       const id = await withDrafts(t);

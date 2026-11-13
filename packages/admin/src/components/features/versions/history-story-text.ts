@@ -175,27 +175,31 @@ function replacedBy(payload: Record<string, unknown>): string | null {
  */
 function rewriteSentence(event: DocumentEvent): string {
   const payload = event.payload ?? {};
-  const field =
-    typeof payload.field === "string" && payload.field !== ""
-      ? payload.field
-      : "a field";
-  const copies = Array.isArray(payload.copies)
-    ? payload.copies.filter((copy): copy is string => typeof copy === "string")
+  const field = textOr(payload.field, "a field");
+  const plugin = textOr(payload.plugin, "");
+  const via = plugin === "" ? "" : ` via ${plugin}`;
+  return `Rewrote ${field} ${rewrittenWhere(payload.copies)}${via}`;
+}
+
+/** A payload's text, or `fallback` where it holds none. */
+function textOr(value: unknown, fallback: string): string {
+  return typeof value === "string" && value !== "" ? value : fallback;
+}
+
+/**
+ * Where a rewrite wrote, from the copies it names: the live copy and its
+ * drafts, or its drafts only, which changed nothing a visitor sees.
+ */
+function rewrittenWhere(listed: unknown): string {
+  const copies = Array.isArray(listed)
+    ? listed.filter((copy): copy is string => typeof copy === "string")
     : [];
   const drafts = copies.filter(copy => copy.startsWith("draft")).length;
   const draftWords = drafts === 1 ? "its draft" : `${drafts} drafts`;
-  // A rewrite that left the live copy as it was says so: it changed nothing
-  // a visitor sees.
-  const where = !copies.includes("live")
-    ? `in ${draftWords} only`
-    : drafts === 0
-      ? "on the live copy"
-      : `on the live copy and ${draftWords}`;
-  const via =
-    typeof payload.plugin === "string" && payload.plugin !== ""
-      ? ` via ${payload.plugin}`
-      : "";
-  return `Rewrote ${field} ${where}${via}`;
+  if (!copies.includes("live")) return `in ${draftWords} only`;
+  return drafts === 0
+    ? "on the live copy"
+    : `on the live copy and ${draftWords}`;
 }
 
 /** What an event that is a row of its own says happened. */

@@ -311,6 +311,7 @@ import {
 } from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
 import { addressableFields } from "../../../shared/addressable-fields";
+import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 import { storeDraftSave } from "../../versions/draft-save";
 import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
 import {
@@ -6494,16 +6495,13 @@ export class CollectionMutationService extends BaseService {
       check = versionCheckFor(versionBodyOf(request), { exempt: false });
       const { collection, fields, tableName } =
         await this.readCollectionWriteMeta(params.collectionName);
-      const manyToManyFields = fields.filter(
-        f =>
-          f.type === "relationship" && f.options?.relationType === "manyToMany"
-      );
       // Looked up among the fields stored at the document's top level, a
-      // field inside an unnamed layout group included.
+      // field inside an unnamed layout group included, and refused where
+      // storage keeps it in tables of its own, by storage's own predicates.
       const field = assertRewritableField(
         addressableFields(fields) as unknown as FieldDefinition[],
         request.field,
-        f => isFieldGroupField(f) || manyToManyFields.includes(f)
+        f => isFieldGroupField(f) || usesJunctionTable(f)
       );
       // The translations' readiness, read before the transaction, which only
       // consults it: unread, a language's values would be skipped.
@@ -6729,7 +6727,7 @@ export class CollectionMutationService extends BaseService {
       args,
       ref,
       decided.liveBefore,
-      drafts.map(d => d.slot),
+      decided.held,
       translatedIn
     );
 
@@ -6785,11 +6783,13 @@ export class CollectionMutationService extends BaseService {
         maxPerDoc,
       });
     }
-    if (args.localized && !draftsKept && translatedIn === null) {
+    // Every language draft holding the field is judged against the live
+    // value the rewrite moved, whether its own value moved or not.
+    if (liveChanges && args.localized && !draftsKept && translatedIn === null) {
       await this.moveRewrittenDraftBases(
         tx,
         ref,
-        drafts.map(d => d.slot),
+        decided.held,
         behindBefore,
         liveAfter
       );
@@ -6935,6 +6935,11 @@ export class CollectionMutationService extends BaseService {
     /** Whether the live value moves; drafts holds only those that do. */
     liveChanges: boolean;
     drafts: { slot: DraftSlot; value: unknown }[];
+    /**
+     * Every draft holding the field, moved or not: a draft whose own value
+     * stays still had its base against a live value that may move.
+     */
+    held: DraftSlot[];
   }> {
     const { set } = args.call.request;
     const liveBefore = await this.rewriteLiveDocument(tx, args, translatedIn);
@@ -6960,7 +6965,14 @@ export class CollectionMutationService extends BaseService {
       await this.assertRewrittenValueAllowed(tx, args, copy, value);
       drafts.push({ slot, value });
     }
-    return { liveBefore, liveCopy, liveValue, liveChanges, drafts };
+    return {
+      liveBefore,
+      liveCopy,
+      liveValue,
+      liveChanges,
+      drafts,
+      held: slots,
+    };
   }
 
   /**
