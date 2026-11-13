@@ -5928,6 +5928,11 @@ export class CollectionMutationService extends BaseService {
      * opened. Ignored for an unlocalized document, which has one.
      */
     locale?: string | null;
+    /**
+     * Discard the shared part's pending change alone, leaving each language's: where the shared
+     * part keeps a draft of its own (a translated collection under per-language storage).
+     */
+    shared?: boolean;
     /** Who discarded it, for the document's history. */
     actor?: RequestActor;
     user?: UserContext;
@@ -5991,12 +5996,35 @@ export class CollectionMutationService extends BaseService {
           );
           if (denied) throw errorFromServiceEnvelope(denied);
         }
-        const draftLocale = workingDraftLocale({
-          documentLocalized:
-            (collection as { localized?: boolean }).localized === true,
-          requestLocale: params.locale ?? null,
-          defaultLocale: this.localization?.defaultLocale ?? null,
-        });
+        // The shared part's draft is kept apart only where each part has its own; elsewhere there
+        // is no such draft to discard, and the request is refused rather than read as another.
+        if (
+          params.shared === true &&
+          !(
+            draftsKeptByPart() &&
+            (collection as { localized?: boolean }).localized === true
+          )
+        ) {
+          throw NextlyError.validation({
+            errors: [
+              {
+                path: "part",
+                code: "NO_SHARED_DRAFT",
+                message:
+                  "This entry keeps no draft of its shared part on its own: discard a language's pending change instead.",
+              },
+            ],
+          });
+        }
+        const draftLocale =
+          params.shared === true
+            ? SHARED_DRAFT_SLOT
+            : workingDraftLocale({
+                documentLocalized:
+                  (collection as { localized?: boolean }).localized === true,
+                requestLocale: params.locale ?? null,
+                defaultLocale: this.localization?.defaultLocale ?? null,
+              });
         const discardedRef = {
           scopeKind: "collection" as const,
           scopeSlug: params.collectionName,

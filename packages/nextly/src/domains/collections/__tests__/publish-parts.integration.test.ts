@@ -23,7 +23,7 @@ import { dispatchCollections } from "../../../dispatcher/handlers/collection-dis
 import { container } from "../../../di/container";
 import type { ServiceContainer } from "../../../services";
 import type { PublishGate } from "../services/publish-gate";
-import { defineCollection, text } from "../../../config";
+import { defineCollection, group, text } from "../../../config";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -1128,6 +1128,63 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
 
     expect(refusal).toMatch(/FORBIDDEN/);
     expect(refusal).toMatch(/tagline/);
+  });
+
+  // Judging a publishing save's values reads a copy of them: the save itself, and its hooks, are
+  // handed what was submitted, nested values included.
+  it("leaves a publishing save's submitted values as they were sent", async () => {
+    const seen: unknown[] = [];
+    await boot(
+      posts({
+        requireEveryLanguage: true,
+        access: { read: () => true, update: () => true, publish: () => true },
+        hooks: {
+          beforeValidate: [
+            ({ data }: { data?: Record<string, unknown> }) => {
+              seen.push(
+                (data?.meta as { secret?: unknown } | undefined)?.secret
+              );
+              return data;
+            },
+          ],
+        },
+        fields: [
+          text({ name: "title", required: true }),
+          text({ name: "tagline", localized: false }),
+          group({
+            name: "meta",
+            fields: [
+              text({ name: "note" }),
+              text({ name: "secret", access: { update: () => false } }),
+            ],
+          }),
+        ],
+      } as never)
+    );
+    const id = await entry({ es: { title: "Hola" } });
+    const editor = await userWhoMay(t!, "editor", "update", ["posts"]);
+    await grantTo(t!, editor, "publish", ["posts"]);
+    await grantTo(t!, editor, "read", ["posts"]);
+    seen.length = 0;
+
+    await refusalOf(
+      t!.nextly.update({
+        collection: "posts",
+        id,
+        locale: "es",
+        overrideAccess: false,
+        user: { id: editor, email: "editor@example.test", roles: [] },
+        data: {
+          title: "Hola",
+          meta: { note: "n", secret: "s" },
+          status: "published",
+          _overwrite: true,
+        },
+      })
+    );
+
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[0]).toBe("s");
   });
 
   /** A gate holding back the parts `held` names: a language code, or "shared". */

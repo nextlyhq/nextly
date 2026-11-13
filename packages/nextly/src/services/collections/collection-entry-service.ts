@@ -1069,7 +1069,9 @@ export class CollectionEntryService extends BaseService {
     }
     // Only what the save may write counts: a value its field rules refuse is not written, so it
     // cannot stand in for one the language lacks.
-    const writable = { ...written };
+    // A deep copy: the field write rules delete denied values in place, nested ones too, and the
+    // save and its hooks must still be handed what was submitted.
+    const writable = structuredClone({ ...written });
     if (params.overrideAccess !== true) {
       await applyFieldWriteAccess({
         kind: "collection",
@@ -1246,8 +1248,14 @@ export class CollectionEntryService extends BaseService {
   ): Promise<number> {
     // The draft is deleted under the language as named, so one the site no
     // longer configures is told every language, not the default.
+    // The shared part's draft shows in every language, so discarding it is judged in each.
     return withRuleLanguage(
-      writeAsNamedLanguagesFor(this.localization, params.locale ?? undefined),
+      params.shared === true
+        ? writeLanguagesFor(this.localization, EVERY_LOCALE)
+        : writeAsNamedLanguagesFor(
+            this.localization,
+            params.locale ?? undefined
+          ),
       () => this.mutationService.discardWorkingDraft(params)
     );
   }

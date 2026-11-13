@@ -39,6 +39,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
+import { discardWorkingDraft } from "../../../versions/discard-working-draft";
 
 const TRANSLATED = "partposts";
 const UNTRANSLATED = "partnotes";
@@ -624,6 +625,30 @@ describe.each(getConfiguredTestDialects())(
 
       expect(published.success, JSON.stringify(published)).toBe(false);
       expect((await read(entries, LOCKED, id, "es")).views).toBe(10);
+    }, 90_000);
+
+    // The shared part's pending change can be thrown away on its own: each language's change
+    // stays, and what readers see does not move.
+    it("discards the shared draft alone, keeping each language's", async () => {
+      const entries = await boot(dialect);
+      const id = await publishedInBoth(entries, TRANSLATED);
+      await save(entries, TRANSLATED, id, "es", { title: "es 2", views: 40 });
+      expect(Object.keys(await drafts(id)).sort()).toEqual(["es", "shared"]);
+
+      await discardWorkingDraft({
+        scopeKind: "collection",
+        slug: TRANSLATED,
+        entryId: id,
+        user: { id: "editor" } as never,
+        shared: true,
+        version: { _overwrite: true },
+      });
+
+      expect(Object.keys(await drafts(id))).toEqual(["es"]);
+      expect((await read(entries, TRANSLATED, id, "es", true)).title).toBe(
+        "es 2"
+      );
+      expect((await read(entries, TRANSLATED, id, "en")).views).toBe(10);
     }, 90_000);
 
     // A shared-only draft goes live in every language, so a publish of every
