@@ -373,6 +373,7 @@ import {
   registerDocumentLockServices,
   registerVersionServices,
   registerWebhookServices,
+  registerWorkflowComparisonBaselines,
   registerWorkflowNoticeKinds,
   resetWidgetRegistries,
   type RegistrationContext,
@@ -799,6 +800,9 @@ export function registerDomainServices(ctx: RegistrationContext): void {
   // The notices a workflow's steps and assignments give the people they name, registered with
   // the notices service as the releases' are, so no move can name a person it cannot tell.
   registerWorkflowNoticeKinds();
+  // The comparisons a review shows, "since submitted" and "since approved", registered with the
+  // history's baselines so its comparison names them as it names its own.
+  registerWorkflowComparisonBaselines();
 }
 
 /** How a caller registers the services. */

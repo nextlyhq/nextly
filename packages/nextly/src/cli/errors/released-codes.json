@@ -55,6 +55,7 @@
   "INTERRUPTED_BEFORE_START": "The command was interrupted while it waited to take a schema lock, before it changed anything.",
   "INVALID_SNAPSHOT": "A migration's snapshot file is not valid JSON, or not a snapshot this version of Nextly reads.",
   "LEGACY_BOOKKEEPING_FOUND": "The database still has the migration bookkeeping tables of an earlier Nextly release.",
+  "FIELDS_LEAVING_TRANSLATION_NOT_MOVED": "`db:sync` could not move the values of a field that stops being translated, so the field keeps them in its translations table.",
   "LOCALIZATION_NOT_PROVISIONED": "`db:sync` could not create the translation tables of a localized entity, so its translations cannot be written or read.",
   "MEDIA_APPLY_OUTSIDE_PROJECT": "`nextly media orphans --apply` was run from outside the project `--cwd` names, so the database settings it read may be another project's.",
   "MEDIA_CONFIG_OUTSIDE_PROJECT": "`nextly media orphans --apply` was given a configuration from outside the project, whose storage may be another project's.",
