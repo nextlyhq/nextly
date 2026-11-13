@@ -534,3 +534,69 @@ describe("what a move takes with it, and where it arrives", () => {
     ).toBe(true);
   });
 });
+
+describe("names as the save sends them, and layout groups", () => {
+  it("judges a draft name by the name the save sends", () => {
+    // The Builder keeps the name as typed; the save sends it normalised.
+    const fields = [
+      plain("f-g", "group", {
+        type: "group",
+        fields: [plain("f-a", "My Field!")],
+      }),
+      plain("f-b", "my_field"),
+    ];
+    expect(refusal(judgeMove(fields, "f-a", {}, ctx)).reason).toBe(
+      "name-clash"
+    );
+  });
+
+  it("counts a nameless layout group's fields as siblings of the level holding it", () => {
+    const fields = [
+      plain("f-layout", "", {
+        type: "group",
+        fields: [plain("f-inner", "body")],
+      }),
+      plain("f-g", "group", {
+        type: "group",
+        fields: [plain("f-out", "Body")],
+      }),
+    ];
+    // Arriving at the top level, beside the layout group's `body`.
+    expect(refusal(judgeMove(fields, "f-out", {}, ctx)).reason).toBe(
+      "name-clash"
+    );
+    // Into the layout group from the top level stays on the same level: nothing new to judge.
+    const level = [plain("f-x", "x"), ...fields];
+    expect(
+      judgeMove(level, "f-x", { parentFieldId: "f-layout" }, ctx).allowed
+    ).toBe(true);
+  });
+});
+
+describe("leaving repeating rows before the save", () => {
+  const fields = () => [
+    plain("f-rows", "rows", {
+      type: "repeater",
+      fields: [plain("f-kept", "kept"), plain("f-new", "fresh")],
+    }),
+  ];
+  const savedIn = (placements: Record<string, string[] | null>) => ({
+    ...ctx,
+    savedContainerIdsOf: (id: string) => placements[id] ?? null,
+  });
+
+  it("lets a field never saved there leave", () => {
+    const after = moved(
+      judgeMove(fields(), "f-new", {}, savedIn({ "f-kept": ["f-rows"] }))
+    );
+    expect(namesIn(after)).toEqual(["rows", "fresh"]);
+  });
+
+  it("keeps a field whose rows are saved there in them", () => {
+    expect(
+      refusal(
+        judgeMove(fields(), "f-kept", {}, savedIn({ "f-kept": ["f-rows"] }))
+      ).reason
+    ).toBe("out-of-repeating-rows");
+  });
+});
