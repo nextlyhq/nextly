@@ -380,4 +380,85 @@ describe("migrate --dry-run", () => {
       return true;
     });
   });
+  /** A dry run against a MySQL server that accepts a CHECK without enforcing it. */
+  const previewOnUnenforcingServer = () =>
+    previewMigrate({
+      adapter: testDb.adapter as unknown as Parameters<
+        typeof previewMigrate
+      >[0]["adapter"],
+      db: testDb.db,
+      dialect: "mysql",
+      migrationsDir: dir,
+      plugins: [],
+      logger: {
+        info: () => {},
+        warn: () => {},
+        debug: () => {},
+        error: () => {},
+        success: () => {},
+        newline: () => {},
+        keyValue: () => {},
+      } as unknown as Parameters<typeof previewMigrate>[0]["logger"],
+      serverConstructs: {
+        enforcesCheckConstraints: false,
+        functionalIndexes: true,
+        serverVersion: "8.0.14",
+      },
+    });
+
+  it("refuses a hand-written app file with no snapshot whose statements add a CHECK", async () => {
+    // No snapshot pairs this file, so the only account of what it adds is the
+    // SQL that would run.
+    writeFileSync(
+      join(dir, "20260102_000000_000_scores.sql"),
+      "-- UP\nALTER TABLE `tickets` ADD CONSTRAINT `ck_score` CHECK (`score` >= 0);"
+    );
+    await loadDialectTables("mysql");
+    await expect(previewOnUnenforcingServer()).rejects.toSatisfy(
+      (error: unknown) => {
+        expect(JSON.stringify((error as NextlyError).publicData)).toContain(
+          'scores.sql\\" adds a CHECK'
+        );
+        return true;
+      }
+    );
+  });
+
+  it("does not refuse an app file for the owner's check in its copy of a plugin's table", async () => {
+    // The app's snapshot freezes the plugin's whole table beside the column
+    // the app contributed; the check on it is the plugin's, not the file's.
+    const metaDir = join(dir, "meta");
+    mkdirSync(metaDir, { recursive: true });
+    writeFileSync(
+      join(metaDir, "20260101_000000_000_init.snapshot.json"),
+      JSON.stringify({
+        version: 1,
+        migrationHash: "a".repeat(64),
+        dialect: "mysql",
+        snapshot: {
+          tables: [
+            {
+              name: "acme__items",
+              columns: [
+                { name: "id", type: "varchar(32)", nullable: false },
+                { name: "app_note", type: "text", nullable: true },
+              ],
+              indexes: [],
+              checks: [{ name: "ck_acme__items_state", sql: "state <> ''" }],
+            },
+          ],
+        },
+        contributions: {
+          acme__items: {
+            columns: ["app_note"],
+            indexes: [],
+            foreignKeys: [],
+            checks: [],
+          },
+        },
+      })
+    );
+    await loadDialectTables("mysql");
+    await expect(previewOnUnenforcingServer()).resolves.toBeUndefined();
+  });
 });

@@ -12,11 +12,8 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../../errors/nextly-error";
 import type { TableSpec } from "../../../pipeline/diff/types";
-import {
-  assertModuleForeignKeysResolve,
-  migrationChecksum,
-  type PluginMigration,
-} from "../plugin-migration";
+import { assertModuleForeignKeysResolve } from "../module-foreign-keys";
+import { migrationChecksum, type PluginMigration } from "../plugin-migration";
 
 /** A table with one key over `ref` at `target`'s id. */
 const keying = (name: string, target: string): TableSpec => ({
@@ -195,7 +192,7 @@ describe("assertModuleForeignKeysResolve", () => {
     );
     expect(message).toContain("001_init");
     expect(message).toContain("app_posts");
-    expect(message).toContain("not created by any earlier migration stream");
+    expect(message).toContain("neither exists before the run");
   });
 
   it("accepts an external target present in availableTables under run-wide stream validation", () => {

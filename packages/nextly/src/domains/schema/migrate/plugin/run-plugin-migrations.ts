@@ -46,15 +46,17 @@ import {
   type ReconcileRepo,
 } from "../drift-reconcile";
 import { assertRunnableStatements, statementRefusals } from "../split-sql";
+import type { ServerConstructCapabilities } from "../../extension/build-extension-schema";
 import {
-  refuseConstructsTheServerCannotHold,
-  type ServerConstructCapabilities,
-} from "../../extension/build-extension-schema";
+  constructsAdded,
+  refuseUnitTheServerCannotHold,
+  type AddedConstructs,
+} from "../server-constructs";
 import type { NextlySchemaSnapshot } from "../../pipeline/diff/types";
 
+import { assertModuleForeignKeysResolve } from "./module-foreign-keys";
 import {
   assertAppliedUnchanged,
-  assertModuleForeignKeysResolve,
   assertModuleIntact,
   moduleSql,
   orderedMigrations,
@@ -75,6 +77,7 @@ import {
 import {
   mergeContributions,
   narrowToContributions,
+  NO_ELEMENTS,
 } from "../../migrate-create/app-stream";
 import { upRendersItsSides } from "../../migrate-create/generate-plugin";
 
@@ -102,6 +105,13 @@ export interface RunPluginMigrationsDeps {
    * dialect with no one server to ask at generation.
    */
   serverConstructs?: ServerConstructCapabilities;
+  /**
+   * Every table the database holds before the run. A module's key may reach a
+   * table that already exists — an installed dependency's, one the app
+   * adopted, any the database held — as well as one an earlier stream of the
+   * run creates. Absent, only core tables and earlier streams' count.
+   */
+  existingTables?: () => Promise<ReadonlySet<string>>;
   /**
    * Every plugin the configuration declares, a plugin whose list is empty
    * included, so a module the ledger records applied for it is found missing
@@ -302,20 +312,7 @@ export async function runPluginMigrations(
   // executes; a target no module of the owner names is another owner's or
   // one the database already held, judged for reach at the declaration
   // compile rather than by arrival.
-  const availableTables = new Set<string>(CORE_TABLE_NAMES);
-  for (const set of sets) {
-    const ordered = orderedMigrations(set.migrations);
-    assertModuleForeignKeysResolve(set.pluginName, ordered, {
-      availableTables,
-      dialect: deps.dialect,
-    });
-    const last = ordered[ordered.length - 1];
-    if (last) {
-      for (const table of last.snapshot[deps.dialect]?.tables ?? []) {
-        availableTables.add(table.name);
-      }
-    }
-  }
+  await assertStreamKeysResolve(sets, deps.dialect, deps.existingTables);
   // And for what the server itself can hold: a module generated for every
   // dialect had no one server to be judged against, so pending modules are
   // judged here, against the one about to run them — before any module of any
@@ -369,8 +366,37 @@ export function pendingPluginModules(
 }
 
 /**
- * Refuse pending modules whose snapshot (or contributed elements) declares a
- * check or expression index the connected server cannot hold, within `limit`.
+ * Refuse, before any module runs, a module whose key reaches a table that
+ * neither exists before the run nor is created earlier in it: by core, by a
+ * plugin ordered before this one, or by this plugin's own earlier modules
+ * (`assertModuleForeignKeysResolve`). A run and its preview ask this one
+ * question, so a dry run refuses what the run would.
+ */
+async function assertStreamKeysResolve(
+  sets: readonly PluginMigrationSet[],
+  dialect: SupportedDialect,
+  existingTables: (() => Promise<ReadonlySet<string>>) | undefined
+): Promise<void> {
+  const available = new Set<string>(CORE_TABLE_NAMES);
+  for (const name of (await existingTables?.()) ?? []) available.add(name);
+  for (const set of sets) {
+    const ordered = orderedMigrations(set.migrations);
+    assertModuleForeignKeysResolve(set.pluginName, ordered, {
+      availableTables: available,
+      dialect,
+    });
+    for (const table of ordered.at(-1)?.snapshot[dialect]?.tables ?? []) {
+      available.add(table.name);
+    }
+  }
+}
+
+/**
+ * Refuse pending modules that would add a check the connected server will not
+ * enforce, or an expression index it cannot build, within `limit`: judged on
+ * what each module adds over the snapshot before it, and on the statements it
+ * would run (`server-constructs.ts`). Already-applied modules are left alone,
+ * so a pending module removing a construct an applied one added runs.
  */
 function refusePendingConstructsTheServerCannotHold(
   sets: readonly PluginMigrationSet[],
@@ -378,7 +404,7 @@ function refusePendingConstructsTheServerCannotHold(
     dialect: SupportedDialect;
     appliedShas: { has(key: string): boolean };
     limit?: number;
-    serverConstructs?: ServerConstructCapabilities | Record<string, unknown>;
+    serverConstructs?: ServerConstructCapabilities;
   }
 ): void {
   const server = deps.serverConstructs;
@@ -390,52 +416,48 @@ function refusePendingConstructsTheServerCannotHold(
       if (!isPending(set, migration, deps)) continue;
       if (remaining <= 0) return;
       remaining -= 1;
-      refuseConstructsTheServerCannotHold(
-        tablesForServerConstructCheck(ordered, at, deps.dialect),
-        server
-      );
+      refuseUnitTheServerCannotHold({
+        source: qualifiedFilename(set.pluginName, migration.name),
+        dialect: deps.dialect,
+        server,
+        statements: pluginModuleStatements(migration, deps.dialect, "up"),
+        added: constructsAddedByModule(ordered, at, deps.dialect),
+      });
     }
   }
 }
 
 /**
- * The tables a pending module declares or contributes to, narrowed on foreign
- * tables to the checks and indexes this plugin owns.
+ * The checks and indexes a module adds: on its own tables, every one its
+ * snapshot holds that the snapshot before it did not; on another owner's
+ * table, of those, only the ones this plugin's modules record as its own —
+ * the module carries a frozen copy of the whole table, whose other elements
+ * are the owner's to add and answer for.
  */
-function tablesForServerConstructCheck(
+function constructsAddedByModule(
   ordered: readonly PluginMigration[],
   at: number,
   dialect: SupportedDialect
-): Parameters<typeof refuseConstructsTheServerCannotHold>[0] {
+): AddedConstructs[] {
   const migration = ordered[at];
-  const ownTables = migration.snapshot[dialect]?.tables ?? [];
-  const contributedRaw = migration.contributed?.[dialect]?.tables ?? [];
-  if (contributedRaw.length === 0) return ownTables;
-  const contributions = recordedContributions(
-    ordered.slice(0, at + 1),
-    dialect
+  const own = constructsAdded(
+    migration.before[dialect]?.tables ?? [],
+    migration.snapshot[dialect]?.tables ?? []
+  );
+  const contributed = migration.contributed?.[dialect]?.tables ?? [];
+  if (contributed.length === 0) return own;
+  const recorded = recordedContributions(ordered.slice(0, at + 1), dialect);
+  const foreign = Object.fromEntries(
+    contributed.map(table => [table.name, recorded[table.name] ?? NO_ELEMENTS])
   );
   return [
-    ...ownTables,
-    ...contributedRaw.map(table =>
-      narrowContributedConstructs(table, contributions[table.name])
+    ...own,
+    ...constructsAdded(
+      migration.contributedBefore?.[dialect]?.tables ?? [],
+      contributed,
+      foreign
     ),
   ];
-}
-
-/** Narrow a foreign table's checks and indexes to the ones this plugin contributed. */
-function narrowContributedConstructs(
-  table: NextlySchemaSnapshot["tables"][number],
-  own: { checks: readonly string[]; indexes: readonly string[] } | undefined
-): Parameters<typeof refuseConstructsTheServerCannotHold>[0][number] {
-  if (own === undefined) return { name: table.name };
-  const ownChecks = new Set(own.checks);
-  const ownIndexes = new Set(own.indexes);
-  return {
-    name: table.name,
-    checks: (table.checks ?? []).filter(ck => ownChecks.has(ck.name)),
-    indexes: (table.indexes ?? []).filter(ix => ownIndexes.has(ix.name)),
-  };
 }
 
 /**
@@ -515,7 +537,9 @@ export async function previewPluginMigrations(
     /** As a run is handed it (`RunPluginMigrationsDeps.declaredPlugins`). */
     declaredPlugins?: ReadonlySet<string>;
     /** Server construct capabilities, judged identically to execution. */
-    serverConstructs?: ServerConstructCapabilities | Record<string, unknown>;
+    serverConstructs?: ServerConstructCapabilities;
+    /** As a run is handed it (`RunPluginMigrationsDeps.existingTables`). */
+    existingTables?: () => Promise<ReadonlySet<string>>;
   }
 ): Promise<PluginModulePreview[]> {
   const appliedShas = appliedPluginShas(args.rows);
@@ -525,20 +549,7 @@ export async function previewPluginMigrations(
     appliedShas,
     declaredPlugins: args.declaredPlugins,
   });
-  const availableTables = new Set<string>(CORE_TABLE_NAMES);
-  for (const set of sets) {
-    const ordered = orderedMigrations(set.migrations);
-    assertModuleForeignKeysResolve(set.pluginName, ordered, {
-      availableTables,
-      dialect: args.dialect,
-    });
-    const last = ordered[ordered.length - 1];
-    if (last) {
-      for (const table of last.snapshot[args.dialect]?.tables ?? []) {
-        availableTables.add(table.name);
-      }
-    }
-  }
+  await assertStreamKeysResolve(sets, args.dialect, args.existingTables);
   if (args.serverConstructs !== undefined) {
     refusePendingConstructsTheServerCannotHold(sets, {
       dialect: args.dialect,
