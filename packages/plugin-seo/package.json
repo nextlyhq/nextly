@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-seo",
-  "version": "0.0.2-alpha.75",
+  "version": "0.0.2-alpha.76",
   "description": "First-party SEO plugin for Nextly: adds an SEO meta field group to content collections",
   "license": "MIT",
   "type": "module",
@@ -41,11 +41,11 @@
     "zod": "^4.6.7"
   },
   "peerDependencies": {
-    "@nextlyhq/admin": "0.0.2-alpha.75",
+    "@nextlyhq/admin": "0.0.2-alpha.76",
     "@nextlyhq/ui": "workspace:^",
     "lucide-react": ">=0.400.0",
     "next": "^16.4.1",
-    "nextly": "0.0.2-alpha.75",
+    "nextly": "0.0.2-alpha.76",
     "react": "^19.3.0",
     "react-hook-form": "^7.66.0",
     "sharp": "^0.35.5"

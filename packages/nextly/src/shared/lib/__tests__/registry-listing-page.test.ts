@@ -50,6 +50,18 @@ describe("registryPage", () => {
     expect(slugs(desc.rows)).toEqual(["posts", "news", "pages", "crème"]);
   });
 
+  it("breaks a tie by the thenBy column before id", () => {
+    // "pages" (id 1) and "crème" (id 2) share a createdAt: by slug, crème
+    // comes first, where id alone would put pages first.
+    const asc = registryPage(ROWS, {
+      include: () => true,
+      orderBy: "createdAt",
+      thenBy: "slug",
+      direction: "asc",
+    });
+    expect(slugs(asc.rows)).toEqual(["crème", "pages", "news", "posts"]);
+  });
+
   it("searches without regard to case, beyond ASCII, and literally", () => {
     const search = (text: string) =>
       slugs(

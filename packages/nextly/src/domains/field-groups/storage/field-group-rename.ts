@@ -8,9 +8,9 @@
  * where nothing reads it, and the renamed field reads empty although no row was deleted. A rename
  * that keeps the rows re-keys them instead, and its reverse keys them back.
  *
- * Which removed and added fields MAY be one field renamed is decided here (`keepsFieldGroupRows`);
- * how a surface pairs them is its own: the Builder takes the one pair a save can hold and refuses
- * more, while `migrate:create` asks the operator about each.
+ * Which removed and added fields MAY be one field renamed is decided here (`fieldGroupRenamePairs`);
+ * what a surface does with the pairs is its own: the Builder takes the one pair a save can hold and
+ * refuses more, while `migrate:create` asks the operator about each.
  *
  * @module domains/field-groups/storage/field-group-rename
  */
@@ -50,13 +50,61 @@ export function removedAndAddedFields<T extends { name: string }>(
   };
 }
 
-/** The removed and the added field-group fields of a change (`removedAndAddedFields`). */
+/**
+ * The removed and the added field-group fields of a change.
+ *
+ * A name on both sides is the same field only when it still keeps the rows stored under it
+ * (`keepsFieldGroupRows`). Otherwise the field under that name was removed and a different one
+ * added: a field group whose name now holds a field of another kind (a site renaming its own `seo`
+ * field group while the SEO plugin adds its `seo` group to the same type), or one that now holds
+ * other groups or another cardinality. Compared by name alone, such a field group read as kept, so
+ * no detector offered its rename, and its rows stayed keyed by a name nothing reads any more. A
+ * same-name pair is never itself a rename: by construction it does not keep its rows.
+ */
 export function removedAndAddedFieldGroups<T extends RenamedFieldShape>(
   oldFields: readonly T[],
   newFields: readonly T[]
 ): { oldOnly: T[]; newOnly: T[] } {
-  return removedAndAddedFields(oldFields, newFields, f =>
-    isFieldGroupFieldType(f.type)
+  const oldByName = new Map(oldFields.map(f => [f.name, f]));
+  const newByName = new Map(newFields.map(f => [f.name, f]));
+  const kept = (from: T | undefined, to: T | undefined) =>
+    from !== undefined && to !== undefined && keepsFieldGroupRows(from, to);
+  return {
+    oldOnly: oldFields.filter(
+      f => isFieldGroupFieldType(f.type) && !kept(f, newByName.get(f.name))
+    ),
+    newOnly: newFields.filter(
+      f => isFieldGroupFieldType(f.type) && !kept(oldByName.get(f.name), f)
+    ),
+  };
+}
+
+/**
+ * The removed and added field-group fields that may be one field renamed, as every surface pairs
+ * them: each pair keeps its rows (`keepsFieldGroupRows`), and its new name is not one whose old
+ * field group shares a group with it. That old field's rows stay keyed by the name in the shared
+ * group table, so moving another field's rows onto it would mix the two, and two fields exchanging
+ * names would move each other's rows twice and hand them all to whichever moved last. A field
+ * renamed to its own name is never a pair, since its old field group shares its groups.
+ */
+export function fieldGroupRenamePairs<T extends RenamedFieldShape>(
+  oldFields: readonly T[],
+  newFields: readonly T[]
+): Array<{ from: T; to: T }> {
+  const { oldOnly, newOnly } = removedAndAddedFieldGroups(oldFields, newFields);
+  const heldGroups = new Map(
+    oldFields
+      .filter(f => isFieldGroupFieldType(f.type))
+      .map(f => [f.name, fieldGroupSlugList(f)])
+  );
+  const sharesHeldRows = (to: T) =>
+    fieldGroupSlugList(to).some(slug =>
+      (heldGroups.get(to.name) ?? []).includes(slug)
+    );
+  return oldOnly.flatMap(from =>
+    newOnly
+      .filter(to => !sharesHeldRows(to) && keepsFieldGroupRows(from, to))
+      .map(to => ({ from, to }))
   );
 }
 

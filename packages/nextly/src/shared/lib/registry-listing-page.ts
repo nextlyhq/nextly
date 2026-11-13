@@ -44,8 +44,14 @@ export interface RegistryPageQuery {
   include: (row: RegistryRow) => boolean;
   /** Text to find, and the columns it is looked for in. */
   search?: { text: string; columns: readonly string[] };
-  /** The column to order by; `id` breaks ties. */
+  /** The column to order by; `thenBy` and then `id` break ties. */
   orderBy: string;
+  /**
+   * A column that breaks a tie in `orderBy`, ascending, before `id` does: a
+   * registry orders rows created in the same second by slug, since MySQL
+   * keeps `created_at` to the second and `id` is random.
+   */
+  thenBy?: string;
   direction: "asc" | "desc";
   /** Rows skipped before the page. */
   offset?: number;
@@ -104,10 +110,14 @@ export function registryPage(
         ))
   );
   const sign = query.direction === "asc" ? 1 : -1;
+  const { thenBy } = query;
   const ordered = [...matching].sort(
     (a, b) =>
       sign *
         compareKeys(orderKey(a[query.orderBy]), orderKey(b[query.orderBy])) ||
+      (thenBy === undefined
+        ? 0
+        : compareKeys(orderKey(a[thenBy]), orderKey(b[thenBy]))) ||
       compareKeys(orderKey(a.id), orderKey(b.id))
   );
   const offset = Math.max(0, query.offset ?? 0);
