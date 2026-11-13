@@ -1,25 +1,35 @@
 "use client";
 
 import type { TableParams } from "@nextlyhq/ui";
-import {
-  Avatar,
-  AvatarFallback,
-  AvatarImage,
-  Badge,
-  Skeleton,
-} from "@nextlyhq/ui";
+import { Avatar, AvatarFallback, AvatarImage, Badge } from "@nextlyhq/ui";
 import { Edit, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type JSX } from "react";
 
 import { BulkActionBar } from "@admin/components/features/entries/EntryList/BulkActionBar";
 import { UserDeleteDialog } from "@admin/components/features/user-dialog";
+import {
+  USERS_CUSTOM_COLUMN_WIDTH,
+  USERS_LIST,
+  USERS_LIST_COLUMNS,
+} from "@admin/components/features/users/users-list-layout";
 import { BulkDeleteDialog } from "@admin/components/shared/bulk-action-dialogs";
+import { outlineRowsFor } from "@admin/components/shared/loading-frame/list-rows";
+import {
+  ScreenOutline,
+  TableOutline,
+} from "@admin/components/shared/loading-frame/outlines";
 import { toast } from "@admin/components/ui";
-import type {
-  DataTableSelection,
-  NextlyColumn,
-  RowAction,
+import {
+  resolvePluginColumns,
+  type DataTableSelection,
+  type NextlyColumn,
+  type RowAction,
 } from "@admin/components/ui/table/data-table";
+import {
+  HeldPluginRegistrations,
+  useDataTablePluginRegistrations,
+} from "@admin/components/ui/table/data-table/DataTableView";
+import { ShortIdCell } from "@admin/components/ui/table/data-table/short-id-cell";
 import {
   ListView,
   useTableColumns,
@@ -266,6 +276,7 @@ export default function UserTable(): JSX.Element {
       cols.push({
         name: fieldName,
         header: fieldDef.label,
+        width: USERS_CUSTOM_COLUMN_WIDTH,
         hideOnMobile: true,
         cell: ({ row }) => renderCustomFieldCell(row[fieldName], fieldDef),
       });
@@ -276,8 +287,7 @@ export default function UserTable(): JSX.Element {
   const allColumns = useMemo((): NextlyColumn<UserApiResponse>[] => {
     return [
       {
-        name: "name",
-        header: "NAME",
+        ...USERS_LIST_COLUMNS.name,
         cell: ({ row }) => {
           const initial = row.name.split(" ")[0].charAt(0).toUpperCase();
           return (
@@ -303,24 +313,12 @@ export default function UserTable(): JSX.Element {
         },
       },
       {
-        name: "id",
-        header: "ID",
+        ...USERS_LIST_COLUMNS.id,
         hideOnMobile: true,
-        cell: ({ value }) => {
-          const id = typeof value === "string" ? value : "";
-          return (
-            <span
-              className="font-mono text-xs text-muted-foreground"
-              title={id}
-            >
-              {id.length > 8 ? `${id.slice(0, 8)}...` : id}
-            </span>
-          );
-        },
+        cell: ({ value }) => <ShortIdCell value={value} />,
       },
       {
-        name: "roles",
-        header: "ROLE",
+        ...USERS_LIST_COLUMNS.roles,
         cell: ({ row }) => (
           <div className="flex flex-wrap gap-2 text-left">
             {row.roles.length > 0 ? (
@@ -346,8 +344,7 @@ export default function UserTable(): JSX.Element {
       },
       ...customColumns,
       {
-        name: "createdAt",
-        header: "CREATED",
+        ...USERS_LIST_COLUMNS.createdAt,
         hideOnMobile: true,
         cell: ({ value }) => (
           <span className="text-sm">
@@ -400,6 +397,19 @@ export default function UserTable(): JSX.Element {
 
   const showLoadingSkeleton = isLoading || (isFetching && !data);
 
+  // The columns the table will draw, plugins' contributions included, read
+  // from one snapshot of the registrations that the table below is handed
+  // too: the outline is drawn from these, so a column a plugin adds to the
+  // users list stands in the outline where the table will draw it.
+  const registered = useDataTablePluginRegistrations();
+  const tableColumns = useMemo(
+    () =>
+      resolvePluginColumns(USERS_LIST, columns, registered).filter(
+        column => !column.hidden
+      ),
+    [columns, registered]
+  );
+
   return (
     <>
       {/* The failure is a table state rather than a separate Alert, so the
@@ -407,67 +417,79 @@ export default function UserTable(): JSX.Element {
           show, `DataTableView` returns the message alone and draws no card
           around it, which is why nothing here needs to suppress the empty
           state or lay the error out. */}
-      <ListView<UserApiResponse>
-        search={{
-          value: search,
-          onChange: setSearch,
-          placeholder: "Search users by name or email",
-          isLoading: isFetching,
-        }}
-        bulkBar={
-          selectedCount > 0 ? (
-            <BulkActionBar
-              selectedCount={selectedCount}
-              collection={undefined}
-              onDelete={handleBulkDelete}
-              onClear={clearSelection}
-              itemLabel="user"
-            />
-          ) : undefined
-        }
-        // While the list is still loading there is nothing to toggle, so the
-        // control is withheld and its footprint held by a skeleton rather
-        // than by a menu that would open onto an empty list.
-        columnsControl={showLoadingSkeleton ? undefined : columnsControl}
-        toolbarActions={
-          showLoadingSkeleton ? <Skeleton className="h-9 w-25" /> : undefined
-        }
-        columns={columns}
-        rows={filteredData}
-        loading={showLoadingSkeleton}
-        rowHref={user => buildRoute(ROUTES.USERS_EDIT, { id: user.id })}
-        primaryColumn="name"
-        selection={selection}
-        rowActions={rowActions}
-        registryKey="users"
-        ariaLabel="Users table"
-        pagination={
-          data && data.meta.totalPages > 0
-            ? {
-                currentPage: page,
-                totalPages: data.meta.totalPages,
-                totalItems: data.meta.total,
-                pageSize,
-                pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
-                onPageChange: setPage,
-                onPageSizeChange: setPageSize,
-                isLoading,
-              }
-            : undefined
-        }
-        error={
-          isError
-            ? error instanceof Error
-              ? error.message
-              : "Failed to load users. Please try again."
-            : null
-        }
-        emptyMessage={
-          search || roleFilter !== "all"
-            ? "No users found. Try adjusting your search or filters."
-            : "No users available."
-        }
-      />
+      <HeldPluginRegistrations.Provider value={registered}>
+        <ListView<UserApiResponse>
+          search={{
+            value: search,
+            onChange: setSearch,
+            placeholder: "Search users by name or email",
+            isLoading: isFetching,
+          }}
+          bulkBar={
+            selectedCount > 0 ? (
+              <BulkActionBar
+                selectedCount={selectedCount}
+                collection={undefined}
+                onDelete={handleBulkDelete}
+                onClear={clearSelection}
+                itemLabel="user"
+              />
+            ) : undefined
+          }
+          // Offered while the rows load too: the columns are known before the
+          // rows are, and the control drawn at once is the one that stays, so
+          // the toolbar does not change size when the rows land.
+          columnsControl={columnsControl}
+          columns={columns}
+          // The list's own outline while its rows load, at the table's own
+          // columns and as many rows as it last drew.
+          skeleton={
+            <ScreenOutline>
+              <TableOutline
+                selection
+                headers={tableColumns.map(column => column.header)}
+                columnWidths={tableColumns.map(column => column.width)}
+                rows={outlineRowsFor(USERS_LIST)}
+                list={USERS_LIST}
+              />
+            </ScreenOutline>
+          }
+          rows={filteredData}
+          loading={showLoadingSkeleton}
+          rowHref={user => buildRoute(ROUTES.USERS_EDIT, { id: user.id })}
+          primaryColumn="name"
+          selection={selection}
+          rowActions={rowActions}
+          registryKey={USERS_LIST}
+          ariaLabel="Users table"
+          pagination={
+            data && data.meta.totalPages > 0
+              ? {
+                  currentPage: page,
+                  totalPages: data.meta.totalPages,
+                  totalItems: data.meta.total,
+                  pageSize,
+                  pageSizeOptions: PAGINATION.TABLE_PAGE_SIZE_OPTIONS,
+                  onPageChange: setPage,
+                  onPageSizeChange: setPageSize,
+                  isLoading,
+                }
+              : undefined
+          }
+          error={
+            isError
+              ? error instanceof Error
+                ? error.message
+                : "Failed to load users. Please try again."
+              : null
+          }
+          emptyMessage={
+            search || roleFilter !== "all"
+              ? "No users found. Try adjusting your search or filters."
+              : "No users available."
+          }
+        />
+      </HeldPluginRegistrations.Provider>
 
       <UserDeleteDialog
         open={deleteDialogOpen}

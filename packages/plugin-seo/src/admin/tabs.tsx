@@ -42,6 +42,7 @@ import {
   type SettingsDraft,
 } from "./settings-draft";
 import { ControlNote, SettingsCard, TextRow } from "./settings-parts";
+import { verificationDraftProblem } from "./verification";
 
 /** What every tab is handed: the draft, and how to change it. */
 export interface TabProps {
@@ -449,7 +450,7 @@ function SwitchRow({
 }
 
 /** The host the site is served from, for the sentences that name it. */
-function siteHostOf(
+export function siteHostOf(
   draft: SettingsDraft,
   serverAddresses: readonly string[] = []
 ): string {
@@ -562,5 +563,5 @@ export function draftProblem(
       return "Fix the social profile address first.";
     }
   }
-  return null;
+  return verificationDraftProblem(draft.verificationCodes);
 }

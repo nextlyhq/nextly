@@ -30,6 +30,11 @@ import { Filter } from "@admin/components/icons";
 import { SearchBar } from "@admin/components/shared/search-bar";
 
 import { ListColumnsMenu } from "./ListColumnsMenu";
+import {
+  LIST_TOOLBAR_CONTROLS,
+  LIST_TOOLBAR_ROW,
+  LIST_TOOLBAR_SEARCH,
+} from "./toolbar-layout";
 import type { ListColumnsControl, ListSearch } from "./types";
 
 export interface ListToolbarProps<Row extends object> {
@@ -83,12 +88,9 @@ export function ListToolbar<Row extends object>({
     // against is an empty toolbar row still contributing its gap to the column
     // above the table — and an empty row and an absent one are identical when
     // you look for the controls that would have been inside it.
-    <div
-      data-slot="list-toolbar"
-      className="flex flex-col justify-between gap-4 @lg/content:flex-row @lg/content:items-center"
-    >
+    <div data-slot="list-toolbar" className={LIST_TOOLBAR_ROW}>
       {search && (
-        <div className="relative w-full @lg/content:max-w-xs @2xl/content:max-w-sm">
+        <div className={LIST_TOOLBAR_SEARCH}>
           <SearchBar
             value={search.value}
             onChange={search.onChange}
@@ -101,7 +103,7 @@ export function ListToolbar<Row extends object>({
       )}
 
       {hasControls && (
-        <div className="flex flex-wrap items-center gap-2 @lg/content:justify-end">
+        <div className={LIST_TOOLBAR_CONTROLS}>
           {filters && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

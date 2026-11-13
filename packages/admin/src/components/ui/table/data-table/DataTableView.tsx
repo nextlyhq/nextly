@@ -52,6 +52,7 @@ import {
 } from "react";
 
 import { ChevronRight } from "@admin/components/icons";
+import { useRememberedListPager } from "@admin/components/shared/loading-frame/list-rows";
 import { Pagination } from "@admin/components/shared/pagination";
 import type { PaginationProps } from "@admin/components/shared/pagination/types";
 import { navigateTo } from "@admin/lib/navigation";
@@ -65,7 +66,14 @@ import {
   subscribeToDataTablePlugins,
   type DataTablePluginRegistrations,
 } from "./plugin-registry";
-import { ROW_ACTIONS_COLUMN, ROW_ACTIONS_TRIGGER } from "./row-actions";
+import {
+  FIXED_LAYOUT_TABLE,
+  fixedColumnLayout,
+  LIST_TABLE,
+  ROW_ACTIONS_COLUMN,
+  ROW_ACTIONS_TRIGGER,
+  SELECTION_COLUMN,
+} from "./row-actions";
 import {
   isListEmpty,
   rowCountLabel,
@@ -550,6 +558,9 @@ export function DataTableView<Row extends object>({
     () => resolvedColumns.filter(c => !c.hidden),
     [resolvedColumns]
   );
+  // Laid out by the columns' widths where every column declares one, so
+  // the columns do not move as rows arrive; else by their content.
+  const fixedLayout = fixedColumnLayout(visibleColumns.map(c => c.width));
   const mobileColumns = useMemo(
     () => visibleColumns.filter(c => !c.hideOnMobile),
     [visibleColumns]
@@ -779,7 +790,10 @@ export function DataTableView<Row extends object>({
             </TableCell>
           )}
           {selection && (
-            <TableCell className="w-10" onClick={e => e.stopPropagation()}>
+            <TableCell
+              className={SELECTION_COLUMN}
+              onClick={e => e.stopPropagation()}
+            >
               <Checkbox
                 checked={selectedSet.has(id)}
                 disabled={!selectable}
@@ -1065,6 +1079,9 @@ export function DataTableView<Row extends object>({
     typeof footer === "boolean" ||
     footer === "";
 
+  // How tall the pager stands, kept for the list's outline next time.
+  const rememberedPager = useRememberedListPager(registryKey);
+
   // The limit worth stating rather than hiding: a component that RETURNS null
   // still counts as content here, because no inspection of the node can know
   // what it renders without rendering it. That case draws an empty surface, and
@@ -1073,7 +1090,9 @@ export function DataTableView<Row extends object>({
     !footerRendersNothing || pagination !== undefined ? (
       <>
         {footer}
-        {pagination !== undefined && <Pagination {...pagination} />}
+        {pagination !== undefined && (
+          <Pagination ref={rememberedPager} {...pagination} />
+        )}
       </>
     ) : undefined;
 
@@ -1148,10 +1167,14 @@ export function DataTableView<Row extends object>({
           )}
         </div>
 
-        {/* Desktop / wide: table view */}
-        <div className="hidden @md/table:block">
+        {/* Desktop / wide: table view. Named as a table's outline names its
+            rows, so a test can hold the two to one box. */}
+        <div data-frame-part="list-rows" className="hidden @md/table:block">
           <div className="overflow-x-auto">
-            <Table aria-label={ariaLabel} className="w-full min-w-max">
+            <Table
+              aria-label={ariaLabel}
+              className={cn(LIST_TABLE, fixedLayout && FIXED_LAYOUT_TABLE)}
+            >
               <TableHeader>
                 <TableRow>
                   {rowDetail && (
@@ -1160,7 +1183,7 @@ export function DataTableView<Row extends object>({
                     </TableHead>
                   )}
                   {selection && (
-                    <TableHead className="w-10">
+                    <TableHead className={SELECTION_COLUMN}>
                       <Checkbox
                         checked={allSelected}
                         indeterminate={someSelected}
@@ -1182,6 +1205,7 @@ export function DataTableView<Row extends object>({
                           col.align === "center" && "text-center",
                           canSort && "relative cursor-pointer select-none"
                         )}
+                        style={fixedLayout ? { width: col.width } : undefined}
                         aria-sort={ariaSortOf(sorted, canSort)}
                       >
                         <HeaderLabel

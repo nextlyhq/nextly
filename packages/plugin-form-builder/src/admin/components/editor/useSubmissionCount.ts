@@ -57,21 +57,32 @@ async function readCount(
   return totalOf(await response.json()) ?? null;
 }
 
-/**
- * The number of submissions `formId` has in `submissionsSlug`, or `undefined`
- * while it is unknown: not saved yet, still loading, or the read failed. The
- * bar then draws no count rather than a wrong one.
- */
+/** One form's submission count, as far as it is known. */
+export interface SubmissionCount {
+  /**
+   * The count, or `undefined` while it is unknown: not saved yet, still
+   * loading, or the read failed. The bar then draws no count rather than a
+   * wrong one.
+   */
+  count: number | undefined;
+  /**
+   * Whether the read failed, so no count will come. Until it answers, one is
+   * on its way, and the bar holds its place meanwhile.
+   */
+  failed: boolean;
+}
+
+/** The number of submissions `formId` has in `submissionsSlug`. */
 export function useSubmissionCount(
   formId: string | undefined,
   submissionsSlug: string | undefined
-): number | undefined {
-  const { data } = useQuery({
+): SubmissionCount {
+  const { data, isError } = useQuery({
     queryKey: [...SUBMISSION_COUNT_KEY, submissionsSlug, formId],
     enabled: formId !== undefined && submissionsSlug !== undefined,
     queryFn: () => readCount(submissionsSlug ?? "", formId ?? ""),
     // The count is a convenience: a failed read shows none, without retries.
     retry: false,
   });
-  return data ?? undefined;
+  return { count: data ?? undefined, failed: isError };
 }

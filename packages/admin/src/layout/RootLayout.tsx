@@ -33,6 +33,7 @@ import { invalidateContentCaches } from "../hooks/schema-change-invalidation";
 import { useRouter } from "../hooks/useRouter";
 import { cn } from "../lib/utils";
 import LoginPage from "../pages/(auth)/login";
+import { RouteLoadingOutline } from "../pages/route-loading-outline";
 
 import "../styles/globals.css";
 import { DashboardLayout } from "./DashboardLayout";
@@ -110,15 +111,14 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
     // is null because we don't render a load indicator during transitions.
     // A private screen's code arriving shows the screen's outline, which is
     // also what it shows while its data loads, so the outline stays put.
+    // The same while a lazily fetched route's code arrives (`lazyRoute`).
+    const routeOutline =
+      routeType === "private" ? <ScreenOutlineFor pathname={pathname} /> : null;
     const suspended = (
-      <Suspense
-        fallback={
-          routeType === "private" ? (
-            <ScreenOutlineFor pathname={pathname} />
-          ) : null
-        }
-      >
-        <Component params={params} searchParams={searchParams} />
+      <Suspense fallback={routeOutline}>
+        <RouteLoadingOutline.Provider value={routeOutline}>
+          <Component params={params} searchParams={searchParams} />
+        </RouteLoadingOutline.Provider>
       </Suspense>
     );
 

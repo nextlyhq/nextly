@@ -21,6 +21,7 @@
 
 import type { JSX, ReactNode } from "react";
 
+import { useRememberedListRows } from "@admin/components/shared/loading-frame/list-rows";
 import { cn } from "@admin/lib/utils";
 
 import {
@@ -97,6 +98,12 @@ export function ListView<Row extends object>({
   className,
   ...table
 }: ListViewProps<Row>): JSX.Element {
+  // How many rows this list drew, kept so its outline next time draws as
+  // many: one count per list, read by every outline of it.
+  useRememberedListRows(
+    table.registryKey,
+    table.loading || table.error ? undefined : table.rows.length
+  );
   const toolbar = {
     search,
     filters,

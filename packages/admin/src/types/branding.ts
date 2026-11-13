@@ -304,6 +304,13 @@ export interface PluginMetadata {
    */
   panelSections?: Array<{ slug: string; title: string; component: string }>;
   /**
+   * @experimental The collections whose document screens start with the
+   * rail's panel folded away, contributed via
+   * `contributes.admin.views[<slug>].foldedPanel`, on the slug the admin
+   * routes. Present only for enabled plugins.
+   */
+  foldedPanels?: string[];
+  /**
    * @experimental The filters this plugin offers in the entry list's toolbar,
    * via `contributes.admin.filters`, as they passed the boot check. Present
    * only for enabled plugins.
