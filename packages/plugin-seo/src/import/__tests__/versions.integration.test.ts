@@ -820,11 +820,11 @@ describe.each(getConfiguredTestDialects())(
         kind: "rankMath",
         fileName: "rank-math.csv",
         text: [
-          "id,url,canonical_url",
+          "id,url,seo_title,canonical_url",
           // The English page's own address: nothing to set.
-          "1,https://example.com/about,https://example.com/about",
+          "1,https://example.com/about,,https://example.com/about",
           // The German page sent to the English one on purpose.
-          "2,https://example.de/about,https://example.com/about",
+          "2,https://example.de/about,,https://example.com/about",
         ].join("\n"),
       };
 
