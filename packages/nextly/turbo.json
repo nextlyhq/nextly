@@ -3,6 +3,13 @@
   "extends": ["//"],
   "tasks": {
     "test": {
+      // This package's own build too, not only its dependencies': two suites
+      // judge the BUILT `nextly/next` entry, loading it through the exports map
+      // as an app's config does (`with-nextly-loads.test.ts`,
+      // `with-nextly-html-limited-bots.test.ts`). Without this edge a runner
+      // that has not built the package (the Windows nextly job) has no
+      // `dist/next.mjs` to load, and one that built it earlier tests a stale one.
+      "dependsOn": ["$TURBO_EXTENDS$", "build"],
       // The spec page is an INPUT to this package's tests, not documentation
       // beside them: `block-document.test.ts` reads
       // `docs/api-reference/block-document-format.mdx` and asserts every
