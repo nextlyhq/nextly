@@ -108,12 +108,13 @@ export interface VersionsNamespace {
     }
   ): Promise<VersionDiff>;
   /**
-   * Name a version, or clear its name with `null`. Answers the version
-   * without its snapshot, as REST's rename does, whoever calls.
+   * Name a version, or clear its name with `null`. Answers the version as
+   * `get` reads it: its snapshot whole on a trusted call, and on a checked
+   * call with every field the caller may not read withheld.
    */
   name(
     args: VersionCall & { versionNo: number; label: string | null }
-  ): Promise<MutationResult<VersionMeta>>;
+  ): Promise<MutationResult<VersionRow>>;
   /**
    * Restore a version into the working draft: the fields `fields` names, or
    * every field it holds, and never what is published. Refused where the
@@ -212,13 +213,13 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
   /**
    * A trusted call's name: written as the service writes one, recorded in
    * the document's history against the call's actor where it names one, and
-   * answered without the snapshot, as a checked call is.
+   * answered as the version is stored.
    */
   async function trustedName(
     ref: VersionRef,
     args: VersionCall & { versionNo: number },
     label: string | null
-  ): Promise<VersionMeta> {
+  ): Promise<VersionRow> {
     const actor = directApiActor(defaultConfig, args);
     const person = accessOptions(mergeConfig(defaultConfig, args)).user;
     const row = await getService("versionsService").setLabel(
@@ -237,8 +238,7 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
           }
         : undefined
     );
-    const { snapshot: _snapshot, ...meta } = row;
-    return meta;
+    return row;
   }
 
   /** The common arguments of the REST functions, for a checked caller. */
@@ -327,15 +327,23 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
       const h = await historyFunctions();
       const checked = await checkedAs(args, "update");
       const ref = await refOf(args);
-      const item: VersionMeta = checked
-        ? await scoped(args, () =>
-            h.setVersionLabelForDocument({
+      const item: VersionRow = checked
+        ? await scoped(args, async () => {
+            await h.setVersionLabelForDocument({
               ...restArgs(ref, checked.user, args),
               versionNo: args.versionNo,
               body: { label: args.label },
               params: {},
-            })
-          )
+            });
+            // The version as the caller may read it, through the same read
+            // `get` makes: a checked call's snapshot is redacted for it.
+            const { withheld: _withheld, ...read } =
+              await h.getVersionForDocument({
+                ...restArgs(ref, checked.user, args),
+                versionNo: args.versionNo,
+              });
+            return read;
+          })
         : await trustedName(ref, args, h.normalizeLabel(args.label, "label"));
       return {
         message: item.label ? "Version named." : "Version name cleared.",
@@ -350,9 +358,10 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
       const version = versionKeysOf(args);
       const fields = args.fields ? { fields: args.fields } : {};
       const actor = directApiActor(defaultConfig, args);
-      // The request behind the call, for the update's hooks, as an ordinary
-      // write hands it.
+      // The request and hook context behind the call, for the update's hooks,
+      // as an ordinary write hands them.
       const request = accessOptions(mergeConfig(defaultConfig, args)).request;
+      const context = mergeConfig(defaultConfig, args).context;
       const item = checked
         ? await scoped(args, () =>
             h.restoreVersionForDocument({
@@ -363,6 +372,7 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
               ...fields,
               ...(actor ? { actor } : {}),
               ...(request ? { request } : {}),
+              ...(context ? { context } : {}),
             })
           )
         : await restoreVersion({
@@ -375,6 +385,7 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
             // Who it was made for, never judged as them: a trusted call.
             ...(actor ? { actor } : {}),
             ...(request ? { request } : {}),
+            ...(context ? { context } : {}),
           });
       return { message: "Version restored.", item };
     },

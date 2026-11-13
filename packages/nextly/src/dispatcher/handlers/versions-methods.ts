@@ -782,6 +782,8 @@ export async function restoreVersionForDocument(
     params: Params;
     /** The HTTP request behind the restore, when one produced it. */
     request?: Request;
+    /** What the caller hands the update's hooks as `ctx.context`. */
+    context?: Record<string, unknown>;
     /** `_rev` and `_overwrite` from the request: see `restoreVersion`. */
     version?: Readonly<Record<string, unknown>>;
     /** The fields to restore; every field the version holds when absent. */
@@ -832,6 +834,7 @@ export async function restoreVersionForDocument(
     // scope, not the owner's RBAC.
     authenticatedScope: readAuthenticatedScope(),
     request: args.request,
+    ...(args.context ? { context: args.context } : {}),
     // Judged as the update the restore makes is.
     version: args.version,
     ...(args.fields ? { fields: args.fields } : {}),

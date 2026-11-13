@@ -61,7 +61,7 @@ interface VersionsNamespace {
   compare(args: Record<string, unknown>): Promise<unknown>;
   name(
     args: Record<string, unknown>
-  ): Promise<{ item: { label: string | null } }>;
+  ): Promise<{ item: { label: string | null; snapshot?: unknown } }>;
   restore(
     args: Record<string, unknown>
   ): Promise<{ item: { restoredFrom: number } }>;
@@ -291,6 +291,8 @@ describe.each(getConfiguredTestDialects())(
       });
 
       expect(named.item.label).toBe("Kept");
+      // Answered as the version, snapshot and all, as before the name.
+      expect(named.item.snapshot).toBeDefined();
       const viaRest = (await rest("GET", history(id))) as {
         items: { versionNo: number; label: string | null }[];
       };
@@ -387,7 +389,7 @@ describe.each(getConfiguredTestDialects())(
       expect(page.meta.limit).toBe(viaRest.meta.limit);
     }, 120_000);
 
-    it("records who named a version on a trusted call made for a person, and returns no snapshot", async () => {
+    it("records who named a version on a trusted call made for a person, and returns the version", async () => {
       const id = await publishedTwice();
 
       const named = await versions().name({
@@ -398,7 +400,10 @@ describe.each(getConfiguredTestDialects())(
         user: { id: ADMIN as AuthUserId, email: `${ADMIN}@example.test` },
       });
 
-      expect(Object.hasOwn(named.item, "snapshot")).toBe(false);
+      // The version as `get` answers a trusted call: its snapshot whole.
+      expect(named.item.snapshot).toEqual(
+        (await versions().get({ collection: POSTS, id, versionNo: 1 })).snapshot
+      );
       const events = await t.nextly.contentEvents.list({
         subject: { kind: "collection", slug: POSTS, id },
       });
@@ -472,6 +477,61 @@ describe.each(getConfiguredTestDialects())(
       expect(
         events.items.filter(e => e.kind === "restored").map(e => e.actorId)
       ).toContain(ADMIN);
+    }, 120_000);
+
+    it("answers a checked name with the version as the caller reads it", async () => {
+      const id = await publishedTwice();
+
+      const named = await versions().name({
+        collection: POSTS,
+        id,
+        versionNo: 1,
+        label: "Checked",
+        overrideAccess: false,
+        user: { id: ADMIN as AuthUserId, email: `${ADMIN}@example.test` },
+      });
+
+      expect(named.item.label).toBe("Checked");
+      // The read a checked `get` makes, not the stored row.
+      const read = await versions().get({
+        collection: POSTS,
+        id,
+        versionNo: 1,
+        overrideAccess: false,
+        user: { id: ADMIN as AuthUserId, email: `${ADMIN}@example.test` },
+      });
+      expect(named.item.snapshot).toEqual(read.snapshot);
+    }, 120_000);
+
+    it("hands a restore's hook context to the update it makes, checked or trusted", async () => {
+      const id = await publishedTwice();
+      const seen: unknown[] = [];
+      const watch = (ctx: {
+        context?: { marker?: unknown };
+        data?: unknown;
+      }) => {
+        seen.push(ctx.context?.marker);
+        return ctx.data;
+      };
+      registerHook("beforeUpdate", POSTS, watch as never);
+      try {
+        for (const overrideAccess of [true, false]) {
+          await versions().restore({
+            collection: POSTS,
+            id,
+            versionNo: 1,
+            _overwrite: true,
+            overrideAccess,
+            user: { id: ADMIN as AuthUserId, email: `${ADMIN}@example.test` },
+            context: { marker: `restored-${String(overrideAccess)}` },
+          });
+        }
+      } finally {
+        unregisterHook("beforeUpdate", POSTS, watch as never);
+      }
+
+      expect(seen).toContain("restored-true");
+      expect(seen).toContain("restored-false");
     }, 120_000);
 
     it("marks a version seen on a trusted call, for a person the read rules would refuse", async () => {
