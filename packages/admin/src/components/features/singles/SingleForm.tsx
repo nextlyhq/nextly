@@ -34,6 +34,7 @@ import { pluginDocumentLock } from "@admin/components/features/entries/EntryForm
 import {
   topLevelFieldNames,
   useContentFields,
+  useWithoutWithheldFields,
   useDocumentPanelParts,
   useDocumentPlace,
 } from "@admin/components/features/entries/EntryForm/document-place";
@@ -1000,7 +1001,12 @@ export function SingleForm({
   // Single, whose slug its config fixes). Per the
   // special-casing. Any user-defined field with admin.position: "sidebar"
   // now renders inline like every other Builder field.
-  const allFields = schema.fields;
+  // Less any field a plugin's switch keeps off this Single, which is then
+  // drawn nowhere and never decides the takeover layout.
+  const allFields = useWithoutWithheldFields(
+    { single: schema.slug },
+    schema.fields
+  ) as typeof schema.fields;
   const titleField = allFields.find(f => "name" in f && f.name === "title");
   const slugField = allFields.find(f => "name" in f && f.name === "slug");
   // Takeover layout: a field flagged `layout: "takeover"` (when active) collapses the
@@ -1051,11 +1057,14 @@ export function SingleForm({
     ...(editingLanguage ? { language: editingLanguage } : {}),
     ...(editingLocale ? { locale: editingLocale } : {}),
   });
+  // The version's values are read over every declared field, the withheld
+  // ones too: a drawn field's condition may name one of them.
   const viewedVersionHost = useViewedVersion(
     allFields,
     takeoverTypes,
     versionFor,
-    editorRestore
+    editorRestore,
+    schema.fields as FieldConfig[]
   );
   const {
     viewingVersion,
@@ -1595,6 +1604,12 @@ export function SingleForm({
   // field keeps its value in the form, so Save still stores them.
   const fieldNames = useMemo(() => topLevelFieldNames(allFields), [allFields]);
   const contentFields = useContentFields(documentPlace, fieldNames, mainFields);
+  // A past version is drawn as it was stored, less any field a plugin's
+  // switch keeps off this Single now.
+  const shownHistoricalFields = useWithoutWithheldFields(
+    documentPlace.context,
+    historicalFields
+  );
   // The side panel's sections in the order the server placed them, with the
   // sections plugins declared at the Single's page among them, as on a
   // collection entry's page.
@@ -1766,7 +1781,7 @@ export function SingleForm({
       // A save alone: during a recovery, work that reaches the form after its
       // one read is still unsaved, so leaving still asks.
       disabled={isSubmitting}
-      fields={schema.fields}
+      fields={allFields}
       // Same rule as the entry editor: a refused switch takes its seed with it.
       onCancel={onSeedHandled}
     >
@@ -1797,7 +1812,7 @@ export function SingleForm({
           // shows: a field covering the bar reports what the bar would have.
           documentStatus={editedStatus}
           // The fields, so a field inside a repeater's row has an address.
-          fields={schema.fields}
+          fields={allFields}
           // So a field recording its own state stays quiet where this does.
           keepsRecoveryPoints={keepsRecoveryPoints}
         >
@@ -1862,7 +1877,7 @@ export function SingleForm({
                           recovery={recovery}
                           viewingVersion={viewingVersion}
                           recovering={recovering}
-                          fields={schema.fields}
+                          fields={allFields}
                           // A document view has no header, so the banner goes
                           // in among its own: an author working in the view
                           // still sees the document is in a scheduled release.
@@ -2063,7 +2078,7 @@ export function SingleForm({
                                     <SingleFormFieldsPanel
                                       document={document}
                                       singleSlug={schema.slug}
-                                      historicalFields={historicalFields}
+                                      historicalFields={shownHistoricalFields}
                                       historicalValues={historicalValues}
                                       isSubmitting={isSubmitting}
                                       mainFields={contentFields}

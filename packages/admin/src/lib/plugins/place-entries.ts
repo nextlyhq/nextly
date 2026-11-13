@@ -144,3 +144,25 @@ export function entriesDrawnHere(
     return item.replaces === undefined ? [] : [{ builtIn: item.replaces }];
   });
 }
+
+/**
+ * The fields a plugin's switch keeps off this page (`withheldFields` in the
+ * workspace metadata, keyed `collection:<slug>` or `single:<slug>`): fields
+ * the plugin added to the page's type and has switched off there. The page
+ * draws them nowhere, and their stored values are left as they are.
+ */
+export function fieldsWithheldHere(
+  withheld: Readonly<Record<string, readonly string[]>> | undefined,
+  context: unknown
+): ReadonlySet<string> {
+  if (withheld === undefined) return new Set();
+  const collection = pageCollection(context);
+  const single = pageSingle(context);
+  const key =
+    collection !== undefined
+      ? `collection:${collection}`
+      : single !== undefined
+        ? `single:${single}`
+        : undefined;
+  return new Set(key === undefined ? [] : (withheld[key] ?? []));
+}

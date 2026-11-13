@@ -436,6 +436,23 @@ describe("contributionsForReader — offered where the plugin's fields were adde
     expect(meta["collection.edit"]?.tab).toHaveLength(1);
   });
 
+  it("withholds it on a type the plugin's switch has the field off on", async () => {
+    publishConfiguredExtensions(added("collection:posts", "collection:logs"));
+    publishBuilderExtensions(new Map());
+    const off = new Map([
+      ["@acme/notes", new Map([["notes", new Set(["collection:logs"])]])],
+    ]);
+    const meta = await contributionsForReader(
+      [NOTES],
+      reader([], ["posts", "logs"]).audience,
+      "workspace",
+      off
+    );
+    expect(meta["collection.edit"]?.tab).toEqual([
+      expect.objectContaining({ id: "acme-notes.tab", collections: ["posts"] }),
+    ]);
+  });
+
   it("does not count a field of that name another plugin added", async () => {
     publishConfiguredExtensions(
       new Map([["collection:posts", new Map([["notes", "@acme/other"]])]])

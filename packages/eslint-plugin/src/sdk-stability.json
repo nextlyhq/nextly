@@ -47,6 +47,7 @@
       "DraftSplitEligibility",
       "DurableEvent",
       "DurableHandler",
+      "EXTENSION_SWITCH_SERVICE",
       "EmailAfterSendValue",
       "EmailFilterContext",
       "EmailPayloadFilterValue",

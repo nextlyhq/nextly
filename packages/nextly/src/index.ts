@@ -721,6 +721,11 @@ export {
 // Which types a plugin's `extend` added each field to, as the start resolved
 // them. @experimental
 export { typesExtendedBy, type ExtendedType } from "./plugins/extended-types";
+// A plugin's switch for the fields its `extend` added. @experimental
+export {
+  EXTENSION_SWITCH_SERVICE,
+  type ExtensionSwitch,
+} from "./plugins/extension-switch";
 
 // The later pages of a paginated list's address (`/news/page/2`): one
 // spelling per page, read the way the content routes read them.

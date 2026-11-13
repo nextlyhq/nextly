@@ -83,6 +83,7 @@ import { pluginDocumentLock } from "./document-lock-affordances";
 import {
   topLevelFieldNames,
   useContentFields,
+  useWithoutWithheldFields,
   useDocumentPanelParts,
   useDocumentPlace,
 } from "./document-place";
@@ -605,7 +606,16 @@ export function EntryForm({
   // no user-defined fields may use `admin.position: 'sidebar'`, and any
   // legacy `seoField` name match is dropped — components (including ones
   // named "seo") render inline like every other field.
-  const allFields = getCollectionFields(collection);
+  // Less any field a plugin's switch keeps off this collection, which is
+  // then drawn nowhere and never decides the takeover layout.
+  const declaredFields = useMemo(
+    () => getCollectionFields(collection),
+    [collection]
+  );
+  const allFields = useWithoutWithheldFields(
+    { collection: collectionSlug },
+    declaredFields
+  ) as ReturnType<typeof getCollectionFields>;
   const slugField = allFields.find(f => f.name === "slug");
   const titleField = allFields.find(f => f.name === "title");
 
@@ -689,11 +699,14 @@ export function EntryForm({
     ...(editingLanguage ? { language: editingLanguage } : {}),
     ...(editingLocale ? { locale: editingLocale } : {}),
   });
+  // The version's values are read over every declared field, the withheld
+  // ones too: a drawn field's condition may name one of them.
   const viewedVersionHost = useViewedVersion(
     allFields,
     takeoverTypes,
     versionFor,
-    editorRestore
+    editorRestore,
+    declaredFields
   );
   const {
     viewingVersion,
@@ -882,6 +895,12 @@ export function EntryForm({
   // plugin's tab takes over, by the same rule as the page's own content:
   // they are drawn, and edited, in their tab.
   const besideFields = useContentFields(documentPlace, fieldNames, allFields);
+  // A past version is drawn as it was stored, less any field a plugin's
+  // switch keeps off this type now.
+  const shownHistoricalFields = useWithoutWithheldFields(
+    documentPlace.context,
+    historicalFields
+  );
   const renderEntryFields = useCallback(
     (excludePath: string, presentation?: EntryFieldsPresentation) =>
       fieldsBesidePanel(besideFields, excludePath, {
@@ -1306,7 +1325,7 @@ export function EntryForm({
         isCreateMode={mode === "create"}
         {...contextDocumentStatus}
         // The fields, so a field inside a repeater's row has an address.
-        fields={getCollectionFields(collection)}
+        fields={allFields}
         // So a field recording its own state stays quiet where this does.
         keepsRecoveryPoints={keepsRecoveryPoints}
       >
@@ -1373,7 +1392,7 @@ export function EntryForm({
                 means "keep the current password" (the stored hash never
                 round-trips), so it is not treated as a required-field miss. */}
               <EntryFormContent
-                fields={getCollectionFields(collection)}
+                fields={allFields}
                 disabled={savePending}
                 // Without the permission to save, the entry is shown as it is
                 // rather than as a form whose changes go nowhere.
@@ -1411,7 +1430,7 @@ export function EntryForm({
       // A save alone: during a recovery, work that reaches the form after its
       // one read is still unsaved, so leaving still asks.
       disabled={savePending}
-      fields={getCollectionFields(collection)}
+      fields={allFields}
       // A refused switch takes its seed with it. The request to fill the target
       // from this language was made ALONGSIDE a navigation; if the navigation
       // does not happen, the request did not either — and a seed left behind
@@ -1482,7 +1501,7 @@ export function EntryForm({
                   {...contextDocumentStatus}
                   // The fields, so a field inside a repeater's row has an
                   // address the Page Builder and other views open it by.
-                  fields={getCollectionFields(collection)}
+                  fields={allFields}
                   // So a field recording its own state, the Page Builder's
                   // canvas, stays quiet where the editor's recording does.
                   keepsRecoveryPoints={keepsRecoveryPoints}
@@ -1537,7 +1556,7 @@ export function EntryForm({
                           recovery={recovery}
                           viewingVersion={viewingVersion}
                           recovering={recovering}
-                          fields={getCollectionFields(collection)}
+                          fields={allFields}
                           // A document view has no header, so the banner goes
                           // in among its own: an author working in the view
                           // still sees the document is in a scheduled release.
@@ -1773,7 +1792,9 @@ export function EntryForm({
                       answers a published version through the same surface. Its
                       comparison bar is drawn among the banners under the bar. */}
                                     <ViewedVersionBody
-                                      fields={historicalFields ?? contentFields}
+                                      fields={
+                                        shownHistoricalFields ?? contentFields
+                                      }
                                       values={historicalValues ?? undefined}
                                       // A submit in flight withholds restore too: a
                                       // restore racing the ordinary save would let
