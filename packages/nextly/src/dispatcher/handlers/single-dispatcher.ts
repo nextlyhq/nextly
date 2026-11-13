@@ -61,7 +61,10 @@ import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prom
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
-import { recordedFieldsOf } from "../../domains/schema/services/collection-schema-apply";
+import {
+  fieldsAsStored,
+  recordedFieldsOf,
+} from "../../domains/schema/services/collection-schema-apply";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
@@ -1005,7 +1008,12 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           ...draftSplitResponseFields(draftSplit),
         } as Record<string, unknown>,
       ]);
-      return respondDoc(marked);
+      // As the Builder's editor reads it: a relationship the earlier Builder stored gets the
+      // target and the Unique mark the editor reads (`withEditorRelationshipShape`).
+      const { withEditorRelationshipShape } = await import(
+        "../../domains/schema/services/editor-relationship-fields"
+      );
+      return respondDoc(withEditorRelationshipShape(marked));
     },
   },
 
@@ -1115,9 +1123,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // Same rules as the ui-schema.json mirror (see api/fields-payload). A field name the
         // Single already holds keeps working whatever its case.
         assertValidFieldsPayload(b.fields, { stored: existing.fields ?? [] });
-        updateData.fields = b.fields;
-        updateData.schemaHash = calculateSchemaHash(b.fields);
-        schemaFields = b.fields as unknown as FieldDefinition[];
+        // An earlier-shaped relationship the editor read is written back in its stored shape.
+        const fields = fieldsAsStored(b.fields, existing);
+        updateData.fields = fields;
+        updateData.schemaHash = calculateSchemaHash(fields);
+        schemaFields = fields as unknown as FieldDefinition[];
       }
 
       // The schema change and the registry row are written by one service call, because a lock has
@@ -1166,13 +1176,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       if (!single) throw new Error("Single not found");
       refuseChangeDefinedInCode(single, "Single", slug);
 
-      const { fields } = body as { fields: unknown[] };
-      if (!fields) throw new Error("fields is required in request body");
+      const { fields: sentFields } = body as { fields: unknown[] };
+      if (!sentFields) throw new Error("fields is required in request body");
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
       // A field name the Single already holds keeps working whatever its case.
-      assertValidFieldsPayload(fields, { stored: single.fields ?? [] });
+      assertValidFieldsPayload(sentFields, { stored: single.fields ?? [] });
+      // Planned as the save will write them: an earlier-shaped relationship in its stored shape.
+      const fields = fieldsAsStored(sentFields, single);
       // A pair of sibling fields this save would create is refused before anything is planned;
       // one the entity already holds keeps working (judged against the stored fields).
       assertNoNewSiblingClashes(
@@ -1276,7 +1288,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       const slug = requireParam(p, "slug", "Single slug");
 
       const {
-        fields,
+        fields: sentFields,
         confirmed,
         schemaVersion,
         resolutions,
@@ -1298,11 +1310,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       };
 
       if (!confirmed) throw new Error("Schema changes must be confirmed");
-      if (!fields) throw new Error("fields is required in request body");
+      if (!sentFields) throw new Error("fields is required in request body");
       // Same rules as the ui-schema.json mirror (see api/fields-payload):
       // an invalid field must fail HERE, not only at the file write, or
       // the DB and the committed manifest diverge silently.
-      assertValidFieldsPayload(fields, { stored: "under-lock" });
+      assertValidFieldsPayload(sentFields, { stored: "under-lock" });
 
       // Everything above reads the request alone, so it is decided before the lock is taken: a
       // malformed save is answered as one, not with a lock refusal or a lock table created on the
@@ -1326,6 +1338,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           const single = await svc.registry.getSingleForWrite(slug);
           if (!single) throw new Error("Single not found");
           refuseChangeDefinedInCode(single, "Single", slug);
+          // An earlier-shaped relationship the editor read is written back in its stored shape,
+          // through a rename the save makes, against the row this save is checked and written
+          // against.
+          const fields = fieldsAsStored(sentFields, single, renameResolutions);
           // A field name the Single already holds keeps working whatever its case; one this save
           // creates is the Builder's own. Judged against the row as stored now.
           assertBuilderFieldNames(fields, single.fields ?? []);

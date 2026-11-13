@@ -52,6 +52,7 @@ import type {
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { AddressKind } from "../../../shared/address-rule";
+import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
 import { mainTableFields } from "../../i18n/per-language-storage";
@@ -651,7 +652,9 @@ async function settledRows(
       });
     }
     if (resolution.kind === "fill") {
-      if (field.unique === true) {
+      // Unique by its Unique mark, or as a relationship stored one-to-one (`builderColumnIsUnique`):
+      // one value would repeat across the rows it fills either way.
+      if (builderColumnIsUnique(field)) {
         throw NextlyError.validation({
           errors: [
             {

@@ -44,6 +44,7 @@ import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { NextlySchemaSnapshot, Operation } from "./diff/types";
 import { withKeptScopeFieldsIn } from "./kept-scope-fields";
+import { withoutUniquesAlreadyEnforced } from "./live-uniques";
 import { operationsToJudge, planCompanionMoves } from "./moved-to-companion";
 import {
   excludeLockedTableOps,
@@ -179,9 +180,11 @@ export async function previewDesiredSchema(
   // does not show is previewed as the apply plans it (`withRecordedShapes`).
   // A translated relation's switch on its companion joins them, as the apply plans it
   // (`relationSwitches`), so what is confirmed here is what runs.
-  const diffed = diffSnapshots(
-    withRecordedShapes(liveSnapshot, desired),
-    desiredSnapshot
+  // Less the unique indexes a column already has, which SQLite's snapshot cannot show
+  // (`withoutUniquesAlreadyEnforced`), so the preview plans what the apply plans.
+  const diffed = await withoutUniquesAlreadyEnforced(
+    diffSnapshots(withRecordedShapes(liveSnapshot, desired), desiredSnapshot),
+    { db, dialect, live: liveSnapshot }
   );
   const switches = await relationSwitches({
     db,

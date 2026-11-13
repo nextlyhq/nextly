@@ -558,10 +558,13 @@ export class DynamicCollectionSchemaService {
   ): string[] {
     const statements: string[] = [];
     for (const { previous, field } of pairs) {
-      if (previous.unique === field.unique || !fieldProducesColumn(field))
-        continue;
+      // Unique by its mark or by a relationship being one-to-one, so a relationship becoming
+      // one-to-one is made unique as a field marked unique is, and loses it when it stops.
+      const wasUnique = this.columnIsUnique(previous);
+      const isUnique = this.columnIsUnique(field);
+      if (wasUnique === isUnique || !fieldProducesColumn(field)) continue;
       const column = toSnakeCase(field.name);
-      if (field.unique === true) {
+      if (isUnique) {
         if (this.plannedUniqueIndexName(tableName, field) === null) {
           if (column === "slug") continue;
           throw this.uniquenessNotEnforceable(tableName, field);
@@ -583,10 +586,15 @@ export class DynamicCollectionSchemaService {
         options?.uniqueColumns?.get(before) ??
         undefined;
       // A field this dialect could never key (and `slug`, whose index every table keeps) had no
-      // index of its own to drop.
+      // index of its own to drop. Where the live table was read, it decides for a field unique by
+      // being one-to-one alone: an earlier release made such a one-to-one without any unique index,
+      // and SQLite's inline one has no name a statement can drop, so a generated name would drop
+      // what is not there. A field marked Unique always had its index made under that name, which
+      // a file still waiting to run may create, so its drop stays.
       if (
         live === undefined &&
-        this.plannedUniqueIndexName(tableName, previous) === null
+        ((options?.uniqueColumns !== undefined && previous.unique !== true) ||
+          this.plannedUniqueIndexName(tableName, previous) === null)
       )
         continue;
       const present = live ?? uniqueIndexNameForColumn(tableName, before);
@@ -629,7 +637,7 @@ export class DynamicCollectionSchemaService {
     tableName: string,
     field: FieldDefinition
   ): string | null {
-    if (field.unique !== true || !fieldProducesColumn(field)) return null;
+    if (!this.columnIsUnique(field) || !fieldProducesColumn(field)) return null;
     // `slug` already carries a UNIQUE index that every generated table gets
     // unconditionally, so a field declaring `unique: true` on it would be asking for a
     // second index over the same column. The desired schema keeps only the system one —
@@ -1333,21 +1341,12 @@ export class DynamicCollectionSchemaService {
         const type = this.newColumnType(f);
         const nullable = f.required ? "NOT NULL" : "";
 
-        // A one-to-one keeps its inline `UNIQUE`, and ONLY a one-to-one.
-        //
-        // Its cardinality has no other enforcement anywhere — no constraint, no index, no runtime
-        // check — so removing this would silently let a one-to-one hold duplicates. The declared
-        // `unique: true` case moves to a named index below; this one cannot follow it yet, because
-        // the desired schema declares a one-to-one's index as NON-unique, and emitting a unique one
-        // here would drift from that on every table carrying a one-to-one.
-        //
-        // Reconciling that means changing what the desired schema declares, which would then
-        // propose ADDING a unique index to existing one-to-one columns — a statement that fails
-        // wherever duplicates were already allowed in. That needs a precondition and a decision,
-        // not a quiet edit here.
+        // Uniqueness is a named index (below), and inline only where this dialect cannot key the
+        // column, for a field marked unique and a one-to-one alike: the desired schema declares
+        // `uq_<table>_<column>` for both, so a named index is the one spelling the diff, the
+        // migration file and this create agree on.
         const unique =
-          this.columnIsUnique(f) &&
-          (f.unique !== true || !this.uniquenessCanBeAnIndex(type))
+          this.columnIsUnique(f) && !this.uniquenessCanBeAnIndex(type)
             ? "UNIQUE"
             : "";
 
@@ -1500,9 +1499,8 @@ ${allColumnDefs.join(",\n")}
     // table. It also made a `unique: true` column impossible to drop on SQLite, since the constraint
     // outlives every index drop.
     //
-    // The flag alone, NOT `columnIsUnique`: a one-to-one relationship is unique by cardinality, and
-    // the desired schema gives it a NON-unique index. Emitting a unique one here would be a third
-    // spelling of the same property, and the next diff would propose dropping it.
+    // A field marked unique and a one-to-one alike (`plannedUniqueIndexName` asks `columnIsUnique`):
+    // the desired schema declares the same named index for both.
     mainFields.forEach(f => {
       if (this.plannedUniqueIndexName(tableName, f) === null) return;
       indexStatements.push(this.uniqueIndexSql(tableName, toSnakeCase(f.name)));
@@ -1938,7 +1936,7 @@ ${allColumnDefs.join(",\n")}
         // silently gone. There is no spelling that works here: MySQL refuses to key an unbounded
         // TEXT/BLOB either way, and cannot index JSON at all. Saying so is the only honest
         // outcome, and saying it first is what keeps the table untouched.
-        if (field.unique && !this.uniquenessCanBeAnIndex(type)) {
+        if (this.columnIsUnique(field) && !this.uniquenessCanBeAnIndex(type)) {
           throw this.uniquenessNotEnforceable(tableName, field);
         }
         if (fillThenDrop !== null) {
@@ -1977,23 +1975,20 @@ ${allColumnDefs.join(",\n")}
             );
           }
 
-          // The flag only, not `columnIsUnique`. A one-to-one's uniqueness is spelled three
-          // different ways today: the table CREATE writes it inline, where the dialect names the
-          // index itself; the desired schema the diff compares against declares a NON-unique
-          // index for the same field; and a named constraint here would be a third. Emitting one
-          // makes the next diff propose dropping it, so the cardinality is enforced by agreeing
-          // on one spelling, not by adding another.
-          if (field.unique) {
+          // A field marked unique and a one-to-one alike, under the name the desired schema
+          // declares for both (`uniqueIndexNameForColumn`, kept within the identifier limit), so
+          // the next diff finds it and plans nothing.
+          if (this.columnIsUnique(field)) {
             statements.push(
-              `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD CONSTRAINT ${this.quoteIdentifier(`uq_${tableName}_${addColName}`)} UNIQUE (${this.quoteIdentifier(addColName)});`
+              `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD CONSTRAINT ${this.quoteIdentifier(uniqueIndexNameForColumn(tableName, addColName))} UNIQUE (${this.quoteIdentifier(addColName)});`
             );
           }
         } else {
-          // For SQLite with unique constraint, create a unique index instead. The flag only,
-          // for the reason above.
-          if (field.unique) {
+          // SQLite adds no constraint to an existing table, so a unique index instead, for a
+          // field marked unique and a one-to-one alike.
+          if (this.columnIsUnique(field)) {
             statements.push(
-              `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(`uq_${tableName}_${addColName}`)} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(addColName)});`
+              `CREATE UNIQUE INDEX IF NOT EXISTS ${this.quoteIdentifier(uniqueIndexNameForColumn(tableName, addColName))} ON ${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(addColName)});`
             );
           }
         }
@@ -2387,13 +2382,16 @@ ${allColumnDefs.join(",\n")}
     }
 
     // A field kept whose `unique` flag changed: its index, which neither the column rewrite above
-    // nor the add and remove loops create or drop.
+    // nor the add and remove loops create or drop. A field whose storage moved (a many-to-many
+    // become a one-to-one) is left out: the add path writes its column with its index.
     statements.push(
       ...this.uniquenessToggleStatements(
         tableName,
         newFields.flatMap(field => {
           const previous = previousDefinitionOf(field);
-          return previous ? [{ previous, field }] : [];
+          return previous && !this.storageClassChanged(previous, field)
+            ? [{ previous, field }]
+            : [];
         }),
         options
       )

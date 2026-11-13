@@ -15,6 +15,7 @@
  *
  * @module domains/schema/services/collection-schema-apply
  */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
 import {
@@ -94,6 +95,7 @@ import { recoverInterruptedSqliteRebuilds } from "../pipeline/sqlite-rebuild-rec
 import type { DesiredCollection, DesiredSchema } from "../pipeline/types";
 
 import { DrizzleStatementExecutor } from "./drizzle-statement-executor";
+import { withStoredRelationshipOptions } from "./editor-relationship-fields";
 import { toSnakeCase } from "./field-column-descriptor";
 import { withSchemaChangeExcluded } from "./schema-change-exclusion";
 
@@ -351,6 +353,162 @@ export async function applyCollectionSchemaChange(
     },
     () => applyHoldingSchemaLock(change)
   );
+}
+
+/**
+ * The fields a schema save sends, as it writes them: each relationship the editor read from an
+ * earlier-shaped one written back in its stored shape (`withStoredRelationshipOptions`), matched
+ * through the renames the save accepted.
+ *
+ * @param sent the field list the save sends
+ * @param entity the collection's or Single's row the save is checked and written against
+ * @param renames the dialog's answers to the renames its preview paired, when it has any
+ */
+export function fieldsAsStored<F>(
+  sent: readonly F[],
+  entity: { tableName: string; fields?: readonly unknown[] | null },
+  renames: readonly BrowserRenameResolution[] = []
+): F[] {
+  const stored = (entity.fields ?? []) as unknown as FieldDefinition[];
+  return withStoredRelationshipOptions(
+    sent,
+    stored,
+    acceptedFieldRenames(
+      renames,
+      entity.tableName,
+      stored,
+      sent as unknown as FieldDefinition[]
+    )
+  );
+}
+
+/**
+ * Each rename the admin accepted on `tableName`, as the fields it pairs: the stored field and the
+ * field the save renames it to, matched by their columns. A rename naming a column neither list
+ * holds pairs nothing.
+ */
+function acceptedFieldRenames<F extends { name: string }>(
+  renames: readonly {
+    tableName: string;
+    fromColumn: string;
+    toColumn: string;
+    choice: string;
+  }[],
+  tableName: string,
+  oldFields: readonly F[],
+  newFields: readonly F[]
+): { from: F; to: F }[] {
+  const byColumn = (fields: readonly F[], column: string) =>
+    fields.find(field => toSnakeCase(field.name) === column);
+  return renames.flatMap(rename => {
+    if (rename.tableName !== tableName || rename.choice !== "rename") {
+      return [];
+    }
+    const from = byColumn(oldFields, rename.fromColumn);
+    const to = byColumn(newFields, rename.toColumn);
+    return from && to ? [{ from, to }] : [];
+  });
+}
+
+/**
+ * Refuse a change that makes a main-table column unique, by its Unique mark or by a relationship
+ * becoming one-to-one, while the column's entries already repeat a value.
+ *
+ * The database refuses the unique index part-way through the apply, and MySQL keeps every schema
+ * statement that ran before it. So the question is asked first, by the precondition the service's
+ * save asks (`refusalsForCollectionSave`, uniqueness only), and the two roads refuse alike. The
+ * schema dialog asks it before its save writer too, which runs no push. A
+ * translated field's column is its companion's, whose per-language uniqueness is judged where the
+ * companion's unique indexes are made.
+ */
+export async function refuseUniqueOverRepeats(args: {
+  adapter: DrizzleAdapter;
+  tableName: string;
+  /** The stored fields; none when the row records none. */
+  oldFields: FieldDefinition[] | undefined;
+  newFields: FieldDefinition[];
+  wasLocalized: boolean;
+  isLocalized: boolean;
+  /** The renames the admin accepted: a renamed field's values are checked under its old column. */
+  renames?: readonly {
+    tableName: string;
+    fromColumn: string;
+    toColumn: string;
+    choice: string;
+  }[];
+  /** The one value an added Required field gives every existing entry; the dialog sends none. */
+  fills?: readonly { field: string; value: unknown }[];
+}): Promise<void> {
+  const { adapter, tableName } = args;
+  // A table still to be made holds no entries, so nothing can repeat yet.
+  if (!(await adapter.tableExists(tableName))) return;
+  const [
+    { refusalsForCollectionSave },
+    { introspectLiveSnapshot },
+    { readUniqueColumns },
+  ] = await Promise.all([
+    import("../../dynamic-collections/services/save-preconditions"),
+    import("../pipeline/diff/introspect-live"),
+    import("../pipeline/live-table-facts"),
+  ]);
+  const onMain = (fields: FieldDefinition[], localized: boolean) => {
+    const translated = new Set(resolveLocalizedFieldNames(fields, localized));
+    return fields.filter(field => !translated.has(field.name));
+  };
+  const live = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [tableName]
+  );
+  const oldFields = onMain(args.oldFields ?? [], args.wasLocalized);
+  const newFields = onMain(args.newFields, args.isLocalized);
+  const refusals = await refusalsForCollectionSave({
+    adapter,
+    dialect: adapter.dialect,
+    tableName,
+    oldFields,
+    newFields,
+    renames: acceptedFieldRenames(
+      args.renames ?? [],
+      tableName,
+      oldFields,
+      newFields
+    ),
+    // A column this apply adds takes NULL in every existing entry, which never repeats, unless
+    // the change fills it with one value, which every entry then shares.
+    addedColumnBackfill: field => {
+      const fill = args.fills?.find(each => each.field === field.name);
+      return fill === undefined || fill.value === null
+        ? null
+        : JSON.stringify(fill.value);
+    },
+    presentColumns: new Set(
+      live.tables[0]?.columns.map(column => column.name) ?? []
+    ),
+    // Unique as the live table holds it, not as the previous definition says.
+    liveUniqueColumns: new Set(
+      (
+        await readUniqueColumns(
+          adapter.getDrizzle(),
+          adapter.dialect,
+          tableName
+        )
+      ).keys()
+    ),
+    only: "uniqueness",
+  });
+  if (refusals.length > 0) {
+    throw NextlyError.validation({
+      errors: refusals.map(refusal => refusal.error),
+      logContext: {
+        tableName,
+        fields: refusals.map(refusal => refusal.error.path),
+        details: refusals.flatMap(refusal =>
+          refusal.logContext ? [refusal.logContext] : []
+        ),
+      },
+    });
+  }
 }
 
 /** The registry and the adapter, which a schema change cannot run without. */
@@ -653,6 +811,18 @@ async function applyHoldingSchemaLock(
     oldFields,
     newFields: fields,
     subject: `Collection '${slug}'`,
+  });
+  // A column made unique over entries that already repeat a value is refused before anything
+  // runs, naming the field and how many values repeat.
+  await refuseUniqueOverRepeats({
+    adapter,
+    tableName,
+    oldFields,
+    newFields: fields,
+    wasLocalized,
+    isLocalized,
+    renames: change.renameResolutions,
+    fills: change.fills ?? [],
   });
   // A Required or Unique field leaving translation is pushed without its setting first, and the
   // setting is pushed once the companion transition has copied its values in, before its companion

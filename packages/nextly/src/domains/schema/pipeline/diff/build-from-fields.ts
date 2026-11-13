@@ -29,6 +29,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
+import { builderColumnIsUnique } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupStructuralDefaults } from "../../../field-groups/services/field-group-schema-service";
 import { resolveLocalizedFieldNames } from "../../../i18n/classify-fields";
 import {
@@ -163,6 +164,13 @@ interface CollectionIndexContext<F> {
    */
   isSingleRelation?: (field: F) => boolean;
   /**
+   * Whether a field's column is unique. Defaults to the Builder's rule for a collection or Single
+   * (`builderColumnIsUnique`: its Unique mark, or a relationship stored one-to-one); a component
+   * passes the rule its creator follows, the Unique mark alone, so the two declare the same
+   * indexes.
+   */
+  columnIsUnique?: (field: F) => boolean;
+  /**
    * Compound indexes the config declared, which nothing emitted before.
    *
    * `CollectionConfig.indexes` has been validated and then discarded since it
@@ -273,11 +281,21 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
       : (field.type === "relationship" || field.type === "upload") &&
         field.hasMany !== true &&
         !Array.isArray(field.relationTo);
+    // Unique by its mark, or by a relationship the Builder stored one-to-one: one rule for every
+    // road (`builderColumnIsUnique`), so a migration file, a push and a save's preview all make a
+    // one-to-one's column unique, and take the uniqueness away when it stops being one.
+    const unique = context.columnIsUnique
+      ? context.columnIsUnique(field)
+      : builderColumnIsUnique(field);
     // Asked through the same rule the generators use. Where a dialect cannot key the column they
     // keep the uniqueness inline and write no index, so declaring one here would make every diff
     // propose a `CREATE UNIQUE INDEX` the server refuses.
     const uniqueIsIndexable =
-      field.unique === true && context.uniquenessIsIndexable(field, col);
+      unique && context.uniquenessIsIndexable(field, col);
+    // A relationship unique by its cardinality alone keeps the plain index it has always had
+    // beside its unique one: every one-to-one made before its uniqueness was declared carries it,
+    // and dropping it would plan an operation for a column that is already unique.
+    const keepsPlainIndex = !uniqueIsIndexable || field.unique !== true;
 
     if (uniqueIsIndexable) {
       indexes.push({
@@ -285,7 +303,9 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
         columns: [col],
         unique: true,
       });
-    } else if (
+    }
+    if (
+      keepsPlainIndex &&
       (field.index === true || isSingleRelation) &&
       (context.columnIsIndexable?.(field, col) ?? true)
     ) {
@@ -860,6 +880,9 @@ export function buildDesiredTableFromComponentFields(
       // relation holding a JSON list (a many-to-many included) never does. Asked through the rule
       // the creator asks, so the two declare the same indexes.
       isSingleRelation: componentRelationIsSingleReference,
+      // The creator makes a component column unique by its Unique mark alone, never by a
+      // relationship's cardinality.
+      columnIsUnique: field => field.unique === true,
       hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
       localizedNames,
       columnNameFor: field =>
