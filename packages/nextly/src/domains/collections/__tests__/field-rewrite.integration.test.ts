@@ -282,6 +282,11 @@ describe.each(getConfiguredTestDialects())("a field rewrite (%s)", dialect => {
       takeTransactionEscapes(),
       expect.getState().testPath
     );
+    // The collection's table built again on its next read, as after a
+    // registry change this process did not make: that read is the rewrite's.
+    (
+      t.getService("collectionsHandler") as CollectionsHandler
+    ).invalidateCollectionSchema(PAGES);
     await t.nextly.rewriteField({
       collection: PAGES,
       id,
