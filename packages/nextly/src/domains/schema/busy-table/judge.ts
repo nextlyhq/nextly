@@ -77,6 +77,8 @@ const PAREN_KEYWORDS = new Set([
   "INTO",
   "REFERENCES",
   "FOREIGN",
+  // A subquery: `SELECT (SELECT …)`.
+  "SELECT",
   "WITH",
   "IDENTITY",
   // PostgreSQL's index methods, as drizzle-kit writes them: `USING btree (`.
@@ -188,6 +190,13 @@ const BUILT_IN_FUNCTIONS = new Set([
   "WEIGHT_STRING",
   "UNIX_TIMESTAMP",
   "ROW_NUMBER",
+  // What Nextly's own migration generator writes: the SQLite rebuild guard's `instr` and its
+  // foreign-key read, and PostgreSQL's `timezone('utc', now())` default.
+  "INSTR",
+  "PRAGMA_FOREIGN_KEY_LIST",
+  "PRAGMA_TABLE_INFO",
+  "PRAGMA_INDEX_LIST",
+  "TIMEZONE",
 ]);
 
 /** Taking a value from a sequence: a rollback leaves a gap, never a repeat. */
@@ -226,11 +235,30 @@ function calledAt(
   at: number
 ): string | undefined {
   if (tokens[at + 1] !== "(") return undefined;
-  const before = tokens[at - 1];
+  // A schema-qualified name (`"public"."users"(`) is read back to the word before its qualifier.
+  let beforeAt = at - 1;
+  while (tokens[beforeAt] === ".") beforeAt -= 2;
+  const before = tokens[beforeAt];
   if (typeof before === "string" && NAME_FOLLOWS.has(before)) return undefined;
+  // In a schema statement, a size or a prefix length (`title(191)`, a MySQL prefix index): no
+  // call. A row change's `my_fn(1)` stays a call.
+  const schema = tokens[0] === "CREATE" || tokens[0] === "ALTER";
+  if (schema && onlyDigitsWithin(tokens, at + 1)) return undefined;
   const word = tokens[at];
   if (typeof word !== "string") return word?.kind === "name" ? "" : undefined;
   return QUALIFIED_WORD.test(word) ? word : undefined;
+}
+
+/** Whether the parentheses opening at `open` hold nothing but digits. */
+function onlyDigitsWithin(
+  tokens: readonly StatementToken[],
+  open: number
+): boolean {
+  let at = open + 1;
+  if (tokens[at] === ")") return false;
+  while (typeof tokens[at] === "string" && /^[0-9]$/.test(tokens[at] as string))
+    at++;
+  return tokens[at] === ")";
 }
 
 /**
@@ -324,7 +352,8 @@ function tableKeywordAt(tokens: readonly StatementToken[]): number | undefined {
         ? "INTO"
         : first === "DELETE"
           ? "FROM"
-          : first === "CREATE" && tokens.includes("INDEX")
+          : startsWith(tokens, "CREATE", "INDEX") ||
+              startsWith(tokens, "CREATE", "UNIQUE", "INDEX")
             ? "ON"
             : "TABLE";
   const at = tokens.indexOf(keyword);

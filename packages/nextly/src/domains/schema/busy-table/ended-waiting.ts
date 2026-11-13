@@ -71,17 +71,34 @@ export function endedWaiting(
   dialect: SupportedDialect,
   watchdogFired: boolean
 ): boolean {
+  return causeChain(error).some(link =>
+    linkEndedWaiting(link, dialect, watchdogFired)
+  );
+}
+
+/** One link of an error's `cause` chain, as the drivers' codes are read from it. */
+export interface CauseLink {
+  readonly code?: unknown;
+  readonly errno?: unknown;
+}
+
+/**
+ * `error` and the errors down its `cause` chain, at most six links: the one reading of where a
+ * driver's code sits, for every reader of one (`endedWaiting`, the holder's unreadable lines).
+ */
+export function causeChain(error: unknown): CauseLink[] {
+  const links: CauseLink[] = [];
   let link: unknown = error;
   for (
     let depth = 0;
     depth < MAX_DEPTH && typeof link === "object" && link !== null;
     depth++
   ) {
-    const fields = link as { code?: unknown; errno?: unknown; cause?: unknown };
-    if (linkEndedWaiting(fields, dialect, watchdogFired)) return true;
+    const fields = link as CauseLink & { cause?: unknown };
+    links.push(fields);
     link = fields.cause;
   }
-  return false;
+  return links;
 }
 
 /**

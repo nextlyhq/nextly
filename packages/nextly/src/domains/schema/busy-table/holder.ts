@@ -17,7 +17,7 @@ import { sql } from "drizzle-orm";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
 
-import { sessionNumberOf } from "./ended-waiting";
+import { causeChain, sessionNumberOf } from "./ended-waiting";
 import type { HolderReport, HolderSession } from "./types";
 
 const id = (name: string) => sql.identifier(name);
@@ -43,31 +43,18 @@ const MYSQL_PRIVILEGE_CODES = new Set([
   "ER_SPECIFIC_ACCESS_DENIED_ERROR",
 ]);
 
-/** The driver's code and number for `error`, read down the `cause` chain, at most six links. */
+/** The driver's code and number for `error`: the first link of its `cause` chain that has one. */
 function driverCode(error: unknown): {
   code: string | undefined;
   errno: number | undefined;
 } {
-  let link: unknown = error;
-  for (
-    let depth = 0;
-    depth < 6 && typeof link === "object" && link !== null;
-    depth++
-  ) {
-    const { code, errno, cause } = link as {
-      code?: unknown;
-      errno?: unknown;
-      cause?: unknown;
-    };
-    if (typeof code === "string" || typeof errno === "number") {
-      return {
-        code: typeof code === "string" ? code : undefined,
-        errno: typeof errno === "number" ? errno : undefined,
-      };
-    }
-    link = cause;
-  }
-  return { code: undefined, errno: undefined };
+  const link = causeChain(error).find(
+    ({ code, errno }) => typeof code === "string" || typeof errno === "number"
+  );
+  return {
+    code: typeof link?.code === "string" ? link.code : undefined,
+    errno: typeof link?.errno === "number" ? link.errno : undefined,
+  };
 }
 
 /**

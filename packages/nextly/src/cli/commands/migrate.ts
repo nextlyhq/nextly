@@ -401,12 +401,6 @@ interface ParsedMigration {
   transaction: boolean;
 }
 
-/**
- * Execute the migrate command
- *
- * @param options - Combined global and command options
- * @param context - Command context with logger
- */
 /** The busy-table bounds a run's options and the environment give (`busyTableBounds`). */
 function busyTableBoundsOf(
   options: Pick<MigrateCommandOptions, "lockTimeout" | "lockTimeoutTotal">
@@ -429,6 +423,12 @@ function orFail<T>(read: () => T, fail: (error: unknown) => never): T {
   }
 }
 
+/**
+ * Execute the migrate command
+ *
+ * @param options - Combined global and command options
+ * @param context - Command context with logger
+ */
 export async function runMigrate(
   options: ResolvedMigrateOptions,
   context: CommandContext

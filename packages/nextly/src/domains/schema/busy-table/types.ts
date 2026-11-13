@@ -82,8 +82,8 @@ export interface BusyTableStop {
   /** The changes this run applied before this one, in order. */
   readonly appliedBefore: readonly string[];
   readonly outcome: BusyTableOutcome;
-  /** "table busy", or "interrupted" where a signal ended the tries. */
-  readonly cause: "table-busy" | "interrupted";
+  /** Why the tries stopped: the table stayed busy past them. */
+  readonly cause: "table-busy";
   /** On SQLite, whether the tries ended early because the schema lock could not be renewed. */
   readonly endedAtLease: boolean;
 }

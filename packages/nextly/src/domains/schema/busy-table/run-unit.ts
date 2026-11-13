@@ -56,8 +56,12 @@ export interface BusyTableRun {
 /** The tables of this database with a trigger a row change would fire. */
 function triggerTablesQuery(dialect: SupportedDialect): SQL {
   if (dialect === "postgresql") {
+    // Only the schemas an unqualified name reaches: a trigger on a same-named table elsewhere is
+    // not this table's.
     return sql`SELECT DISTINCT c.relname AS name FROM pg_trigger t
-      JOIN pg_class c ON c.oid = t.tgrelid WHERE NOT t.tgisinternal`;
+      JOIN pg_class c ON c.oid = t.tgrelid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE NOT t.tgisinternal AND n.nspname = ANY (current_schemas(false))`;
   }
   if (dialect === "mysql") {
     return sql`SELECT DISTINCT EVENT_OBJECT_TABLE AS name FROM information_schema.TRIGGERS
@@ -244,6 +248,10 @@ export async function runUnitInTries(
             },
             onStatement: index => {
               reached = index;
+            },
+            // The watch stops before the commit hands the connection back to the pool.
+            settle: async () => {
+              await watchdog.stop();
             },
           }
         );

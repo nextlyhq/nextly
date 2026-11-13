@@ -326,3 +326,52 @@ describe("firstNoRetry", () => {
     ).toBeUndefined();
   });
 });
+
+describe("judgeStatement on what drizzle-kit and the migration generator write", () => {
+  it.each([
+    [
+      "postgresql",
+      'ALTER TABLE "posts" ADD CONSTRAINT "fk" FOREIGN KEY ("author_id") REFERENCES "public"."users"("id") ON DELETE cascade',
+    ],
+    [
+      "postgresql",
+      'CREATE TABLE IF NOT EXISTS "public"."posts" ("id" integer)',
+    ],
+    [
+      "postgresql",
+      "ALTER TABLE posts ADD COLUMN at timestamp DEFAULT timezone('utc', now())",
+    ],
+    ["mysql", "CREATE INDEX idx ON posts (title(191))"],
+    [
+      "sqlite",
+      "INSERT INTO guard (n) SELECT (SELECT COUNT(*) FROM sqlite_master WHERE type = 'view' AND instr(sql, 'posts') > 0)",
+    ],
+    [
+      "sqlite",
+      "INSERT INTO fks (n) SELECT COUNT(*) FROM pragma_foreign_key_list('posts')",
+    ],
+  ] as const)("lets %s run again: %s", (dialect, statement) => {
+    expect(judgeStatement(statement, dialect, () => false)).toEqual({
+      kind: "may-run-again",
+    });
+  });
+
+  it("still reads a schema-qualified quoted call as a call", () => {
+    expect(
+      judgeStatement(
+        'UPDATE posts SET slug = "audit"."make_slug"(title)',
+        "postgresql",
+        () => false
+      )
+    ).toEqual({ kind: "no-retry", reason: "unknown-code" });
+  });
+
+  it("names the table of a MySQL CREATE TABLE with an inline index and ON DELETE", () => {
+    expect(
+      targetTable(
+        "CREATE TABLE posts (id int, a int, INDEX idx (a), FOREIGN KEY (a) REFERENCES users (id) ON DELETE CASCADE)",
+        "mysql"
+      )
+    ).toBe("posts");
+  });
+});

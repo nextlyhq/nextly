@@ -257,14 +257,14 @@ function plainStop(stop: BusyTableStop): BusyTableStop {
 
 /**
  * The error a change ends with once its tries for a busy table stop: `NEXTLY_TABLE_BUSY`, its
- * reason "table busy" or "interrupted", and the stop in its log context.
+ * reason "table busy", and the stop in its log context.
  *
  * The public message is one line saying what happened, then the lines saying why (what the
  * outcome left, the wait, the changes applied before it, and on SQLite why the tries ended early),
  * then one line saying what to do next, so a reader can split it into those three parts.
  */
 export function tableBusyError(stop: BusyTableStop): NextlyError {
-  const why = stop.cause === "interrupted" ? "interrupted" : "table busy";
+  const why = "table busy";
   const lines = [
     whatHappened(stop, why),
     ...outcomeLines(stop.outcome),

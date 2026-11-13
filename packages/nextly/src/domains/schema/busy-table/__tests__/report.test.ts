@@ -1,7 +1,7 @@
 /**
  * What an operator reads about a change that waited for a busy table: the holder as the database
  * names it, the line printed at each try after the first, and the error a stopped change ends
- * with, for each outcome, each kind of holder, an interrupted run and SQLite's lease. Never the
+ * with, for each outcome, each kind of holder and SQLite's lease. Never the
  * text of a query another session runs, even when something hands one along.
  */
 import { describe, expect, it } from "vitest";
@@ -289,18 +289,6 @@ describe("tableBusyError", () => {
     expect(tableBusyError(stopWith()).publicMessage).not.toContain(
       "could not be renewed"
     );
-  });
-
-  it("says interrupted instead of table busy", () => {
-    const error = tableBusyError(
-      stopWith({ cause: "interrupted", tries: 3, elapsedMs: 20_000 })
-    );
-    expect(error.code).toBe("NEXTLY_TABLE_BUSY");
-    expect(error.logContext?.reason).toBe("interrupted");
-    expect(error.publicMessage.split("\n")[0]).toBe(
-      "`0007_add_keys.sql` stopped: interrupted, nothing changed."
-    );
-    expect(error.publicMessage).not.toContain("table busy");
   });
 
   it("carries the whole stop in its log context", () => {

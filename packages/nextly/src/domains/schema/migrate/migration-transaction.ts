@@ -78,6 +78,12 @@ export interface StatementTryBound {
    * the whole unit, for `onStatement` and the required-column count alike.
    */
   readonly from?: number;
+  /**
+   * Awaited once every statement has run, before the unit's ledger write and its commit, while
+   * the try's connection still runs this unit: the try's watch stops here, so nothing it sends can
+   * reach a connection the pool has since handed to other work.
+   */
+  readonly settle?: () => Promise<void>;
 }
 
 /**
@@ -428,41 +434,60 @@ async function runUnitStatements(
     .filter(statement => isConnectionSetting(statement, dialect));
   if (unit.transaction) {
     await executeTransaction(adapter, async tx => {
-      if (bound !== undefined && dialect !== "sqlite") {
-        if (dialect === "postgresql") {
-          // The watch on this session ends the try once its waits add up to the bound, having
-          // read what holds the table first. Each lock is also bounded by the database, half a
-          // second later, as a backstop for a watch that could not ask. MySQL's per-lock bound
-          // is a session setting that would outlive the transaction on its pooled connection, so
-          // there the watch alone bounds the try.
-          await tx.execute(
-            `SET LOCAL lock_timeout = '${String(Math.round(bound.tryMs) + 500)}ms'`
-          );
+      // On MySQL each metadata lock is bounded by the session's `lock_wait_timeout`, half a second
+      // past the try, as a backstop for a watch that could not ask. A session setting outlives the
+      // transaction on its pooled connection, so it is set back to the server's own default before
+      // the transaction ends, whatever its outcome.
+      const mysqlBackstop = bound !== undefined && dialect === "mysql";
+      if (mysqlBackstop) {
+        await tx.execute(
+          `SET SESSION lock_wait_timeout = ${String(Math.ceil((bound.tryMs + 500) / 1000))}`
+        );
+      }
+      try {
+        if (bound !== undefined && dialect !== "sqlite") {
+          if (dialect === "postgresql") {
+            // The watch on this session ends the try once its waits add up to the bound, having
+            // read what holds the table first. Each lock is also bounded by the database, half a
+            // second later, as a backstop for a watch that could not ask. MySQL's per-lock bound
+            // is a session setting that would outlive the transaction on its pooled connection, so
+            // there the watch alone bounds the try.
+            await tx.execute(
+              `SET LOCAL lock_timeout = '${String(Math.round(bound.tryMs) + 500)}ms'`
+            );
+          }
+          const session = await tx.session();
+          if (session !== undefined) bound.onSession?.(session);
         }
-        const session = await tx.session();
-        if (session !== undefined) bound.onSession?.(session);
+        for (const setting of settingsBefore) await tx.execute(sent(setting));
+        for (const [offset, statement] of statements.slice(from).entries()) {
+          const index = from + offset;
+          await checkpoint?.(tx.db, index);
+          // A run that lost the lock starts no further statement (`assertSchemaLockHeld`).
+          await assertSchemaLockHeld();
+          bound?.onStatement?.(index);
+          await tx.execute(sent(statement));
+        }
+        bound?.onStatement?.(statements.length);
+        await bound?.settle?.();
+        // A unit may rewrite registry rows (a schema save's upsert of its own
+        // row): what the transaction read of them before is read again.
+        clearRegistryRowCache();
+        if (after !== undefined) {
+          await tx.restoreSession();
+          await after(tx.db, statements.length);
+        }
+        // The commit is what lands the file: refused, and the transaction undone, as a statement.
+        // Not on MySQL, whose DDL committed as it ran: the file has landed by now, and refusing here
+        // would report it as not recorded.
+        if (dialect !== "mysql") await assertSchemaLockHeld();
+      } finally {
+        if (mysqlBackstop) {
+          await tx
+            .execute("SET SESSION lock_wait_timeout = DEFAULT")
+            .catch(() => undefined);
+        }
       }
-      for (const setting of settingsBefore) await tx.execute(sent(setting));
-      for (const [offset, statement] of statements.slice(from).entries()) {
-        const index = from + offset;
-        await checkpoint?.(tx.db, index);
-        // A run that lost the lock starts no further statement (`assertSchemaLockHeld`).
-        await assertSchemaLockHeld();
-        bound?.onStatement?.(index);
-        await tx.execute(sent(statement));
-      }
-      bound?.onStatement?.(statements.length);
-      // A unit may rewrite registry rows (a schema save's upsert of its own
-      // row): what the transaction read of them before is read again.
-      clearRegistryRowCache();
-      if (after !== undefined) {
-        await tx.restoreSession();
-        await after(tx.db, statements.length);
-      }
-      // The commit is what lands the file: refused, and the transaction undone, as a statement.
-      // Not on MySQL, whose DDL committed as it ran: the file has landed by now, and refusing here
-      // would report it as not recorded.
-      if (dialect !== "mysql") await assertSchemaLockHeld();
     });
     return statements.length;
   }
@@ -486,6 +511,7 @@ async function runUnitStatements(
       }
     }
     bound?.onStatement?.(statements.length);
+    await bound?.settle?.();
   };
   const onPool = (statement: string) => adapter.executeQuery(statement);
   if (dialect === "sqlite") {
