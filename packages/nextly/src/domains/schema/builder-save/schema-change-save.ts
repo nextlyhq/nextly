@@ -92,11 +92,7 @@ export function saveOfSchemaChange(args: {
       labels: args.row.labels ?? { singular: args.slug, plural: args.slug },
       fields: args.row.fields ?? [],
     } satisfies UiSchemaEntity);
-  const answers = answersOf(
-    args.answers,
-    { now: args.fields, before: previous.fields },
-    args.table
-  );
+  const answers = answersOf(args.answers, { now: args.fields }, args.table);
   const optional = new Set(
     answers.filter(a => a.kind === "make_optional").map(a => a.field)
   );
@@ -178,8 +174,6 @@ function answersOf(
 interface AnsweredFields {
   /** The fields this save keeps or adds, which a fill or a change settles. */
   now: readonly NamedField[];
-  /** The fields before it, among them the ones it removes. */
-  before: readonly NamedField[];
 }
 
 /** One typed answer, by field; undefined for one the file needs nothing for. A cancel stops. */
@@ -189,10 +183,12 @@ function answerOfEvent(
   table: string
 ): Answer | undefined {
   if (resolution.kind === "abort") throw new PromptCancelledError();
-  // A drop's confirmation names a field this save removes, so it is read against the fields
-  // before the save; it still names a field of this collection, and needs nothing in the file.
+  // A drop's confirmation needs nothing in the file, so it must only name a column of this table.
+  // The column may be one no field declares: a table made before its saves wrote migrations can
+  // hold one, and dropping it is a conversion this save's adoption makes, which the conversion
+  // check refuses until the person confirms it (`acknowledgedConversions`).
   if (resolution.kind === "confirm_drop") {
-    fieldOfEvent(resolution.eventId, fields.before, table);
+    eventOnTable(resolution.eventId, table);
     return undefined;
   }
   const field = fieldOfEvent(resolution.eventId, fields.now, table);
@@ -215,29 +211,38 @@ function fieldOfEvent(
   fields: readonly NamedField[],
   table: string
 ): string {
+  const event = eventOnTable(eventId, table);
+  const field = fields.find(
+    f => typeof f.name === "string" && toSnakeCase(f.name) === event.column
+  );
+  if (field?.name === undefined) throw unknownEvent(eventId);
+  return field.name;
+}
+
+/** An event's parts, refused unless it is well formed and names `table`. */
+function eventOnTable(
+  eventId: string,
+  table: string
+): ReturnType<typeof parseEventId> {
   let event: ReturnType<typeof parseEventId> | undefined;
   try {
     event = parseEventId(eventId);
   } catch {
     event = undefined;
   }
-  const field =
-    event?.table === table
-      ? fields.find(
-          f =>
-            typeof f.name === "string" && toSnakeCase(f.name) === event.column
-        )
-      : undefined;
-  if (field?.name === undefined) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "eventResolutions",
-          code: "RESOLUTION_EVENT_UNKNOWN",
-          message: `${eventId} is not a change to a field of this collection.`,
-        },
-      ],
-    });
-  }
-  return field.name;
+  if (event?.table !== table) throw unknownEvent(eventId);
+  return event;
+}
+
+/** The refusal of an answer to an event that is not a change to this entity. */
+function unknownEvent(eventId: string): NextlyError {
+  return NextlyError.validation({
+    errors: [
+      {
+        path: "eventResolutions",
+        code: "RESOLUTION_EVENT_UNKNOWN",
+        message: `${eventId} is not a change to a field of this collection.`,
+      },
+    ],
+  });
 }

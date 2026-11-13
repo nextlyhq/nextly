@@ -331,7 +331,16 @@ describe.each(getConfiguredTestDialects())(
         confirmed: true,
         schemaVersion: (await registry.getComponent("older")).schemaVersion,
         // The push drops the undeclared column only once its drop is confirmed,
-        // as the Builder's prompt answers it.
+        // and asks whether the new field is that column renamed: both answered
+        // as the Builder's prompt answers them.
+        renameResolutions: [
+          {
+            tableName: "comp_older",
+            fromColumn: "extra",
+            toColumn: "byline",
+            choice: "drop_and_add",
+          },
+        ],
         eventResolutions: [
           {
             kind: "confirm_drop",
@@ -457,8 +466,9 @@ describe.each(getConfiguredTestDialects())(
             {
               name: "featured",
               type: "relationship",
-              relationTo: "articles",
-              hasMany: true,
+              // A many-to-many keeps its links in a junction table; a
+              // `hasMany` relationship is stored as JSON on the row.
+              options: { relationType: "manyToMany", target: "articles" },
             },
           ],
         }

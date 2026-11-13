@@ -949,7 +949,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             ? {}
             : await singleRelations(
                 builderSave.adapter,
-                builderSave.logger,
+                getLoggerFromDI() ?? consoleLogger,
                 single.tableName,
                 (single.fields ?? []) as unknown as FieldDefinition[],
                 []
@@ -1290,7 +1290,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           ? {}
           : await singleRelations(
               reviewDeps.adapter,
-              reviewDeps.logger,
+              getLoggerFromDI() ?? consoleLogger,
               tableName,
               currentFields,
               fields as FieldDefinition[]
@@ -1597,7 +1597,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
                 ? {}
                 : await singleRelations(
                     builderSave.adapter,
-                    builderSave.logger,
+                    getLoggerFromDI() ?? consoleLogger,
                     tableName,
                     (single.fields ?? []) as unknown as FieldDefinition[],
                     fields as unknown as FieldDefinition[]
