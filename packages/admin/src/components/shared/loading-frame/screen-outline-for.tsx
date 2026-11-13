@@ -16,6 +16,7 @@ import type { JSX } from "react";
 
 import { DOCUMENT_COLUMN_INSET } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
+import { ROUTES } from "@admin/constants/routes";
 
 import {
   DashboardOutline,
@@ -31,12 +32,15 @@ type ScreenOutlineKind =
   | "dashboard"
   | "list"
   | "entry-editor"
+  | "entry-creator"
   | "single-editor"
   | "media"
   | "users"
   | "form"
   | "generic";
 
+/** A collection address's last part that opens a new entry's editor, read from its route. */
+const NEW_ENTRY = ROUTES.COLLECTION_ENTRY_CREATE.split("/").at(-1);
 /** A collection address's last part that names a page of its own, not an entry. */
 const COLLECTION_PAGES = new Set(["api"]);
 /** A Single address's last part that names a page of its own, not the editor. */
@@ -50,6 +54,7 @@ const SECTION_KINDS: Readonly<Record<string, SectionKinds>> = {
   collections: (slug, item) => {
     if (slug === undefined) return "generic";
     if (item === undefined) return "list";
+    if (item === NEW_ENTRY) return "entry-creator";
     return COLLECTION_PAGES.has(item) ? "generic" : "entry-editor";
   },
   singles: (slug, item) => {
@@ -87,9 +92,11 @@ export function ScreenOutlineFor({
     case "list":
       return <ListOutline />;
     case "entry-editor":
+    case "entry-creator":
     case "single-editor":
       return (
         <EditorOutline
+          creating={kind === "entry-creator"}
           // The document panel is wider beside a Single's fields.
           sideWidth={kind === "single-editor" ? 360 : 320}
           columnClassName={DOCUMENT_COLUMN_INSET}

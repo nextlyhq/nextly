@@ -97,6 +97,8 @@ function CreateEntryPageSkeleton() {
   // side panel at the editor's own geometry.
   return (
     <EditorOutline
+      // A new entry's bar has only its verbs.
+      creating
       sideWidth={320}
       columnClassName={DOCUMENT_COLUMN_INSET}
       columnStyle={{ maxWidth: CONTENT_MEASURE_LENGTH }}
