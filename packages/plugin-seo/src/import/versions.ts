@@ -33,6 +33,7 @@ import { keepsDrafts, pagesOf, type ReadPage } from "../bulk/pages";
 import { singleDeclaration, type SingleAccess } from "../bulk/singles";
 import { isRecord } from "../plain-values";
 import { pageTypeOf } from "../problems/page-types";
+import { servedOf } from "../redirects/served";
 import type { SiteRules } from "../resolver/page-levels";
 import { SEO_GROUP } from "../tab/typed";
 
@@ -62,6 +63,11 @@ export interface ReadVersion extends ReadPage {
   stored: Record<string, unknown>;
   /** Whether it is written on the import's one transaction. */
   inTransaction: boolean;
+  /**
+   * The address it is served at in its language: its path, with the
+   * language's prefix, or on the language's own domain in full.
+   */
+  served?: string;
   /** Why the import leaves it as it is, where it must (`LeftOut`). */
   leftOut?: LeftOut;
 }
@@ -457,6 +463,18 @@ function versionsOfPage(
     "draft",
     "held"
   );
+  return beside(read, version, held);
+}
+
+/**
+ * A published version and the working draft beside it, each with how it is
+ * written: on the transaction or as a step, or left as it is.
+ */
+function beside(
+  read: LanguageRead,
+  version: ReadVersion,
+  held: ReadVersion
+): ReadVersion[] {
   // A held save is a step of its own, read back as stored, since what a save
   // on the transaction answers is the person's read of it; but a translated
   // type's draft keeps a group only from a save on the transaction, so its
@@ -467,11 +485,13 @@ function versionsOfPage(
   }
   // A collection's draft in another language does not keep a group a save
   // outside the transaction sends; a Single's draft does.
-  const inLanguage = pageTypeOf(read.key).kind === "collection";
-  return [
-    { ...version, leftOut: inLanguage ? "untilDraftDone" : "withDraft" },
-    inLanguage ? { ...held, leftOut: "draftInLanguage" } : held,
-  ];
+  if (pageTypeOf(read.key).kind === "collection") {
+    return [
+      { ...version, leftOut: "untilDraftDone" },
+      { ...held, leftOut: "draftInLanguage" },
+    ];
+  }
+  return [{ ...version, leftOut: "withDraft" }, held];
 }
 
 /** Every version of the type `key`'s pages in one language. */
@@ -500,7 +520,20 @@ async function versionsInLanguage(read: LanguageRead): Promise<ReadVersion[]> {
       [...drafts.values()].map(draft => draft.shown)
     ),
   };
-  return shown.flatMap(document => versionsOfPage(read, pages, document));
+  const versions = shown.flatMap(document =>
+    versionsOfPage(read, pages, document)
+  );
+  return Promise.all(versions.map(version => withServed(version)));
+}
+
+/** A version with the address it is served at in its language. */
+async function withServed(version: ReadVersion): Promise<ReadVersion> {
+  if (version.path === undefined) return version;
+  const served =
+    version.locale === undefined
+      ? version.path
+      : await servedOf(version.path, version.locale);
+  return { ...version, served };
 }
 
 /**

@@ -804,6 +804,41 @@ describe.each(getConfiguredTestDialects())(
       ).toBe("Über das Team");
     });
 
+    it("judges a canonical against the address each language is served at", async () => {
+      const { t, key } = await boot(dialect, {
+        languages: true,
+        domains: true,
+      });
+      const about = await create(
+        t,
+        "pages",
+        { title: "About", slug: "about" },
+        "en"
+      );
+      await save(t, "pages", about, { title: "Über uns" }, "de");
+      const source: ImportSource = {
+        kind: "rankMath",
+        fileName: "rank-math.csv",
+        text: [
+          "id,url,canonical_url",
+          // The English page's own address: nothing to set.
+          "1,https://example.com/about,https://example.com/about",
+          // The German page sent to the English one on purpose.
+          "2,https://example.de/about,https://example.com/about",
+        ].join("\n"),
+      };
+
+      const run = await dryRun(key, source);
+      expect(rowOf(run, "About", "published", "en")).toMatchObject({
+        set: [],
+        same: ["canonical"],
+      });
+      expect(rowOf(run, "Über uns", "published", "de")).toMatchObject({
+        outcome: "set",
+        set: ["canonical"],
+      });
+    });
+
     it("leaves every version as it was when a save fails part-way", async () => {
       const { t, key } = await boot(dialect, { languages: true });
       const about = await create(

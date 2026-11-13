@@ -59,7 +59,7 @@ import { writeConnections } from "../connections/store";
 import { isRecord } from "../plain-values";
 import { recheckSaved, type ProblemChecks } from "../problems/check";
 import { pageTypeOf } from "../problems/page-types";
-import { keptFrom, originBeside, servedOf } from "../redirects/served";
+import { keptFrom, originBeside } from "../redirects/served";
 import { putRedirect } from "../redirects/store";
 import { resolveOrder } from "../resolver/order";
 import type { SiteRules } from "../resolver/page-levels";
@@ -462,14 +462,11 @@ const placeOf = (version: ReadVersion) =>
  * and without a trailing slash, in its own language, with the origin it is
  * served on where its language has a domain of its own.
  */
-async function servedAddress(
+function servedAddress(
   version: ReadVersion
-): Promise<{ origin?: string; path: string } | undefined> {
-  if (version.path === undefined) return undefined;
-  const served =
-    version.locale === undefined
-      ? version.path
-      : await servedOf(version.path, version.locale);
+): { origin?: string; path: string } | undefined {
+  const served = version.served ?? version.path;
+  if (served === undefined) return undefined;
   const path = pathOfAddress(served);
   if (path === undefined) return undefined;
   const origin = originOfAddress(served);
@@ -477,8 +474,94 @@ async function servedAddress(
 }
 
 /** Adds `place` to the places found at `at`. */
-function index(map: Map<string, Set<string>>, at: string, place: string): void {
+function add(map: Map<string, Set<string>>, at: string, place: string): void {
   map.set(at, new Set([...(map.get(at) ?? []), place]));
+}
+
+/** Where each version can be found: by key, place, address, path and slug. */
+interface VersionIndex {
+  byKey: Map<string, ReadVersion>;
+  places: Map<string, ReadVersion[]>;
+  byAddress: Map<string, Set<string>>;
+  byPath: Map<string, Set<string>>;
+  bySlug: Map<string, Set<string>>;
+}
+
+/**
+ * Each version indexed where a record can name it. An address on a
+ * language's own domain is found by its origin and path. By its path alone,
+ * as an address on another site (the old one) or with no origin is read,
+ * only the default language is found where the languages have domains,
+ * since every language serves the same path there; by slug, the default
+ * language alone.
+ */
+function indexOf(
+  versions: readonly ReadVersion[],
+  defaultLocale: string | undefined
+): VersionIndex {
+  const index: VersionIndex = {
+    byKey: new Map(),
+    places: new Map(),
+    byAddress: new Map(),
+    byPath: new Map(),
+    bySlug: new Map(),
+  };
+  for (const version of versions) {
+    index.byKey.set(version.key, version);
+    const place = placeOf(version);
+    index.places.set(place, [...(index.places.get(place) ?? []), version]);
+    const inDefault =
+      version.locale === undefined || version.locale === defaultLocale;
+    indexAddress(index, version, place, inDefault);
+    if (version.slug !== undefined && inDefault) {
+      add(index.bySlug, version.slug, place);
+    }
+  }
+  return index;
+}
+
+/** Indexes the address `version` is served at, as `indexOf` says. */
+function indexAddress(
+  index: VersionIndex,
+  version: ReadVersion,
+  place: string,
+  inDefault: boolean
+): void {
+  const served = servedAddress(version);
+  if (served === undefined) return;
+  if (served.origin !== undefined) {
+    add(index.byAddress, `${served.origin}${served.path}`, place);
+  }
+  if (served.origin === undefined || inDefault) {
+    add(index.byPath, served.path, place);
+  }
+}
+
+/** The versions of the one place `found` names, or why there are none. */
+function onePlace(index: VersionIndex, found: ReadonlySet<string>): Found {
+  if (found.size === 0) return undefined;
+  if (found.size > 1) return "ambiguous";
+  const [only] = found;
+  return only === undefined ? undefined : index.places.get(only);
+}
+
+/** The versions a record read from a page names: that version, or its default language. */
+function pageVersions(
+  index: VersionIndex,
+  page: NonNullable<ImportedRecord["match"]["page"]>,
+  defaultLocale: string | undefined
+): Found {
+  if (page.version !== undefined) {
+    const found = index.byKey.get(page.version);
+    return found === undefined ? undefined : [found];
+  }
+  const list = [...index.byKey.values()].filter(
+    each =>
+      each.type === page.type &&
+      each.id === page.id &&
+      (each.locale === undefined || each.locale === defaultLocale)
+  );
+  return list.length === 0 ? undefined : list;
 }
 
 /**
@@ -486,67 +569,26 @@ function index(map: Map<string, Set<string>>, at: string, place: string): void {
  * from, or every form of the page in the language its address is served in,
  * or, by slug, in the default language.
  */
-async function matcher(
+function matcher(
   versions: readonly ReadVersion[],
   defaultLocale: string | undefined
-): Promise<(record: ImportedRecord) => Found> {
-  const byKey = new Map<string, ReadVersion>();
-  const places = new Map<string, ReadVersion[]>();
-  // An address on a language's own domain is found by its origin and path.
-  // By its path alone, as an address on another site (the old one) or with
-  // no origin is read, only the default language is found where the
-  // languages have domains, since every language serves the same path.
-  const byAddress = new Map<string, Set<string>>();
-  const byPath = new Map<string, Set<string>>();
-  const bySlug = new Map<string, Set<string>>();
-  for (const version of versions) {
-    byKey.set(version.key, version);
-    const place = placeOf(version);
-    places.set(place, [...(places.get(place) ?? []), version]);
-    const inDefault =
-      version.locale === undefined || version.locale === defaultLocale;
-    const served = await servedAddress(version);
-    if (served?.origin !== undefined) {
-      index(byAddress, `${served.origin}${served.path}`, place);
-    }
-    if (served !== undefined && (served.origin === undefined || inDefault)) {
-      index(byPath, served.path, place);
-    }
-    if (version.slug !== undefined && inDefault) {
-      index(bySlug, version.slug, place);
-    }
-  }
-  const one = (found: ReadonlySet<string> | undefined): Found => {
-    if (found === undefined || found.size === 0) return undefined;
-    if (found.size > 1) return "ambiguous";
-    const [only] = found;
-    return only === undefined ? undefined : places.get(only);
-  };
-  return record => {
-    const { match } = record;
+): (record: ImportedRecord) => Found {
+  const index = indexOf(versions, defaultLocale);
+  return ({ match }) => {
     if (match.page !== undefined) {
-      const { type, id, version } = match.page;
-      if (version !== undefined) {
-        const found = byKey.get(version);
-        return found === undefined ? undefined : [found];
-      }
-      const list = versions.filter(
-        each =>
-          each.type === type &&
-          each.id === id &&
-          (each.locale === undefined || each.locale === defaultLocale)
-      );
-      return list.length === 0 ? undefined : list;
+      return pageVersions(index, match.page, defaultLocale);
     }
     const atAddress =
       match.path === undefined || match.origin === undefined
         ? undefined
-        : byAddress.get(`${match.origin}${match.path}`);
-    if (atAddress !== undefined) return one(atAddress);
+        : index.byAddress.get(`${match.origin}${match.path}`);
+    if (atAddress !== undefined) return onePlace(index, atAddress);
     const atPath =
-      match.path === undefined ? undefined : byPath.get(match.path);
-    if (atPath !== undefined) return one(atPath);
-    return one(match.slug === undefined ? undefined : bySlug.get(match.slug));
+      match.path === undefined ? undefined : index.byPath.get(match.path);
+    if (atPath !== undefined) return onePlace(index, atPath);
+    const atSlug =
+      match.slug === undefined ? undefined : index.bySlug.get(match.slug);
+    return atSlug === undefined ? undefined : onePlace(index, atSlug);
   };
 }
 
@@ -629,22 +671,35 @@ function same(a: string | undefined, b: string | undefined): boolean {
  */
 function ownAddress(
   canonical: string,
-  page: ReadPage,
+  page: Decided,
   origins: readonly string[]
 ): boolean {
-  if (page.path === undefined) return false;
+  // Where the page is served in its language: its prefix, or its domain.
+  const served = page.served ?? page.path;
+  if (served === undefined) return false;
   let url: URL;
+  let home: URL;
   try {
-    url = new URL(canonical, "https://relative.invalid");
+    url = new URL(canonical, RELATIVE);
+    home = new URL(served, RELATIVE);
   } catch {
     return false;
   }
   if (url.search !== "" || url.hash !== "") return false;
   const onSite =
-    url.origin === "https://relative.invalid" || origins.includes(url.origin);
+    url.origin === RELATIVE ||
+    (home.origin === RELATIVE
+      ? origins.includes(url.origin)
+      : url.origin === home.origin);
   const trim = (path: string) => path.replace(/\/+$/, "") || "/";
-  return onSite && trim(url.pathname) === trim(page.path);
+  return onSite && trim(url.pathname) === trim(home.pathname);
 }
+
+/** The origin a relative address is read on, and known by. */
+const RELATIVE = "https://relative.invalid";
+
+/** A page a record's values are decided for: one version, served where it is. */
+type Decided = ReadPage & { served?: string };
 
 /**
  * The digest an apply is held to: every change, each version it goes into
@@ -724,7 +779,7 @@ interface Deciding {
    */
   unreadable: ReadonlySet<string>;
   record: ImportedRecord;
-  page: ReadPage;
+  page: Decided;
   templates: TemplateValues;
   tally: Tally;
   decision: Decision;
@@ -932,7 +987,7 @@ function decideHidden(at: Deciding): void {
  */
 function decide(
   record: ImportedRecord,
-  page: ReadPage,
+  page: Decided,
   templates: TemplateValues,
   images: ReadonlyMap<string, string>,
   tally: Tally,
@@ -1527,7 +1582,7 @@ export async function planImport(
   };
   const matched = matchRecords(
     parsed.records,
-    await matcher(versions, ctx.config.localization?.defaultLocale),
+    matcher(versions, ctx.config.localization?.defaultLocale),
     (record, version) =>
       own
         ? tidyOwn(version, tally)
@@ -1769,14 +1824,32 @@ async function writeVersion(
   return typeof next === "string" ? next : undefined;
 }
 
-/** Whether a version read as stored holds every value the import wrote it. */
-function holds(stored: unknown, page: PlannedPage): boolean {
-  try {
-    refuseDroppedValues(stored, page.writes, page.id);
-    return true;
-  } catch {
-    return false;
+/** A value as two stored values compare: an image by its id. */
+function comparable(value: unknown): string {
+  const id = idText(isRecord(value) ? value.id : value);
+  return id ?? JSON.stringify(value ?? null);
+}
+
+/**
+ * The group a step put back writes: the group as stored now, each place
+ * that still holds what the import wrote set back to what it held before.
+ * A place someone changed since, or the write left out, is left as it is,
+ * so a save made since is never undone. None where no place holds the
+ * import's value.
+ */
+export function undoneGroup(
+  stored: unknown,
+  page: PlannedPage
+): Record<string, unknown> | undefined {
+  const now =
+    isRecord(stored) && isRecord(stored[SEO_GROUP]) ? stored[SEO_GROUP] : {};
+  const back: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(page.writes)) {
+    if (comparable(now[name]) === comparable(value)) {
+      back[name] = page.seo[name] ?? null;
+    }
   }
+  return Object.keys(back).length === 0 ? undefined : seoWith(now, back);
 }
 
 /**
@@ -1854,18 +1927,14 @@ async function putBack(plan: ImportPlan, written: Written): Promise<boolean> {
       // made since is never undone.
       const now = await storedVersion(page);
       const rev = isRecord(now) ? now._rev : undefined;
-      if (!holds(now, page)) {
-        plan.engine.ctx.logger.warn(
-          "An imported version changed before it could be put back, so it is left as it is",
-          { type: page.type, id: page.id, locale: page.locale, form: page.form }
-        );
-        restored = false;
-        continue;
-      }
+      const back = undoneGroup(now, page);
+      // Nothing of the import's is there any more: someone changed every
+      // place since, or the write kept none of it.
+      if (back === undefined) continue;
       await writeVersion(
         plan,
         page,
-        page.seo,
+        back,
         typeof rev === "string" ? rev : undefined,
         "site"
       );
