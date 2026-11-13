@@ -41,6 +41,7 @@ import type {
 } from "../pipeline/diff/types";
 
 import {
+  assertNoOwnerChange,
   ELEMENT_NOUNS,
   ownerRecordKey,
   type OwnerRecord,
@@ -445,14 +446,13 @@ export function refuseChangesToKeptElements(input: {
   rows: readonly OwnerRecord[];
   declaring: ReadonlySet<string>;
   kept: readonly KeptElement[];
-  desired: NextlySchemaSnapshot;
   live: NextlySchemaSnapshot;
 }): void {
   refusePlannedChanges(
     input.operations,
     removedOwnersElements(input.rows, input.declaring)
   );
-  refuseKeptOverRemovedColumns(input.kept, input.desired, input.live);
+  refuseKeptOverDroppedColumns(input.operations, input.kept, input.live);
 }
 
 /** Refuse an operation that changes one of `removed`. */
@@ -475,47 +475,63 @@ function refusePlannedChanges(
 }
 
 /**
- * Refuse a kept index or foreign key over a column the desired table no
- * longer has: the database would drop it with that column.
+ * Refuse a column drop this push runs that would take a kept element with
+ * it: an index or foreign key over the column, or a check whose expression
+ * names it. The database drops them with the column (PostgreSQL drops a
+ * check that names it), and nothing would put them back.
+ *
+ * Judged from the operations the push will run, not from the desired state,
+ * so a column a UI save leaves alone on a table it does not own refuses
+ * nothing.
  */
-function refuseKeptOverRemovedColumns(
+function refuseKeptOverDroppedColumns(
+  operations: readonly Operation[],
   kept: readonly KeptElement[],
-  desiredSnapshot: NextlySchemaSnapshot,
   liveSnapshot: NextlySchemaSnapshot
 ): void {
-  const desired = byName(desiredSnapshot);
   const live = byName(liveSnapshot);
-  for (const element of kept) {
-    const table = element.table.toLowerCase();
-    const columns = new Set(desired.get(table)?.columns.map(c => c.name) ?? []);
-    const gone = keptElementColumns(live.get(table), element).find(
-      column => !columns.has(column)
+  for (const op of operations) {
+    if (op.type !== "drop_column") continue;
+    const table = live.get(op.tableName.toLowerCase());
+    const taken = keptOn(kept, op.tableName).find(element =>
+      dependsOnColumn(table, element, op.columnName)
     );
-    if (gone === undefined) continue;
+    if (taken === undefined) continue;
     throw keptElementRefusal(
-      {
-        table: element.table,
-        kind: element.kind,
-        name: element.name,
-        act: "drop",
-      },
-      element.ownerId,
-      ` along with the column "${gone}"`
+      { table: taken.table, kind: taken.kind, name: taken.name, act: "drop" },
+      taken.ownerId,
+      ` along with the column "${op.columnName}"`
     );
   }
 }
 
-/** The columns a kept index or foreign key names, as the database has it. */
-function keptElementColumns(
+/**
+ * Whether a kept element goes with `column`: an index or foreign key naming
+ * it, or a check whose expression mentions it as a word. A check is read as
+ * text, so a mention inside a string literal counts too: refusing then is the
+ * safe side.
+ */
+function dependsOnColumn(
   table: TableSpec | undefined,
-  element: KeptElement
-): readonly string[] {
-  const find = <T extends { name: string; columns: string[] }>(
-    list: readonly T[] | undefined
-  ) => list?.find(e => e.name === element.name)?.columns ?? [];
-  if (element.kind === "index") return find(table?.indexes);
-  if (element.kind === "fk") return find(table?.foreignKeys);
-  return [];
+  element: KeptElement,
+  column: string
+): boolean {
+  const named = <T extends { name: string }>(list: readonly T[] | undefined) =>
+    list?.find(e => e.name === element.name);
+  if (element.kind === "index") {
+    return named(table?.indexes)?.columns.includes(column) ?? false;
+  }
+  if (element.kind === "fk") {
+    return named(table?.foreignKeys)?.columns.includes(column) ?? false;
+  }
+  if (element.kind === "check") {
+    const sql = named(table?.checks)?.sql ?? "";
+    const escaped = column.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(^|[^A-Za-z0-9_])${escaped}($|[^A-Za-z0-9_])`, "i").test(
+      sql
+    );
+  }
+  return false;
 }
 
 /** The kept elements on one table, by kind. */
@@ -566,6 +582,39 @@ export function describeKept(kept: readonly KeptElement[]): string {
     .join("; ");
 }
 
+/**
+ * Refuse a contributed element whose row names an owner that no longer
+ * contributes it: another owner taking over what the first one added.
+ *
+ * An element several plugins contribute alike (an identical index, which
+ * the compiler accepts and creates once) is recorded for one of them, and
+ * any of them may hold the row; only an owner outside that set is a
+ * takeover. The refusal is the registry's own (`assertNoOwnerChange`).
+ */
+export function assertNoContributedOwnerChange(
+  contributed: readonly ContributedElement[],
+  rows: readonly OwnerRecord[]
+): void {
+  const contributors = new Map<string, Set<string>>();
+  const claims = contributed.map(element => ({
+    tableName: element.table,
+    elementKind: element.elementKind,
+    elementName: element.elementName,
+    ownerId: ownerIdOf(element.owner),
+  }));
+  for (const claim of claims) {
+    const key = ownerRecordKey(claim);
+    contributors.set(
+      key,
+      (contributors.get(key) ?? new Set()).add(claim.ownerId)
+    );
+  }
+  const recorded = rows.filter(
+    row => !contributors.get(ownerRecordKey(row))?.has(row.ownerId)
+  );
+  assertNoOwnerChange(claims, recorded);
+}
+
 /** What the push read and wrote of the owner rows, for the steps after it. */
 export interface PushElementOwners {
   /** Every owner row, as it stands once the push has recorded its own. */
@@ -603,13 +652,11 @@ export async function pushElementOwners(input: {
     { SCHEMA_OWNERS_TABLE },
     { SchemaOwnersRepository },
     { retiredElementRows },
-    { assertNoOwnerChange },
   ] = await Promise.all([
     import("../pipeline/diff/introspect-live"),
     import("../../../schemas/schema-owners"),
     import("./schema-owners-repository"),
     import("./retired-elements"),
-    import("./owner-registry"),
   ]);
   let exists: boolean;
   try {
@@ -647,15 +694,7 @@ export async function pushElementOwners(input: {
   const gone = new Set(retired.map(row => ownerRecordKey(row)));
   rows = rows.filter(row => !gone.has(ownerRecordKey(row)));
 
-  assertNoOwnerChange(
-    contributed.map(element => ({
-      tableName: element.table,
-      elementKind: element.elementKind,
-      elementName: element.elementName,
-      ownerId: ownerIdOf(element.owner),
-    })),
-    rows
-  );
+  assertNoContributedOwnerChange(contributed, rows);
   const added = ownerRowsToRecord(
     contributed,
     new Set(input.schema?.owners.keys() ?? []),

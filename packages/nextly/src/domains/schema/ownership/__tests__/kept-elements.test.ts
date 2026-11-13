@@ -11,6 +11,7 @@ import type {
   TableSpec,
 } from "../../pipeline/diff/types";
 import {
+  assertNoContributedOwnerChange,
   contributedElements,
   declaringOwners,
   keptElements,
@@ -281,7 +282,6 @@ describe("refuseChangesToKeptElements", () => {
         rows,
         declaring: new Set(["app"]),
         kept: [],
-        desired,
         live,
       })
     ).toThrow(
@@ -306,30 +306,93 @@ describe("refuseChangesToKeptElements", () => {
         rows,
         declaring: new Set(["app", "gone"]),
         kept: [],
-        desired,
         live,
       })
     ).not.toThrow();
   });
 
-  it("refuses a kept index over a column the table's owner removes", () => {
+  const dropHeadline: Operation = {
+    type: "drop_column",
+    tableName: POSTS,
+    columnName: "headline",
+    columnType: "text",
+  };
+  const keptIndex: KeptElement = {
+    table: POSTS,
+    kind: "index",
+    name: "idx_dc_posts_headline",
+    ownerId: "gone",
+  };
+
+  it("refuses a kept index over a column this push drops, which the database would drop with it", () => {
+    expect(() =>
+      refuseChangesToKeptElements({
+        operations: [dropHeadline],
+        rows: [row("gone", "index", "idx_dc_posts_headline")],
+        declaring: new Set(["app"]),
+        kept: [keptIndex],
+        live,
+      })
+    ).toThrow(
+      expect.objectContaining({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              message: expect.stringContaining(
+                'along with the column "headline"'
+              ),
+            }),
+          ],
+        },
+      })
+    );
+  });
+
+  it("leaves a kept index alone when no operation this push runs drops its column", () => {
+    // A UI save leaves out the operations on tables it does not own, so a
+    // column the configuration omits there is not one this push drops.
     expect(() =>
       refuseChangesToKeptElements({
         operations: [],
         rows: [row("gone", "index", "idx_dc_posts_headline")],
         declaring: new Set(["app"]),
-        kept: [
-          {
-            table: POSTS,
-            kind: "index",
-            name: "idx_dc_posts_headline",
-            ownerId: "gone",
-          },
-        ],
-        desired: { tables: [{ name: POSTS, columns: [stamp], indexes: [] }] },
+        kept: [keptIndex],
         live,
       })
-    ).toThrow();
+    ).not.toThrow();
+  });
+
+  it("refuses a kept check that names a column this push drops", () => {
+    // PostgreSQL drops a check with a column it names, and nothing would put
+    // the kept check back.
+    const withCheck: NextlySchemaSnapshot = {
+      tables: [
+        {
+          ...liveTable,
+          checks: [
+            { name: "ck_dc_posts_short", sql: 'length("headline") < 20' },
+          ],
+        },
+      ],
+    };
+    const keptCheck: KeptElement = {
+      table: POSTS,
+      kind: "check",
+      name: "ck_dc_posts_short",
+      ownerId: "gone",
+    };
+    const refuse = (operations: Operation[]) =>
+      refuseChangesToKeptElements({
+        operations,
+        rows: [row("gone", "check", "ck_dc_posts_short")],
+        declaring: new Set(["app"]),
+        kept: [keptCheck],
+        live: withCheck,
+      });
+    expect(() => refuse([dropHeadline])).toThrow();
+    expect(() =>
+      refuse([{ ...dropHeadline, columnName: "headline_old" }])
+    ).not.toThrow();
   });
 });
 
@@ -351,5 +414,34 @@ describe("refuseRebuildsLosingKeptElements", () => {
     expect(() =>
       refuseRebuildsLosingKeptElements(["dc_other"], [column])
     ).not.toThrow();
+  });
+});
+
+describe("assertNoContributedOwnerChange", () => {
+  const shared = (id: string) => ({
+    table: POSTS,
+    elementKind: "index" as const,
+    elementName: "idx_dc_posts_stamp",
+    owner: { kind: "plugin" as const, id },
+  });
+
+  it("accepts an element two plugins contribute alike, recorded for either", () => {
+    // The compiler accepts identical contributions and makes one index; the
+    // row names the first contributor, and the second is not a takeover.
+    expect(() =>
+      assertNoContributedOwnerChange(
+        [shared("a"), shared("b")],
+        [row("a", "index", "idx_dc_posts_stamp")]
+      )
+    ).not.toThrow();
+  });
+
+  it("refuses an element recorded for a plugin that no longer contributes it", () => {
+    expect(() =>
+      assertNoContributedOwnerChange(
+        [shared("b")],
+        [row("a", "index", "idx_dc_posts_stamp")]
+      )
+    ).toThrow(/recorded as belonging to "a"/);
   });
 });

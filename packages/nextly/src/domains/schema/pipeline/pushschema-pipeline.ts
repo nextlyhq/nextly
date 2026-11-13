@@ -926,7 +926,6 @@ export class PushSchemaPipeline {
           rows: elementOwners.rows,
           declaring: elementOwners.declaring,
           kept,
-          desired: snapshotBeforeRenames,
           live: liveSnapshot,
         });
       }
