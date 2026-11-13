@@ -30,6 +30,24 @@ import { renderWithProviders } from "../../../../../__tests__/utils";
 const useDocumentLock = vi.fn();
 /** What the page last handed the (replaced) default editor. */
 let entryFormProps: Record<string, unknown> | undefined;
+// The page's started reads, watched: which places it starts, with which ids.
+const { startedPlaces } = vi.hoisted(() => ({ startedPlaces: vi.fn() }));
+vi.mock("@admin/hooks/queries/usePluginRoute", async importOriginal => {
+  const actual =
+    await importOriginal<
+      typeof import("@admin/hooks/queries/usePluginRoute")
+    >();
+  return {
+    ...actual,
+    usePlaceStartupReads: (
+      ...args: Parameters<typeof actual.usePlaceStartupReads>
+    ) => {
+      startedPlaces(...args);
+      return actual.usePlaceStartupReads(...args);
+    },
+  };
+});
+
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({
   useDocumentLock: (options: unknown) => useDocumentLock(options) as unknown,
 }));
@@ -806,5 +824,18 @@ describe("a custom edit view with pages of its own", () => {
     });
     expect(window.location.pathname).toBe("/admin/collections/posts");
     expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+});
+
+describe("the reads the edit page starts as it opens", () => {
+  it("starts its own place's parts' reads and the form's, with the ids each takes", () => {
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+    expect(startedPlaces).toHaveBeenCalledWith([
+      { place: "collection.edit", ids: { collection: "posts", entryId: "42" } },
+      {
+        place: "entry.form",
+        ids: { kind: "collection", slug: "posts", entryId: "42" },
+      },
+    ]);
   });
 });

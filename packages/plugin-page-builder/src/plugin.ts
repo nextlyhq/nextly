@@ -390,6 +390,7 @@ import {
   registerEntryDesignCascade,
 } from "./templates/entry-design-cascade";
 import { judgeTemplateInTransaction } from "./templates/entry-design-write";
+import { ENTRY_DESIGN_STARTUP_PATH } from "./templates/entry-designs-contract";
 import { entryDesignsRoute } from "./templates/entry-designs-route";
 import {
   templateActionsRoute,
@@ -4558,6 +4559,10 @@ export const pageBuilder = (
             // the section sits above the form there, where an author meets
             // which design the entry is shown with before its fields.
             narrow: "above-form",
+            // The section's read, started as the edit page opens rather than
+            // once the section mounts, so the section is drawn above Status
+            // with the editor instead of pushing it down after.
+            startupReads: [{ path: ENTRY_DESIGN_STARTUP_PATH }],
           },
         ],
         // Delete component on the component store, wherever it is: the

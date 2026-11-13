@@ -1024,6 +1024,9 @@ contributes: {
         label: "SLA",
         component: "@acme/support/admin#Sla",
         after: "status", // after the built-in Status section, as close as it can
+        // @experimental: the reads the section makes as it opens, started with the page
+        // (collection.edit, single.edit and entry.form only; refused elsewhere)
+        startupReads: [{ path: "/sla?collection={collection}&entry={entryId}" }],
       },
       {
         id: "acme-support.escalate",

@@ -31,6 +31,7 @@ import {
   type DeclaredAdminPlace,
 } from "./admin-places-registry";
 import { orderContributions, type OrderedEntry } from "./contribution-order";
+import { placeStartupReadsProblem } from "./place-startup-reads";
 import type { PluginDefinition } from "./plugin-context";
 import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
 import { resolutionError } from "./resolution-error";
@@ -62,6 +63,7 @@ const BASE_KEYS = [
   "visibleWhen",
   "collections",
   "singles",
+  "startupReads",
   "extendedWith",
 ];
 
@@ -399,6 +401,11 @@ function contributionProblem(
   if (typeof declared.place !== "string") return "it names no place";
   return (
     kindProblem(kind as AdminContributionKind, declared, plugin) ??
+    placeStartupReadsProblem(
+      plugin.name,
+      declared.place,
+      declared.startupReads
+    ) ??
     (declared.fields === undefined
       ? undefined
       : tabFieldsProblem(declared.fields, declared.place)) ??
