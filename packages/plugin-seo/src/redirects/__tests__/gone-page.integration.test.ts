@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { keptSeoContext } from "../../not-found/report";
 import { seoPlugin } from "../../plugin";
-import { redirectsProxyHandler } from "../proxy-handler";
+import { GONE_PAGE_HEADER, redirectsProxyHandler } from "../proxy-handler";
 import { putRedirect } from "../store";
 
 let current: TestNextly | undefined;
@@ -129,6 +129,41 @@ describe.each(getConfiguredTestDialects())(
       expect(answer?.response?.status).toBe(410);
       expect(await answer?.response?.text()).toBe("This page is gone.");
       expect(fetchPage).not.toHaveBeenCalled();
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "the site's Gone page read by the Proxy itself (%s)",
+  dialect => {
+    it("answers the plain page to its own read of the page, so a Gone page that is Gone never reads itself", async () => {
+      // As a pattern or a language's own address can make the page Gone
+      // under another spelling than the option's.
+      const seo = await boot(dialect, ["/retired/*"]);
+      const fetchPage = sitePage();
+      const answer = await redirectsProxyHandler(undefined, undefined, {
+        gonePage: "/retired/page",
+        fetchPage,
+      }).handle(
+        new Request("https://example.com/retired/page-de", {
+          headers: { [GONE_PAGE_HEADER]: "1" },
+        }),
+        seo
+      );
+      expect(answer?.response?.status).toBe(410);
+      expect(await answer?.response?.text()).toBe("This page is gone.");
+      expect(fetchPage).not.toHaveBeenCalled();
+    });
+
+    it("marks its read of the site's page as its own", async () => {
+      const seo = await boot(dialect, ["/old-offer"]);
+      const fetchPage = sitePage();
+      await redirectsProxyHandler(undefined, undefined, {
+        gonePage: "/gone",
+        fetchPage,
+      }).handle(new Request("https://example.com/old-offer"), seo);
+      const init = fetchPage.mock.calls[0]?.[1];
+      expect(new Headers(init?.headers).get(GONE_PAGE_HEADER)).toBe("1");
     });
   }
 );

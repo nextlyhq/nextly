@@ -131,6 +131,14 @@ function plainGoneResponse(): Response {
   });
 }
 
+/**
+ * The request header the Proxy's own read of the site's Gone page carries.
+ * A read carrying it that meets a Gone answer is answered with the plain
+ * page, so a Gone page that is itself Gone, under whatever spelling a
+ * pattern or a language's address gives it, never reads itself again.
+ */
+export const GONE_PAGE_HEADER = "x-nextly-seo-gone-page";
+
 /** How long the site's own Gone page may take to answer before the plain one is sent. */
 const GONE_PAGE_TIMEOUT_MS = 5_000;
 
@@ -149,22 +157,26 @@ export interface GoneAnswerOptions {
  * What an address that is gone for good answers: the site's own page where
  * it names one, read from the site and sent with status 410, else a short
  * plain page. The plain page also answers where the site's page can't be
- * read or doesn't answer 200, and where the address asked for is that page
- * itself, which would otherwise read itself.
+ * read or doesn't answer 200, and where the request is that page itself, or
+ * the Proxy's own read of it, which would otherwise read itself again.
  */
 async function goneResponse(
+  request: Request,
   url: URL,
-  asked: KeptAddress,
   options: GoneAnswerOptions
 ): Promise<Response> {
   const { gonePage } = options;
-  if (gonePage === undefined || asked.path === gonePage) {
+  if (
+    gonePage === undefined ||
+    request.headers.get(GONE_PAGE_HEADER) !== null ||
+    url.pathname.replace(/(.)\/$/, "$1") === gonePage
+  ) {
     return plainGoneResponse();
   }
   try {
     const read = options.fetchPage ?? ((at, init) => fetch(at, init));
     const page = await read(new URL(gonePage, url.origin), {
-      headers: { accept: "text/html" },
+      headers: { accept: "text/html", [GONE_PAGE_HEADER]: "1" },
       redirect: "manual",
       signal: AbortSignal.timeout(GONE_PAGE_TIMEOUT_MS),
     });
@@ -211,7 +223,7 @@ export function redirectsProxyHandler(
         : undefined;
       if (redirect?.gone === true) {
         hits.note(ctx, redirect.id);
-        return { response: await goneResponse(url, address, gone) };
+        return { response: await goneResponse(request, url, gone) };
       }
       const location =
         redirect !== undefined
