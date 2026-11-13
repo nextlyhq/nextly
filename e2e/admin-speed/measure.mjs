@@ -490,6 +490,7 @@ async function steady(context, log, load, { fresh, before } = {}) {
   return {
     kept: samples[0].kept,
     startupStartsMs: median(samples.map(x => x.startupStartsMs)),
+    mostStatements: Math.max(...samples.map(x => x.statements)),
     result: {
       requests: Object.values(kinds).reduce((a, b) => a + b, 0),
       rounds: Math.min(...samples.map(x => x.rounds)),
@@ -520,10 +521,13 @@ async function measureDialect(dialect, dir) {
   let browser;
   let server;
   // `timings` sits beside `screens`, not in it, so `--update-pins` never
-  // writes a time into the pins.
+  // writes a time, or the most statements a load took, into the pins.
   const out = { start: {}, screens: {}, timings: {} };
   const keep = (name, measured) => {
-    out.timings[name] = { startupStartsMs: measured.startupStartsMs };
+    out.timings[name] = {
+      startupStartsMs: measured.startupStartsMs,
+      mostStatements: measured.mostStatements,
+    };
     return measured.result;
   };
   try {
