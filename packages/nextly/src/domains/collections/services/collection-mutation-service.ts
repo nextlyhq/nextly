@@ -4961,7 +4961,8 @@ export class CollectionMutationService extends BaseService {
       restoreCtx: RestoreSchemaContext;
       /** The entry as stored, which the rules compare the promotion with. */
       live: Record<string, unknown>;
-      user: UserContext;
+      /** The person asking, or none where an API key asks on its own grants. */
+      user: UserContext | undefined;
       /** The scope an API key arrived with, judged on its own grants. */
       authenticatedScope?: AuthenticatedScope;
       grants: () => Promise<CallerGrants>;
@@ -11101,12 +11102,12 @@ export class CollectionMutationService extends BaseService {
     const sharedDraft = args.pending.find(
       change => change.locale === SHARED_DRAFT_SLOT
     );
-    const user = args.caller.user;
     const grants = promotion.grants;
+    // Only a trusted caller skips the field rules, and a caller no field rule could ask: an API
+    // key is judged like a person, whether or not a user comes with it.
     if (
       sharedDraft === undefined ||
       args.caller.overrideAccess === true ||
-      user === undefined ||
       grants === undefined
     ) {
       return;
@@ -11135,7 +11136,7 @@ export class CollectionMutationService extends BaseService {
             snapshot: sharedDraft.snapshot,
             restoreCtx: promotion.restoreContext,
             live,
-            user,
+            user: args.caller.user,
             authenticatedScope: args.caller.authenticatedScope,
             grants,
           })

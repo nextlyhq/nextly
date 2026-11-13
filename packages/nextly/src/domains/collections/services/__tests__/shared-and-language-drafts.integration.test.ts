@@ -548,6 +548,38 @@ describe.each(getConfiguredTestDialects())(
       expect((await read(entries, FIELD_GUARDED, id, "es")).views).toBe(10);
     }, 90_000);
 
+    // An API key is judged by the same field rules as a person: a request made with a key carries
+    // its owner and the key's own grants, and its publish still asks the shared fields' rules in
+    // every live language.
+    it("asks the shared fields' rules in every live language when an API key publishes", async () => {
+      const entries = await boot(dialect);
+      await userWhoMay(handle!, PUBLISHER, "read", [FIELD_GUARDED]);
+      const id = await publishedInBoth(entries, FIELD_GUARDED);
+      await save(entries, FIELD_GUARDED, id, "en", { views: 80 });
+
+      const published = await entries.publishParts(
+        {
+          collectionName: FIELD_GUARDED,
+          entryId: id,
+          user: { id: PUBLISHER, email: `${PUBLISHER}@example.test` },
+          overrideAccess: false,
+          authenticatedScope: {
+            actorType: "apiKey",
+            permissions: ["read", "update", "publish"].map(
+              action => `${action}-${FIELD_GUARDED}`
+            ),
+          },
+          data: { _overwrite: true },
+        },
+        { direction: "publish", locales: ["en"], shared: true }
+      );
+
+      // Refused by the field rule in Spanish, not by anything before it.
+      expect(published.success, JSON.stringify(published)).toBe(false);
+      expect(JSON.stringify(published)).toMatch(/views/);
+      expect((await read(entries, FIELD_GUARDED, id, "es")).views).toBe(10);
+    }, 90_000);
+
     // A shared-only draft goes live in every language, so a publish of every
     // language asks each language's publish rule about it, Spanish included.
     it("asks every language's publish rule about a shared-only draft a publish of every language puts live", async () => {

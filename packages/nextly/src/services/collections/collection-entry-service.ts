@@ -976,7 +976,11 @@ export class CollectionEntryService extends BaseService {
   private async valueRuleRefusal(
     params: Pick<
       EveryLanguageLifecycleParams,
-      "collectionName" | "entryId" | "user" | "overrideAccess"
+      | "collectionName"
+      | "entryId"
+      | "user"
+      | "overrideAccess"
+      | "authenticatedScope"
     >,
     locales: readonly string[] | "all",
     written?: Readonly<Record<string, unknown>>
@@ -987,12 +991,18 @@ export class CollectionEntryService extends BaseService {
     ) {
       return null;
     }
+    // The publish rule is asked too: in each language written, or, for every language, in every
+    // language. A caller it refuses is answered by the write's own access refusal, never told
+    // what the entry holds.
     const read = await this.mutationService.publishPartsReads(params, {
       action: "publish",
-      locales: [],
-      shared: false,
+      locales: locales === "all" ? [] : locales,
+      shared: locales === "all",
     });
     if ("answer" in read) return null;
+    if (read.sharedRefusal !== null || read.languageRefusals.size > 0) {
+      return null;
+    }
     const { state } = read;
     if (written === undefined || locales === "all") {
       return publishValueRefusal(state, locales);
@@ -1066,8 +1076,12 @@ export class CollectionEntryService extends BaseService {
    * have to learn a different call to reverse it.
    */
   async unpublishAllLocales(params: EveryLanguageLifecycleParams) {
+    // Asked of the languages it takes down: every one, or the chosen ones where a request
+    // chooses some, as the request was judged before the transition.
     const result = await withRuleLanguage(
-      everyLanguageOf(this.localization),
+      params.parts === undefined
+        ? everyLanguageOf(this.localization)
+        : { locales: [...params.parts.locales] },
       () => this.mutationService.unpublishAllLocales(params)
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);

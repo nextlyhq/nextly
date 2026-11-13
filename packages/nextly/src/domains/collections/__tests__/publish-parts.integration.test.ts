@@ -73,12 +73,12 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
 
   /** A draft entry written in English, then in each language of `others`. */
   async function entry(others: Record<string, Doc> = {}): Promise<string> {
-    const created = (await t!.nextly.create({
+    const created = await t!.nextly.create({
       collection: "posts",
       locale: "en",
       data: { title: "Hello", tagline: "Shared" },
-    })) as { item: { id: string } };
-    const id = created.item.id;
+    });
+    const id = String(created.item.id);
     for (const [locale, data] of Object.entries(others)) {
       await t!.nextly.update({
         collection: "posts",
@@ -463,6 +463,77 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     expect((await states(id)).es).toBe("published");
   });
 
+  // A caller who may not publish is told so, and learns nothing of what the entry holds: the
+  // value rules are not asked for them, so no field or language of the entry is named.
+  it("refuses a caller without the publish right before judging what the entry holds", async () => {
+    await boot(posts({ requireEveryLanguage: true }));
+    const id = await entry({ es: { title: "" } });
+    const editor = await userWhoMay(t!, "editor", "update", ["posts"]);
+    await grantTo(t!, editor, "read", ["posts"]);
+    const handler = t!.getService("collectionsHandler") as unknown as {
+      publishAllLocales(params: Record<string, unknown>): Promise<{
+        success: boolean;
+        statusCode: number;
+        message?: string;
+      }>;
+    };
+
+    const everyLanguage = await handler.publishAllLocales({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: false,
+      user: { id: editor, email: "editor@example.test", roles: [] },
+      data: { _overwrite: true },
+    });
+
+    expect(everyLanguage.success).toBe(false);
+    expect(JSON.stringify(everyLanguage)).not.toMatch(
+      /title|REQUIRED_IN_LANGUAGE/
+    );
+    expect(everyLanguage.statusCode).toBe(403);
+  });
+
+  // The rule is asked of the languages the request takes down, on the pool and again by the
+  // transition: a rule that keeps French live does not stop Spanish alone being taken down.
+  it("asks the unpublish rule of the chosen languages only, here and under the lock", async () => {
+    await boot(
+      posts({
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: ({ locales }) => !locales.includes("fr"),
+        },
+      })
+    );
+    const id = await entry({ es: { title: "Hola" }, fr: { title: "Bonjour" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    const editor = await userWhoMay(t!, "editor", "unpublish", ["posts"]);
+    await grantTo(t!, editor, "update", ["posts"]);
+    await grantTo(t!, editor, "read", ["posts"]);
+
+    await t!.nextly.unpublish({
+      collection: "posts",
+      id,
+      locales: ["es"],
+      overrideAccess: false,
+      user: { id: editor, email: "editor@example.test", roles: [] },
+      data: { _overwrite: true },
+    });
+
+    expect(await states(id)).toEqual({
+      shared: "published",
+      en: "published",
+      es: "draft",
+      fr: "published",
+    });
+  });
+
   /** A gate holding back the parts `held` names: a language code, or "shared". */
   function holdBack(held: readonly string[]): void {
     container.registerSingleton<PublishGate>("publishGate", () => ({
@@ -623,12 +694,12 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
         ],
       })
     );
-    const created = (await t!.nextly.create({
+    const created = await t!.nextly.create({
       collection: "pages",
       locale: "en",
       data: { title: "Hello", slug: "hola" },
-    })) as { item: { id: string } };
-    const id = created.item.id;
+    });
+    const id = String(created.item.id);
     await t!.nextly.publish({
       collection: "pages",
       id,
@@ -726,12 +797,12 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
         ],
       })
     );
-    const created = (await t!.nextly.create({
+    const created = await t!.nextly.create({
       collection: "pages",
       locale: "en",
       data: { title: "Hello", slug: "hola", status: "published" },
-    })) as { item: { id: string } };
-    const id = created.item.id;
+    });
+    const id = String(created.item.id);
     // Held as Spanish's pending change, since the entry is live.
     await t!.nextly.update({
       collection: "pages",

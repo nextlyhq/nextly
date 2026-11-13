@@ -84,6 +84,11 @@ type EveryLanguageLifecycleHandlerParams = {
   /** Acting identity from the transport, forwarded to the recorded event. */
   actor?: RequestActor;
   /**
+   * Skip cache revalidation for this move (the outbox drain still runs), for a caller that owns
+   * its cache strategy.
+   */
+  disableRevalidate?: boolean;
+  /**
    * The version the move was made from: `_rev` and `_overwrite`, judged as a
    * save's are (see the entry service).
    */
