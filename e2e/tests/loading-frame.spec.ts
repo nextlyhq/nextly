@@ -993,20 +993,38 @@ test.describe("an editor, held to the screen it stands for", () => {
       window.localStorage.setItem(key, "1");
     }, SIGNED_IN_HERE_KEY);
     await page.goto(`${ADMIN}/collections/posts/${id}`);
+    type Read = { path: string; started: number; ended: number | null };
+    const readsSoFar = () =>
+      page.evaluate(() => (window as unknown as { __reads: Read[] }).__reads);
+    // Until the entry and the section's read have both answered: before the
+    // page's code has run, no outline is on screen either, so its absence
+    // alone says nothing.
+    await expect
+      .poll(
+        async () => {
+          const sofar = await readsSoFar();
+          return (
+            sofar.some(
+              read =>
+                read.path.startsWith(
+                  `/admin/api/collections/posts/entries/${id}`
+                ) && read.ended !== null
+            ) &&
+            sofar.some(
+              read => read.path === designReadOf(id) && read.ended !== null
+            )
+          );
+        },
+        { timeout: 60_000 }
+      )
+      .toBe(true);
     await expect(page.locator('[data-testid="screen-outline"]')).toHaveCount(
       0,
       {
         timeout: 60_000,
       }
     );
-    const reads = await page.evaluate(
-      () =>
-        (
-          window as unknown as {
-            __reads: { path: string; started: number; ended: number | null }[];
-          }
-        ).__reads
-    );
+    const reads = await readsSoFar();
     const entry = reads.find(read =>
       read.path.startsWith(`/admin/api/collections/posts/entries/${id}`)
     );

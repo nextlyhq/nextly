@@ -144,16 +144,24 @@ export function usePluginRoute<T extends object | null>({
     // Only where the caller asked for freshness. `always` overrides the cache
     // for this query alone, so a route whose subject the admin edits elsewhere
     // is re-read when a surface that needs it mounts — and one that takes the
-    // default keeps the admin's ordinary caching. The first mount after a
-    // page started the read (`usePlaceStartupReads`) takes that answer instead:
-    // it was asked for as the page opened, for this mount.
+    // default keeps the admin's ordinary caching. The first mounts after a
+    // page started the read (`usePlaceStartupReads`) take that answer instead:
+    // it was asked for as the page opened, for them.
+    // Asked as often as the query library likes, so it only reads the mark;
+    // the mark is let go below, when this mount goes.
     ...(staleTime === 0
       ? {
           refetchOnMount: () =>
-            takeStartedPluginRead(route) ? false : ("always" as const),
+            startedReads.has(route) ? false : ("always" as const),
         }
       : {}),
   });
+  useEffect(() => {
+    if (staleTime !== 0) return undefined;
+    return () => {
+      startedReads.delete(route);
+    };
+  }, [route, staleTime]);
   return {
     data: bodyOf<T>(query.data),
     // `isPending` is true for a DISABLED query too — it has no data and never
@@ -205,19 +213,12 @@ async function readPluginRouteBody<T extends object | null>(
 }
 
 /**
- * The routes a page started reading for a component not yet mounted, each
- * taken once by the component's first read (`takeStartedPluginRead`).
+ * The routes a page started reading for a component not yet mounted. The
+ * started read serves the mounts it was started for, and the mark goes when
+ * the first of them goes (or the page does): a later mount reads again, as a
+ * fresh-on-mount read always has.
  */
 const startedReads = new Set<string>();
-
-
-/**
- * Whether a page started `route`'s read for this mount, consuming the mark:
- * every later mount reads again, as a fresh-on-mount read always has.
- */
-function takeStartedPluginRead(route: string): boolean {
-  return startedReads.delete(route);
-}
 
 /**
  * What the cache holds for a route that answered with no body.
@@ -271,7 +272,9 @@ export function readPluginRoute<T extends object | null>({
  * page, each read whose ids the page has, in the order delivered, once each.
  */
 function placeStartupRoutes(
-  delivered: Partial<Record<string, readonly DeliveredAdminEntry[]>> | undefined,
+  delivered:
+    | Partial<Record<string, readonly DeliveredAdminEntry[]>>
+    | undefined,
   ids: Readonly<Record<string, string | null | undefined>>
 ): string[] {
   const routes: string[] = [];
