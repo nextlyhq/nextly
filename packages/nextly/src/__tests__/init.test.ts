@@ -275,6 +275,7 @@ describe("init - Nextly API", () => {
       "register",
       "releases",
       "resetPassword",
+      "rewriteField",
       "roles",
       "shutdown",
       "storage",

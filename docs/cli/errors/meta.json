@@ -155,6 +155,7 @@
     "plugin-route-mount-invalid",
     "plugin-route-root-unreachable",
     "plugin-schema-behind",
+    "plugin-schema-prefix-changed",
     "plugin-schema-uninstalled",
     "plugin-schema-version-missing",
     "plugin-schema-version-not-advanced",
