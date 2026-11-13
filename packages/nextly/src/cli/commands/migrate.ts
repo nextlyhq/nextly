@@ -3886,6 +3886,33 @@ function assertRunsAsJudged(
   }
 }
 
+/**
+ * The file's UP less each unique index the database already carries under the file's name for it
+ * (`adoptUniqueIndexesAlreadyThere`), made by the run's own one-to-one step or a Builder save before
+ * the file was written. A file with a snapshot of its own is judged against the schema that snapshot
+ * says it starts from (`before`); one without is judged on the live table alone.
+ */
+async function upWithoutUniquesAlreadyThere(
+  db: unknown,
+  dialect: SupportedDialect,
+  m: ParsedMigration,
+  snapshots: {
+    target: NextlySchemaSnapshot | null;
+    before: NextlySchemaSnapshot;
+  }
+): Promise<string> {
+  const adoption = await adoptUniqueIndexesAlreadyThere(
+    db,
+    dialect,
+    splitSqlStatements(m.upSql, dialect, m),
+    snapshots.target ? snapshots.before : undefined
+  );
+  if (adoption.adopted.length === 0) return m.upSql;
+  return adoption.statements
+    .map(statement => `${statement};`)
+    .join("\n--> statement-breakpoint\n");
+}
+
 /** An app migration file `runFileMigrations` has just applied, with the point before it. */
 export interface AppliedAppMigration {
   /** Its base name. */
@@ -4079,19 +4106,11 @@ export async function runFileMigrations(args: {
         m.localization,
         filename
       );
-      // A unique index the database already carries under the file's name for it, made by the
-      // run's own one-to-one step or a Builder save before the file was written, is left out.
-      const adoption = await adoptUniqueIndexesAlreadyThere(
-        db,
-        dialect,
-        splitSqlStatements(m.upSql, dialect, m),
-        target ? before : undefined
-      );
-      if (adoption.adopted.length > 0) {
-        m.upSql = adoption.statements
-          .map(statement => `${statement};`)
-          .join("\n--> statement-breakpoint\n");
-      }
+      // A unique index the database already carries under the file's name for it is left out.
+      m.upSql = await upWithoutUniquesAlreadyThere(db, dialect, m, {
+        target,
+        before,
+      });
       // The caller's last word before the file applies, every refusal of it passed.
       await args.beforeApply?.(m.name);
 
