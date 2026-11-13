@@ -14,7 +14,11 @@
  * - a reader whose decision guards access reads the row itself: the preview
  *   revocation generation and the address a preview link sends its holder
  *   to reflect another instance's change at once, even while a copy read a
- *   moment earlier is kept for everyone else.
+ *   moment earlier is kept for everyone else;
+ * - so does a read that fills a cache outside this process: the public site
+ *   settings a page renders are kept under a tag another instance's save
+ *   expires, so the refill after that expiry must hold the save, not a copy
+ *   read here a moment before it.
  */
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
@@ -31,6 +35,7 @@ import {
 } from "../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../routeHandler";
 import { defaultGeneration } from "../../runtime/preview/preview-route-defaults";
+import { readPublicSiteSettings } from "../../runtime/site-settings-read";
 
 import {
   GENERAL_SETTINGS_READ_INTERVAL_MS,
@@ -153,6 +158,26 @@ describe.each(getConfiguredTestDialects())(
       expect((await settings.getSettings({ fresh: true })).siteUrl).toBe(
         "https://after.example"
       );
+    });
+
+    it("refills the tag-cached public settings with another instance's save at once", async () => {
+      const { t, settings, elsewhere } = await boot();
+      // The copy every other reader here is answered from, read just now.
+      expect((await settings.getSettings()).applicationName).toBe("Before");
+      expect((await readPublicSiteSettings(t.nextly)).applicationName).toBe(
+        "Before"
+      );
+
+      // Instance B saves; its save expires the settings tag everywhere, and
+      // this instance is the one that refills the cached entry.
+      await elsewhere({
+        applicationName: "Saved elsewhere",
+        timezone: "Asia/Tokyo",
+      });
+
+      const refill = await readPublicSiteSettings(t.nextly);
+      expect(refill.applicationName).toBe("Saved elsewhere");
+      expect(refill.timezone).toBe("Asia/Tokyo");
     });
 
     it("answers a revoke made here with the new generation at once", async () => {
