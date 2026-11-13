@@ -384,8 +384,10 @@ describe("importing this site's own field group", () => {
     const dialog = screen.getByRole("dialog", {
       name: 'Import the Posts\' own "seo" field',
     });
+    // Renamed alone, the type still has no SEO: it is added to the plugin's
+    // collections too, so its renamed field is offered here.
     expect(dialog.textContent).toContain(
-      "It is defined in the site's code, so Nextly can't replace it from here. Rename it in the code, for example to legacySeo, and deploy."
+      "It is defined in the site's code, so Nextly can't replace it from here. In the code, rename it, for example to legacySeo, add Posts to the SEO plugin's collections, and deploy."
     );
     // Nothing to confirm: the rename is the person's, in the site's code.
     expect(

@@ -324,10 +324,12 @@ function OwnSeoDialog({
   type: TypeWithOwnSeo;
   close: () => void;
 }): JSX.Element {
+  // Renamed alone, the type still has no SEO: the plugin adds its group
+  // only to the collections it is given, so the type is added there too.
   const where =
     type.definedIn === "code"
-      ? "It is defined in the site's code, so Nextly can't replace it from here. Rename it in the code, for example to legacySeo, and deploy."
-      : "Rename it in the Schema Builder, for example to legacySeo, and save the type.";
+      ? `It is defined in the site's code, so Nextly can't replace it from here. In the code, rename it, for example to legacySeo, add ${type.label} to the SEO plugin's collections, and deploy.`
+      : `Rename it in the Schema Builder, for example to legacySeo, and save the type. Then add ${type.label} to the SEO plugin's collections in the site's code, and deploy.`;
   return (
     <Dialog open onOpenChange={open => (open ? undefined : close())}>
       <DialogContent>
