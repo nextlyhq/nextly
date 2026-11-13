@@ -268,7 +268,7 @@ export const STRUCTURED_DATA_TYPES: Readonly<
     // stays on offer for a site that chooses it, and is never added to a
     // page of another kind.
     richResult: false,
-    note: "Google no longer shows these results",
+    note: "no longer shown by Google",
   },
   profilePage: {
     label: "Profile page",
@@ -409,8 +409,9 @@ export function structuredDataTypesFor(page: {
 }
 
 /**
- * A type as a chooser offers it: its name, with its note beside it where it
- * has one, so every chooser of a type says the same.
+ * A type as a chooser lists it: its name, with its note beside it where it
+ * has one, so every chooser of a type says the same. Once chosen, a
+ * chooser names the type alone, so the choice fits its box.
  */
 export function structuredDataChoiceText(key: StructuredDataTypeKey): string {
   const { label, note } = STRUCTURED_DATA_TYPES[key];

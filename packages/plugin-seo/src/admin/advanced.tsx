@@ -282,7 +282,7 @@ function StructuredDataRow({
       error={errors.structuredDataType}
       label="Structured data type"
       labelId={`${id}-label`}
-      help="Tells Google what kind of page this is, so it can show details like the author and date. Only types Google still shows are offered."
+      help="Tells Google what kind of page this is, so it can show details like the author and date. A type Google no longer shows says so."
       control={
         <Select
           value={chosen === "" ? AUTOMATIC_TYPE : chosen}
@@ -295,7 +295,12 @@ function StructuredDataRow({
             aria-labelledby={`${id}-label`}
             className="h-8 w-auto min-w-[210px] text-xs"
           >
-            <SelectValue />
+            {/* The type's name alone: the list carries its note. */}
+            <SelectValue>
+              {chosen === ""
+                ? `${structured.automatic.label} · automatic`
+                : structured.offered.find(type => type.key === chosen)?.label}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={AUTOMATIC_TYPE}>

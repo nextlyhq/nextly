@@ -473,8 +473,9 @@ describe("Advanced", () => {
     expect(writes.at(-1)).toEqual(["structuredDataType", "webPage"]);
   });
 
-  it("says beside Questions and answers that Google no longer shows these results", async () => {
+  it("says beside Questions and answers that Google no longer shows it, and names only the type once chosen", async () => {
     const user = userEvent.setup();
+    const writes: [string, unknown][] = [];
     const structuredData = CONTEXT.structuredData;
     if (structuredData === undefined) throw new Error("no structured data");
     render(
@@ -489,6 +490,7 @@ describe("Advanced", () => {
             ],
           },
         }}
+        onWrite={(f, v) => writes.push([f, v])}
       />
     );
     await user.click(screen.getByRole("button", { name: /Advanced/ }));
@@ -501,8 +503,18 @@ describe("Advanced", () => {
       "Article · automatic",
       "Article",
       "Web page",
-      "Questions and answers · Google no longer shows these results",
+      "Questions and answers · no longer shown by Google",
     ]);
+    await user.click(
+      screen.getByRole("option", {
+        name: "Questions and answers · no longer shown by Google",
+      })
+    );
+    expect(writes.at(-1)).toEqual(["structuredDataType", "faqPage"]);
+    // Once chosen, the choice is named alone, so it fits its box.
+    expect(
+      screen.getByRole("combobox", { name: "Structured data type" }).textContent
+    ).toBe("Questions and answers");
   });
 
   it("offers no control for a field the group does not declare", () => {
