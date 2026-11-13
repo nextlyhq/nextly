@@ -108,6 +108,20 @@ async function pick(
   await user.click(await screen.findByRole("option", { name: option }));
 }
 
+/**
+ * Empties the textbox named `name` and pastes `value` into it, in one input
+ * event. Typing it a key at a time re-renders the whole Settings page per key,
+ * which on Windows runners costs about 150 ms a character.
+ */
+async function replace(
+  user: ReturnType<typeof userEvent.setup>,
+  name: string,
+  value: string
+) {
+  await user.clear(screen.getByRole("textbox", { name }));
+  await user.paste(value);
+}
+
 describe("a form's Settings", () => {
   it("is one page in sections, in order", () => {
     view();
@@ -130,18 +144,11 @@ describe("a form's Settings", () => {
   it("saves each of today's settings, and the new ones", async () => {
     const { user, fetchMock } = view({ status: "published" });
 
-    const button = screen.getByRole("textbox", { name: "Button text" });
-    await user.clear(button);
-    await user.type(button, "Save my seat");
-    const message = screen.getByRole("textbox", {
-      name: "Message after submitting",
-    });
-    await user.clear(message);
-    await user.type(message, "You're on the list.");
-    await user.type(
-      screen.getByRole("textbox", { name: "Message when closed" }),
-      "Sign-ups are closed."
-    );
+    // Pasted, as `replace` does: typed a key at a time, these four values
+    // took this test past its time limit on Windows runners.
+    await replace(user, "Button text", "Save my seat");
+    await replace(user, "Message after submitting", "You're on the list.");
+    await replace(user, "Message when closed", "Sign-ups are closed.");
     await user.click(
       screen.getByRole("switch", { name: "Accepting submissions" })
     );
@@ -150,10 +157,7 @@ describe("a form's Settings", () => {
     );
     await pick(user, "Hidden trap field", "On");
     await pick(user, "Bot check", "reCAPTCHA");
-    await user.type(
-      screen.getByRole("textbox", { name: "Internal note" }),
-      "Lahore meetup."
-    );
+    await replace(user, "Internal note", "Lahore meetup.");
     await user.click(save());
 
     await waitFor(() => expect(saves(fetchMock)).toHaveLength(1));
@@ -220,10 +224,7 @@ describe("a form's Settings", () => {
     await user.click(
       screen.getByRole("radio", { name: "Go to a web address" })
     );
-    await user.type(
-      screen.getByRole("textbox", { name: "Web address" }),
-      "https://example.com/thanks"
-    );
+    await replace(user, "Web address", "https://example.com/thanks");
     await user.click(save());
 
     await waitFor(() => expect(saves(fetchMock)).toHaveLength(1));
