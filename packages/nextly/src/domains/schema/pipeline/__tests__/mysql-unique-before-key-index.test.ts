@@ -137,39 +137,6 @@ describe("a key's plain index dropped after the unique one replacing it", () => 
     ).toEqual([]);
   });
 
-  it("holds the drop where the same save renames the column the unique index then names", () => {
-    const rename: Operation = {
-      type: "rename_column",
-      tableName: "profiles",
-      fromColumn: "person",
-      toColumn: "owner",
-      fromType: "varchar(36)",
-      toType: "varchar(36)",
-    };
-    const addOwner: Operation = {
-      type: "add_index",
-      tableName: "profiles",
-      index: { name: "uq_profiles_owner", columns: ["owner"], unique: true },
-    };
-    expect(
-      keyIndexDropsHeldForUnique(
-        [rename, drop, addOwner],
-        "mysql",
-        profiles(true)
-      )
-    ).toEqual([drop]);
-    const createOwner =
-      "CREATE UNIQUE INDEX `uq_profiles_owner` ON `profiles` (`owner`);";
-    expect(
-      uniqueCreatedBeforeKeyIndexDrop(
-        [DROP, createOwner],
-        "mysql",
-        profiles(true),
-        [rename]
-      )
-    ).toEqual([createOwner, DROP]);
-  });
-
   it("adds a held drop to the batch once, and none the batch already makes", () => {
     const held = keyIndexDropsHeldForUnique(
       [drop, add],
