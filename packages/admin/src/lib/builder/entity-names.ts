@@ -24,7 +24,7 @@ export interface EntityNames {
  * form's slug field takes kebab only, snake_case for the others. The server
  * accepts a hyphen in every kind's address; this is only what is offered.
  */
-export function addressFromName(kind: BuilderKind, name: string): string {
+function addressFromName(kind: BuilderKind, name: string): string {
   return kind === "single" ? toKebabName(name) : toSnakeName(name);
 }
 

@@ -35,7 +35,7 @@ describe("suggestIcon", () => {
   });
 
   it("offers only icons the picker draws", () => {
-    const drawn = new Set(ICON_PICKER_ICONS.map(icon => icon.name));
+    const drawn = new Set<string>(ICON_PICKER_ICONS.map(icon => icon.name));
     const names = [
       "Product",
       "Team member",

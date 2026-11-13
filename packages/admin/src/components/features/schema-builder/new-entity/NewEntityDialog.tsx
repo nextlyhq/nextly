@@ -106,7 +106,6 @@ export function NewEntityDialog({
   const [values, setValues] = useState<BuilderSettingsValues>(EMPTY_VALUES);
   // Until the person picks an icon, the name suggests one.
   const [pickedIcon, setPickedIcon] = useState<string | null>(null);
-  const [optionsOpen, setOptionsOpen] = useState(false);
 
   const pluginEntries = usePluginFieldTypeEntries("entries");
   const kindChoices = entryKindChoices(pluginEntries);
@@ -140,8 +139,6 @@ export function NewEntityDialog({
     });
   };
 
-  const addressNote = addressNoteOf(check, typed);
-
   return (
     <Dialog open={open} onOpenChange={next => !next && onCancel()}>
       <DialogContent className="sm:max-w-lg">
@@ -161,30 +158,18 @@ export function NewEntityDialog({
             />
           )}
 
-          <div className="flex items-end gap-2">
-            {hasIcon && (
-              <div className="w-40 shrink-0">
-                <IconPicker
-                  value={icon}
-                  onChange={setPickedIcon}
-                  accessibleName={`Icon: ${iconLabel(icon)}`}
-                />
-              </div>
-            )}
-            <div className="min-w-0 flex-1 space-y-1">
-              <Label htmlFor={`${ids}-name`}>Name</Label>
-              <Input
-                id={`${ids}-name`}
-                value={values.singularName}
-                onChange={e =>
-                  setValues(current => ({
-                    ...current,
-                    ...namesFollowingName(kind, current, e.target.value),
-                  }))
-                }
-              />
-            </div>
-          </div>
+          <NameRow
+            ids={ids}
+            icon={hasIcon ? icon : null}
+            onPickIcon={setPickedIcon}
+            name={values.singularName}
+            onName={name =>
+              setValues(current => ({
+                ...current,
+                ...namesFollowingName(kind, current, name),
+              }))
+            }
+          />
 
           {hasPlural && (
             <div className="space-y-1">
@@ -197,86 +182,27 @@ export function NewEntityDialog({
             </div>
           )}
 
-          <div className="space-y-1">
-            <Label htmlFor={`${ids}-address`}>API address</Label>
-            <Input
-              id={`${ids}-address`}
-              className="font-mono"
-              value={values.slug}
-              aria-invalid={typed && check.status === "refused"}
-              aria-describedby={`${ids}-address-note`}
-              onChange={e => set("slug", e.target.value)}
-            />
-            <p
-              id={`${ids}-address-note`}
-              className={
-                addressNote.refused
-                  ? "text-xs text-destructive"
-                  : "text-xs text-muted-foreground"
-              }
-            >
-              {addressNote.text}
-            </p>
-          </div>
+          <AddressField
+            ids={ids}
+            value={values.slug}
+            note={addressNoteOf(check, typed)}
+            onChange={next => set("slug", next)}
+          />
 
-          <div className="space-y-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-expanded={optionsOpen}
-              aria-label={optionsName(values)}
-              onClick={() => setOptionsOpen(current => !current)}
-            >
-              More options
-            </Button>
-            {optionsOpen && (
-              <div className="space-y-4 rounded-md border border-border p-3">
-                <div className="space-y-1">
-                  <Label htmlFor={`${ids}-description`}>Description</Label>
-                  <Textarea
-                    id={`${ids}-description`}
-                    rows={2}
-                    value={values.description ?? ""}
-                    onChange={e => set("description", e.target.value)}
-                  />
-                </div>
-                <AdvancedTab
-                  fields={config.advancedFields.filter(
-                    field => field !== "showSystemFields"
-                  )}
-                  kind={kind}
-                  values={values}
-                  onChange={setValues}
-                />
-              </div>
-            )}
-          </div>
+          <MoreOptions
+            ids={ids}
+            config={config}
+            values={values}
+            onChange={setValues}
+          />
         </div>
 
-        <DialogFooter className="items-center gap-2">
-          {blockedBy !== null && (
-            <p
-              id={`${ids}-create-blocked`}
-              className="text-xs text-muted-foreground sm:mr-auto"
-            >
-              {blockedBy}
-            </p>
-          )}
-          <Button type="button" variant="outline" onClick={onCancel}>
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            disabled={blockedBy !== null}
-            aria-describedby={
-              blockedBy !== null ? `${ids}-create-blocked` : undefined
-            }
-            onClick={create}
-          >
-            Create
-          </Button>
-        </DialogFooter>
+        <CreateFooter
+          ids={ids}
+          blockedBy={blockedBy}
+          onCancel={onCancel}
+          onCreate={create}
+        />
       </DialogContent>
     </Dialog>
   );
@@ -300,4 +226,169 @@ function addressNoteOf(
     text: "Its API routes use this address. It cannot be changed once saved.",
     refused: false,
   };
+}
+
+/** The icon, beside the name; a kind with no icon shows the name alone. */
+function NameRow({
+  ids,
+  icon,
+  onPickIcon,
+  name,
+  onName,
+}: {
+  ids: string;
+  icon: string | null;
+  onPickIcon: (icon: string) => void;
+  name: string;
+  onName: (name: string) => void;
+}): JSX.Element {
+  return (
+    <div className="flex items-end gap-2">
+      {icon !== null && (
+        <div className="w-40 shrink-0">
+          <IconPicker
+            value={icon}
+            onChange={onPickIcon}
+            accessibleName={`Icon: ${iconLabel(icon)}`}
+          />
+        </div>
+      )}
+      <div className="min-w-0 flex-1 space-y-1">
+        <Label htmlFor={`${ids}-name`}>Name</Label>
+        <Input
+          id={`${ids}-name`}
+          value={name}
+          onChange={e => onName(e.target.value)}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** The API address, with the server's answer about it said beneath it. */
+function AddressField({
+  ids,
+  value,
+  note,
+  onChange,
+}: {
+  ids: string;
+  value: string;
+  note: { text: string; refused: boolean };
+  onChange: (next: string) => void;
+}): JSX.Element {
+  return (
+    <div className="space-y-1">
+      <Label htmlFor={`${ids}-address`}>API address</Label>
+      <Input
+        id={`${ids}-address`}
+        className="font-mono"
+        value={value}
+        aria-invalid={note.refused}
+        aria-describedby={`${ids}-address-note`}
+        onChange={e => onChange(e.target.value)}
+      />
+      <p
+        id={`${ids}-address-note`}
+        className={
+          note.refused
+            ? "text-xs text-destructive"
+            : "text-xs text-muted-foreground"
+        }
+      >
+        {note.text}
+      </p>
+    </div>
+  );
+}
+
+/** The further options, folded under one control that names those that are on. */
+function MoreOptions({
+  ids,
+  config,
+  values,
+  onChange,
+}: {
+  ids: string;
+  config: BuilderConfig;
+  values: BuilderSettingsValues;
+  onChange: (next: BuilderSettingsValues) => void;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="space-y-2">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        aria-expanded={open}
+        aria-label={optionsName(values)}
+        onClick={() => setOpen(current => !current)}
+      >
+        More options
+      </Button>
+      {open && (
+        <div className="space-y-4 rounded-md border border-border p-3">
+          <div className="space-y-1">
+            <Label htmlFor={`${ids}-description`}>Description</Label>
+            <Textarea
+              id={`${ids}-description`}
+              rows={2}
+              value={values.description ?? ""}
+              onChange={e =>
+                onChange({ ...values, description: e.target.value })
+              }
+            />
+          </div>
+          <AdvancedTab
+            fields={config.advancedFields.filter(
+              field => field !== "showSystemFields"
+            )}
+            kind={config.kind}
+            values={values}
+            onChange={onChange}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Cancel and Create, with the reason Create is not offered yet beside them. */
+function CreateFooter({
+  ids,
+  blockedBy,
+  onCancel,
+  onCreate,
+}: {
+  ids: string;
+  blockedBy: string | null;
+  onCancel: () => void;
+  onCreate: () => void;
+}): JSX.Element {
+  return (
+    <DialogFooter className="items-center gap-2">
+      {blockedBy !== null && (
+        <p
+          id={`${ids}-create-blocked`}
+          className="text-xs text-muted-foreground sm:mr-auto"
+        >
+          {blockedBy}
+        </p>
+      )}
+      <Button type="button" variant="outline" onClick={onCancel}>
+        Cancel
+      </Button>
+      <Button
+        type="button"
+        disabled={blockedBy !== null}
+        aria-describedby={
+          blockedBy !== null ? `${ids}-create-blocked` : undefined
+        }
+        onClick={onCreate}
+      >
+        Create
+      </Button>
+    </DialogFooter>
+  );
 }
