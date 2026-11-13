@@ -821,6 +821,31 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
         });
       }
 
+      test.describe("the dashboard", () => {
+        // A further account per width: the dashboard's reads are many, and
+        // the screens above spend their own accounts' budgets.
+        ownSeat(31 + index);
+
+        for (const mode of ["held", "unheld"] as const) {
+          test(`moves no part of the dashboard, ${mode}`, async ({ page }) => {
+            test.setTimeout(90_000);
+            // A first visit: the cards' loading states stand as tall as the
+            // cards, the setup card's as its checklist.
+            await expectStillLoad(page, "", mode);
+          });
+
+          test(`moves no part of the dashboard on a revisit, ${mode}`, async ({
+            page,
+          }) => {
+            test.setTimeout(90_000);
+            // The first visit keeps each card's drawn height on the device,
+            // and the next, in a fresh tab, draws each card at it.
+            await visitOnce(page, "");
+            await expectStillLoad(page, "", mode, { revisit: true });
+          });
+        }
+      });
+
       test.describe("a list's own outline", () => {
         // A further account per width, as the history's above.
         ownSeat(2 * WIDTHS.length + index + 1);
