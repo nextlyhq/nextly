@@ -14,7 +14,10 @@ import {
   fieldGroupUsedByQuery,
   type FieldGroupPlacement,
 } from "@admin/hooks/useFieldGroupUsedBy";
-import type { MoveContext } from "@admin/lib/builder/move-rule";
+import {
+  savedContainerIdsFrom,
+  type MoveContext,
+} from "@admin/lib/builder/move-rule";
 import { heldNamesOf } from "@admin/lib/builder/move-words";
 import { fieldGroupFieldHolding } from "@admin/lib/builder/outline/move-targets";
 import {
@@ -80,6 +83,12 @@ export function useMoveContext({
     used.map((slug, at) => [slug, usedBy[at]?.data] as const)
   );
   const heldNames = useMemo(() => heldNamesOf(saved, fields), [saved, fields]);
+  // Where each field was last saved: a field never saved has no values a move
+  // could lose, so it may leave repeating rows and change level freely.
+  const savedContainerIdsOf = useMemo(
+    () => savedContainerIdsFrom(saved),
+    [saved]
+  );
 
   return {
     entityReadOnly: locked,
@@ -87,6 +96,7 @@ export function useMoveContext({
     // entity's built-in columns.
     topLevelReservesNames: config.kind !== "field-group",
     heldNames,
+    savedContainerIdsOf,
     excludedTypes: pickerExcludedTypes(config),
     describeFieldGroup: slug => {
       const loaded = fieldGroups.get(slug);
