@@ -91,3 +91,22 @@ describe("holding an editor until its claim and its parts' reads are in", () => 
     expect(result.current).toBe(false);
   });
 });
+
+describe("an editor moved straight to another document", () => {
+  it("holds the next document's outline for its own claim", () => {
+    const { result, rerender } = renderHook(
+      ({ document, claim }) =>
+        useEditorRevealHold(true, { claim, reads: false }, document),
+      { initialProps: { document: "posts/a", claim: false } }
+    );
+    // Document A is shown: its claim answered.
+    expect(result.current).toBe(false);
+    // The same editor now opens document B, whose claim is out.
+    rerender({ document: "posts/b", claim: true });
+    expect(result.current).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(EDITOR_CLAIM_HOLD_MS);
+    });
+    expect(result.current).toBe(false);
+  });
+});

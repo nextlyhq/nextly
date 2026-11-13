@@ -99,34 +99,59 @@ export const EDITOR_REVEAL_HOLD_MS = 250;
  */
 export const EDITOR_CLAIM_HOLD_MS = 1_000;
 
+/** Where one document's hold stands: when it began, and whether it ended. */
+interface RevealHold {
+  document: string;
+  since: number;
+  expired: boolean;
+  shown: boolean;
+}
+
+/** A hold for `document`, begun now. */
+function freshHold(document: string): RevealHold {
+  return { document, since: Date.now(), expired: false, shown: false };
+}
+
 /**
  * Whether a screen whose own data is in still holds its outline, waiting for
  * the parts that finish it (`waiting`): so the screen is drawn whole, its
  * parts in their places, rather than drawn and then pushed apart as each
  * lands. For `limitMs` (a part's {@link EDITOR_REVEAL_HOLD_MS} unless
  * given) at most from the first render that asked, then never again for this
- * mount, so a part that answers late
- * after all can never take the screen away once shown.
+ * `document`, so a part that answers late after all can never take the
+ * screen away once shown. Another document (the same editor moved straight
+ * to the next entry) begins a hold of its own.
  */
 export function useHeldReveal(
   waiting: boolean,
-  limitMs: number = EDITOR_REVEAL_HOLD_MS
+  limitMs: number = EDITOR_REVEAL_HOLD_MS,
+  document = ""
 ): boolean {
-  const [since] = useState(() => Date.now());
-  const [expired, setExpired] = useState(false);
-  const [shown, setShown] = useState(false);
-  const holding = waiting && !expired && !shown;
+  const [stored, setHold] = useState(() => freshHold(document));
+  // Reset while rendering, as React's guide has state follow a prop: the
+  // next document's first frame already holds, rather than one frame later.
+  let hold = stored;
+  if (stored.document !== document) {
+    hold = freshHold(document);
+    setHold(hold);
+  }
+  const holding = waiting && !hold.expired && !hold.shown;
+  const { since } = hold;
   useEffect(() => {
+    const own = (update: Partial<RevealHold>) =>
+      setHold(current =>
+        current.document === document ? { ...current, ...update } : current
+      );
     if (!holding) {
-      setShown(true);
+      own({ shown: true });
       return;
     }
     const timer = setTimeout(
-      () => setExpired(true),
+      () => own({ expired: true }),
       Math.max(0, since + limitMs - Date.now())
     );
     return () => clearTimeout(timer);
-  }, [holding, since, limitMs]);
+  }, [holding, since, limitMs, document]);
   return holding;
 }
 
@@ -134,19 +159,23 @@ export function useHeldReveal(
  * Whether an editor given its outline (`outlined`) still draws it: while its
  * claim is out, for {@link EDITOR_CLAIM_HOLD_MS} at most, and while its parts'
  * started reads are out, for {@link EDITOR_REVEAL_HOLD_MS} at most. Each wait
- * ends once; a shown editor is never taken back.
+ * ends once for `document` (the collection or Single and the document's id);
+ * a shown editor is never taken back, but the next document waits afresh.
  */
 export function useEditorRevealHold(
   outlined: boolean,
-  waiting: { claim: boolean; reads: boolean }
+  waiting: { claim: boolean; reads: boolean },
+  document = ""
 ): boolean {
   const forClaim = useHeldReveal(
     outlined && waiting.claim,
-    EDITOR_CLAIM_HOLD_MS
+    EDITOR_CLAIM_HOLD_MS,
+    document
   );
   const forReads = useHeldReveal(
     outlined && waiting.reads,
-    EDITOR_REVEAL_HOLD_MS
+    EDITOR_REVEAL_HOLD_MS,
+    document
   );
   return forClaim || forReads;
 }

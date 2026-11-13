@@ -827,10 +827,13 @@ export function EntryForm({
   // Drawn whole: the outline stays until the claim says who holds the entry
   // and the parts' started reads are in, briefly at most, so a colleague's
   // banner or a plugin's section does not push the fields down as it lands.
-  const holdReveal = useEditorRevealHold(revealOutline !== undefined, {
-    claim: lockSurface.settling,
-    reads: revealWaiting,
-  });
+  const holdReveal = useEditorRevealHold(
+    revealOutline !== undefined,
+    { claim: lockSurface.settling, reads: revealWaiting },
+    // Each document waits for its own claim and reads: the same editor moved
+    // straight to the next one begins its hold again.
+    `collection:${collectionSlug}/${entry?.id ?? ""}`
+  );
   // A gained entry's latest version starts the whole form again, whatever
   // its `updatedAt` says, and the lock holds until it has; the document views
   // key on the count it carries. Someone else's change is said over it.
