@@ -6474,10 +6474,12 @@ export class CollectionMutationService extends BaseService {
     call: FieldRewriteCall
   ): Promise<CollectionServiceResult<FieldRewriteResult>> {
     const { request } = call;
+    // The person stays named when access is not judged: a trusted rewrite
+    // made for someone is still theirs in history, as a trusted update is.
     const params = {
       collectionName: request.collection,
       entryId: request.id,
-      user: call.overrideAccess ? undefined : call.user,
+      user: call.user,
       overrideAccess: call.overrideAccess === true,
       authenticatedScope: call.authenticatedScope,
     };
@@ -7236,6 +7238,17 @@ export class CollectionMutationService extends BaseService {
         });
       }
     }
+    // Judged by the language rules an update in that language is: a
+    // translated field another language may leave blank is not required
+    // there.
+    const localeCtx =
+      copy.locale === null
+        ? undefined
+        : await this.localizedRequiredContext(
+            params.collectionName,
+            copy.locale,
+            tx.getDrizzle()
+          );
     const issues = await this.entryIssues({
       data: { [field]: written },
       fields,
@@ -7245,7 +7258,7 @@ export class CollectionMutationService extends BaseService {
       reader: params,
       id: params.entryId,
       tx,
-      ...(copy.locale === null ? {} : { writeLocale: copy.locale }),
+      ...(copy.locale === null ? {} : { writeLocale: copy.locale, localeCtx }),
     });
     if (issues.length > 0) {
       throw NextlyError.validation({
@@ -7375,6 +7388,7 @@ export class CollectionMutationService extends BaseService {
     args: {
       params: RewriteParams;
       field: string;
+      fields: FieldDefinition[];
     },
     draft: {
       ref: VersionRef;
@@ -7410,6 +7424,16 @@ export class CollectionMutationService extends BaseService {
     await storeDraftSave(tx, this.versionCapture, {
       ref,
       locale: slot.locale,
+      // Keyed as a held save keys its version: where the document has no
+      // languages and the draft carries a field group, under the language
+      // that group was read in, so a restore of it keeps the group.
+      versionLocale:
+        slot.locale ??
+        ((args.fields as unknown as FieldConfig[]).some(
+          f => isFieldGroupField(f) && snapshot[f.name] != null
+        )
+          ? this.componentSnapshotLocale(undefined)
+          : null),
       snapshot,
       replaces,
       createdBy: args.params.user?.id ?? null,

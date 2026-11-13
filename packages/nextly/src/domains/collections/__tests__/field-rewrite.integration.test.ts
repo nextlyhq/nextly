@@ -105,7 +105,7 @@ async function boot(
               status: true,
               versions: { drafts: true },
               fields: [
-                text({ name: "title", localized: true }),
+                text({ name: "title", localized: true, required: true }),
                 // Shared by every language: fields of a translated
                 // collection are translated unless they say otherwise.
                 text({ name: "layout", localized: false }),
@@ -497,6 +497,25 @@ describe.each(getConfiguredTestDialects())("a field rewrite (%s)", dialect => {
     expect(snapshot.secret ?? null).toBeNull();
   });
 
+  it("names the person a trusted rewrite is made for", async () => {
+    const t = await boot(dialect);
+    await userWhoMay(t, EDITOR.id, "read", [PAGES]);
+    const id = await create(t, PAGES, { layout: "wide", status: "published" });
+    await t.nextly.rewriteField({
+      collection: PAGES,
+      id,
+      field: "layout",
+      expectedVersion: (await read(t, PAGES, id))._rev as string,
+      set: { value: "narrow" },
+      reason: REASON,
+      user: { id: EDITOR.id } as never,
+    });
+    const rewrite = (await events(t, PAGES, id)).find(
+      e => e.kind === "field-rewritten"
+    );
+    expect(rewrite).toMatchObject({ actorKind: "person", actorId: EDITOR.id });
+  });
+
   it("names the plugin that made it, from its own identity", async () => {
     const t = await boot(dialect);
     const id = await create(t, PAGES, { layout: "wide", status: "published" });
@@ -627,6 +646,30 @@ describe.each(getConfiguredTestDialects())(
       ) as Record<string, unknown>;
       expect(snapshot.title).toBe("DE neu");
       expect(newest.status).toBe("draft");
+    });
+
+    it("lets another language leave a required translated field blank, as an update does", async () => {
+      const t = await boot(dialect, true);
+      const id = await withDrafts(t);
+      const rewrite = async (locale: string) =>
+        t.nextly.rewriteField({
+          collection: LOCALIZED,
+          id,
+          field: "title",
+          locale,
+          expectedVersion: (await read(t, LOCALIZED, id, { locale }))
+            ._rev as string,
+          set: { value: null },
+          reason: REASON,
+        });
+      // The default language must keep its value.
+      await expect(rewrite("en")).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+      });
+      await rewrite("de");
+      expect(
+        (await read(t, LOCALIZED, id, { locale: "de" })).title ?? null
+      ).toBeNull();
     });
 
     it("refuses a language the site does not configure", async () => {
