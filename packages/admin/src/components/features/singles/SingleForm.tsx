@@ -145,7 +145,7 @@ import {
   versionAwareToolbarSlots,
 } from "@admin/components/features/versions/viewed-version-host";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
-import { useHeldReveal } from "@admin/components/shared/loading-frame/delayed-reveal";
+import { useEditorRevealHold } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { useDiscardSingleWorkingDraft } from "@admin/hooks/queries/useDiscardSingleWorkingDraft";
 import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
@@ -325,7 +325,7 @@ export interface SingleFormProps {
   latest?: DocumentLatest;
   /**
    * The page's outline of this editor, drawn in its place a moment longer
-   * while what finishes the editor is on its way (`useHeldReveal`): the claim
+   * while what finishes the editor is on its way (`useEditorRevealHold`): the claim
    * on the Single, and `revealWaiting`. Absent, the editor is drawn at once.
    */
   revealOutline?: React.ReactNode;
@@ -973,9 +973,10 @@ export function SingleForm({
   // Drawn whole: the outline stays until the claim says who holds the Single
   // and the parts' started reads are in, briefly at most, as the entry
   // editor's does.
-  const holdReveal = useHeldReveal(
-    revealOutline !== undefined && (lockSurface.settling || revealWaiting)
-  );
+  const holdReveal = useEditorRevealHold(revealOutline !== undefined, {
+    claim: lockSurface.settling,
+    reads: revealWaiting,
+  });
   // A gained Single's latest version starts the whole form again, whatever
   // its `updatedAt` says, and the lock holds until it has; the document views
   // key on the count it carries. Someone else's change is said over it.

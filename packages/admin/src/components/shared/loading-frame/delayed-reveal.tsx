@@ -81,24 +81,37 @@ export function DelayedReveal({
 
 /**
  * The longest an editor waits, once its document has arrived, for the reads
- * that finish it before it is drawn: its claim on the document, which says
- * whether a colleague holds it, and the reads the parts plugins add to it
- * declare (`startupReads`). Each is normally in before the document, so the
- * wait holds nothing; past it the editor is drawn and a late part lands as it
- * would have. Short beside the outline's own 0.4 s, so a slow plugin read
- * never holds an editor that is otherwise ready.
+ * the parts plugins add to it declare (`startupReads`) before it is drawn.
+ * Each is normally in before the document, so the wait holds nothing; past it
+ * the editor is drawn and a late part lands as it would have. Short beside
+ * the outline's own 0.4 s, so a slow plugin read never holds an editor that
+ * is otherwise ready.
  */
 export const EDITOR_REVEAL_HOLD_MS = 250;
+
+/**
+ * The longest an editor waits, once its document has arrived, for its claim
+ * on the document, which says whether a colleague holds it. Longer than a
+ * part's wait: the claim decides whether the fields may be written at all,
+ * and an editor drawn writable that a colleague's banner then pushes down
+ * and makes read-only is worse than one more moment of its outline. A busy
+ * server answers the claim late, which is when this matters.
+ */
+export const EDITOR_CLAIM_HOLD_MS = 1_000;
 
 /**
  * Whether a screen whose own data is in still holds its outline, waiting for
  * the parts that finish it (`waiting`): so the screen is drawn whole, its
  * parts in their places, rather than drawn and then pushed apart as each
- * lands. For {@link EDITOR_REVEAL_HOLD_MS} at most from the first render
- * that asked, then never again for this mount, so a part that answers late
+ * lands. For `limitMs` (a part's {@link EDITOR_REVEAL_HOLD_MS} unless
+ * given) at most from the first render that asked, then never again for this
+ * mount, so a part that answers late
  * after all can never take the screen away once shown.
  */
-export function useHeldReveal(waiting: boolean): boolean {
+export function useHeldReveal(
+  waiting: boolean,
+  limitMs: number = EDITOR_REVEAL_HOLD_MS
+): boolean {
   const [since] = useState(() => Date.now());
   const [expired, setExpired] = useState(false);
   const [shown, setShown] = useState(false);
@@ -110,9 +123,30 @@ export function useHeldReveal(waiting: boolean): boolean {
     }
     const timer = setTimeout(
       () => setExpired(true),
-      Math.max(0, since + EDITOR_REVEAL_HOLD_MS - Date.now())
+      Math.max(0, since + limitMs - Date.now())
     );
     return () => clearTimeout(timer);
-  }, [holding, since]);
+  }, [holding, since, limitMs]);
   return holding;
+}
+
+/**
+ * Whether an editor given its outline (`outlined`) still draws it: while its
+ * claim is out, for {@link EDITOR_CLAIM_HOLD_MS} at most, and while its parts'
+ * started reads are out, for {@link EDITOR_REVEAL_HOLD_MS} at most. Each wait
+ * ends once; a shown editor is never taken back.
+ */
+export function useEditorRevealHold(
+  outlined: boolean,
+  waiting: { claim: boolean; reads: boolean }
+): boolean {
+  const forClaim = useHeldReveal(
+    outlined && waiting.claim,
+    EDITOR_CLAIM_HOLD_MS
+  );
+  const forReads = useHeldReveal(
+    outlined && waiting.reads,
+    EDITOR_REVEAL_HOLD_MS
+  );
+  return forClaim || forReads;
 }

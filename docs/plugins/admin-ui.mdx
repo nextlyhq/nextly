@@ -326,9 +326,11 @@ page fills in from its address:
 The page starts these reads as it first renders, beside its own reads, rather than once
 your component has mounted, so their answers arrive a round sooner. Your component's
 `usePluginRoute` read of the same path takes the started read instead of asking again.
-An editor (`collection.edit`, `single.edit`) waits for them, and for its claim on the
-document, before it is drawn, for 250 ms at most, so your part is drawn in its place
-with the editor rather than pushing the parts below it down when it lands.
+An editor (`collection.edit`, `single.edit`) waits for them before it is drawn, for
+250 ms at most after its document, so your part is drawn in its place with the editor
+rather than pushing the parts below it down when it lands. (It also waits for its claim
+on the document, for up to a second, since that decides whether the fields may be
+written.)
 
 - The ids a path may name are the place's context ids other than `userId`:
   `{collection}` and `{entryId}` at `collection.edit`, `{single}` at `single.edit`,

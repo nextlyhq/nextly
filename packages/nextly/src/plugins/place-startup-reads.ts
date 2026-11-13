@@ -21,9 +21,17 @@ import { carriedStartupRead, MAX_PAGE_STARTUP_READS } from "./startup-reads";
 
 /** The ids a place's reads may name: its context's, but the reader's own. */
 type PlaceIds<P extends CoreAdminPlaceId> = Exclude<
-  keyof AdminPlaces[P]["context"],
+  NamedKeys<AdminPlaces[P]["context"]>,
   "userId"
 >;
+
+/**
+ * The keys a context names, without an index signature's `string`: the
+ * login page's context is `Record<string, never>`, which names none.
+ */
+type NamedKeys<T> = keyof {
+  [K in keyof T as string extends K ? never : K]: T[K];
+};
 
 /**
  * @experimental The ids each core place's reads may name, in braces: the keys

@@ -5,7 +5,12 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { EDITOR_REVEAL_HOLD_MS, useHeldReveal } from "../delayed-reveal";
+import {
+  EDITOR_CLAIM_HOLD_MS,
+  EDITOR_REVEAL_HOLD_MS,
+  useEditorRevealHold,
+  useHeldReveal,
+} from "../delayed-reveal";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -49,6 +54,40 @@ describe("holding an editor's outline", () => {
 
   it("holds nothing where there is nothing to wait for", () => {
     const { result } = renderHook(() => useHeldReveal(false));
+    expect(result.current).toBe(false);
+  });
+});
+
+describe("holding an editor until its claim and its parts' reads are in", () => {
+  it("waits longer for the claim, which says whether the editor may write", () => {
+    const { result } = renderHook(() =>
+      useEditorRevealHold(true, { claim: true, reads: false })
+    );
+    act(() => {
+      vi.advanceTimersByTime(EDITOR_REVEAL_HOLD_MS);
+    });
+    // Past the parts' short wait, the claim is still waited for.
+    expect(result.current).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(EDITOR_CLAIM_HOLD_MS - EDITOR_REVEAL_HOLD_MS);
+    });
+    expect(result.current).toBe(false);
+  });
+
+  it("waits only briefly for the parts' reads", () => {
+    const { result } = renderHook(() =>
+      useEditorRevealHold(true, { claim: false, reads: true })
+    );
+    act(() => {
+      vi.advanceTimersByTime(EDITOR_REVEAL_HOLD_MS);
+    });
+    expect(result.current).toBe(false);
+  });
+
+  it("holds nothing for an editor with no outline to hold", () => {
+    const { result } = renderHook(() =>
+      useEditorRevealHold(false, { claim: true, reads: true })
+    );
     expect(result.current).toBe(false);
   });
 });

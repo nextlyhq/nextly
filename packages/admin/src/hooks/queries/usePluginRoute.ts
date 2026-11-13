@@ -277,19 +277,26 @@ function placeStartupRoutes(
     | undefined,
   ids: Readonly<Record<string, string | null | undefined>>
 ): string[] {
-  const routes: string[] = [];
-  for (const entries of Object.values(delivered ?? {})) {
-    for (const item of entries ?? []) {
-      if ("builtIn" in item || !offeredHere(item, ids)) continue;
-      for (const read of item.startupReads ?? []) {
-        const path = fillPlaceStartupPath(read.path, ids);
-        if (path === null) continue;
-        const route = pluginRouteFullPath(item.plugin, path, read.mount);
-        if (!routes.includes(route)) routes.push(route);
-      }
-    }
-  }
-  return routes;
+  const entries = Object.values(delivered ?? {}).flatMap(each => each ?? []);
+  return [...new Set(entries.flatMap(item => startupRoutesOf(item, ids)))];
+}
+
+/**
+ * One delivered part's started reads, as full routes: none for a core part
+ * or one not offered on this page, and none for a read naming an id the page
+ * does not have.
+ */
+function startupRoutesOf(
+  item: DeliveredAdminEntry,
+  ids: Readonly<Record<string, string | null | undefined>>
+): string[] {
+  if ("builtIn" in item || !offeredHere(item, ids)) return [];
+  return (item.startupReads ?? []).flatMap(read => {
+    const path = fillPlaceStartupPath(read.path, ids);
+    return path === null
+      ? []
+      : [pluginRouteFullPath(item.plugin, path, read.mount)];
+  });
 }
 
 /** What a page's started reads report. */
