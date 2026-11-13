@@ -14,8 +14,8 @@
  */
 import { useMemo, useSyncExternalStore } from "react";
 
-import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
 import type { BuilderKind } from "@admin/components/features/schema-builder/builder-config";
+import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
 import type { PendingAddress } from "@admin/services/addressCheckApi";
 import type { FieldDefinition } from "@admin/types/collection";
 

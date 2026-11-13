@@ -53,8 +53,8 @@ import {
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { collectionCreatePayload } from "@admin/lib/builder/create-request";
 import { settingsAreDirty } from "@admin/lib/builder/settings-dirty";
-import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
 import { collectionEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
+import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
 import {
   removeUnsavedEntity,
   type UnsavedEntity,

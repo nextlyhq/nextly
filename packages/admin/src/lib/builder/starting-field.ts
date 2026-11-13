@@ -117,7 +117,7 @@ const PAGE_BUILDER_FIELD_TYPE = "blocks";
  * on.
  */
 export function hasPageBuilderField(
-  fields: readonly { type: string }[]
+  fields: readonly { name: string; type: string }[]
 ): boolean {
   return fields.some(field => field.type === PAGE_BUILDER_FIELD_TYPE);
 }

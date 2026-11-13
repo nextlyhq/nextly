@@ -6,11 +6,11 @@
  * @module lib/builder/create-request
  */
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
+import type { CreateComponentPayload } from "@admin/services/fieldGroupApi";
 import type {
   CreateCollectionPayload,
   FieldDefinition,
 } from "@admin/types/collection";
-import type { CreateComponentPayload } from "@admin/services/fieldGroupApi";
 import type { UpdateSinglePayload } from "@admin/types/entities";
 
 export function collectionCreatePayload(

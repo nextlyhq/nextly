@@ -28,11 +28,11 @@ import { type JSX, useId, useState } from "react";
 import { usePluginFieldTypeEntries } from "@admin/components/field-ui";
 import { namesFollowingName } from "@admin/lib/builder/entity-names";
 import { suggestIcon } from "@admin/lib/builder/icon-suggestion";
-import { useUnsavedAddresses } from "@admin/lib/builder/unsaved-entities";
 import {
   entryKindChoices,
   hasStartingFieldChoice,
 } from "@admin/lib/builder/starting-field";
+import { useUnsavedAddresses } from "@admin/lib/builder/unsaved-entities";
 
 import {
   type AdvancedField,
