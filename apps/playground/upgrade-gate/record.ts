@@ -273,7 +273,7 @@ async function main(): Promise<void> {
     `${JSON.stringify(meta, null, 2)}\n`
   );
   console.log(
-    `Recorded. Now run the gate (pnpm lane:test:integration:playground, once per dialect) and bring upgrade-gate/allowlist.ts to what it reports. ${work} can be removed.`
+    `Recorded. Now run the gate (pnpm test:integration upgrade-gate, on each dialect) and bring upgrade-gate/allowlist.ts to what it reports. ${work} can be removed.`
   );
 }
 
