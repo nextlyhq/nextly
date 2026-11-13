@@ -956,10 +956,6 @@ export async function buildExtensionSchema(
     ),
   });
 
-  // The edges were keyed to the compiled tables; the registry resolves them
-  // against the ones the hooks returned. See `rekeyRelationEdges`.
-  rekeyRelationEdges({ edges: relations, compiled, returned: drizzle });
-
   // The migration model follows the hook, rather than describing the shape the
   // hook was handed.
   //
@@ -1015,6 +1011,13 @@ export async function buildExtensionSchema(
     // each reshaped spec is built (`specAfterHook`).
     assertForeignKeyTargetsAfterHooks(specs);
   }
+
+  // The edges were keyed to the compiled tables; the registry resolves them
+  // against the ones the hooks returned. See `rekeyRelationEdges`. After the
+  // keys are judged at both ends: a key's own edge joins the key's columns,
+  // and a hook that removed one is refused naming the key it broke rather
+  // than the edge the key carries.
+  rekeyRelationEdges({ edges: relations, compiled, returned: drizzle });
 
   const { adopted, adoptedRelations } = compileAdoptedTables(
     store,
