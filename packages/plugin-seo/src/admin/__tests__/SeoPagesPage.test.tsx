@@ -294,6 +294,29 @@ describe("the list", () => {
     );
   });
 
+  it("says a page the problem list didn't check for this person is not checked, though it checked others of its type", () => {
+    vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
+      // Their read rule admits the Blog page alone of the type's pages.
+      data:
+        args.path === "/problems"
+          ? {
+              ...PROBLEMS,
+              checked: [{ type: "pages", id: "8" }],
+            }
+          : { items: listed },
+      pending: false,
+      error: null,
+      refetch: () => {},
+      fetching: false,
+    })) as unknown as typeof usePluginRoute);
+    render(<SeoPagesPage />);
+    expect(rowOf("Home").getByText("Not checked")).toBeTruthy();
+    expect(rowOf("Home").queryByText("Good")).toBeNull();
+    expect(rowOf("Blog").getByText("Warning")).toBeTruthy();
+    // A page built in code isn't checked page by page either way.
+    expect(rowOf("Pricing").getByText("Not connected")).toBeTruthy();
+  });
+
   it("finds a page by part of its address or name", async () => {
     render(<SeoPagesPage />);
     fireEvent.change(screen.getByPlaceholderText("Search pages"), {
