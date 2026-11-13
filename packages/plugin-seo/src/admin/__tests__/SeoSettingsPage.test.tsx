@@ -982,6 +982,34 @@ describe("the content types tab", () => {
     }
   });
 
+  it("says beside Questions and answers that Google no longer shows it, and names only the type once chosen", async () => {
+    serving(SET_UP);
+    render(<SeoSettingsPage />);
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("combobox", { name: "Structured data for Blog posts" })
+    );
+    const options = (await screen.findAllByRole("option")).map(
+      option => option.textContent
+    );
+    expect(options).toContain(
+      "Questions and answers · no longer shown by Google"
+    );
+    // Only that kind carries the note.
+    expect(options.filter(text => text?.includes("·"))).toHaveLength(1);
+    await user.click(
+      screen.getByRole("option", {
+        name: "Questions and answers · no longer shown by Google",
+      })
+    );
+    // Once chosen, the choice is named alone, so it fits its box.
+    expect(chosen("Structured data for Blog posts")).toBe(
+      "Questions and answers"
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Map details" }));
+    expect(chosen("Details for")).toBe("Questions and answers");
+  });
+
   it("offers the details a type may use as well as those it needs, counting only the needed as missing", async () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);
