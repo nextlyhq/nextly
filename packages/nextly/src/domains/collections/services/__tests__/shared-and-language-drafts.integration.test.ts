@@ -50,6 +50,7 @@ const PUBLISHER = "part-publisher";
 /** Translated, with a translated component holding a shared sub-field. */
 const BANNERED = "partbanners";
 const BANNER = "partbanner";
+const FIELD_GUARDED = "partfieldguards";
 
 /** Translatable: `title` and `body`. Shared: `views` (a number). */
 const FIELDS = () => [
@@ -99,6 +100,26 @@ async function boot(dialect: TestDialect): Promise<CollectionEntryService> {
         status: true,
         versions: { drafts: true },
         fields: FIELDS(),
+      }),
+      defineCollection({
+        slug: FIELD_GUARDED,
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+        },
+        fields: [
+          text({ name: "title" }),
+          text({ name: "body" }),
+          // A shared value this rule does not let the caller change in Spanish.
+          number({
+            name: "views",
+            access: { update: ({ locale }) => locale !== "es" },
+          }),
+        ],
       }),
       defineCollection({
         slug: UNTRANSLATED,
@@ -470,6 +491,33 @@ describe.each(getConfiguredTestDialects())(
         expect((await read(entries, TRANSLATED, id, locale)).views).toBe(60);
       }
       expect(await drafts(id)).toEqual({});
+    }, 90_000);
+
+    // The shared part shows in every live language, so publishing it asks its fields' rules in
+    // each of them: a shared value the caller may not change in Spanish is not put live by a
+    // publish chosen in English while Spanish is live.
+    it("asks the shared fields' rules in every live language when a publish carries the shared draft", async () => {
+      const entries = await boot(dialect);
+      await userWhoMay(handle!, PUBLISHER, "update", [FIELD_GUARDED]);
+      for (const action of ["read", "publish"]) {
+        await grantTo(handle!, PUBLISHER, action, [FIELD_GUARDED]);
+      }
+      const id = await publishedInBoth(entries, FIELD_GUARDED);
+      await save(entries, FIELD_GUARDED, id, "en", { views: 80 });
+
+      const published = await entries.publishParts(
+        {
+          collectionName: FIELD_GUARDED,
+          entryId: id,
+          user: { id: PUBLISHER, email: `${PUBLISHER}@example.test` },
+          overrideAccess: false,
+          data: { _overwrite: true },
+        },
+        { direction: "publish", locales: ["en"], shared: true }
+      );
+
+      expect(published.success, JSON.stringify(published)).toBe(false);
+      expect((await read(entries, FIELD_GUARDED, id, "es")).views).toBe(10);
     }, 90_000);
 
     // A shared-only draft goes live in every language, so a publish of every

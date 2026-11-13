@@ -11052,6 +11052,66 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Refuses a publish whose shared draft changes a value the caller may not change in a language
+   * that shows the shared part. The shared part's values show in every language it is live in, so
+   * its field rules are asked in each of them, not only in the language whose change carries it:
+   * a rule that refuses a change in Spanish refuses it whichever language the publish chose. Asked
+   * of the shared draft's own values alone, so a language's translated values are never judged in
+   * another language. Nothing to ask where the caller is trusted or no field rule could ask.
+   */
+  private async refuseSharedDraftOutsideFieldRules(
+    tx: TransactionContext,
+    args: Parameters<CollectionMutationService["promotionsJudgedOnTx"]>[1],
+    promotion: NonNullable<LifecycleAllLocalesReady["promotion"]>
+  ): Promise<void> {
+    const sharedDraft = args.pending.find(
+      change => change.locale === SHARED_DRAFT_SLOT
+    );
+    const user = args.caller.user;
+    const grants = promotion.grants;
+    if (
+      sharedDraft === undefined ||
+      args.caller.overrideAccess === true ||
+      user === undefined ||
+      grants === undefined
+    ) {
+      return;
+    }
+    // The shared values as they are live, which are the same in every language's document.
+    const live =
+      args.storedBefore.get(null) ?? [...args.storedBefore.values()][0];
+    if (live === undefined) return;
+    // Every language that shows the shared part once this publish is done: each one where
+    // everything moves, else the chosen ones and those already live.
+    const showing = (this.localization?.locales ?? [])
+      .map(language => language.code)
+      .filter(
+        locale =>
+          movesLanguage(args.caller.parts, locale) ||
+          args.prior.get(locale) === "published"
+      );
+    const issues: ValidationIssue[] = [];
+    for (const locale of showing) {
+      const refused = await withRuleLanguage(
+        writeLanguagesFor(this.localization, locale),
+        () =>
+          this.promotionAccessIssues(promotion.context, {
+            collectionName: args.collectionName,
+            entryId: args.storedId,
+            snapshot: sharedDraft.snapshot,
+            restoreCtx: promotion.restoreContext,
+            live,
+            user,
+            authenticatedScope: args.caller.authenticatedScope,
+            grants,
+          })
+      );
+      issues.push(...refused.map(issue => ({ ...issue, locale })));
+    }
+    if (issues.length > 0) throw NextlyError.validation({ errors: issues });
+  }
+
+  /**
    * The gate a publish of every language passes, judged on `tx` before
    * anything is written: each pending change's promotion
    * (`pendingChangePromotion`), then every language the publish puts live as
@@ -11125,6 +11185,7 @@ export class CollectionMutationService extends BaseService {
           })
         );
       }
+      await this.refuseSharedDraftOutsideFieldRules(tx, args, promotion);
     }
     // Every other language this puts live goes live as it is stored, each
     // judged when it was saved as a draft and never as published: validated
