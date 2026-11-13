@@ -403,6 +403,15 @@ indexes still missing. A run limited by `--step` leaves this to one that runs ev
 migration file `migrate:create` writes later for the same uniqueness is applied without its index,
 which is already there.
 
+The other way works too. An earlier release's Schema Builder wrote a one-to-one's uniqueness into
+the column itself, as an inline `UNIQUE` that no migration file records. Once a one-to-one is
+edited into a many-to-one and its change is applied, `nextly migrate` drops that inline `UNIQUE`
+after its files, so the column takes repeats. It drops only the exact constraint that release made:
+on PostgreSQL the one named `<table>_<column>_key`, on MySQL the single-column index named after
+the column, and only while another index still serves the column's foreign key. A collection whose
+change still waits for its migration keeps it, and so does any other unique index. SQLite keeps the
+inline `UNIQUE` for now.
+
 A migration file that makes any column unique is checked the same way, and refused with the same
 message while the column's entries repeat a value. The check runs before any of the file's
 statements, or just before the index's own statement when an earlier statement of the file changes

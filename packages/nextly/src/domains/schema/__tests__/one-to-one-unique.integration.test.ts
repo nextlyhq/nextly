@@ -399,10 +399,13 @@ describeEachDialect(
       120_000
     );
 
-    // Not yet true on any dialect: the inline UNIQUE an older release created stays, because the
-    // diff plans no removal of it (on SQLite introspection does not report it at all, its index
-    // being an internal `sqlite_autoindex_*`), so the column keeps refusing repeats after the edit,
-    // as it did before this change. Only the uniqueness this change installs (`uq_`) goes.
+    // Not true of the save itself on any dialect: the save's migration file cannot drop the inline
+    // UNIQUE an older release created, which no snapshot records and a database built from files
+    // never had, so after the save the column keeps refusing repeats; only the uniqueness this
+    // change installs (`uq_`) goes. The next `nextly migrate` lets the inline one go on PostgreSQL
+    // and MySQL (`letGoOfEarlierInlineUniques`, tested in migrate-unique-columns); SQLite keeps it,
+    // since only a rebuild removes it and the rebuild cannot yet carry the foreign key an
+    // earlier-shaped relationship holds.
     it.skip("lets a one-to-one made before this change take a repeat once it is edited into a many-to-one", async () => {
       const t = await boot(dialect, "oneToOne", { legacy: true });
       // The profiles' table as the Builder created it before, its one-to-one unique by an inline
