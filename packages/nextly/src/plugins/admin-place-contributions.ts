@@ -11,6 +11,11 @@
  * @experimental
  */
 import { judgeConfiguredAddress } from "../shared/address-rule";
+import {
+  isRequired,
+  numberRule,
+  type ValidatableField,
+} from "../shared/lib/entry-validation";
 
 import type {
   AdminContribution,
@@ -31,7 +36,6 @@ import {
   type DeclaredAdminPlace,
 } from "./admin-places-registry";
 import { orderContributions, type OrderedEntry } from "./contribution-order";
-import { extensionFieldsOf } from "./extension-switch";
 import { placeStartupReadsProblem } from "./place-startup-reads";
 import type { PluginDefinition } from "./plugin-context";
 import { isInPluginNamespace, pluginAdminSlug } from "./plugin-slug";
@@ -627,4 +631,60 @@ export function contributedAdminContributions(
     assertKindAccepted(contribution, places);
   }
   return { contributions, ordered: orderedByPlace(contributions) };
+}
+
+// The fields a plugin's `extend` adds, and which its extension switch may
+// turn off (`extension-switch`): kept here, where the start already checks
+// what plugins declare, so that check loads nothing the switch reads.
+
+/**
+ * Whether `field` demands a value, or holds a field that does at any depth
+ * (a group's or repeater's own fields): required, or a list with a positive
+ * `minRows` or `minChips`, in either spelling the entry validator reads. A
+ * page that drew it nowhere could not then be saved.
+ */
+function holdsRequired(field: unknown): boolean {
+  if (typeof field !== "object" || field === null) return false;
+  const validatable = field as ValidatableField;
+  // Required, or a list that must hold at least one row or chip: either way
+  // an empty value the page could not fill is refused.
+  if (isRequired(validatable)) return true;
+  for (const bound of ["minRows", "minChips"]) {
+    if ((numberRule(validatable, bound) ?? 0) > 0) return true;
+  }
+  const { fields } = field as { fields?: unknown };
+  return Array.isArray(fields) && fields.some(holdsRequired);
+}
+
+/**
+ * Every field each plugin's `extend` adds, by plugin, or with
+ * `"switchable"` only those its switch may turn off: never a required one,
+ * since a page that drew it nowhere could not be saved, so a required field
+ * is always shown.
+ */
+export function extensionFieldsOf(
+  plugins: readonly PluginDefinition[],
+  which: "all" | "switchable" = "all"
+): Record<string, string[]> {
+  const fields: Record<string, string[]> = {};
+  for (const plugin of plugins) {
+    const declared = (plugin.contributes?.extend ?? []).flatMap(clause =>
+      clause.fields.flatMap(field => {
+        const { name } = field as { name?: unknown };
+        return typeof name === "string" ? [{ name, field }] : [];
+      })
+    );
+    // A name kept wherever any of its declarations holds a required field:
+    // which target a declaration reached is not asked here.
+    const kept = new Set(
+      which === "all"
+        ? []
+        : declared.filter(({ field }) => holdsRequired(field)).map(d => d.name)
+    );
+    const names = declared
+      .map(({ name }) => name)
+      .filter(name => !kept.has(name));
+    if (names.length > 0) fields[plugin.name] = [...new Set(names)];
+  }
+  return fields;
 }
