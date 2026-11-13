@@ -35,6 +35,9 @@ const suite = getConfiguredTestDialects().includes("postgresql")
 
 const SCHEMA = "nx_tenant";
 
+/** The PostgreSQL handle the installation check reads the catalogue through. */
+type CatalogReader = Parameters<typeof assertInstallationInConfiguredSchema>[0];
+
 const notes = defineTable("notes", { id: col.id(), body: col.shortText() });
 
 const posts = defineCollection({
@@ -137,7 +140,7 @@ suite("an installation in a named PostgreSQL schema", () => {
   it("refuses a start in public once the installation is in the named schema, naming both", async () => {
     await boot(SCHEMA);
     const handle = current as TestNextly;
-    const db = handle.adapter.getDrizzle();
+    const db = handle.adapter.getDrizzle<CatalogReader>();
 
     await expect(
       assertInstallationInConfiguredSchema(db, SCHEMA, {})
@@ -157,7 +160,7 @@ suite("an installation in a named PostgreSQL schema", () => {
   it("refuses a start in a named schema once the installation is in public, naming both", async () => {
     await boot(undefined);
     const handle = current as TestNextly;
-    const db = handle.adapter.getDrizzle();
+    const db = handle.adapter.getDrizzle<CatalogReader>();
 
     expect((await tablesBySchema(handle)).public).toEqual(
       expect.arrayContaining(["nextly_schema_events"])

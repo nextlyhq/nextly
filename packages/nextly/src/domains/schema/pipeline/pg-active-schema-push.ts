@@ -21,7 +21,7 @@
  *
  * @module domains/schema/pipeline/pg-active-schema-push
  */
-import { is, Table } from "drizzle-orm";
+import { is } from "drizzle-orm";
 import { pgSchema, PgTable } from "drizzle-orm/pg-core";
 
 import type { KitHint } from "../../../database/drizzle-kit-lazy";
@@ -87,6 +87,13 @@ function literalEnd(statement: string, start: number): number {
 }
 
 /**
+ * The key a drizzle table keeps its PostgreSQL schema under. drizzle registers
+ * it globally (`Symbol.for`), which is how `getTableConfig` and drizzle-kit
+ * read it; its own `Table.Symbol` is not part of drizzle's typed surface.
+ */
+const TABLE_SCHEMA = Symbol.for("drizzle:Schema");
+
+/**
  * Run `push` with every desired PostgreSQL table placed in `schema`, then put
  * each table's own schema back, whether the push answered or threw.
  *
@@ -104,14 +111,14 @@ async function withTablesInSchema<T>(
   );
   const own = tables.map(table => {
     const slot = table as unknown as Record<symbol, unknown>;
-    return { slot, schema: slot[Table.Symbol.Schema] };
+    return { slot, schema: slot[TABLE_SCHEMA] };
   });
-  for (const { slot } of own) slot[Table.Symbol.Schema] = schema;
+  for (const { slot } of own) slot[TABLE_SCHEMA] = schema;
   try {
     return await push();
   } finally {
     for (const { slot, schema: previous } of own) {
-      slot[Table.Symbol.Schema] = previous;
+      slot[TABLE_SCHEMA] = previous;
     }
   }
 }

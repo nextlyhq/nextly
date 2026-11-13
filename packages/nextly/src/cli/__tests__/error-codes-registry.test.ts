@@ -22,6 +22,7 @@ import {
   toCliError,
   type CliErrorCode,
 } from "../errors";
+import type { CliCodeDefinition } from "../errors/define";
 import { CLI_ERROR_MAPPINGS } from "../errors/from-thrown";
 import { CLI_ERROR_AREAS } from "../errors/registry";
 import releasedCodes from "../errors/released-codes.json";
@@ -499,12 +500,16 @@ describe("what a message tells the user to type", () => {
     expect([...unknown].sort()).toEqual([]);
   });
 
+  /** A code's definition, read as the general shape every area's codes share. */
+  const definition = (code: CliErrorCode): CliCodeDefinition =>
+    CLI_ERROR_CODES[code];
+
   it("maps no error to a retired code, and says why it was retired", () => {
     // A retired code's cause can no longer happen: nothing may end a command as it, and its
     // docs page must say what removed the cause, or a reader takes it for a live error.
-    const retired = codes.filter(code => CLI_ERROR_CODES[code].retired);
+    const retired = codes.filter(code => definition(code).retired);
     for (const code of retired) {
-      expect(CLI_ERROR_CODES[code].from ?? [], code).toEqual([]);
+      expect(definition(code).from ?? [], code).toEqual([]);
       expect(
         CLI_ERROR_MAPPINGS.filter(m => m.to === code),
         code
@@ -515,7 +520,7 @@ describe("what a message tells the user to type", () => {
       );
       expect(page, code).toContain("retired");
       expect(page, code).toContain(
-        CLI_ERROR_CODES[code].retired?.why ?? "(no reason)"
+        definition(code).retired?.why ?? "(no reason)"
       );
     }
   });
@@ -532,7 +537,7 @@ describe("what a message tells the user to type", () => {
     const unraised = codes.filter(
       code =>
         !reserved.has(code) &&
-        CLI_ERROR_CODES[code].retired === undefined &&
+        definition(code).retired === undefined &&
         !mapped.has(code) &&
         !product.includes(`new CliError("${code}"`) &&
         !new RegExp(`new CliError\\(\\s*"${code}"`).test(product) &&
