@@ -421,6 +421,46 @@ asked for: OpenAI's ads checker `OAI-AdsBot`, which visits only pages submitted 
 ChatGPT, and `Google-CloudVertexBot`, which crawls only for a Vertex AI agent the site's owner
 set up.
 
+### Your own rules
+
+**SEO > Settings > Search engines and AI** has a box for lines of your own, such as keeping
+crawlers out of search-result or filter addresses. They are served after the plugin's own
+lines, under a comment saying where they come from, and never replace them:
+
+```txt
+# Your own rules, from the SEO settings
+User-agent: *
+Disallow: /search
+Disallow: /*?filter=
+```
+
+Each line is read as you type, the way crawlers read robots.txt:
+
+- A rule that would keep every crawler, Googlebot or Bingbot away from the home page or the
+  whole site, such as `Disallow: /` under `User-agent: *`, is refused. robots.txt doesn't keep
+  a page out of Google's index; Hide from search does.
+- A rule that blocks pages the sitemap lists names them, and saves only once you tick
+  **Block these pages anyway**. The confirmation is kept with the rules' text and the pages it
+  named, so it is asked again when either changes. Each such page stays an error on the
+  problem list while the rule stands.
+- A misspelt rule (`Dissalow`) is warned about. A line that is not a standard rule, such as
+  `Content-Signal`, is kept with a note that crawlers may ignore it.
+- A group naming an AI crawler, such as `User-agent: GPTBot`, replaces the AI tools choice for
+  that crawler, and the screen says so. A group naming any other crawler, such as Googlebot,
+  is followed by that crawler instead of the rules for every crawler, Nextly's own included.
+- A rule needs a `User-agent` line above it, and a line holding a control character is
+  refused, so nothing in the box can start a group of its own you did not write.
+
+A value edited past the screen that breaks these rules is not served, with one warning in the
+log. robots.txt is served with an `x-nextly-robots` header, which the screen reads to say when
+the site serves its own robots.txt file instead, so the box and the AI tools choice have no
+effect. The rules are a new field of the settings Single: a site that applies its schema with
+migrations runs `nextly migrate:create` and then `nextly migrate` after upgrading.
+
+robots.txt can't take a site out of Google's AI Overviews or AI Mode without taking it out of
+Google Search: they read pages with Google Search's own crawler. A page's snippet controls
+keep its text out of them.
+
 ### The site's address, and why it affects caching
 
 Both files name the site by one of its production addresses, read as the page's head reads
@@ -1384,12 +1424,14 @@ it is published in and at its address there, as its head would be served, for:
 - an image in its content (rich text, a media field or a Page Builder image block) with no alt
   text, unless it is marked decorative;
 - structured data missing a detail its type needs;
-- a language the site's language links leave out, because search engines don't accept its code.
+- a language the site's language links leave out, because search engines don't accept its code;
+- a robots.txt rule that keeps Googlebot, Bingbot or every crawler away from it, though the
+  sitemap lists it.
 
 Each kind of problem has one severity. **Errors** keep the site, a content type or a page out of
 search, or keep what was set from reaching it: no production address, a content type with no
-public address, redirects saved but not served, a page with no title, and a canonical that names
-another address. **Notices** are worth a look with nothing wrong in what is served: a title or
+public address, redirects saved but not served, a page with no title, a canonical that names
+another address, and a page the sitemap lists that robots.txt blocks. **Notices** are worth a look with nothing wrong in what is served: a title or
 description longer than Google shows, and images with no alt text. Everything else is a
 **warning**. A problem is counted once for each page a check fails on, however many times it fails
 there, and once for a check of the whole site, however many things it names, on Problems and on

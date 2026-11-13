@@ -762,5 +762,72 @@ describe.each(getConfiguredTestDialects())(
       expect(robots.body).toContain("Sitemap: http://localhost/sitemap.xml");
       expect(robots.cacheControl).toBe("no-store");
     });
+
+    it("serves the site's own rules after the plugin's lines, and says the file is the plugin's", async () => {
+      const { t } = await boot(dialect, { aiCrawlers: "search" });
+      const before = await rootFile("robots.txt");
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: {
+          _overwrite: true,
+          robotsRules: {
+            text: "User-agent: *\nDisallow: /search\nContent-Signal: search=yes, ai-train=no",
+          },
+        },
+      });
+      const response = await createDynamicHandlers().GET(
+        new Request("http://localhost/admin/api/robots.txt"),
+        { params: Promise.resolve({ params: ["robots.txt"] }) }
+      );
+      const body = await response.text();
+      expect(response.headers.get("x-nextly-robots")).toBe("plugin-seo");
+      expect(body.startsWith(before.body)).toBe(true);
+      expect(body.slice(before.body.length)).toBe(
+        "\n# Your own rules, from the SEO settings\nUser-agent: *\nDisallow: /search\nContent-Signal: search=yes, ai-train=no\n"
+      );
+    });
+
+    it("refuses to save an own rule that keeps every crawler from the whole site", async () => {
+      const { t } = await boot(dialect);
+      await expect(
+        t.nextly.updateSingle({
+          slug: SEO_SETTINGS_SLUG,
+          data: {
+            _overwrite: true,
+            robotsRules: { text: "User-agent: *\nDisallow: /" },
+          },
+        })
+      ).rejects.toThrow();
+      expect((await rootFile("robots.txt")).body).not.toContain(
+        "Your own rules"
+      );
+    });
+
+    it("keeps answering robots.txt and the sitemap with their defaults until the settings are migrated", async () => {
+      const { t } = await boot(dialect, { aiCrawlers: "search" });
+      await create(t, "posts", {
+        title: "Hello",
+        slug: "hello",
+        status: "published",
+      });
+      const before = await rootFile("robots.txt");
+      // A database the upgrade has not been migrated for: the settings'
+      // newest column is missing, so core refuses every read of them.
+      await t.adapter.executeQuery(
+        "ALTER TABLE single_seo_settings DROP COLUMN robots_rules"
+      );
+      await expect(
+        t.nextly.findSingle({ slug: SEO_SETTINGS_SLUG, overrideAccess: true })
+      ).rejects.toMatchObject({ code: "ENTITY_NOT_MIGRATED" });
+
+      const robots = await rootFile("robots.txt");
+      expect(robots.status).toBe(200);
+      expect(robots.body).toBe(before.body);
+      const sitemap = await rootFile("sitemap.xml");
+      expect(sitemap.status).toBe(200);
+      expect(sitemap.body).toContain(`<loc>${SITE}/blog/hello</loc>`);
+      // Off until switched on, as for a site with nothing set.
+      expect((await rootFile("llms.txt")).status).toBe(404);
+    });
   }
 );

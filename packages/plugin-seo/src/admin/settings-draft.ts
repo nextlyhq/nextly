@@ -42,6 +42,16 @@ export interface ProfileDraft {
   url: string;
 }
 
+/**
+ * The site's own robots.txt lines as the form holds them: the box's text,
+ * and the confirmation of the sitemap pages its rules block, saved with the
+ * text and the pages it confirmed.
+ */
+export interface RobotsRulesDraft {
+  text: string;
+  confirmed?: { text: string; pages: string };
+}
+
 /** Every value the screen edits, as the form holds it. */
 export interface SettingsDraft {
   siteName: string;
@@ -69,6 +79,8 @@ export interface SettingsDraft {
   llmsTxt: boolean;
   /** Whether each listed page has a plain-text copy. */
   plainTextCopies: boolean;
+  /** The site's own robots.txt lines. */
+  robotsRules: RobotsRulesDraft;
 }
 
 /** The stored Single as the admin reads it. */
@@ -110,6 +122,42 @@ function patternsOf(value: unknown): SettingsDraft["patterns"] {
     };
   }
   return patterns;
+}
+
+/**
+ * The stored own robots.txt lines as the form holds them: the box empty
+ * where nothing is stored, as before the field existed.
+ */
+export function robotsRulesDraftOf(value: unknown): RobotsRulesDraft {
+  if (!isRecord(value)) return { text: "" };
+  const confirmed = isRecord(value.confirmed) ? value.confirmed : undefined;
+  return {
+    text: text(value.text),
+    ...(confirmed === undefined
+      ? {}
+      : {
+          confirmed: {
+            text: text(confirmed.text),
+            pages: text(confirmed.pages),
+          },
+        }),
+  };
+}
+
+/**
+ * The own lines as they are stored: the text without the blank lines at its
+ * end, the confirmation only while it is for that text, and null for an
+ * empty box, so clearing it clears the value.
+ */
+function storedRobotsRules(draft: RobotsRulesDraft): RobotsRulesDraft | null {
+  const kept = draft.text.replace(/\s+$/, "");
+  if (kept.trim() === "") return null;
+  const confirmed =
+    draft.confirmed !== undefined &&
+    draft.confirmed.text.replace(/\s+$/, "") === kept
+      ? { text: kept, pages: draft.confirmed.pages }
+      : undefined;
+  return confirmed === undefined ? { text: kept } : { text: kept, confirmed };
 }
 
 /** What the plugin's own options answer while the settings hold nothing. */
@@ -172,6 +220,7 @@ export function draftOf(
     indexNow: stored.indexNow === true,
     llmsTxt: stored.llmsTxt === true,
     plainTextCopies: stored.plainTextCopies === true,
+    robotsRules: robotsRulesDraftOf(stored.robotsRules),
   };
 }
 
@@ -378,6 +427,7 @@ function storedForm(
   return {
     ...draft,
     structuredData: savedRules(draft.structuredData, defaults),
+    robotsRules: storedRobotsRules(draft.robotsRules),
     productionAddresses: draft.productionAddresses
       .map(address => address.trim())
       .filter(address => address !== ""),

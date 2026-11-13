@@ -8,13 +8,15 @@
  * @module admin/tabs
  */
 import {
+  Alert,
+  AlertDescription,
   Button,
   Input,
   SegmentedChoice,
   SettingsRowGroup,
   Switch,
 } from "@nextlyhq/plugin-sdk/admin";
-import { X } from "lucide-react";
+import { Info, X } from "lucide-react";
 import { useId, type JSX, type ReactNode } from "react";
 
 import type { SeoContentType } from "../settings/contract";
@@ -33,7 +35,9 @@ import {
   ChoiceCards,
   SITE_KIND_CHOICES,
 } from "./choices";
+import { CrawlerTable } from "./crawler-table";
 import { MediaChoice } from "./MediaChoice";
+import { OwnRulesRow, type RulesCheck } from "./robots-rules";
 import {
   networkOf,
   patternOf,
@@ -463,12 +467,44 @@ function siteHostOf(
   return typeof window === "undefined" ? "your-site" : window.location.host;
 }
 
+/**
+ * What robots.txt can't do for Google's AI answers, beside the choices that
+ * might suggest it can: they read pages with Google Search's own crawler,
+ * so only a page's snippet controls keep its text out of them.
+ */
+function AiOverviewsRow(): JSX.Element {
+  return (
+    <SettingsRowGroup
+      label="Google's AI Overviews and AI Mode"
+      description="Answers Google shows above its results."
+    >
+      <Alert variant="info" role="note">
+        <Info className="size-4" aria-hidden="true" />
+        <AlertDescription>
+          robots.txt can&apos;t take your site out of them. They read pages with
+          Google Search&apos;s own crawler, so blocking it would take you out of
+          Google Search too. To keep a page&apos;s text out, set its{" "}
+          <b className="font-semibold">Text under the link</b> to None on that
+          page; that also removes the text from normal results.
+        </AlertDescription>
+      </Alert>
+    </SettingsRowGroup>
+  );
+}
+
 /** Which automated readers may use the site's pages, and what they are given. */
 export function CrawlersTab({
   draft,
   change,
   serverAddresses,
-}: TabProps & { serverAddresses: readonly string[] }): JSX.Element {
+  rulesCheck,
+  retryRulesCheck,
+}: TabProps & {
+  serverAddresses: readonly string[];
+  /** Which sitemap pages the own rules being typed block. */
+  rulesCheck: RulesCheck;
+  retryRulesCheck: () => void;
+}): JSX.Element {
   const host = siteHostOf(draft, serverAddresses);
   return (
     <SettingsCard>
@@ -476,7 +512,9 @@ export function CrawlersTab({
         label="Search engines"
         description="Google, Bing and the others."
       >
-        <p className="text-sm text-foreground">Always allowed.</p>
+        <p className="text-sm text-foreground">
+          Always allowed, except where your own rules below say otherwise.
+        </p>
         <ControlNote>
           To keep pages out of search, hide them on the page or by content type.
         </ControlNote>
@@ -495,7 +533,15 @@ export function CrawlersTab({
           }
         />
         <ControlNote>{AI_CHOICES_NOTE}</ControlNote>
+        <CrawlerTable choice={draft.aiCrawlers} />
       </SettingsRowGroup>
+      <AiOverviewsRow />
+      <OwnRulesRow
+        draft={draft}
+        change={change}
+        check={rulesCheck}
+        retry={retryRulesCheck}
+      />
       <SwitchRow
         label="llms.txt"
         description={`A plain list of your pages at ${host}/llms.txt, for AI tools to read. Off by default; few tools use it today. It lists the same pages and words people see.`}

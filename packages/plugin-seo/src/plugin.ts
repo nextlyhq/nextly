@@ -122,6 +122,7 @@ import {
   settingsDocumentRoute,
 } from "./settings/content-types-route";
 import { SETTINGS_PAGE, SETTINGS_PAGE_HREF } from "./settings/contract";
+import { robotsRulesCheckRoute } from "./settings/robots-rules-route";
 import {
   readBrandFacts,
   readSeoRules,
@@ -916,6 +917,25 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // What the settings screen reads: the types SEO is added to, and which
     // Single holds the settings.
     contentTypesRoute(targets),
+    // Which sitemap pages the own robots.txt rules being typed would block.
+    robotsRulesCheckRoute({
+      readRules,
+      aiCrawlers: options.aiCrawlers,
+      listPaths: async ctx =>
+        (
+          await listPages(ctx, {
+            // Only the paths are read, so any origin makes them absolute.
+            origin: "http://localhost",
+            readRules,
+            readStructuredDataRules:
+              problemChecks.readers.readStructuredDataRules,
+            codeRoutes,
+            ...(sitemapSubset === undefined
+              ? {}
+              : { collections: sitemapSubset }),
+          })
+        ).pages.map(page => page.path),
+    }),
     settingsDocumentRoute(),
     // What the redirects screen reads and writes.
     ...redirectRoutes(),

@@ -33,6 +33,7 @@ export type ProblemKind =
   | "redirectChain"
   | "languageCode"
   | "notListed"
+  | "robotsBlocked"
   | "noTitle"
   | "noDescription"
   | "sharedTitle"
@@ -86,6 +87,12 @@ export const KIND_TEXT: Readonly<
     title: "Page left out of the sitemap",
     explain:
       "The page has no official address, so search engines aren't told about it.",
+    siteWide: false,
+  },
+  robotsBlocked: {
+    title: "Page in the sitemap that robots.txt blocks",
+    explain:
+      "The sitemap lists the page for search engines, but robots.txt asks them not to read it, so what was set for it doesn't reach search. To keep a page out of search, use Hide from search; robots.txt only stops crawling.",
     siteWide: false,
   },
   noAddress: {
@@ -179,6 +186,7 @@ export const KIND_SEVERITY: Readonly<Record<ProblemKind, ProblemSeverity>> = {
   productionAddress: "error",
   noAddress: "error",
   proxyNotWired: "error",
+  robotsBlocked: "error",
   noTitle: "error",
   canonical: "error",
   connection: "warning",
@@ -247,6 +255,7 @@ export const KIND_ORDER: readonly ProblemKind[] = [
   "redirectChain",
   "languageCode",
   "notListed",
+  "robotsBlocked",
   "noTitle",
   "sharedTitle",
   "canonical",
@@ -340,7 +349,12 @@ export function seoTabIdOf(kind: "collection" | "single"): string {
 export const WHOLE_SITE: ProblemSubject = { label: "Whole site" };
 
 /** The SEO settings' tabs a fix can land on. */
-export type SettingsTab = "general" | "types" | "brand" | "connections";
+export type SettingsTab =
+  | "general"
+  | "types"
+  | "brand"
+  | "crawlers"
+  | "connections";
 
 /**
  * Where a problem is fixed:

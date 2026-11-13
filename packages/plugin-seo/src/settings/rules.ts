@@ -33,6 +33,10 @@ import {
 import { defaultTitlePattern, SEPARATORS, type Separator } from "./patterns";
 import { productionAddressesProblem } from "./production-addresses";
 import {
+  storedRobotsRulesOf,
+  type StoredRobotsRules,
+} from "./robots-rules-stored";
+import {
   hiddenTypesProblem,
   patternsProblem,
   socialProfilesProblem,
@@ -77,6 +81,16 @@ export interface SeoRules {
   llmsTxt?: boolean;
   /** Whether each listed page has a plain-text copy: only once switched on. */
   plainTextCopies?: boolean;
+  /**
+   * The site's own robots.txt lines and their confirmation, where stored and
+   * passing their rule.
+   */
+  robotsRules?: StoredRobotsRules;
+  /**
+   * Why the stored own lines are not served, where they fail their rule: a
+   * value edited past the screen. Said once in the log by what serves them.
+   */
+  robotsRulesRefused?: string;
 }
 
 /** One of the brand's official accounts. */
@@ -199,6 +213,18 @@ async function rulesOf(
       document.plainTextCopies === true ? true : undefined
     ),
     patterns: patternsOf(document),
+    ...ownRobotsRulesOf(document),
+  };
+}
+
+/** The own robots.txt lines, or why the stored ones are not served. */
+function ownRobotsRulesOf(
+  document: SeoSettingsDocument
+): Pick<SeoRules, "robotsRules" | "robotsRulesRefused"> {
+  const { rules, problem } = storedRobotsRulesOf(document.robotsRules);
+  return {
+    ...withDefined("robotsRules", rules),
+    ...withDefined("robotsRulesRefused", problem),
   };
 }
 

@@ -40,6 +40,11 @@ import { designLevelOf } from "../resolver/design-level";
 import { addressOf } from "../resolver/page-levels";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
 import { readRouteValues, routeValuesKey } from "../route-values/store";
+import {
+  crawledPathOf,
+  robotsBlockOf,
+  servedGroups,
+} from "../settings/robots-blocks";
 import type { ReadSocialCardRules } from "../social/card";
 import { shareImageProblems } from "../social/problems";
 import { readStanding } from "../staging/guard";
@@ -329,9 +334,19 @@ async function examine(
     detail: ownAddress,
     ...(locale === undefined ? {} : { locale }),
   };
+  const robotsBlock = robotsBlockOf(
+    servedGroups({
+      aiCrawlers: rules.aiCrawlers ?? "all",
+      ...(rules.robotsRules === undefined
+        ? {}
+        : { ownRules: rules.robotsRules.text }),
+    }),
+    crawledPathOf(ownAddress)
+  );
   const problems = pageProblems({
     subject,
     answer,
+    ...(robotsBlock === undefined ? {} : { robotsBlock }),
     canonicalIsOwn: canonicalIsOwn(
       answer,
       productionAddresses[0] ?? NO_ORIGIN,

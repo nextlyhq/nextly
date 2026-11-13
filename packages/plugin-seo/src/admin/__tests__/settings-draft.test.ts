@@ -83,6 +83,7 @@ describe("the form's values, from the stored settings", () => {
       indexNow: false,
       llmsTxt: false,
       plainTextCopies: true,
+      robotsRules: { text: "" },
     });
   });
 
@@ -107,6 +108,7 @@ describe("the form's values, from the stored settings", () => {
       indexNow: false,
       llmsTxt: false,
       plainTextCopies: false,
+      robotsRules: { text: "" },
     });
   });
 });
