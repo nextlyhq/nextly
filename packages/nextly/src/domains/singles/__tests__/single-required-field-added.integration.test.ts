@@ -157,6 +157,11 @@ describeEachDialect("a field added to a Single that holds its row", dialect => {
     await save([TITLE, { name: "tagline", type: "text", default: "hello" }]);
 
     expect((await column("tagline"))?.default ?? null).toBeNull();
+    // The entry already there takes the default once, as the column default used to give it.
+    const [row] = await exec<{ filled: unknown }>(
+      `SELECT ${dialect === "mysql" ? "`tagline`" : '"tagline"'} AS filled FROM ${dialect === "mysql" ? "`single_hero`" : '"single_hero"'}`
+    );
+    expect(row?.filled).toBe("hello");
   });
 
   it("reads a new Single whose required field states a null default as stating none", async () => {
@@ -203,3 +208,69 @@ describeEachDialect("a field added to a Single that holds its row", dialect => {
     expect((await column("tagline"))?.default ?? null).toBeNull();
   });
 });
+
+describeEachDialect(
+  "a required field a localized Single makes shared",
+  dialect => {
+    let current: TestNextly;
+
+    beforeEach(async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      current = await createTestNextly({
+        dialect,
+        collections: [],
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
+    });
+
+    afterEach(async () => {
+      await current.destroy();
+      vi.unstubAllEnvs();
+    });
+
+    const CODE = { name: "code", type: "email", required: true };
+    const VIEWS = { name: "views", type: "number" };
+
+    it("takes the English value, never judging a default the column is not filled with", async () => {
+      await dispatchSingles(
+        "createSingle",
+        {},
+        { slug: "hero", label: "Hero", localized: true, fields: [CODE, VIEWS] }
+      );
+      const singles: SingleEntryService =
+        current.getService("singleEntryService");
+      const written = await singles.update(
+        "hero",
+        { code: "a1@example.com", views: 1, _overwrite: true },
+        { locale: "en", overrideAccess: true }
+      );
+      expect(written.success, JSON.stringify(written)).toBe(true);
+
+      // The default is no email, which the field's rules refuse; the shared column is filled from
+      // the English value instead, so the default is never written and the save goes through.
+      const refused = await dispatchSingles(
+        "updateSingleSchema",
+        { slug: "hero" },
+        {
+          fields: [
+            { ...CODE, localized: false, defaultValue: "not-an-email" },
+            VIEWS,
+          ],
+        }
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refused).toBeUndefined();
+      const [row] = await (
+        current.adapter as unknown as {
+          executeQuery<R>(sql: string): Promise<R[]>;
+        }
+      ).executeQuery<{ code: unknown }>(
+        `SELECT ${dialect === "mysql" ? "`code`" : '"code"'} AS code FROM ${dialect === "mysql" ? "`single_hero`" : '"single_hero"'}`
+      );
+      expect(row?.code).toBe("a1@example.com");
+    });
+  }
+);

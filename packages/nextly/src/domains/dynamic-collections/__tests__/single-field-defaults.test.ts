@@ -59,12 +59,18 @@ describe.each(DIALECTS)("field defaults on %s", dialect => {
     );
   });
 
-  it("adds a field with a default to a Single with no DEFAULT, and to a collection with it", () => {
+  it("adds a field with a default to a Single filling its row once and keeping no DEFAULT, and to a collection with it", () => {
+    const toNotNull: [string, boolean][] = [];
     const single = service(dialect).generateAlterTableMigration(
       "single_hero",
       [TITLE],
       [TITLE, STATUS],
-      { isSingle: true, tableHasRows: true }
+      {
+        isSingle: true,
+        tableHasRows: true,
+        onSqliteNullability: (column, required) =>
+          toNotNull.push([column, required]),
+      }
     );
     const collection = service(dialect).generateAlterTableMigration(
       "dc_posts",
@@ -72,8 +78,27 @@ describe.each(DIALECTS)("field defaults on %s", dialect => {
       [TITLE, STATUS],
       { tableHasRows: true }
     );
+    const statements = about(single, "status_label");
+    // The entry already there gets the field's default, as the column default once gave it; the
+    // column keeps none, and an optional field stays open.
+    const fill =
+      dialect === "mysql"
+        ? `X'${Buffer.from("draft", "utf8").toString("hex")}'`
+        : "'draft'";
 
-    expect(about(single, "status_label").join(";")).not.toMatch(/DEFAULT/i);
+    expect(statements.join(";")).not.toMatch(/NOT NULL/i);
+    expect(statements.join(";")).toContain(fill);
+    if (dialect === "sqlite") {
+      expect(statements[0]).not.toMatch(/DEFAULT/i);
+      expect(
+        statements.some(s => /^UPDATE single_hero SET status_label = /i.test(s))
+      ).toBe(true);
+      expect(toNotNull).toEqual([]);
+    } else {
+      expect(statements.at(-1)).toMatch(
+        /ALTER COLUMN status_label DROP DEFAULT/i
+      );
+    }
     expect(about(collection, "status_label").join(";")).toMatch(
       /DEFAULT 'draft'/i
     );
