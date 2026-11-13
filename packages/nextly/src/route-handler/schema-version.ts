@@ -74,6 +74,11 @@ interface ServedSchema {
   /** Set by {@link bumpSchemaVersion}: the next request reads again. */
   stale: boolean;
   /**
+   * Moved by every {@link bumpSchemaVersion}: a load recorded by
+   * {@link definitionsLoaded} is one no change was marked during.
+   */
+  marks: number;
+  /**
    * Whether the definitions were loaded at `seq`: false from a reload that did
    * not register every entity until one does, and while false every read
    * reloads again, even one finding the version it served.
@@ -95,10 +100,15 @@ function served(): ServedSchema {
     seq: undefined,
     readAt: undefined,
     stale: false,
+    marks: 0,
     inSync: true,
     inFlight: null,
   };
-  return globalForSchema.__nextly_servedSchema;
+  const state = globalForSchema.__nextly_servedSchema;
+  // A dev server keeps this state across a module reload, and a build from
+  // before `marks` left none.
+  (state as Partial<ServedSchema>).marks ??= 0;
+  return state;
 }
 
 /** The registered adapter, or undefined while the services are not up. */
@@ -146,6 +156,116 @@ export async function servedSchemaVersion(): Promise<number | undefined> {
     });
     state.inFlight = reading;
   }
+}
+
+/**
+ * Run `load`, a load of this copy's definitions from the registry rows made
+ * by the start, which answers whether it registered every definition, and
+ * record the stored version it loaded them at: the version is read just
+ * before, so a change landing while they load is still seen as a move by the
+ * next follow. Without the record the first follow (a page's first Direct API
+ * call, the first admin request) could not tell what the start loaded, and
+ * loaded every definition again to be sure. Recorded only for a complete
+ * load ({@link definitionsLoaded} says when else not).
+ */
+export async function loadingDefinitions(
+  load: () => Promise<boolean>,
+  options: {
+    /** The adapter loaded through; the registered one where not given. */
+    adapter?: DrizzleAdapter;
+  } = {}
+): Promise<boolean> {
+  const adapter = options.adapter ?? registeredAdapter();
+  // Nothing is recorded while a production start's shared registry reads are
+  // open (`di/start-reads`): the load may be answered from rows read before
+  // the version below, and a label read after the rows it labels could name a
+  // change they do not hold. The start labels its own load itself, with the
+  // version it read before those reads began.
+  const startReadsOpen =
+    (globalThis as { __nextly_startReads?: unknown }).__nextly_startReads !==
+    undefined;
+  if (adapter === undefined || startReadsOpen) return load();
+  const before = await versionBeforeLoading(adapter);
+  const complete = await load();
+  definitionsLoaded(adapter, before, complete);
+  return complete;
+}
+
+/** The stored version read just before a load, for {@link definitionsLoaded}. */
+export interface VersionBeforeLoading {
+  seq: number | undefined;
+  /** How many changes this process had marked when it was read. */
+  marks: number;
+}
+
+/**
+ * {@link loadingDefinitions}'s first half, for a caller whose load is not
+ * one call: the stored version, read now, before the definitions load. A
+ * change this process marked before it (its own registry write, say) is in
+ * what it reads, since the read is fresh.
+ */
+export async function versionBeforeLoading(
+  adapter: DrizzleAdapter
+): Promise<VersionBeforeLoading> {
+  const marks = served().marks;
+  const seq = await storedSchemaSeq(adapter, { fresh: true });
+  return { seq, marks };
+}
+
+/**
+ * {@link loadingDefinitions}'s second half: the definitions loaded, at the
+ * version read before the load began, recorded only where `complete` (every
+ * definition registered), the version could be read, and no change was
+ * marked here since it was read. A change marked before the read is in what
+ * the load read, so the record settles it. A load not recorded leaves the
+ * first follow to load every definition again, as before.
+ */
+export function definitionsLoaded(
+  adapter: DrizzleAdapter,
+  before: VersionBeforeLoading,
+  complete: boolean
+): void {
+  const state = served();
+  if (
+    !complete ||
+    before.seq === undefined ||
+    state.marks !== before.marks ||
+    state.inFlight !== null
+  ) {
+    return;
+  }
+  state.database = adapter;
+  state.seq = before.seq;
+  state.inSync = true;
+  state.stale = false;
+  state.readAt = monotonicNow();
+}
+
+/**
+ * Run `operation` once this copy's definitions follow the stored schema
+ * version ({@link servedSchemaVersion}), as every admin API request does
+ * before it is handled: for the Direct API, which every page a site renders
+ * and every script reads through. A process that serves no admin request
+ * (an instance that has only rendered pages since it started, a script)
+ * would otherwise keep the definitions it started with however the schema
+ * changed elsewhere, and a removed column would fail its reads while an
+ * added one went unread.
+ *
+ * Costs a memory check within the interval, one indexed read after it, and
+ * a reload only where the version moved. Nothing is read inside an open
+ * transaction: the call is part of a write already under way, which reads
+ * the definitions it began with.
+ */
+export async function withCurrentSchema<T>(
+  operation: () => Promise<T>
+): Promise<T> {
+  const adapter = registeredAdapter() as
+    | Partial<Pick<DrizzleAdapter, "transactionOpenInFlow">>
+    | undefined;
+  if (adapter !== undefined && adapter.transactionOpenInFlow?.() !== true) {
+    await servedSchemaVersion();
+  }
+  return operation();
 }
 
 /**
@@ -217,6 +337,7 @@ async function loadDefinitionsAgain(): Promise<boolean> {
 export function bumpSchemaVersion(): number {
   const state = served();
   state.stale = true;
+  state.marks += 1;
   // The shared read too, so the cached registry rows follow the new count
   // from the next read on rather than after the interval.
   markSchemaChanged();
