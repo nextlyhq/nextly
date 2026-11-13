@@ -108,6 +108,8 @@ After running `pnpm dev`, visit [http://localhost:3000/admin/setup](http://local
 - `Button`, `Input`, `Textarea`, `Checkbox`, `RadioGroup`, `Select`, `Badge`, `Skeleton`, `Spinner`, and more
 - `Toaster`, `toast` for notifications
 
+Nothing else is exported from the root. The root is what the admin loads before its first screen draws, so it holds only what an application mounts and reads the admin with. The parts plugins build their pages from (the media library, the field-UI kit, the data table, the widget kit, the plugin-page parts) are reached through [`@nextlyhq/plugin-sdk/admin`](../plugin-sdk), and load with the pages that use them. The SDK takes them from `@nextlyhq/admin/kit`, which is internal and unstable: import the SDK, never the kit.
+
 ## Compatibility
 
 | Tool     | Version                                                         |
