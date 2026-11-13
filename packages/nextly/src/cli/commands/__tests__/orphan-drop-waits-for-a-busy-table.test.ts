@@ -22,6 +22,16 @@ vi.mock(
   "../../../domains/field-groups/services/teardown-entity-field-group-data",
   () => ({ teardownEntityComponentData: async () => undefined })
 );
+// The cache expiries a removal flushes, recorded rather than sent.
+const flushed = vi.hoisted(() => [] as unknown[]);
+vi.mock("../../../domains/flush-content-change", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/flush-content-change")
+  >()),
+  flushContentChange: async (intent: unknown) => {
+    if (intent !== undefined) flushed.push(intent);
+  },
+}));
 vi.mock("../../../domains/i18n/migration/teardown-entity-i18n", () => ({
   teardownEntityI18n: async () => undefined,
 }));
@@ -30,6 +40,7 @@ vi.mock("../../../domains/field-groups/storage/resolve-storage-names", () => ({
   resolveTypeColumns: async () => new Map(),
 }));
 
+import { CollectionRegistryService } from "../../../domains/collections/services/collection-registry-service";
 import { CollectionSyncService } from "../../../domains/collections/services/collection-sync-service";
 import { handleRemovedComponents } from "../dev-build";
 
@@ -37,6 +48,10 @@ const DROP = 'DROP TABLE IF EXISTS "comp_hero"';
 const DROP_POSTS = 'DROP TABLE IF EXISTS "dc_posts"';
 /** Each registry delete, by what it was sent through. */
 const registryDeletes: string[] = [];
+/** The drops that stay busy; a case may let one through. */
+const busyDrops = new Set<string>();
+/** Whether the registry delete's transaction fails. */
+let registryDeleteFails = false;
 
 /** SQLite's busy timeout running out, as its driver reports it. */
 function sqliteBusy(): Error {
@@ -55,9 +70,14 @@ const adapter = {
   },
   transaction: async () => {
     registryDeletes.push("transaction");
-    return { expire: [] };
+    if (registryDeleteFails) throw new Error("connection lost");
+    return { expire: undefined };
   },
   tableExists: async () => false,
+  // Outside a transaction, an effect after commit runs at once.
+  afterCommit: async (effect: () => unknown) => {
+    await effect();
+  },
   executeQuery: (statement: string): Promise<unknown[]> => {
     if (statement === "PRAGMA busy_timeout") {
       return Promise.resolve([{ timeout: 0 }]);
@@ -66,7 +86,7 @@ const adapter = {
       return Promise.resolve([]);
     }
     sent.push(statement);
-    return statement === DROP || statement === DROP_POSTS
+    return busyDrops.has(statement)
       ? Promise.reject(sqliteBusy())
       : Promise.resolve([]);
   },
@@ -91,6 +111,11 @@ const logger = {
 beforeEach(() => {
   sent.length = 0;
   registryDeletes.length = 0;
+  flushed.length = 0;
+  busyDrops.clear();
+  busyDrops.add(DROP);
+  busyDrops.add(DROP_POSTS);
+  registryDeleteFails = false;
   warnings.length = 0;
   // One try of a second, three in all: tries at 0 and about 1 second, then a stop.
   vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
@@ -99,6 +124,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe("dropping an orphaned field group's busy table", () => {
@@ -174,5 +200,42 @@ describe("dropping an orphaned collection's busy table", () => {
       },
     });
     expect(registryDeletes).toEqual([]);
+  });
+});
+
+describe("an orphaned collection whose table dropped and whose registry delete failed", () => {
+  it("has its cached reads expired once the table is dropped", async () => {
+    busyDrops.clear();
+    registryDeleteFails = true;
+    vi.spyOn(
+      CollectionRegistryService.prototype,
+      "getCollection"
+    ).mockResolvedValue({ revalidate: null } as never);
+    const service = new CollectionSyncService(adapter, {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+    } as never);
+    const failures: string[] = [];
+    await (
+      service as unknown as {
+        handleRemovedCollections(
+          removed: Array<{ slug: string; tableName: string }>,
+          action: "delete",
+          warnings: string[]
+        ): Promise<Set<string>>;
+      }
+    ).handleRemovedCollections(
+      [{ slug: "posts", tableName: "dc_posts" }],
+      "delete",
+      failures
+    );
+
+    expect(sent).toContain(DROP_POSTS);
+    expect(failures).toEqual([
+      'Failed to delete collection "posts": connection lost',
+    ]);
+    expect(flushed).toHaveLength(1);
   });
 });
