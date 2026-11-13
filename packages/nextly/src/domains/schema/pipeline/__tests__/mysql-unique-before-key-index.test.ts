@@ -137,6 +137,22 @@ describe("a key's plain index dropped after the unique one replacing it", () => 
     ).toEqual([]);
   });
 
+  it("holds nothing, and moves nothing, where the unique index keeps the plain one's name", () => {
+    const sameName: Operation = {
+      type: "add_index",
+      tableName: "profiles",
+      index: { name: "idx_profiles_person", columns: ["person"], unique: true },
+    };
+    expect(
+      keyIndexDropsHeldForUnique([drop, sameName], "mysql", profiles(true))
+    ).toEqual([]);
+    const create =
+      "CREATE UNIQUE INDEX `idx_profiles_person` ON `profiles` (`person`);";
+    expect(
+      uniqueCreatedBeforeKeyIndexDrop([DROP, create], "mysql", profiles(true))
+    ).toEqual([DROP, create]);
+  });
+
   it("adds a held drop to the batch once, and none the batch already makes", () => {
     const held = keyIndexDropsHeldForUnique(
       [drop, add],
