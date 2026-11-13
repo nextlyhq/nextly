@@ -80,6 +80,7 @@ import {
   getComponentRowColumnDescriptor,
   usesJunctionTable,
   type ColumnDescriptor,
+  type ColumnOrigin,
 } from "../../schema/services/field-column-descriptor";
 import {
   MAX_INDEX_NAME_LENGTH,
@@ -218,6 +219,14 @@ function createdAtIndexName(tableName: string): string {
 export interface RuntimeSchemaOptions {
   localized?: boolean;
   typeColumn: string;
+  /**
+   * Which builder's rule reads a text field's width (`builtByFor`), as the desired schema the
+   * table is pushed beside reads it. A field group defined in code is described by the code-first
+   * rule, where a text field that states no width is `varchar(255)` on MySQL; read by the Builder's
+   * rule here, the push widened back to TEXT the column that same apply had just narrowed, on every
+   * sync. Defaults to the Builder's field-group rule, which this service creates tables by.
+   */
+  builtBy?: ColumnOrigin;
 }
 
 export class FieldGroupSchemaService {
@@ -487,27 +496,31 @@ export class FieldGroupSchemaService {
     // handed for a field group, so without them the push creates the table
     // without the column the desired spec asks for.
     const contributed = contributedColumnsFor(tableName, this.dialect);
+    const builtBy = options.builtBy ?? "fieldGroup";
     switch (this.dialect) {
       case "postgresql":
         return this.generatePostgresSchema(
           tableName,
           mainFields,
           typeColumn,
-          contributed
+          contributed,
+          builtBy
         );
       case "mysql":
         return this.generateMySQLSchema(
           tableName,
           mainFields,
           typeColumn,
-          contributed
+          contributed,
+          builtBy
         );
       case "sqlite":
         return this.generateSQLiteSchema(
           tableName,
           mainFields,
           typeColumn,
-          contributed
+          contributed,
+          builtBy
         );
       default:
         throw new Error(`Unsupported dialect: ${String(this.dialect)}`);
@@ -518,7 +531,8 @@ export class FieldGroupSchemaService {
     tableName: string,
     fields: FieldConfig[],
     typeColumn: string,
-    contributed: readonly ExtensionColumn[]
+    contributed: readonly ExtensionColumn[],
+    builtBy: ColumnOrigin
   ): unknown {
     // Required by Drizzle: pgTable() expects a `Record<string, PgColumnBuilderBase>`
     // but the column builders returned by helpers (pgText, pgInteger, ...) have
@@ -545,7 +559,7 @@ export class FieldGroupSchemaService {
       updated_at: pgTimestamp("updated_at").defaultNow().notNull(),
     };
 
-    this.addFieldColumns(columns, fields, contributed);
+    this.addFieldColumns(columns, fields, contributed, builtBy);
 
     // Required by Drizzle: pgTable() is generic over the column shape, and
     // our columns map is dynamic (Record<string, unknown>). The index
@@ -567,7 +581,8 @@ export class FieldGroupSchemaService {
     tableName: string,
     fields: FieldConfig[],
     typeColumn: string,
-    contributed: readonly ExtensionColumn[]
+    contributed: readonly ExtensionColumn[],
+    builtBy: ColumnOrigin
   ): unknown {
     const columns: Record<string, unknown> = {
       id: mysqlVarchar("id", { length: 36 }).primaryKey(),
@@ -595,7 +610,7 @@ export class FieldGroupSchemaService {
         .notNull(),
     };
 
-    this.addFieldColumns(columns, fields, contributed);
+    this.addFieldColumns(columns, fields, contributed, builtBy);
 
     return mysqlTable(
       tableName,
@@ -613,7 +628,8 @@ export class FieldGroupSchemaService {
     tableName: string,
     fields: FieldConfig[],
     typeColumn: string,
-    contributed: readonly ExtensionColumn[]
+    contributed: readonly ExtensionColumn[],
+    builtBy: ColumnOrigin
   ): unknown {
     const columns: Record<string, unknown> = {
       // NOT NULL, with the key declared on the table below rather than on the
@@ -639,7 +655,7 @@ export class FieldGroupSchemaService {
       ),
     };
 
-    this.addFieldColumns(columns, fields, contributed);
+    this.addFieldColumns(columns, fields, contributed, builtBy);
 
     return sqliteTable(
       tableName,
@@ -863,11 +879,14 @@ export class FieldGroupSchemaService {
    * Mapped here a second time, the Drizzle table once declared a MySQL text field `varchar(255)`,
    * and a save that reached drizzle-kit narrowed the TEXT column the CREATE had made.
    */
-  private canonicalColumn(field: DataFieldConfig): ColumnDescriptor | null {
+  private canonicalColumn(
+    field: DataFieldConfig,
+    builtBy: ColumnOrigin = "fieldGroup"
+  ): ColumnDescriptor | null {
     if (!field.name || !(isIconField(field) || isTextField(field))) {
       return null;
     }
-    return getComponentRowColumnDescriptor(field, this.dialect, "fieldGroup");
+    return getComponentRowColumnDescriptor(field, this.dialect, builtBy);
   }
 
   /**
@@ -877,10 +896,11 @@ export class FieldGroupSchemaService {
   private addFieldColumns(
     columns: Record<string, unknown>,
     fields: FieldConfig[],
-    contributed: readonly ExtensionColumn[]
+    contributed: readonly ExtensionColumn[],
+    builtBy: ColumnOrigin
   ): void {
     for (const field of this.columnFields(fields)) {
-      const column = this.drizzleColumnFor(field);
+      const column = this.drizzleColumnFor(field, builtBy);
       if (column) {
         columns[field.name] = column;
       }
@@ -892,9 +912,12 @@ export class FieldGroupSchemaService {
    * A field's runtime Drizzle column: built from the descriptor where it names the column, and by
    * this dialect's own mapper otherwise, so the runtime table and the CREATE read one answer.
    */
-  private drizzleColumnFor(field: DataFieldConfig): unknown {
+  private drizzleColumnFor(
+    field: DataFieldConfig,
+    builtBy: ColumnOrigin
+  ): unknown {
     const mappable = this.asMappableField(field);
-    const canonical = this.canonicalColumn(mappable);
+    const canonical = this.canonicalColumn(mappable, builtBy);
     if (canonical) return buildUserDrizzleColumn(canonical, this.dialect);
     switch (this.dialect) {
       case "postgresql":
