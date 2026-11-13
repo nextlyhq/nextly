@@ -35,6 +35,13 @@
  * - Lexical arrives as its production build, never its development build;
  * - the admin it bundled is the packed one, not the workspace's source.
  *
+ * It also measures, without judging yet, what the application ships: the
+ * admin page's first load, gzipped, divided between the admin, `@nextlyhq/ui`,
+ * React and Next.js and the rest, against a budget it reports until it is
+ * gated, and each route's direct visit. This is the one measure that counts
+ * what the package leaves to the application, so a dependency made external
+ * cannot leave the numbers by moving out of the package's own.
+ *
  * A module the output holds in more than one chunk is counted and printed with
  * its bytes, and does not fail the check: Turbopack copies a module into the
  * chunks of each on-demand group that loads it, which the package cannot
@@ -360,6 +367,8 @@ export function readChunk(name, code, map) {
     }
     factories.push({
       ids,
+      // The factory's code as written, for what a first load spends on it.
+      bytes: element.end - element.start,
       sources: sourcesWithin(element, segments, map),
       modules: exportedModules(element, segments, map),
       loader: loaderOf(element),
@@ -996,6 +1005,11 @@ export function consumerFindings({
     },
     routeNames: [...model.rootOf.keys()].sort(),
     copied: copiedModules(model, output),
+    // Each direct visit: the first load, then what the route's loader fetches.
+    directVisits: visits(model, pkg).map(({ route, loader }) => ({
+      name: routeKey(route.root),
+      chunks: [...model.firstLoad, ...loader.chunks],
+    })),
   };
 }
 
@@ -1265,17 +1279,77 @@ function projectRoot() {
   return dir;
 }
 
-/** The size of a route's first load, its chunks as the output writes them and gzipped. */
-export function firstLoadSize(output, route = ADMIN_ROUTE) {
-  const names = output.firstLoads.get(route) ?? [];
+/**
+ * What the admin page's first load may weigh, gzipped: measured at 560.5 KB on
+ * 2026-11-13 with the fixture's plugin page, plus 10%. Reported, not judged:
+ * it is gated once a week of builds has shown how much it moves between them.
+ */
+export const FIRST_LOAD_BUDGET_KB = 617;
+
+/** Whose code a module of the output is, by the sources its factory maps to. */
+export function partOf(sources, adminDir) {
+  const all = [...sources];
+  if (all.some(source => source.startsWith(`${adminDir}/`))) return "admin";
+  if (
+    all.some(
+      source =>
+        source.startsWith("packages/ui/") || source.includes("/@nextlyhq/ui/")
+    )
+  ) {
+    return "@nextlyhq/ui";
+  }
+  if (
+    all.some(source =>
+      /(^|\/)node_modules\/(\.pnpm\/[^/]+\/node_modules\/)?(react|react-dom|next|scheduler)\//.test(
+        source
+      )
+    )
+  ) {
+    return "react and next";
+  }
+  return "other";
+}
+
+/**
+ * The size of the chunks a visit loads, as the output writes them and
+ * gzipped, and how the gzipped bytes divide between the admin, `@nextlyhq/ui`,
+ * React and Next.js, and everything else. Each chunk's gzipped size is shared
+ * between its modules by their written bytes (gzip does not split exactly);
+ * the code between modules, the bundler's runtime and glue, counts with React
+ * and Next.js.
+ */
+export function visitSize(output, names, adminDir) {
+  const parts = {
+    admin: 0,
+    "@nextlyhq/ui": 0,
+    "react and next": 0,
+    other: 0,
+  };
   let bytes = 0;
   let gzipped = 0;
-  for (const name of names) {
-    const code = output.chunks.get(name)?.code ?? "";
-    bytes += Buffer.byteLength(code);
-    gzipped += gzipSync(code).length;
+  for (const name of new Set(names)) {
+    const chunk = output.chunks.get(name);
+    const code = chunk?.code ?? "";
+    const written = Buffer.byteLength(code);
+    const zipped = gzipSync(code).length;
+    bytes += written;
+    gzipped += zipped;
+    if (written === 0) continue;
+    let placed = 0;
+    for (const factory of chunk?.factories ?? []) {
+      const share = factory.bytes ?? 0;
+      placed += share;
+      parts[partOf(factory.sources, adminDir)] += (zipped * share) / written;
+    }
+    parts["react and next"] +=
+      (zipped * Math.max(written - placed, 0)) / written;
   }
-  return { chunks: names.length, bytes, gzipped };
+  return { chunks: new Set(names).size, bytes, gzipped, parts };
+}
+
+/** The size of a route's first load. */
+export function firstLoadSize(output, adminDir, route = ADMIN_ROUTE) {
+  return visitSize(output, output.firstLoads.get(route) ?? [], adminDir);
 }
 
 function kb(bytes) {
@@ -1326,16 +1400,17 @@ async function main(argv) {
     packageDir,
   });
   const developmentTexts = lexicalDevelopmentTexts();
-  const { problems, counts, routeNames, copied } = consumerFindings({
-    pkg: packageGraph(distDir),
-    output,
-    adminDir,
-    registration,
-    developmentTexts,
-    pinned,
-    // The packed package leaves the record out; it is the workspace build's.
-    record: readBundleModules(join(PACKAGE_ROOT, "dist")),
-  });
+  const { problems, counts, routeNames, copied, directVisits } =
+    consumerFindings({
+      pkg: packageGraph(distDir),
+      output,
+      adminDir,
+      registration,
+      developmentTexts,
+      pinned,
+      // The packed package leaves the record out; it is the workspace build's.
+      record: readBundleModules(join(PACKAGE_ROOT, "dist")),
+    });
   const seconds = ms => `${(ms / 1000).toFixed(1)} s`;
   console.log(
     `check-consumer-bundle: read ${counts.chunks} chunks holding ${counts.modules} admin modules; ` +
@@ -1360,10 +1435,32 @@ async function main(argv) {
   console.log(
     `  measured, not judged: ${copied.length} admin modules sit in more than one chunk, ${kb(copiedBytes)} of extra copies, the bundler's own chunking.`
   );
-  const firstLoad = firstLoadSize(output);
+  const firstLoad = firstLoadSize(output, adminDir);
+  const parts = Object.entries(firstLoad.parts)
+    .map(([part, size]) => `${part} ${kb(size)}`)
+    .join(", ");
   console.log(
-    `  measured, not judged: ${ADMIN_ROUTE}'s first load is ${firstLoad.chunks} chunks, ${kb(firstLoad.gzipped)} gzipped (${kb(firstLoad.bytes)} as written).`
+    `  measured, not judged: ${ADMIN_ROUTE}'s first load is ${firstLoad.chunks} chunks, ${kb(firstLoad.gzipped)} gzipped (${parts}), ${kb(firstLoad.bytes)} as written; ` +
+      `${firstLoad.gzipped / 1024 > FIRST_LOAD_BUDGET_KB ? "over" : "within"} its budget of ${FIRST_LOAD_BUDGET_KB} KB, reported until it is gated.`
   );
+  // One per route: a route with several loaders is counted at its largest.
+  const largest = new Map();
+  for (const visit of directVisits) {
+    const { gzipped } = visitSize(output, visit.chunks, adminDir);
+    largest.set(visit.name, Math.max(largest.get(visit.name) ?? 0, gzipped));
+  }
+  const visitSizes = [...largest]
+    .map(([name, gzipped]) => ({ name, gzipped }))
+    .sort((a, b) => b.gzipped - a.gzipped);
+  if (visitSizes.length > 0) {
+    const median = visitSizes[Math.floor(visitSizes.length / 2)].gzipped;
+    console.log(
+      `  measured, not judged: ${visitSizes.length} routes' direct visits, median ${kb(median)} gzipped; the largest: ${visitSizes
+        .slice(0, 5)
+        .map(visit => `${visit.name} ${kb(visit.gzipped)}`)
+        .join(", ")}.`
+    );
+  }
   const expected = option(argv, "--must-fail-with")?.split(",");
   if (expected) return expectedFailure(expected, problems);
   if (problems.length > 0) {
