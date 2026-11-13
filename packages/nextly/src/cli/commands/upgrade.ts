@@ -405,6 +405,11 @@ export async function previewReconcileCore(deps: {
   const plan = await planCoreReconcile(
     await reconcileTarget(adapter, deps.contributions)
   );
+  // A push drizzle-kit cannot plan is refused before anything else, so the
+  // dry run plans nothing past it, as the real run does nothing past it.
+  if (plan.unsupported !== undefined) {
+    return { changes: [], refusals: [plan.unsupported] };
+  }
   const changes: DryRunChange[] = [
     ...plan.statements.map(statement => ({ action: "run", target: statement })),
     ...deletionChanges(plan.deletions),

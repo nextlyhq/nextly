@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
 import { getCoreSchema } from "../../../schemas";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
-import { reconcileCore } from "./core-reconcile";
+import { planCoreReconcile, reconcileCore } from "./core-reconcile";
 
 describe("reconcileCore (Phase 1)", () => {
   let testDb: TestDb;
@@ -226,6 +226,24 @@ describe("reconcileCore (Phase 1)", () => {
         )
       ),
     });
+  });
+
+  it("plans a push drizzle-kit cannot plan as the refusal a run would make", async () => {
+    const { UnplannablePushError } = await import("../pipeline/fresh-push");
+    const plan = await planCoreReconcile({
+      db: testDb.db,
+      dialect: "sqlite",
+      introspect: () => Promise.resolve({ tables: desired.tables.slice(1) }),
+      planPush: () =>
+        Promise.reject(new UnplannablePushError("resolver crashed")),
+    });
+
+    expect(plan.statements).toEqual([]);
+    expect(plan.unsupported).toMatch(
+      new RegExp(
+        `cannot bring ${desired.tables[0].name} up to date.*npx nextly@0\\.0\\.2-alpha\\.65 migrate`
+      )
+    );
   });
 
   it("names the columns still missing after the push, never reporting success", async () => {

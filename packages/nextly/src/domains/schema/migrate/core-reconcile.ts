@@ -730,6 +730,12 @@ export interface CoreReconcilePlan {
   deletions: Deletion[];
   /** The retired auth tables the run would drop, when that was asked for. */
   retiredDrops: readonly string[];
+  /**
+   * The refusal a run would make before its first statement, when drizzle-kit
+   * cannot plan the push (`NEXTLY_CORE_UPGRADE_UNSUPPORTED`); no statements
+   * are planned then.
+   */
+  unsupported?: string;
 }
 
 /**
@@ -748,17 +754,38 @@ export async function planCoreReconcile(
   if (ops.filter(op => !isCoreDrop(op)).length === 0) {
     return { statements: [], degraded: false, deletions, retiredDrops };
   }
-  const push = await (deps.planPush ?? planFreshPush)(
-    deps.dialect,
-    deps.db,
-    bundle
-  );
+  let push: Awaited<ReturnType<typeof planFreshPush>>;
+  try {
+    push = await (deps.planPush ?? planCorePush)(deps.dialect, deps.db, bundle);
+  } catch (err) {
+    if (!(err instanceof UnplannablePushError)) throw err;
+    // What the run would refuse with, as it refuses: the same named error.
+    return {
+      statements: [],
+      degraded: false,
+      deletions,
+      retiredDrops,
+      unsupported: coreUpgradeUnsupported(
+        ops.filter(op => !isCoreDrop(op)),
+        err
+      ).publicMessage,
+    };
+  }
   return {
     statements: push.runnable,
     degraded: push.degraded,
     deletions,
     retiredDrops,
   };
+}
+
+/** The core push's plan, judged unplannable as the push itself judges it. */
+function planCorePush(
+  dialect: FreshPushDialect,
+  db: unknown,
+  schema: Record<string, unknown>
+) {
+  return planFreshPush(dialect, db, schema, { refuseUnplannable: true });
 }
 
 /**

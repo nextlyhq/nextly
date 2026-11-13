@@ -123,9 +123,9 @@ export async function freshPushSchema(
   // do, so a push that stops part-way (killed, its connection lost, a pass it
   // refuses) leaves nothing behind: a table rebuild stopped between its steps
   // would otherwise leave its `__new_` table for the next run to trip on.
-  const passes = async (): Promise<FreshPushResult> => {
+  const passes = async (open?: () => void): Promise<FreshPushResult> => {
     const first = await planForDialect(dialect, db, schema, options);
-    const firstPass = await applyPushResult(dialect, db, schema, first);
+    const firstPass = await applyPushResult(dialect, db, schema, first, open);
     if (!isDegraded(first)) return firstPass;
 
     const second = await planForDialect(dialect, db, schema, options);
@@ -137,7 +137,7 @@ export async function freshPushSchema(
         "the push degraded twice to the additive-tables-only baseline"
       );
     }
-    const secondPass = await applyPushResult(dialect, db, schema, second);
+    const secondPass = await applyPushResult(dialect, db, schema, second, open);
     return {
       hints: [...firstPass.hints, ...secondPass.hints],
       statementsExecuted: [
@@ -146,7 +146,9 @@ export async function freshPushSchema(
       ],
     };
   };
-  return dialect === "sqlite" ? inSqliteTransaction(db, passes) : passes();
+  return dialect === "sqlite"
+    ? inSqliteTransaction(db, open => passes(open))
+    : passes();
 }
 
 /** How a caller of `freshPushSchema` wants a push it cannot plan handled. */
@@ -213,24 +215,32 @@ async function planForDialect(
 }
 
 /**
- * Run `body` in one SQLite transaction, with foreign keys off around it (the
- * pragma does nothing inside a transaction), and the foreign keys checked
- * before the commit: a rebuild that left orphaned child rows fails the push
- * and is undone.
+ * Run `body` in one SQLite transaction, opened by `body` before its first
+ * statement (`open`), so a push with nothing to run touches nothing. Foreign
+ * keys are off around it (the pragma does nothing inside a transaction), and
+ * checked before the commit: a rebuild that left orphaned child rows fails the
+ * push and is undone. Anything that fails, the commit included, is rolled back
+ * before foreign keys are switched on again. Exported for its tests.
  */
-async function inSqliteTransaction<T>(
+export async function inSqliteTransaction<T>(
   db: unknown,
-  body: () => Promise<T>
+  body: (open: () => void) => Promise<T>
 ): Promise<T> {
   const { sql: sqlTag } = await import("drizzle-orm");
   const run = (q: string) =>
     (db as { run: (q: unknown) => unknown }).run(sqlTag.raw(q));
-  run("PRAGMA foreign_keys = OFF");
-  try {
+  let opened = false;
+  const open = () => {
+    if (opened) return;
+    run("PRAGMA foreign_keys = OFF");
+    opened = true;
     run("BEGIN");
+  };
+  try {
     let result: T;
     try {
-      result = await body();
+      result = await body(open);
+      if (!opened) return result;
       const violations = (db as { all?: (q: unknown) => unknown[] }).all?.(
         sqlTag.raw("PRAGMA foreign_key_check")
       );
@@ -244,14 +254,17 @@ async function inSqliteTransaction<T>(
           },
         });
       }
+      // Inside the guard too: a COMMIT that fails (SQLITE_BUSY) leaves the
+      // transaction open, and foreign keys could not be switched back on, nor
+      // the connection used again, until it is rolled back.
+      run("COMMIT");
     } catch (err) {
-      rollbackQuietly(run);
+      if (opened) rollbackQuietly(run);
       throw err;
     }
-    run("COMMIT");
     return result;
   } finally {
-    run("PRAGMA foreign_keys = ON");
+    if (opened) run("PRAGMA foreign_keys = ON");
   }
 }
 
@@ -276,7 +289,9 @@ async function applyPushResult(
   dialect: FreshPushDialect,
   db: unknown,
   schema: Record<string, unknown>,
-  result: { sqlStatements: string[]; hints: KitHint[] }
+  result: { sqlStatements: string[]; hints: KitHint[] },
+  /** SQLite's: opens the push's transaction before its first statement. */
+  open?: () => void
 ): Promise<FreshPushResult> {
   // The statements to run and the ones to strip, as `planFreshPush` reports
   // them; the stripped ones are surfaced via hints + warn below.
@@ -318,7 +333,13 @@ async function applyPushResult(
   // A degraded pass cannot add a column, so an index over one it lacks is a
   // casualty of the baseline rather than a fault; the pass that follows builds
   // both in order.
-  const executed = await executeStatements(dialect, db, runnable, degraded);
+  const executed = await executeStatements(
+    dialect,
+    db,
+    runnable,
+    degraded,
+    open
+  );
 
   return { hints, statementsExecuted: executed };
 }
@@ -346,13 +367,16 @@ export interface FreshPushPlan {
 export async function planFreshPush(
   dialect: FreshPushDialect,
   db: unknown,
-  schema: Record<string, unknown>
+  schema: Record<string, unknown>,
+  options: FreshPushOptions = {}
 ): Promise<FreshPushPlan> {
+  // Planned through the same refusal the push makes, so a plan never shows a
+  // push the run would refuse (`refuseUnplannable`) as one it would make.
   return planPushResult(
     dialect,
     db,
     schema,
-    await pushForDialect(dialect, db, schema)
+    await planForDialect(dialect, db, schema, options)
   );
 }
 
@@ -550,7 +574,9 @@ async function executeStatements(
   dialect: FreshPushDialect,
   db: unknown,
   statements: string[],
-  degraded: boolean
+  degraded: boolean,
+  /** SQLite's: opens the push's transaction (`inSqliteTransaction`). */
+  open?: () => void
 ): Promise<string[]> {
   if (statements.length === 0) return [];
   const { sql: sqlTag } = await import("drizzle-orm");
@@ -591,6 +617,7 @@ async function executeStatements(
     // and correctly ordered across RC bumps. The toggle, the transaction and
     // the integrity check are `inSqliteTransaction`'s, around every pass.
     const run = (q: string) => (db as SqliteRunDb).run(sqlTag.raw(q));
+    open?.();
     for (const stmt of statements) {
       await assertSchemaLockHeld();
       try {

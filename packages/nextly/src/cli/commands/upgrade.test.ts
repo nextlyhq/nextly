@@ -131,6 +131,47 @@ describe("runReconcileCore", () => {
     expect(reconcile).not.toHaveBeenCalled();
   });
 
+  it("an agreement to one change on a column does not cover another change to it found under the lock", async () => {
+    const typeChange = {
+      kind: "column" as const,
+      table: "users",
+      column: "name",
+      core: true,
+      reason: "type changes from text to varchar",
+    };
+    const madeRequired = {
+      ...typeChange,
+      reason: "becomes required, which fails on a row without a value",
+    };
+    const reconcile = vi.fn(
+      async (deps: {
+        judgeDeletions: (deletions: readonly unknown[]) => Promise<void>;
+      }) => {
+        // The same change as agreed passes; another change to the column does not.
+        await deps.judgeDeletions([typeChange]);
+        await deps.judgeDeletions([madeRequired]);
+        return { changed: true };
+      }
+    );
+
+    await expect(
+      runReconcileCore(
+        {
+          adapter: adapter(),
+          consent: resolveDataLossConsent({}),
+          interactive: true,
+          askToDelete: () => Promise.resolve(true),
+          checkAppHistory: () => Promise.resolve(),
+        },
+        {
+          reconcileCore: reconcile as never,
+          planCoreDeletions: () => Promise.resolve([typeChange]),
+        }
+      )
+    ).rejects.toThrow(/users\.name/);
+    expect(reconcile).toHaveBeenCalledOnce();
+  });
+
   it("at a terminal lists what it deletes and asks once; a no changes nothing", async () => {
     const reconcile = vi.fn();
     const askToDelete = vi.fn().mockResolvedValue(false);

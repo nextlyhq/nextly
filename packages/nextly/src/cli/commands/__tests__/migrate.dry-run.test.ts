@@ -124,6 +124,22 @@ describe("migrate --dry-run", () => {
     ]);
   });
 
+  it("lists what the core upgrade would delete, before the migrations, with the consent it needs", async () => {
+    testDb.sqlite.exec(
+      "ALTER TABLE dynamic_collections ADD COLUMN access_rules text"
+    );
+
+    await preview();
+
+    expect(lines.slice(0, 3)).toEqual([
+      "Pending: 3 migrations",
+      "  • Nextly's own tables (core upgrade)",
+      expect.stringMatching(
+        /deletes data: column dynamic_collections\.access_rules.*A real run needs --accept-data-loss=dynamic_collections\.access_rules/
+      ),
+    ]);
+  });
+
   it("spends --step on the plugin modules first", async () => {
     await preview(2);
 

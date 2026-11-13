@@ -11,9 +11,10 @@
  *
  * @module cli/commands/upgrade-steps/core-upgrade-consent
  */
-import type {
-  DataLossConsent,
-  Deletion,
+import {
+  deletionKey,
+  type DataLossConsent,
+  type Deletion,
 } from "../../../domains/schema/migrate/data-loss-consent";
 import {
   deletionSource,
@@ -22,18 +23,31 @@ import {
   type DeletionSource,
 } from "../../utils/data-loss-consent";
 
-/** Where the core upgrade's deletions come from, in a run's listing. */
-export const CORE_UPGRADE_SOURCE: DeletionSource = deletionSource(
-  "Nextly's own tables (core upgrade)",
-  "core upgrade"
-);
+/** The heading the core upgrade's deletions are listed under. */
+export const CORE_UPGRADE_LABEL = "Nextly's own tables (core upgrade)";
+
+/**
+ * Where one core deletion comes from, in a run's listing: under the core
+ * upgrade's heading, with an identity bound to the change itself (what it
+ * deletes and why: a retired column, a type change from one type to another,
+ * a column made required), never to its count. An agreement before the lock
+ * then covers only that change: a different change to the same column, found
+ * under the lock, is judged again rather than accepted.
+ */
+export function coreUpgradeSource(deletion: Deletion): DeletionSource {
+  const change =
+    deletion.kind === "unnamed"
+      ? `${deletion.description}\u0000${deletion.fingerprint ?? ""}`
+      : `${deletionKey(deletion)}\u0000${deletion.reason ?? ""}`;
+  return deletionSource(CORE_UPGRADE_LABEL, change);
+}
 
 /** `deletions`, each listed under the core upgrade's heading. */
 export function coreUpgradeSources(
   deletions: readonly Deletion[]
 ): Map<Deletion, DeletionSource> {
   return new Map(
-    deletions.map(deletion => [deletion, CORE_UPGRADE_SOURCE] as const)
+    deletions.map(deletion => [deletion, coreUpgradeSource(deletion)] as const)
   );
 }
 

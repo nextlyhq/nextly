@@ -282,7 +282,8 @@ import {
 } from "./clear-plaintext-passwords";
 import { commandRun } from "./command-run";
 import {
-  CORE_UPGRADE_SOURCE,
+  CORE_UPGRADE_LABEL,
+  coreUpgradeSource,
   judgeCoreDeletions,
 } from "./upgrade-steps/core-upgrade-consent";
 import {
@@ -1232,8 +1233,16 @@ export async function previewMigrate(args: {
   readEventTriggers?: () => Promise<readonly string[]>;
   /** Connected server capabilities, judged identically to execution. */
   serverConstructs?: ServerConstructCapabilities;
-  /** The compiled schema, whose plugin prefixes a real run checks first. */
-  extensionSchema?: Pick<ExtensionSchema, "pluginPrefixes"> | undefined;
+  /**
+   * The compiled schema, whose plugin prefixes a real run checks first, and
+   * whose contributions to the core tables its core upgrade sets aside.
+   */
+  extensionSchema?:
+    | (Pick<ExtensionSchema, "pluginPrefixes"> &
+        Partial<Pick<ExtensionSchema, "entityColumns" | "entityIndexes">>)
+    | undefined;
+  /** As `MigrateCoreDeps.planCoreDeletionsFn`. */
+  planCoreDeletionsFn?: typeof planCoreDeletions;
 }): Promise<void> {
   const { adapter, db, dialect, logger } = args;
   // Refused as a real run refuses, before anything is listed: a plugin whose
@@ -1291,6 +1300,8 @@ export async function previewMigrate(args: {
     "Pending",
     formatCount(pendingModules.length + pendingFiles.length, "migration")
   );
+  // What the core upgrade, which runs before them, would delete.
+  await previewCoreDeletions(args, logger);
   // The modules a real run applies, then its files, judged as that run's
   // consent judges them: one run, modules first (`judgeFileDeletions`).
   const moduleRuns = pluginModuleUnits(
@@ -1333,6 +1344,38 @@ export async function previewMigrate(args: {
     await previewEventTriggers(args, logger);
   }
   await previewRetiredImageSizes(db, dialect, logger);
+}
+
+/**
+ * What the run's core upgrade would delete (`planCoreDeletions`), under the
+ * heading a real run lists it under, with the consent it needs. Nothing when
+ * it deletes nothing.
+ */
+async function previewCoreDeletions(
+  args: Parameters<typeof previewMigrate>[0],
+  logger: CommandContext["logger"]
+): Promise<void> {
+  const { db, dialect, extensionSchema } = args;
+  const contributions =
+    extensionSchema?.entityColumns !== undefined &&
+    extensionSchema.entityIndexes !== undefined
+      ? {
+          entityColumns: extensionSchema.entityColumns,
+          entityIndexes: extensionSchema.entityIndexes,
+        }
+      : undefined;
+  const deletions = await (args.planCoreDeletionsFn ?? planCoreDeletions)({
+    db,
+    dialect,
+    fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
+      dialect,
+      getDrizzle: <T>() => db as T,
+    }),
+    ...(contributions !== undefined ? { contributions } : {}),
+  });
+  if (deletions.length === 0) return;
+  logger.info(`  • ${CORE_UPGRADE_LABEL}`);
+  previewDeletions(deletions, logger);
 }
 
 /** Each plugin module a real run reaches, with what it would refuse and what it deletes. */
@@ -3078,7 +3121,7 @@ async function judgeFileDeletions(
   // one diff it applies.
   if (agreed === undefined) {
     for (const deletion of await coreRunDeletions(deps)) {
-      sources.set(deletion, CORE_UPGRADE_SOURCE);
+      sources.set(deletion, coreUpgradeSource(deletion));
     }
   }
   // The plugin modules a run applies first, then the app files within the
