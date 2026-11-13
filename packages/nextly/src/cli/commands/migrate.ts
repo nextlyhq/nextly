@@ -233,6 +233,7 @@ import { UserFieldDefinitionService } from "../../domains/users/services/user-fi
 import { NextlyError, describeError } from "../../errors";
 import { configWatchAllowed } from "../../runtime/hmr-listener";
 import type { UserConfig } from "../../users/config/types";
+import { busyTableNotices } from "../busy-table-options";
 import { CliError, exitWithError } from "../errors";
 import type { CommandContext } from "../program";
 import {
@@ -614,10 +615,11 @@ export async function runMigrate(
         // else the rows are brought to the newest applied snapshot.
         registryRows: configWatchAllowed() ? "insert-missing" : "write",
         // An app file or a plugin module waits for a busy table in tries; each try's notice goes
-        // to standard error, so a run with --json keeps one document on standard output.
+        // to standard error, so a run with --json keeps one document on standard output, and is
+        // kept back under --quiet.
         busyTable: {
           bounds,
-          notify: line => process.stderr.write(`${line}\n`),
+          notify: busyTableNotices(logger),
         },
         // A run that finds the schema lock held waits about a minute for it, then stops naming
         // what holds it.
