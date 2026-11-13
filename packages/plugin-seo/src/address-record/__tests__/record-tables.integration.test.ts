@@ -269,6 +269,11 @@ describe.each(getConfiguredTestDialects())(
       expect(await noteValue(seo, "fingerprint")).toBe(
         await seo.publicAddresses.fingerprint()
       );
+      // The collection's shape is kept with the move, lock row included, so
+      // a write there after it is found at the next start.
+      expect(
+        JSON.parse(String(await noteValue(seo, "record-drained")))
+      ).toMatchObject({ rows: 8, newest: expect.any(String) });
       // A move found done moves nothing, however often it runs.
       expect(await moveEarlierRecord(seo)).toBe(0);
       expect(Object.keys(await recordedRows(seo))).toHaveLength(2);
@@ -306,7 +311,10 @@ describe.each(getConfiguredTestDialects())(
       });
 
       expect(writesAmong(statements)).toEqual([]);
-      expect(statements.length).toBeLessThanOrEqual(4);
+      // Measured 6 on every dialect: the catch-up's 5 (the site's types,
+      // its notes, the earlier collection's newest row and count) and the
+      // move's note.
+      expect(statements.length).toBeLessThanOrEqual(6);
     });
   }
 );
