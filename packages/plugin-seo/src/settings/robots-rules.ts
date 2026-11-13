@@ -106,13 +106,6 @@ const GUARDED: readonly { agent: string; name: string }[] = [
   { agent: "bingbot", name: "Bingbot" },
 ];
 
-/**
- * Pages no rule written for a part of the site names, each starting
- * differently: a rule keeping a crawler from all of them keeps it from the
- * whole site, where one naming a section (`/x`) keeps it from one only.
- */
-const ANY_PAGES = ["/x9q-page", "/0", "/~z"];
-
 /** The names of the AI crawlers the AI tools choice speaks for, in lower case. */
 const AI_NAMES: ReadonlyMap<string, string> = new Map(
   AI_CRAWLERS.map(crawler => [crawler.name.toLowerCase(), crawler.name])
@@ -219,11 +212,13 @@ function normalizedPath(value: string): string {
       at += 2;
       continue;
     }
-    const code = char.codePointAt(0) ?? 0;
+    // Read from the text itself, so a character beyond the basic plane is
+    // read whole, both halves of its surrogate pair.
+    const code = value.codePointAt(at) ?? 0;
     if (code > 0x7e) {
       const whole = String.fromCodePoint(code);
       out += encodeURIComponent(whole);
-      if (whole.length > 1) at += 1;
+      at += whole.length - 1;
       continue;
     }
     out += char;
@@ -434,12 +429,43 @@ function fieldFinding(
   return otherFieldFinding(line, field);
 }
 
+/** Whether a pattern matches every path: `/`, `/*` or `*`, with no end. */
+function matchesEverything(pattern: string): boolean {
+  // Anchored at the end, only a wildcard reaches every path (`/*$`).
+  if (pattern.endsWith("$")) return /^\/?\*+$/.test(pattern.slice(0, -1));
+  return /^\/?\**$/.test(pattern) && pattern !== "";
+}
+
+/**
+ * The rule that keeps `agent` away from the whole site, where one does: a
+ * disallow matching every path that no allow overrides, but one opening the
+ * home page alone (`/$`), which leaves every other page blocked. A rule that
+ * names part of the site is never one, however many parts are named.
+ */
+function wholeSiteRule(
+  groups: readonly RuleGroup[],
+  agent: string
+): PathRule | undefined {
+  const rules = rulesFor(groups, agent);
+  const everything = rules.filter(
+    rule => !rule.allow && matchesEverything(rule.pattern)
+  );
+  const widest = everything.sort((a, b) => specificity(b) - specificity(a))[0];
+  if (widest === undefined) return undefined;
+  const opened = rules.some(
+    rule =>
+      rule.allow &&
+      normalizedPath(rule.pattern) !== "/$" &&
+      specificity(rule) >= specificity(widest)
+  );
+  return opened ? undefined : widest;
+}
+
 /** The refusals of a rule that keeps a guarded crawler from the home page or the site. */
 function guardFindings(groups: readonly RuleGroup[]): RuleFinding[] {
   const refused = new Map<number, RuleFinding>();
   for (const { agent, name } of GUARDED) {
-    const each = ANY_PAGES.map(path => blockingRule(groups, agent, path));
-    const site = each.every(rule => rule !== undefined) ? each[0] : undefined;
+    const site = wholeSiteRule(groups, agent);
     const home = blockingRule(groups, agent, "/");
     const rule = site ?? home;
     if (rule === undefined || refused.has(rule.line)) continue;

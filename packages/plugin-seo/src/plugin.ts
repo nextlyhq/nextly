@@ -126,6 +126,7 @@ import {
 } from "./settings/content-types-route";
 import { SETTINGS_PAGE, SETTINGS_PAGE_HREF } from "./settings/contract";
 import {
+  listingOrigins,
   robotsRulesCheckRoute,
   sitemapPaths,
 } from "./settings/robots-rules-route";
@@ -975,22 +976,28 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     robotsRulesCheckRoute({
       readRules,
       aiCrawlers: options.aiCrawlers,
-      listPaths: async ctx =>
-        sitemapPaths(
-          (
-            await listPages(ctx, {
-              // Only each address's path is read, which no origin changes.
-              origin: "http://localhost",
-              readRules,
-              readStructuredDataRules:
-                problemChecks.readers.readStructuredDataRules,
-              codeRoutes,
-              ...(sitemapSubset === undefined
-                ? {}
-                : { collections: sitemapSubset }),
-            })
-          ).pages
-        ),
+      listPaths: async ctx => {
+        const paths: string[] = [];
+        // Each origin's sitemap, as the root sitemap answers on that host.
+        for (const origin of await listingOrigins(
+          ctx,
+          readRules,
+          options.baseUrl
+        )) {
+          const { pages } = await listPages(ctx, {
+            origin,
+            readRules,
+            readStructuredDataRules:
+              problemChecks.readers.readStructuredDataRules,
+            codeRoutes,
+            ...(sitemapSubset === undefined
+              ? {}
+              : { collections: sitemapSubset }),
+          });
+          paths.push(...sitemapPaths(pages));
+        }
+        return paths;
+      },
     }),
     settingsDocumentRoute(),
     // What the redirects screen reads and writes.

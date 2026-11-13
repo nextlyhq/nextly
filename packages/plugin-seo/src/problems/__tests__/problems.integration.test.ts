@@ -854,8 +854,10 @@ describe.each(getConfiguredTestDialects())(
       });
       // A settings save can change many pages' results: the full check says so.
       await until(t, found => found.some(row => row.outOfDate === true));
-      await checkSite(ctx, CHECKS);
-      let list = await problemList(ctx, CHECKS, everything);
+      // The sitemap lists every collection here.
+      const listed = { ...CHECKS, sitemap: {} };
+      await checkSite(ctx, listed);
+      let list = await problemList(ctx, listed, everything);
       expect(list.problems.find(p => p.kind === "robotsBlocked")).toMatchObject(
         {
           subject: { type: "posts", id, detail: "/blog/harbour" },
@@ -866,16 +868,23 @@ describe.each(getConfiguredTestDialects())(
 
       // A site that serves its own robots.txt, the plugin's switched off,
       // is not told the plugin's rules block anything.
-      await checkSite(ctx, { ...CHECKS, servesRobots: false });
-      list = await problemList(ctx, CHECKS, everything);
+      await checkSite(ctx, { ...listed, servesRobots: false });
+      list = await problemList(ctx, listed, everything);
       expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
+      // A page the sitemap does not list is not one it lists and blocks.
+      await checkSite(ctx, { ...listed, sitemap: { collections: ["notes"] } });
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
+      await checkSite(ctx, listed);
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).toContain("robotsBlocked");
 
       await t.nextly.updateSingle({
         slug: SEO_SETTINGS_SLUG,
         data: { _overwrite: true, robotsRules: null },
       });
-      await checkSite(ctx, CHECKS);
-      list = await problemList(ctx, CHECKS, everything);
+      await checkSite(ctx, listed);
+      list = await problemList(ctx, listed, everything);
       expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
     });
   }

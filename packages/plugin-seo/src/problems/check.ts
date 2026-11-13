@@ -51,6 +51,7 @@ import {
   crawledPathOf,
   robotsBlockOf,
   servedGroups,
+  type RobotsBlock,
 } from "../settings/robots-blocks";
 import type { ReadSocialCardRules } from "../social/card";
 import { shareImageProblems } from "../social/problems";
@@ -123,6 +124,44 @@ export interface ProblemChecks {
    * where it names only some.
    */
   sitemap?: { collections?: readonly string[] };
+}
+
+/**
+ * Whether the sitemap lists pages of `type`: none where no sitemap is
+ * served, a Single's always, a collection's where the sitemap names none or
+ * names it.
+ */
+function inSitemap(checks: ProblemChecks, type: string): boolean {
+  const sitemap = checks.sitemap;
+  if (sitemap === undefined) return false;
+  if (sitemap.collections === undefined) return true;
+  return (
+    pageTypeOf(type).kind === "single" || sitemap.collections.includes(type)
+  );
+}
+
+/**
+ * The robots.txt rule keeping search engines from a page the sitemap lists,
+ * as page facts, where one does: judged over the file the plugin serves,
+ * so nothing where it serves none or the sitemap leaves the page out.
+ */
+function robotsBlockFor(
+  checks: ProblemChecks,
+  type: string,
+  rules: Awaited<ReturnType<ReadRules>>,
+  ownAddress: string
+): { robotsBlock?: RobotsBlock } {
+  if (checks.servesRobots === false || !inSitemap(checks, type)) return {};
+  const robotsBlock = robotsBlockOf(
+    servedGroups({
+      aiCrawlers: rules.aiCrawlers ?? "all",
+      ...(rules.robotsRules === undefined
+        ? {}
+        : { ownRules: rules.robotsRules.text }),
+    }),
+    crawledPathOf(ownAddress)
+  );
+  return robotsBlock === undefined ? {} : { robotsBlock };
 }
 
 /** Every type the checks read pages of, by its kept key. */
@@ -357,22 +396,10 @@ async function examine(
     detail: ownAddress,
     ...(locale === undefined ? {} : { locale }),
   };
-  const robotsBlock =
-    checks.servesRobots === false
-      ? undefined
-      : robotsBlockOf(
-          servedGroups({
-            aiCrawlers: rules.aiCrawlers ?? "all",
-            ...(rules.robotsRules === undefined
-              ? {}
-              : { ownRules: rules.robotsRules.text }),
-          }),
-          crawledPathOf(ownAddress)
-        );
   const problems = pageProblems({
     subject,
     answer,
-    ...(robotsBlock === undefined ? {} : { robotsBlock }),
+    ...robotsBlockFor(checks, type, rules, ownAddress),
     canonicalIsOwn: canonicalIsOwn(
       answer,
       productionAddresses[0] ?? NO_ORIGIN,

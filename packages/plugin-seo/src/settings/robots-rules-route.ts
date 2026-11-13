@@ -13,6 +13,8 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
+import { productionAddressesOf } from "../canonical";
+import { originOf } from "../origin";
 import { MANAGE_SEO_PERMISSION } from "../permissions";
 import type { ReadRules } from "../resolver/provider";
 
@@ -47,6 +49,23 @@ export function sitemapPaths(
   pages: readonly { loc: string; path: string }[]
 ): string[] {
   return pages.map(page => crawledPathOf(page.loc));
+}
+
+/**
+ * The origins the sitemap is read at: every production address, so each
+ * language on its own domain is listed as its sitemap lists it; else the
+ * plugin's configured origin; else this host, as a request without either
+ * would name it.
+ */
+export async function listingOrigins(
+  ctx: PluginContext,
+  readRules: ReadRules,
+  baseUrl: string | undefined
+): Promise<string[]> {
+  const rules = await readRules(ctx, undefined);
+  const production = productionAddressesOf(rules.productionAddresses);
+  if (production.length > 0) return production;
+  return [originOf(baseUrl) ?? "http://localhost"];
 }
 
 const CHECK_BODY = z

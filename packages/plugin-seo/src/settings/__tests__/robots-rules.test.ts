@@ -19,6 +19,7 @@ describe("readOwnRules: what is refused", () => {
   it.each([
     ["User-agent: *\nDisallow: /", 2, "every crawler", "the whole site"],
     ["User-agent: *\nDisallow: /*", 2, "every crawler", "the whole site"],
+    ["User-agent: *\nDisallow: /*$", 2, "every crawler", "the whole site"],
     ["User-agent: Googlebot\nDisallow: /", 2, "Googlebot", "the whole site"],
     ["user-agent: BINGBOT\ndisallow: /", 2, "Bingbot", "the whole site"],
     ["User-agent: *\nDisallow: /$", 2, "every crawler", "the home page"],
@@ -242,5 +243,25 @@ describe("reading rules as crawlers do, at any size", () => {
     expect(
       blockingRule(groupsOf("User-agent: *\nDisallow: /a/b"), "x", "/a%2Fb")
     ).toBeUndefined();
+  });
+});
+
+describe("round two of reading rules", () => {
+  it("reads a rule holding a character beyond the basic plane", () => {
+    const text = "User-agent: *\nDisallow: /\u{1F600}";
+    expect(() => readOwnRules(text)).not.toThrow();
+    expect(blockingRule(groupsOf(text), "x", "/%F0%9F%98%80/a")?.line).toBe(2);
+  });
+
+  it("accepts section rules that happen to cover any three sample pages", () => {
+    expect(
+      refusals("User-agent: *\nDisallow: /x\nDisallow: /0\nDisallow: /~")
+    ).toEqual([]);
+  });
+
+  it("calls a block of everything with an exception the home page's only", () => {
+    expect(
+      refusals("User-agent: *\nDisallow: /\nAllow: /blog")[0]?.message
+    ).toContain("away from the home page");
   });
 });
