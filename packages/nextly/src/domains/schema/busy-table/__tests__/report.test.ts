@@ -229,7 +229,7 @@ describe("tableBusyError", () => {
       );
       const lines = error.publicMessage.split("\n");
       expect(lines[0]).toBe(
-        "`0007_add_keys.sql` stopped after one try: table busy."
+        "`0007_add_keys.sql` stopped without trying again: table busy."
       );
       expect(lines[1]).toBe(
         `It was not tried again, since its statement 3, ${kind}, may not be sent again. ` +
@@ -239,7 +239,10 @@ describe("tableBusyError", () => {
       expect(lines[lines.length - 1]).toMatch(
         /^Run it again once the holder ends or the holding session is ended: `0007_add_keys\.sql` was undone whole/
       );
-      expect(error.publicMessage).not.toContain("migrate:resolve");
+      // How to clear an attempt a refusal names, before running it again.
+      expect(error.publicMessage).toContain(
+        "nextly migrate:resolve --failed-cleanup 0007_add_keys.sql"
+      );
     }
   );
 

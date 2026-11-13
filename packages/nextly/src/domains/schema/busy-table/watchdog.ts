@@ -86,6 +86,12 @@ const NO_OP: TryWatchdog = {
 export interface PreparedTryWatchdog extends TryWatchdog {
   /** Starts watching `session`; a second call is ignored. */
   watch(session: string): void;
+  /**
+   * Resolves once no cancel is under way. The runner awaits it before each statement, so a
+   * cancel decided while one statement waited can never land on the next (MySQL's `KILL QUERY`
+   * ends whatever its session runs when it arrives).
+   */
+  idle(): Promise<void>;
 }
 
 /**
@@ -108,7 +114,9 @@ export function prepareTryWatchdog(
     beforeCancel?: (session: string) => Promise<void>;
   } = {}
 ): PreparedTryWatchdog {
-  if (dialect === "sqlite") return { ...NO_OP, watch: () => undefined };
+  if (dialect === "sqlite") {
+    return { ...NO_OP, watch: () => undefined, idle: () => Promise.resolve() };
+  }
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
   let given: (session: string | undefined) => void = () => undefined;
   const sessionGiven = new Promise<string | undefined>(resolve => {
@@ -122,19 +130,19 @@ export function prepareTryWatchdog(
   let lastSeenWaitingAt: number | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let wake: (() => void) | undefined;
+  // A cancel under way (the holder's read, then the cancel), awaited by `idle`.
+  let cancelling: Promise<void> = Promise.resolve();
 
-  async function poll(target: number): Promise<void> {
+  /** Whether the session is waiting for a lock now. */
+  async function waitingNow(target: number): Promise<boolean> {
     const rows = await adapter.queryStatement<{ state: unknown }>(
       waitingQuery(dialect, target)
     );
-    const now = performance.now();
-    if (!rows.some(row => isWaiting(dialect, row.state))) {
-      lastSeenWaitingAt = undefined;
-      return;
-    }
-    if (lastSeenWaitingAt !== undefined) waitedMs += now - lastSeenWaitingAt;
-    lastSeenWaitingAt = now;
-    if (waitedMs < tryMs || stopped) return;
+    return rows.some(row => isWaiting(dialect, row.state));
+  }
+
+  /** Reads the holder, then ends the waiting statement, unless it stopped waiting meanwhile. */
+  async function cancel(target: number): Promise<void> {
     // What holds the table is read before the cancel; a failed read leaves the cancel to go on.
     await options.beforeCancel?.(String(target)).catch(() => undefined);
     if (dialect === "postgresql") {
@@ -143,10 +151,28 @@ export function prepareTryWatchdog(
       );
       // No row: the session stopped waiting between the two asks, so it goes on, unended.
       fired = cancelled.some(row => row.cancelled === true);
-    } else {
-      await adapter.queryStatement(cancelQuery(dialect, target));
-      fired = true;
+      return;
     }
+    // MySQL's kill cannot be made conditional: asked again just before it, so a statement that
+    // got its lock while the holder was read goes on; the runner holds its next statement until
+    // this has ended (`idle`), so the kill can only reach the statement that waited.
+    if (!(await waitingNow(target))) return;
+    await adapter.queryStatement(cancelQuery(dialect, target));
+    fired = true;
+  }
+
+  async function poll(target: number): Promise<void> {
+    const waiting = await waitingNow(target);
+    const now = performance.now();
+    if (!waiting) {
+      lastSeenWaitingAt = undefined;
+      return;
+    }
+    if (lastSeenWaitingAt !== undefined) waitedMs += now - lastSeenWaitingAt;
+    lastSeenWaitingAt = now;
+    if (waitedMs < tryMs || stopped) return;
+    cancelling = cancel(target).catch(() => undefined);
+    await cancelling;
   }
 
   async function run(): Promise<void> {
@@ -172,6 +198,7 @@ export function prepareTryWatchdog(
       sessionNumber(session);
       given(session);
     },
+    idle: () => cancelling,
     async stop() {
       stopped = true;
       given(undefined);
