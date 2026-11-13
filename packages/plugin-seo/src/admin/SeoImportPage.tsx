@@ -92,7 +92,6 @@ import {
   RESULT_WORDS,
   showsVersions,
   valueCounts,
-  versionWords,
 } from "./import-report";
 import { entryHref } from "./pages-view";
 import { AdminLink, PAGES_STEP, SeoTrail } from "./section";
@@ -724,19 +723,22 @@ function NeverServedNote({
 function ValueCell({
   entry,
   place,
+  narrow,
 }: {
   entry: ImportReportEntry;
   place: "title" | "description";
+  /** Whether the table has a Version column beside, so less room. */
+  narrow: boolean;
 }): JSX.Element {
   const result = resultOf(entry, place);
   const value = entry.values[place];
   return (
     <div className="flex items-start justify-between gap-3">
-      {/* At most 13rem wide and two lines, so the table, which sizes its
-          columns to their content, fits its card with every result in view;
-          the whole value is the line's title. */}
+      {/* At most 13rem wide (8rem beside a Version column) and two lines, so
+          the table, which sizes its columns to their content, fits its card
+          with every result in view; the whole value is the line's title. */}
       <span
-        className="line-clamp-2 min-w-0 max-w-52 whitespace-normal text-muted-foreground [overflow-wrap:anywhere]"
+        className={`line-clamp-2 min-w-0 whitespace-normal text-muted-foreground [overflow-wrap:anywhere] ${narrow ? "max-w-32" : "max-w-52"}`}
         title={value ?? undefined}
       >
         {value ?? ""}
@@ -791,6 +793,28 @@ function Counts({ run }: { run: DryRunBody }): JSX.Element {
         </Card>
       ))}
     </div>
+  );
+}
+
+/** A row's version: its language, where it has one, over its form. */
+function VersionCell({ row }: { row: ImportReportEntry }): JSX.Element {
+  const language = row.language ?? row.locale;
+  if (language === undefined) {
+    return (
+      <span className="whitespace-nowrap text-foreground">
+        {row.version ?? "published"}
+      </span>
+    );
+  }
+  return (
+    <span className="grid whitespace-nowrap">
+      <span className="text-foreground">{language}</span>
+      <span className="text-xs text-muted-foreground">
+        {/* Read as one name: "English · published". */}
+        <span className="sr-only"> · </span>
+        {row.version ?? "published"}
+      </span>
+    </span>
   );
 }
 
@@ -885,10 +909,10 @@ function CheckStep({ run }: { run: DryRunBody }): JSX.Element {
           {
             name: "version",
             header: "Version",
+            // Its language over its form, so the column stays narrow
+            // enough for the table to fit its card on a smaller screen.
             cell: ({ row }: { row: ImportReportEntry }) => (
-              <span className="whitespace-nowrap text-foreground">
-                {versionWords(row)}
-              </span>
+              <VersionCell row={row} />
             ),
           },
         ]
@@ -896,12 +920,16 @@ function CheckStep({ run }: { run: DryRunBody }): JSX.Element {
     {
       name: "title",
       header: "Title on Google",
-      cell: ({ row }) => <ValueCell entry={row} place="title" />,
+      cell: ({ row }) => (
+        <ValueCell entry={row} place="title" narrow={versions} />
+      ),
     },
     {
       name: "description",
       header: "Description on Google",
-      cell: ({ row }) => <ValueCell entry={row} place="description" />,
+      cell: ({ row }) => (
+        <ValueCell entry={row} place="description" narrow={versions} />
+      ),
     },
   ];
   return (
