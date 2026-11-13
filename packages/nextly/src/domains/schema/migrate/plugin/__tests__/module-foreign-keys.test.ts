@@ -238,4 +238,68 @@ describe("assertModuleForeignKeysResolve", () => {
     expect(message).toContain("fx__future");
     expect(message).toContain("002_future");
   });
+
+  describe("a key the plugin contributed to a dependency's table", () => {
+    /** A module that also contributes `foreign` to another owner, recording `keys` as its own. */
+    const contributing = (
+      name: string,
+      tables: TableSpec[],
+      foreign: TableSpec,
+      keys: string[]
+    ): PluginMigration => {
+      const sides = (list: TableSpec[]) => ({
+        postgresql: { tables: list },
+        mysql: { tables: list },
+        sqlite: { tables: list },
+      });
+      const elements = {
+        [foreign.name]: {
+          columns: ["ref"],
+          indexes: [],
+          foreignKeys: keys,
+          checks: [],
+        },
+      };
+      const content = {
+        name,
+        schemaVersion: 1,
+        dialects: {
+          postgresql: { up: [], down: [] },
+          mysql: { up: [], down: [] },
+          sqlite: { up: [], down: [] },
+        },
+        snapshot: sides(tables),
+        before: sides([]),
+        contributed: sides([foreign]),
+        contributedBefore: sides([]),
+        contributions: {
+          postgresql: elements,
+          mysql: elements,
+          sqlite: elements,
+        },
+      };
+      return { ...content, checksum: migrationChecksum(content) };
+    };
+
+    it("is judged against the chain like a key on its own table", () => {
+      // 001 keys the dependency's table at fx__parents, which only 002 creates.
+      const message = messageOf([
+        contributing("001_init", [], keying("dep__items", "fx__parents"), [
+          "fk_dep__items_ref",
+        ]),
+        module("002_parents", [plain("fx__parents")]),
+      ]);
+      expect(message).toContain("001_init");
+      expect(message).toContain("fk_dep__items_ref");
+      expect(message).toContain("002_parents");
+    });
+
+    it("leaves a key on the copy that the plugin never contributed to the owner", () => {
+      const message = messageOf([
+        contributing("001_init", [], keying("dep__items", "fx__parents"), []),
+        module("002_parents", [plain("fx__parents")]),
+      ]);
+      expect(message).toBe("");
+    });
+  });
 });
