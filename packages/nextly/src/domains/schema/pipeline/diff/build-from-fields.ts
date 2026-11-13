@@ -28,7 +28,6 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../../errors/nextly-error";
-import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
 import { builderColumnIsUnique } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupStructuralDefaults } from "../../../field-groups/services/field-group-schema-service";
@@ -287,7 +286,7 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
     // one-to-one's column unique, and take the uniqueness away when it stops being one.
     const unique = context.columnIsUnique
       ? context.columnIsUnique(field)
-      : builderColumnIsUnique(field as unknown as FieldDefinition);
+      : builderColumnIsUnique(field);
     // Asked through the same rule the generators use. Where a dialect cannot key the column they
     // keep the uniqueness inline and write no index, so declaring one here would make every diff
     // propose a `CREATE UNIQUE INDEX` the server refuses.

@@ -654,7 +654,7 @@ async function settledRows(
     if (resolution.kind === "fill") {
       // Unique by its Unique mark, or as a relationship stored one-to-one (`builderColumnIsUnique`):
       // one value would repeat across the rows it fills either way.
-      if (builderColumnIsUnique(field as unknown as FieldDefinition)) {
+      if (builderColumnIsUnique(field)) {
         throw NextlyError.validation({
           errors: [
             {
