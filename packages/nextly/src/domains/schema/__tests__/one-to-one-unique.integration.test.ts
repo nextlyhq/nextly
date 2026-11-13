@@ -840,6 +840,50 @@ describeEachDialect(
       expect(t).toBeDefined();
     }, 120_000);
 
+    // The Single's schema update writes its own ALTER: the column comes back with the edit, and its
+    // unique index with it, made once.
+    it("makes a Single's many-to-many edited into a one-to-one unique", async () => {
+      const t = await boot(dialect, "manyToOne");
+      const title = { name: "title", type: "text" };
+      vi.stubEnv("NODE_ENV", "development");
+      try {
+        await dispatchSingles(
+          "createSingle",
+          {},
+          {
+            slug: "o2o_hub",
+            label: "Hub",
+            fields: [
+              title,
+              {
+                name: "person",
+                type: "relationship",
+                options: { target: PEOPLE, relationType: "manyToMany" },
+              },
+            ],
+          }
+        );
+        await dispatchSingles(
+          "updateSingleSchema",
+          { slug: "o2o_hub" },
+          { fields: [title, storedPerson("oneToOne")] }
+        );
+      } finally {
+        vi.unstubAllEnvs();
+      }
+
+      const live = await introspectLiveSnapshot(
+        t.adapter.getDrizzle(),
+        t.adapter.dialect,
+        ["single_o2o_hub"]
+      );
+      expect(
+        live.tables[0]?.indexes?.some(
+          index => index.unique && index.columns.join() === "person"
+        )
+      ).toBe(true);
+    }, 120_000);
+
     it("opens a Single's one-to-one the earlier Builder stored with its target and Unique", async () => {
       await boot(dialect, "oneToOne", { legacy: true });
       vi.stubEnv("NODE_ENV", "development");
@@ -959,6 +1003,25 @@ describeEachDialect(
 
     // The relationship's key needs an index on MySQL, and the Unique mark replaces the plain one
     // with a unique one as the field leaves translation: the unique one is made first.
+    // The column comes back with the edit, and its unique index with it, made once.
+    it("makes a many-to-many edited into a one-to-one unique", async () => {
+      const t = await boot(dialect, "manyToOne");
+      await apply(t, [
+        { name: "title", type: "text" },
+        {
+          name: "person",
+          type: "relationship",
+          options: { target: PEOPLE, relationType: "manyToMany" },
+        },
+      ]);
+
+      await apply(t, profileFields("oneToOne"));
+
+      const ada = await aPerson(t, "Ada");
+      await aProfile(t, ada);
+      expect(await refusedAsRepeat(aProfile(t, ada))).toBe(true);
+    }, 120_000);
+
     it("makes a many-to-one renamed and marked Unique in one save unique under its new name", async () => {
       const t = await boot(dialect, "manyToOne");
       const ada = await aPerson(t, "Ada");
