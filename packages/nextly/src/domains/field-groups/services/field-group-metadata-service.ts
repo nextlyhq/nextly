@@ -1127,6 +1127,7 @@ export class FieldGroupMetadataService {
     );
 
     const moved = await reconcileComponentCompanion({
+      busyTable: { adapter, notify: line => this.logger.warn(line) },
       slug: args.existing.slug,
       tableName: args.existing.tableName,
       oldFields: args.existing.fields as unknown as FieldDefinition[],
@@ -1432,7 +1433,11 @@ export class FieldGroupMetadataService {
       const { applyMigrationStatements } = await import(
         "../../schema/services/apply-migration-statements"
       );
-      await applyMigrationStatements(adapter, migrationSQL);
+      // Waits for a table another session is using in short tries, as `nextly migrate` waits.
+      await applyMigrationStatements(adapter, migrationSQL, {
+        adapter,
+        notify: line => this.logger.warn(line),
+      });
 
       // Observed, not assumed. "Applied" has to mean the table is there, holding every requested
       // column as the type asked for (`columnsTheCreateLeftOut`).
@@ -1467,6 +1472,7 @@ export class FieldGroupMetadataService {
     // thrown: the main table exists and the row describes it, which is what makes a retry possible.
     try {
       await reconcileComponentCompanion({
+        busyTable: { adapter, notify: line => this.logger.warn(line) },
         slug: input.slug,
         tableName: input.tableName,
         oldFields: [],

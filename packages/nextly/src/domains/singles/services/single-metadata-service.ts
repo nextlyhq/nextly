@@ -101,6 +101,8 @@ import { writeRegistryRowsWith } from "../../schema/schema-version";
 import {
   applyMigrationStatements,
   applyMigrationWhole,
+  applyStatementsInTries,
+  type BusyTableWait,
 } from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
@@ -1994,10 +1996,17 @@ export class SingleMetadataService {
     const rename = await this.companionRenameFirst(adapter, input, plan);
     if (!rename) return [];
     try {
-      for (const statement of rename.forward) {
-        await adapter.executeQuery(statement);
-      }
+      // Waits for a busy translations table in short tries, as `nextly migrate` waits.
+      await applyStatementsInTries(
+        this.busyTableWait(adapter),
+        rename.forward,
+        "the translations table's rename"
+      );
     } catch (error) {
+      // Tries that ran out say so themselves: the table, what holds it, and that nothing changed.
+      if (NextlyError.is(error) && error.code === "NEXTLY_TABLE_BUSY") {
+        throw error;
+      }
       throw new NextlyError({
         code: "NEXTLY_MIGRATION_APPLY_FAILED",
         publicMessage:
@@ -2070,6 +2079,14 @@ export class SingleMetadataService {
   }
 
   /**
+   * How this save's statements wait for a table another session is using: in short tries, as
+   * `nextly migrate` waits, each try after the first noted in the log.
+   */
+  private busyTableWait(adapter: DrizzleAdapter): BusyTableWait {
+    return { adapter, notify: line => this.logger.warn(line) };
+  }
+
+  /**
    * Applies the save's main migration. The collection save's runner, so the two apply a migration
    * the same way; MySQL passes over what an earlier refused save already applied, since this plan
    * is drawn from the registry rather than the live table.
@@ -2092,6 +2109,7 @@ export class SingleMetadataService {
         migrationSQL: plan.migrationSQL,
         entity: "single",
         tolerateApplied: true,
+        busyTable: this.busyTableWait(adapter),
         sqliteNullability: plan.sqliteNullability && {
           adapter,
           tableName,
@@ -2234,6 +2252,7 @@ export class SingleMetadataService {
       );
       try {
         await reconcileSingleCompanion({
+          busyTable: this.busyTableWait(adapter),
           slug: input.slug,
           tableName,
           oldFields: plan.previousFields,
@@ -2404,6 +2423,7 @@ export class SingleMetadataService {
         migrationSQL,
         entity: "single",
         sqliteNullability: { adapter, tableName, required },
+        busyTable: this.busyTableWait(adapter),
       });
     try {
       if (dialect !== "mysql") {
@@ -2442,7 +2462,11 @@ export class SingleMetadataService {
   ): Promise<void> {
     for (const step of [...steps].reverse()) {
       try {
-        await applyMigrationStatements(adapter, step.inverse);
+        await applyMigrationStatements(
+          adapter,
+          step.inverse,
+          this.busyTableWait(adapter)
+        );
       } catch (error) {
         this.logger.error(
           `[Singles] Could not take the ${step.setting} setting of "${step.field}" off again ` +
@@ -2671,7 +2695,11 @@ export class SingleMetadataService {
     try {
       // The shared runner, not a private copy: it owns both the splitting rule and the tolerance
       // that makes re-running over half-applied schema the repair case rather than a dead end.
-      await applyMigrationStatements(adapter, migrationSQL);
+      await applyMigrationStatements(
+        adapter,
+        migrationSQL,
+        this.busyTableWait(adapter)
+      );
     } catch (error) {
       this.logger.error(
         `[Singles] Migration execution failed for "${input.tableName}": ${
@@ -2749,6 +2777,7 @@ export class SingleMetadataService {
         "./reconcile-single-companion"
       );
       await reconcileSingleCompanion({
+        busyTable: this.busyTableWait(adapter),
         slug: input.slug,
         tableName: input.tableName,
         oldFields: [],
