@@ -83,6 +83,7 @@ import {
 } from "../../domains/schema/migrate/command-access";
 import {
   planCoreDeletions,
+  planCoreReconcile,
   reconcileCore,
 } from "../../domains/schema/migrate/core-reconcile";
 import {
@@ -1241,8 +1242,8 @@ export async function previewMigrate(args: {
     | (Pick<ExtensionSchema, "pluginPrefixes"> &
         Partial<Pick<ExtensionSchema, "entityColumns" | "entityIndexes">>)
     | undefined;
-  /** As `MigrateCoreDeps.planCoreDeletionsFn`. */
-  planCoreDeletionsFn?: typeof planCoreDeletions;
+  /** The core upgrade's plan; injected for tests (`planCoreReconcile`). */
+  planCoreReconcileFn?: typeof planCoreReconcile;
 }): Promise<void> {
   const { adapter, db, dialect, logger } = args;
   // Refused as a real run refuses, before anything is listed: a plugin whose
@@ -1347,9 +1348,11 @@ export async function previewMigrate(args: {
 }
 
 /**
- * What the run's core upgrade would delete (`planCoreDeletions`), under the
- * heading a real run lists it under, with the consent it needs. Nothing when
- * it deletes nothing.
+ * What the run's core upgrade would do that a dry run must name, from the
+ * reconcile's own plan (`planCoreReconcile`): the refusal a real run makes
+ * before its first statement when drizzle-kit cannot plan the push, and what
+ * it would delete, under the heading a real run lists it under, with the
+ * consent it needs. Nothing when it does neither.
  */
 async function previewCoreDeletions(
   args: Parameters<typeof previewMigrate>[0],
@@ -1364,7 +1367,7 @@ async function previewCoreDeletions(
           entityIndexes: extensionSchema.entityIndexes,
         }
       : undefined;
-  const deletions = await (args.planCoreDeletionsFn ?? planCoreDeletions)({
+  const plan = await (args.planCoreReconcileFn ?? planCoreReconcile)({
     db,
     dialect,
     fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
@@ -1373,9 +1376,16 @@ async function previewCoreDeletions(
     }),
     ...(contributions !== undefined ? { contributions } : {}),
   });
-  if (deletions.length === 0) return;
+  if (plan.unsupported !== undefined) {
+    logger.info(`  • ${CORE_UPGRADE_LABEL}`);
+    logger.info(
+      `    ✖ a real run would refuse before applying anything: ${plan.unsupported}`
+    );
+    return;
+  }
+  if (plan.deletions.length === 0) return;
   logger.info(`  • ${CORE_UPGRADE_LABEL}`);
-  previewDeletions(deletions, logger);
+  previewDeletions(plan.deletions, logger);
 }
 
 /** Each plugin module a real run reaches, with what it would refuse and what it deletes. */

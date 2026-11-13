@@ -38,8 +38,17 @@ export function coreUpgradeSource(deletion: Deletion): DeletionSource {
   const change =
     deletion.kind === "unnamed"
       ? `${deletion.description}\u0000${deletion.fingerprint ?? ""}`
-      : `${deletionKey(deletion)}\u0000${deletion.reason ?? ""}`;
+      : `${deletionKey(deletion)}\u0000${changeOf(deletion.reason)}`;
   return deletionSource(CORE_UPGRADE_LABEL, change);
+}
+
+/**
+ * Why a deletion goes, without a count it ends with in parentheses (`… (3
+ * rows hold none)`): the count can move between the two judgements, the change
+ * cannot.
+ */
+function changeOf(reason: string | undefined): string {
+  return (reason ?? "").replace(/\s+\([^)]*\)$/, "");
 }
 
 /** `deletions`, each listed under the core upgrade's heading. */

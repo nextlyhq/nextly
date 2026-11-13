@@ -318,8 +318,11 @@ export async function runReconcileCore(
       // changes the ledger past: an older build stops with exit 3, an edited
       // applied file with exit 2, an unresolved attempt as it says.
       await deps.checkAppHistory();
+      // Read again under the lock: a field-group storage migration this run
+      // waited behind may have renamed the registry, and reconciling against
+      // the name read before would create the old one empty beside it.
       await reconcile({
-        ...target,
+        ...(await reconcileTarget(adapter, deps.contributions)),
         // The core tables as they stand under the lock, accepted only as
         // agreed before it, or as the consent covers them.
         judgeDeletions: async deletions => {

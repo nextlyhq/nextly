@@ -355,19 +355,26 @@ async function coreDeletionsAmong(
 ): Promise<{ destructive: Operation[]; deletions: Deletion[] }> {
   const destructive = await destructiveOpsOf(deps.db, ops);
   if (destructive.length === 0) return { destructive, deletions: [] };
-  const named = await Promise.all(
-    destructive.map(op => withRequiredCount(deps, op, coreDeletionOf(op)))
+  const counted = await countDeletions(
+    destructive.map(coreDeletionOf),
+    deps.db,
+    deps.dialect
   );
   return {
     destructive,
-    deletions: await countDeletions(named, deps.db, deps.dialect),
+    deletions: await Promise.all(
+      counted.map((deletion, at) =>
+        withRequiredCount(deps, destructive[at], deletion)
+      )
+    ),
   };
 }
 
 /**
- * A column made required is counted by the rows it would fail on, those
- * holding NULL, rather than by the values it keeps. Left uncounted where the
- * database cannot be read.
+ * A column made required is described by the rows it would fail on, those
+ * holding NULL, in its reason: the listing's count of a column is its
+ * non-empty values, which are not what is at risk here, so none is shown.
+ * Without a count when the database cannot be read.
  */
 async function withRequiredCount(
   deps: Pick<ReconcileCoreDeps, "db" | "dialect">,
@@ -377,19 +384,21 @@ async function withRequiredCount(
   if (op.type !== "change_column_nullable" || deletion.kind !== "column") {
     return deletion;
   }
+  const uncounted: Deletion = { ...deletion, count: undefined };
   try {
     const { countNulls } = await import("../pipeline/classifier/count-helpers");
+    const nulls = await countNulls(
+      deps.db,
+      deps.dialect,
+      op.tableName,
+      op.columnName
+    );
     return {
-      ...deletion,
-      count: await countNulls(
-        deps.db,
-        deps.dialect,
-        op.tableName,
-        op.columnName
-      ),
+      ...uncounted,
+      reason: `${deletion.reason ?? "becomes required"} (${nulls === 1 ? "1 row holds" : `${nulls} rows hold`} none)`,
     };
   } catch {
-    return { ...deletion, count: undefined };
+    return uncounted;
   }
 }
 
@@ -471,9 +480,7 @@ export function coreDestructiveRefused(
 }
 
 /** The words of `coreDestructiveRefused`. */
-function coreDestructiveRefusedMessage(
-  deletions: readonly Deletion[]
-): string {
+function coreDestructiveRefusedMessage(deletions: readonly Deletion[]): string {
   return (
     "Bringing Nextly's own tables up to date deletes data: " +
     deletions.map(describeDeletion).join("; ") +
@@ -508,9 +515,7 @@ export function coreUpgradeUnsupported(
 }
 
 /** The words of `coreUpgradeUnsupported`. */
-function coreUpgradeUnsupportedMessage(
-  tables: readonly string[]
-): string {
+function coreUpgradeUnsupportedMessage(tables: readonly string[]): string {
   const named = tables.length === 0 ? "Nextly's own tables" : tables.join(", ");
   return (
     `This version of Nextly cannot bring ${named} up to date from this database in one step, ` +

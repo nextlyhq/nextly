@@ -228,6 +228,51 @@ describe("reconcileCore (Phase 1)", () => {
     });
   });
 
+  it("describes a column made required by the rows it fails on, not by its values", async () => {
+    // A column the declaration makes required, nullable in the database.
+    const table = desired.tables.find(t =>
+      t.columns.some(c => c.nullable === false && c.primaryKey !== true)
+    );
+    const column = table?.columns.find(
+      c => c.nullable === false && c.primaryKey !== true
+    );
+    if (table === undefined || column === undefined) throw new Error("none");
+    const live: NextlySchemaSnapshot = {
+      tables: desired.tables.map(t =>
+        t === table
+          ? {
+              ...t,
+              columns: t.columns.map(c =>
+                c === column ? { ...c, nullable: true } : c
+              ),
+            }
+          : t
+      ),
+    };
+    // Three rows hold NULL in it, whatever is asked.
+    const db = { all: () => [{ count: 3 }], run: () => {} };
+    const judgeDeletions = vi.fn().mockRejectedValue(new Error("stop"));
+
+    await expect(
+      reconcileCore({
+        db,
+        dialect: "sqlite",
+        introspect: () => Promise.resolve(live),
+        applyCore: vi.fn(),
+        judgeDeletions,
+      })
+    ).rejects.toThrow("stop");
+
+    const [deletion] = judgeDeletions.mock.calls[0][0] as Array<{
+      count?: number;
+      reason?: string;
+    }>;
+    expect(deletion.count).toBeUndefined();
+    expect(deletion.reason).toBe(
+      "becomes required, which fails on a row without a value (3 rows hold none)"
+    );
+  });
+
   it("plans a push drizzle-kit cannot plan as the refusal a run would make", async () => {
     const { UnplannablePushError } = await import("../pipeline/fresh-push");
     const plan = await planCoreReconcile({

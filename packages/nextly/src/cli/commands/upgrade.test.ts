@@ -172,6 +172,74 @@ describe("runReconcileCore", () => {
     expect(reconcile).toHaveBeenCalledOnce();
   });
 
+  it("an agreement holds when only the count of a change moved by the time of the lock", async () => {
+    const required = (rows: number) => ({
+      kind: "column" as const,
+      table: "users",
+      column: "name",
+      core: true,
+      reason: `becomes required, which fails on a row without a value (${rows} rows hold none)`,
+    });
+    const reconcile = vi.fn(
+      async (deps: {
+        judgeDeletions: (deletions: readonly unknown[]) => Promise<void>;
+      }) => {
+        await deps.judgeDeletions([required(5)]);
+        return { changed: true };
+      }
+    );
+
+    await runReconcileCore(
+      {
+        adapter: adapter(),
+        consent: resolveDataLossConsent({}),
+        interactive: true,
+        askToDelete: () => Promise.resolve(true),
+        checkAppHistory: () => Promise.resolve(),
+      },
+      {
+        reconcileCore: reconcile as never,
+        planCoreDeletions: () => Promise.resolve([required(3)]),
+      }
+    );
+    expect(reconcile).toHaveBeenCalledOnce();
+  });
+
+  it("reads the field-group registry again under the lock, where a run it waited behind renamed it", async () => {
+    const names = ["dynamic_components", "dynamic_field_groups"];
+    const tables = (
+      testDb.sqlite
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .all() as Array<{ name: string }>
+    ).map(row => row.name);
+    const before = names.find(name => tables.includes(name));
+    expect(before).toBeDefined();
+    const after = names.find(name => name !== before) as string;
+    const reconcile = vi.fn().mockResolvedValue({ changed: false });
+
+    await runReconcileCore(
+      {
+        adapter: adapter(),
+        consent: resolveDataLossConsent({}),
+        interactive: false,
+        checkAppHistory: () => Promise.resolve(),
+      },
+      {
+        reconcileCore: reconcile,
+        planCoreDeletions: async target => {
+          expect(target.fieldGroupRegistryTable).toBe(before);
+          // The field-group storage migration this run waited behind.
+          testDb.sqlite.exec(`ALTER TABLE ${before} RENAME TO ${after}`);
+          return [];
+        },
+      }
+    );
+
+    expect(reconcile.mock.calls[0][0]).toMatchObject({
+      fieldGroupRegistryTable: after,
+    });
+  });
+
   it("at a terminal lists what it deletes and asks once; a no changes nothing", async () => {
     const reconcile = vi.fn();
     const askToDelete = vi.fn().mockResolvedValue(false);
