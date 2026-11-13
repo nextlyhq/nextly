@@ -38,7 +38,11 @@ const STORED_HOOKS = [
     hookId: "auto-slug",
     hookType: "beforeChange",
     enabled: true,
-    config: { sourceField: "headline", targetField: "path" },
+    config: {
+      sourceField: "headline",
+      targetField: "path",
+      overwriteExisting: false,
+    },
     order: 1,
   },
   {
@@ -91,23 +95,25 @@ async function makeCollection(
   const slug = `${prefix}_${Date.now()}`;
   // Stored as a field the Builder made is stored, with its flags written out,
   // so a Builder save finds no schema change that is not the test's own.
-  await createRuntimeCollection(page.request, slug, [
-    {
-      name: "headline",
-      type: "text",
-      label: "Headline",
-      required: false,
-      unique: false,
-      index: false,
-    },
-  ]);
-  // The collection exists from here, but the caller's `finally` only starts
-  // once this returns: a failure storing the hooks removes it here instead,
-  // so one failure does not leave a collection behind for later specs.
+  // The guard covers creation too: creating is three requests, and a failure
+  // after the first leaves a collection behind before the caller's `finally`
+  // has started. A removal that itself fails does not hide the first error.
   try {
+    // Stored as a field the Builder made is stored, with its flags written
+    // out, so a Builder save finds no schema change that is not the test's own.
+    await createRuntimeCollection(page.request, slug, [
+      {
+        name: "headline",
+        type: "text",
+        label: "Headline",
+        required: false,
+        unique: false,
+        index: false,
+      },
+    ]);
     await giveHooks(page.request, slug, hooks);
   } catch (error) {
-    await removeRuntimeCollection(page.request, slug);
+    await removeRuntimeCollection(page.request, slug).catch(() => undefined);
     throw error;
   }
   return slug;
@@ -129,9 +135,9 @@ test("a hook given through the API shows in the editor", async ({ page }) => {
 
     const dialog = page.getByRole("dialog");
     const list = dialog.getByRole("list", {
-      name: "Stored hooks, by when they run",
+      name: "Stored hooks, grouped by when they run",
     });
-    // In run order, which is the stored `order`, not the stored position.
+    // Grouped by stored phase, and by the stored `order` within one.
     await expect(list.getByRole("heading")).toHaveText([
       "Set Audit Fields",
       "Auto-generate Slug",
@@ -154,8 +160,16 @@ test("a hook given through the API shows in the editor", async ({ page }) => {
     }
     await expect(tabPanel.getByRole("button")).toHaveCount(0);
 
-    for (const scheme of ["light", "dark"] as const) {
-      await page.emulateMedia({ colorScheme: scheme });
+    // Each theme is chosen as the admin chooses it, through its stored
+    // setting, so the dark pass audits the dark palette rather than a dark
+    // system preference the light setting overrides.
+    for (const theme of ["light", "dark"] as const) {
+      await gotoAdmin(page, `/builder/collections/${slug}`, theme);
+      await openHooksTab(page, STORED_HOOKS.length);
+      // The admin marks its containers `dark` in the dark theme only.
+      const themed = page.locator(".nextly-admin").first();
+      if (theme === "dark") await expect(themed).toHaveClass(/\bdark\b/);
+      else await expect(themed).not.toHaveClass(/\bdark\b/);
       await expectNoAxeViolations(page, { include: '[role="dialog"]' });
     }
   } finally {
@@ -214,11 +228,13 @@ test("a field added and applied, the hooks read back unchanged", async ({
     await page.getByRole("button", { name: "Close field settings" }).click();
 
     await page.getByRole("button", { name: "Save", exact: true }).click();
-    // The apply is followed by the collection's settings write; the hooks are
-    // read back only after it has answered, so a write that dropped them could
-    // not be missed by reading too early. Its status is not asserted: on the
-    // dev server that write can be refused while the schema file it reads is
-    // being rewritten beside it, which is not what this test is about.
+    // The apply is followed by the collection's settings write. What decides
+    // whether a save can change the stored hooks is what that write SENDS, so
+    // its body is checked to carry no `hooks` at all: that holds whatever the
+    // server answers, and on the dev server it can be refused while the schema
+    // file it reads is being rewritten beside it. The hooks are also read back
+    // once it has answered, so a write that changed them is not missed by
+    // reading too early.
     const settingsWrite = page.waitForResponse(
       response =>
         response.request().method() === "PATCH" &&
@@ -229,7 +245,10 @@ test("a field added and applied, the hooks read back unchanged", async ({
       .getByRole("alertdialog")
       .getByRole("button", { name: "Apply and restart" })
       .click();
-    await settingsWrite;
+    const written: unknown = (await settingsWrite).request().postDataJSON();
+    // The captured request is the settings write itself, which sends labels.
+    expect(written).toHaveProperty("labels");
+    expect(written).not.toHaveProperty("hooks");
 
     await expect
       .poll(

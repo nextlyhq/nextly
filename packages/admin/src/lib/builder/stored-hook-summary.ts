@@ -17,13 +17,14 @@ export interface StoredHookSummary {
   known: boolean;
   name: string;
   when: string;
+  /** The stored `order`, which orders hooks within the pass that runs them. */
+  order: number | null;
   does: string;
   on: boolean;
-  settings: Array<{ label: string; value: string }>;
+  /** Keyed by the stored setting's key, which is unique within one hook. */
+  settings: Array<{ key: string; label: string; value: string }>;
 }
 
-/** Shown where a stored setting is absent: the hook runs with it missing. */
-const NOT_SET_IN_SENTENCE = "(not set)";
 const NOT_SET_VALUE = "Not set";
 
 /**
@@ -40,51 +41,48 @@ const storedHookEntry = z.object({
   order: z.number(),
 });
 type StoredHookEntry = z.infer<typeof storedHookEntry>;
+type HookConfig = Record<string, unknown>;
 
 /**
- * The phases the server runs stored hooks in: how each reads, and its place in
- * the sequence the server dispatches them. A phase missing here
- * (`beforeOperation`, `beforeRead`, or any other string) is never dispatched to
- * stored hooks, so a hook stored with it never runs.
+ * The phases the server runs stored hooks in, each with how it reads, in the
+ * order the list groups them. A phase missing here (`beforeOperation`,
+ * `beforeRead`, or any other string) is never dispatched to stored hooks, so a
+ * hook stored with it never runs.
  *
- * The ranks follow the executor's calls, not the phase names:
- * - a create runs its stored `beforeCreate` hooks, then the `beforeChange` ones
- *   in a separate pass, and an update does the same with `beforeUpdate`, so
- *   those two share a rank ahead of `beforeChange`;
- * - after a create or an update, `afterChange` hooks are matched into the same
- *   pass as `afterCreate` or `afterUpdate` and sorted with them by `order`, so
- *   all three share one rank.
- * Within a rank the list is ordered by `order`, as each pass sorts.
+ * The list is grouped by stored phase and claims no single order across
+ * groups: each write runs its own passes, and within a pass the server sorts by
+ * `order`, which every hook shows. `afterChange` hooks join the after-create
+ * and after-update passes and are sorted with them, which their wording says.
  */
-const RUNNING_PHASES: ReadonlyArray<
-  readonly [phase: string, rank: number, when: string]
-> = [
-  ["beforeCreate", 0, "Before an entry is created"],
-  ["beforeUpdate", 0, "Before an entry is updated"],
-  ["beforeChange", 1, "Before an entry is created or updated"],
-  ["afterCreate", 2, "After an entry is created"],
-  ["afterUpdate", 2, "After an entry is updated"],
-  ["afterChange", 2, "After an entry is created or updated"],
-  ["beforeDelete", 3, "Before an entry is deleted"],
-  ["afterDelete", 4, "After an entry is deleted"],
-  ["afterRead", 5, "After entries are read"],
+const RUNNING_PHASES: ReadonlyArray<readonly [phase: string, when: string]> = [
+  ["beforeCreate", "Before an entry is created"],
+  ["beforeUpdate", "Before an entry is updated"],
+  [
+    "beforeChange",
+    "Before an entry is created or updated, after that write's own before hooks",
+  ],
+  ["afterCreate", "After an entry is created"],
+  ["afterUpdate", "After an entry is updated"],
+  [
+    "afterChange",
+    "After an entry is created or updated, sorted by order among that write's after hooks",
+  ],
+  ["beforeDelete", "Before an entry is deleted"],
+  ["afterDelete", "After an entry is deleted"],
+  ["afterRead", "After entries are read"],
 ];
-const PHASE_RANK = new Map(
-  RUNNING_PHASES.map(([phase, rank]) => [phase, rank])
-);
-const PHASE_WHEN = new Map(
-  RUNNING_PHASES.map(([phase, , when]) => [phase, when])
-);
-/** After every rank that runs: hooks that never run, then unreadable entries. */
-const NEVER_RUNS_RANK = 6;
+const PHASE_GROUP = new Map(RUNNING_PHASES.map(([phase], i) => [phase, i]));
+const PHASE_WHEN = new Map(RUNNING_PHASES);
+/** After every group that runs: hooks that never run, then unreadable entries. */
+const NEVER_RUNS_GROUP = RUNNING_PHASES.length;
 
 /**
- * Where the provided kinds act. Each changes or refuses the data being written,
- * which only takes effect before a create or an update: after the write the
- * server ignores what a hook returns, and before a delete there is nothing
- * being written.
+ * The phases the provided kinds are made for: each changes or refuses the data
+ * of a create or an update. Their sentences describe them there and nowhere
+ * else; stored for any other phase they still run, but what they do there is
+ * not described rather than guessed.
  */
-const ACTING_PHASES: ReadonlySet<string> = new Set([
+const MADE_FOR_PHASES: ReadonlySet<string> = new Set([
   "beforeChange",
   "beforeCreate",
   "beforeUpdate",
@@ -95,10 +93,9 @@ type Entry =
   | { readable: false; value: unknown };
 
 /**
- * The stored hooks grouped by when they run, in lifecycle sequence, and by
- * ascending `order` within each phase, as the executor sorts them; stored
- * position breaks ties (the sort is stable). Hooks that never run, and
- * unreadable entries, come last.
+ * The stored hooks grouped by stored phase, and by ascending `order` within a
+ * group; stored position breaks ties (the sort is stable). Hooks that never
+ * run, and unreadable entries, come last.
  */
 export function summarizeStoredHooks(
   hooks: readonly unknown[] | undefined
@@ -113,14 +110,14 @@ export function summarizeStoredHooks(
   return [...entries].sort(compareEntries).map(summarizeEntry);
 }
 
-function rankOf(entry: Entry): number {
-  if (!entry.readable) return NEVER_RUNS_RANK + 1;
-  return PHASE_RANK.get(entry.hook.hookType) ?? NEVER_RUNS_RANK;
+function groupOf(entry: Entry): number {
+  if (!entry.readable) return NEVER_RUNS_GROUP + 1;
+  return PHASE_GROUP.get(entry.hook.hookType) ?? NEVER_RUNS_GROUP;
 }
 
 function compareEntries(a: Entry, b: Entry): number {
-  const byPhase = rankOf(a) - rankOf(b);
-  if (byPhase !== 0 || !a.readable || !b.readable) return byPhase;
+  const byGroup = groupOf(a) - groupOf(b);
+  if (byGroup !== 0 || !a.readable || !b.readable) return byGroup;
   return a.hook.order - b.hook.order;
 }
 
@@ -131,6 +128,7 @@ function summarizeEntry(entry: Entry): StoredHookSummary {
     known: false,
     name: "Unreadable entry",
     when: "Unknown",
+    order: null,
     does: "This stored entry is not in the shape a hook is stored in, so what it does cannot be shown.",
     on: false,
     settings: [],
@@ -146,6 +144,7 @@ function summarize(hook: StoredHookEntry): StoredHookSummary {
     name: kind?.name ?? hook.hookId,
     when:
       PHASE_WHEN.get(hook.hookType) ?? `Never (stored as "${hook.hookType}")`,
+    order: hook.order,
     does: describe(hook, kind),
     on: hook.enabled,
     settings: kind
@@ -155,9 +154,11 @@ function summarize(hook: StoredHookEntry): StoredHookSummary {
 }
 
 /**
- * What a hook does, given both its kind and its stored phase: a phase the
- * server never runs stored hooks in, an unknown kind, and a known kind stored
- * where it cannot act each say so instead of describing an effect.
+ * What a hook does. A sentence is given only for a known kind, stored for a
+ * phase it is made for, with every declared setting stored and of its type:
+ * the server runs a hook with its stored settings unparsed, so a missing or
+ * mistyped one changes what it does in ways a sentence would have to guess.
+ * Every other stored hook says why it is not described, beside its settings.
  */
 function describe(
   hook: StoredHookEntry,
@@ -167,30 +168,24 @@ function describe(
     return "Never runs: the server does not run stored hooks at this point.";
   if (kind === undefined)
     return "Not a hook this version of Nextly knows, so it runs nothing.";
-  if (!ACTING_PHASES.has(hook.hookType))
-    return `Runs, but changes nothing: ${kind.name} only acts before an entry is created or updated.`;
+  if (!MADE_FOR_PHASES.has(hook.hookType))
+    return "Runs as stored, but what it does is not described here: it is stored for a phase it is not made for.";
   const config = hook.config ?? {};
-  const wrong = wronglyTypedSettings(kind.configSchema, config);
-  if (wrong.length > 0)
-    return `Runs with settings of the wrong type (${wrong.join(", ")}), so what it does cannot be described exactly.`;
+  const unusable = unusableSettings(kind.configSchema, config);
+  if (unusable.length > 0)
+    return `Runs as stored, but what it does is not described here: settings missing or of the wrong type (${unusable.join(", ")}).`;
   return describeKnown(hook.hookId, config, hook.hookType);
 }
 
-/**
- * The declared settings whose stored value is not of the declared type. The
- * server passes stored settings to the hook unparsed, so such a value is used
- * by the server's own coercion (a stored "false" is truthy there), and a
- * sentence read from it here could say the opposite. A missing setting is not
- * listed: it reads as "(not set)" in the sentence instead.
- */
-function wronglyTypedSettings(
+/** The declared settings that are not stored, or not of their declared type. */
+function unusableSettings(
   schema: Parameters<typeof getObjectShape>[0],
   config: HookConfig
 ): string[] {
   return Object.entries(getObjectShape(schema))
     .filter(
       ([key, field]) =>
-        config[key] !== undefined && !field.safeParse(config[key]).success
+        config[key] === undefined || !field.safeParse(config[key]).success
     )
     .map(([key]) => key);
 }
@@ -202,10 +197,11 @@ function wronglyTypedSettings(
  */
 function declaredSettings(
   schema: Parameters<typeof getObjectShape>[0],
-  config: Record<string, unknown>
-): Array<{ label: string; value: string }> {
+  config: HookConfig
+): StoredHookSummary["settings"] {
   const shape = getObjectShape(schema);
   const declared = Object.entries(shape).map(([key, field]) => ({
+    key,
     label: field.description || key,
     value: settingValue(config[key]),
   }));
@@ -216,12 +212,12 @@ function declaredSettings(
 }
 
 function undeclaredSettings(
-  config: Record<string, unknown>,
+  config: HookConfig,
   declared: ReadonlySet<string>
-): Array<{ label: string; value: string }> {
+): StoredHookSummary["settings"] {
   return Object.entries(config)
     .filter(([key]) => !declared.has(key))
-    .map(([key, value]) => ({ label: key, value: settingValue(value) }));
+    .map(([key, value]) => ({ key, label: key, value: settingValue(value) }));
 }
 
 function settingValue(value: unknown): string {
@@ -232,52 +228,27 @@ function settingValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
-/** A stored field name as it reads inside a sentence. */
-function named(value: unknown): string {
-  return typeof value === "string" && value !== ""
-    ? value
-    : NOT_SET_IN_SENTENCE;
-}
-
-type HookConfig = Record<string, unknown>;
-
 /**
- * What each kind does to a write, from its stored settings, one sentence per
- * kind. Worded from the server's behaviour for that kind, which runs with the
- * stored values as they are: no default is assumed for a setting that is
- * missing.
+ * What each kind does to a create or an update, one sentence per kind, from
+ * stored settings already checked to be present and of their types.
  */
 const DESCRIBE_KIND: Record<
   string,
   (config: HookConfig, phase: string) => string
 > = {
-  "auto-slug": config => {
-    const target = named(config.targetField);
-    const source = named(config.sourceField);
-    return config.overwriteExisting === true
-      ? `Fills ${target} from ${source}, replacing any value already there.`
-      : `Fills ${target} from ${source}, unless ${target} already has a value.`;
-  },
+  "auto-slug": config =>
+    config.overwriteExisting === true
+      ? `Fills ${String(config.targetField)} from ${String(config.sourceField)}, replacing any value already there.`
+      : `Fills ${String(config.targetField)} from ${String(config.sourceField)}, unless ${String(config.targetField)} already has a value.`,
   // An update sets only the updater: the creator is written on a create alone,
   // so a hook stored for updates records nothing about who created the entry.
   "audit-fields": (config, phase) =>
     phase === "beforeUpdate"
-      ? `Records who last changed an entry in ${named(config.updatedByField)}.`
-      : `Records who created an entry in ${named(config.createdByField)}, and who last changed it in ${named(config.updatedByField)}.`,
+      ? `Records who last changed an entry in ${String(config.updatedByField)}.`
+      : `Records who created an entry in ${String(config.createdByField)}, and who last changed it in ${String(config.updatedByField)}.`,
   "unique-validation": config =>
-    `Refuses an entry whose ${named(config.field)} another entry already uses${ignoringCase(config)}${refusalMessage(config)}.`,
+    `Refuses an entry whose ${String(config.field)} another entry already uses${config.caseInsensitive === true ? ", ignoring case" : ""}, saying "${String(config.errorMessage)}".`,
 };
-
-function ignoringCase(config: HookConfig): string {
-  return config.caseInsensitive === true ? ", ignoring case" : "";
-}
-
-function refusalMessage(config: HookConfig): string {
-  const message = config.errorMessage;
-  return typeof message === "string" && message !== ""
-    ? `, saying "${message}"`
-    : "";
-}
 
 /**
  * A kind this admin provides but has no sentence for falls back to the kind's

@@ -1,13 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import type { StoredHookConfig } from "@admin/types/collection";
-
 import { summarizeStoredHooks } from "../stored-hook-summary";
 
+/**
+ * A stored hook as the API keeps it. `hookType` is a plain string, since the
+ * collection endpoint accepts any value there.
+ */
+interface StoredHookRow {
+  hookId: string;
+  hookType: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  order: number;
+}
+
 // Each case is a hook as the server stores and runs it: the executor hands the
-// stored `config` to the hook as it is, with no defaults filled in, so the
-// summary describes the stored values and says when one is missing.
-function hook(overrides: Partial<StoredHookConfig>): StoredHookConfig {
+// stored `config` to the hook as it is, with no defaults filled in. A sentence
+// is only given where the stored hook is fully described by it.
+function hook(overrides: Partial<StoredHookRow>): StoredHookRow {
   return {
     hookId: "auto-slug",
     hookType: "beforeChange",
@@ -18,29 +28,48 @@ function hook(overrides: Partial<StoredHookConfig>): StoredHookConfig {
   };
 }
 
-describe("summarizeStoredHooks", () => {
-  it("describes a slug hook from its stored settings", () => {
+const SLUG = {
+  sourceField: "title",
+  targetField: "slug",
+  overwriteExisting: false,
+};
+const AUDIT = { createdByField: "author", updatedByField: "editor" };
+const UNIQUE = {
+  field: "email",
+  errorMessage: "Email taken",
+  caseInsensitive: true,
+};
+
+const NOT_MADE_FOR =
+  "Runs as stored, but what it does is not described here: it is stored for a phase it is not made for.";
+
+describe("summarizeStoredHooks: what a hook does", () => {
+  it("describes a slug hook stored with every setting", () => {
     const [summary] = summarizeStoredHooks([
-      hook({
-        hookId: "auto-slug",
-        config: {
-          sourceField: "title",
-          targetField: "slug",
-          overwriteExisting: false,
-        },
-      }),
+      hook({ hookId: "auto-slug", config: SLUG, order: 3 }),
     ]);
 
     expect(summary.name).toBe("Auto-generate Slug");
     expect(summary.does).toBe(
       "Fills slug from title, unless slug already has a value."
     );
-    expect(summary.when).toBe("Before an entry is created or updated");
+    expect(summary.when).toBe(
+      "Before an entry is created or updated, after that write's own before hooks"
+    );
+    expect(summary.order).toBe(3);
     expect(summary.on).toBe(true);
     expect(summary.settings).toEqual([
-      { label: "Field to generate slug from", value: "title" },
-      { label: "Field to store slug in", value: "slug" },
-      { label: "Overwrite existing slug values", value: "No" },
+      {
+        key: "sourceField",
+        label: "Field to generate slug from",
+        value: "title",
+      },
+      { key: "targetField", label: "Field to store slug in", value: "slug" },
+      {
+        key: "overwriteExisting",
+        label: "Overwrite existing slug values",
+        value: "No",
+      },
     ]);
   });
 
@@ -61,80 +90,102 @@ describe("summarizeStoredHooks", () => {
     );
   });
 
-  it("describes an audit hook from its stored settings", () => {
+  it("describes an audit hook for creates and updates", () => {
     const [summary] = summarizeStoredHooks([
-      hook({
-        hookId: "audit-fields",
-        config: { createdByField: "author", updatedByField: "editor" },
-      }),
+      hook({ hookId: "audit-fields", config: AUDIT }),
     ]);
 
-    expect(summary.name).toBe("Set Audit Fields");
     expect(summary.does).toBe(
       "Records who created an entry in author, and who last changed it in editor."
     );
-    expect(summary.settings).toEqual([
-      { label: "Field for creator user ID", value: "author" },
-      { label: "Field for updater user ID", value: "editor" },
-    ]);
   });
 
-  it("describes a uniqueness hook from its stored settings", () => {
+  it("says an audit hook stored for updates records only the updater", () => {
+    // The creator is written on a create alone.
     const [summary] = summarizeStoredHooks([
-      hook({
-        hookId: "unique-validation",
-        config: {
-          field: "email",
-          errorMessage: "Email taken",
-          caseInsensitive: true,
-        },
-      }),
+      hook({ hookId: "audit-fields", hookType: "beforeUpdate", config: AUDIT }),
     ]);
 
-    expect(summary.name).toBe("Validate Uniqueness");
+    expect(summary.does).toBe("Records who last changed an entry in editor.");
+  });
+
+  it("describes a uniqueness hook stored with every setting", () => {
+    const [summary] = summarizeStoredHooks([
+      hook({ hookId: "unique-validation", config: UNIQUE }),
+    ]);
+
     expect(summary.does).toBe(
       'Refuses an entry whose email another entry already uses, ignoring case, saying "Email taken".'
     );
-    expect(summary.settings).toEqual([
-      { label: "Field to validate", value: "email" },
-      { label: "Error message for duplicate values", value: "Email taken" },
-      { label: "Case-insensitive comparison", value: "Yes" },
-    ]);
   });
 
-  it("names a missing stored setting rather than assuming its default", () => {
-    // The executor passes the stored config through unparsed, so a setting
-    // absent from the row is absent when the hook runs: the summary must not
-    // claim "slug" for a target field that was never stored.
-    const [summary] = summarizeStoredHooks([
-      hook({ hookId: "auto-slug", config: { sourceField: "title" } }),
+  it("does not describe a hook with a setting missing", () => {
+    // Stored without `field`, the server reads `data[undefined]` and validates
+    // nothing: a sentence about refusing duplicates would be wrong.
+    const [unique, slug] = summarizeStoredHooks([
+      hook({
+        hookId: "unique-validation",
+        config: { errorMessage: "Taken", caseInsensitive: false },
+      }),
+      hook({ hookId: "auto-slug", config: { sourceField: "title" }, order: 1 }),
     ]);
 
-    expect(summary.does).toBe(
-      "Fills (not set) from title, unless (not set) already has a value."
+    expect(unique.does).toBe(
+      "Runs as stored, but what it does is not described here: settings missing or of the wrong type (field)."
     );
-    expect(summary.settings).toContainEqual({
+    expect(slug.does).toBe(
+      "Runs as stored, but what it does is not described here: settings missing or of the wrong type (targetField, overwriteExisting)."
+    );
+    expect(slug.settings).toContainEqual({
+      key: "targetField",
       label: "Field to store slug in",
       value: "Not set",
     });
   });
 
-  it("lists a stored setting the hook does not declare, by its key", () => {
+  it("does not describe a hook with a setting of the wrong type", () => {
+    // A stored "false" is truthy where the server reads it, so it overwrites.
     const [summary] = summarizeStoredHooks([
       hook({
-        hookId: "audit-fields",
-        config: {
-          createdByField: "a",
-          updatedByField: "b",
-          extra: 3,
-        },
+        hookId: "auto-slug",
+        config: { ...SLUG, overwriteExisting: "false" },
       }),
     ]);
 
-    expect(summary.settings).toContainEqual({ label: "extra", value: "3" });
+    expect(summary.does).toBe(
+      "Runs as stored, but what it does is not described here: settings missing or of the wrong type (overwriteExisting)."
+    );
   });
 
-  it("says an unknown hook runs nothing", () => {
+  it("does not describe a known hook stored for a phase it is not made for", () => {
+    // After a read or before a delete these kinds still run and can change a
+    // response or refuse a delete; that is not guessed at here.
+    for (const phase of [
+      "afterRead",
+      "beforeDelete",
+      "afterCreate",
+      "afterChange",
+    ]) {
+      const [summary] = summarizeStoredHooks([
+        hook({ hookId: "audit-fields", hookType: phase, config: AUDIT }),
+      ]);
+      expect(summary.does).toBe(NOT_MADE_FOR);
+    }
+  });
+
+  it("says a hook stored in a phase the server never runs never runs", () => {
+    for (const phase of ["beforeOperation", "beforeRead", "duringLunch"]) {
+      const [summary] = summarizeStoredHooks([
+        hook({ hookId: "auto-slug", hookType: phase, config: SLUG }),
+      ]);
+      expect(summary.when).toBe(`Never (stored as "${phase}")`);
+      expect(summary.does).toBe(
+        "Never runs: the server does not run stored hooks at this point."
+      );
+    }
+  });
+
+  it("says an unknown hook runs nothing, and lists its settings by key", () => {
     const [summary] = summarizeStoredHooks([
       hook({ hookId: "send-sms", config: { to: "+1" } }),
     ]);
@@ -144,15 +195,24 @@ describe("summarizeStoredHooks", () => {
     expect(summary.does).toBe(
       "Not a hook this version of Nextly knows, so it runs nothing."
     );
-    expect(summary.settings).toEqual([{ label: "to", value: "+1" }]);
+    expect(summary.settings).toEqual([{ key: "to", label: "to", value: "+1" }]);
   });
 
-  it("describes when a hook runs from its stored phase", () => {
+  it("keys an undeclared setting by its own key, even when it reads like a declared one", () => {
     const [summary] = summarizeStoredHooks([
-      hook({ hookId: "audit-fields", hookType: "beforeCreate" }),
+      hook({
+        hookId: "auto-slug",
+        config: { ...SLUG, "Field to generate slug from": 3 },
+      }),
     ]);
 
-    expect(summary.when).toBe("Before an entry is created");
+    const keys = summary.settings.map(s => s.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(summary.settings).toContainEqual({
+      key: "Field to generate slug from",
+      label: "Field to generate slug from",
+      value: "3",
+    });
   });
 
   it("marks a turned-off hook as off", () => {
@@ -160,8 +220,10 @@ describe("summarizeStoredHooks", () => {
 
     expect(summary.on).toBe(false);
   });
+});
 
-  it("lists hooks in the order they run, not the order they are stored", () => {
+describe("summarizeStoredHooks: the order of the list", () => {
+  it("orders hooks by `order` within one stored phase", () => {
     const summaries = summarizeStoredHooks([
       hook({ hookId: "unique-validation", order: 2 }),
       hook({ hookId: "auto-slug", order: 0 }),
@@ -175,67 +237,24 @@ describe("summarizeStoredHooks", () => {
     ]);
   });
 
-  it("groups hooks by when they run before ordering them within a phase", () => {
-    // `order` only orders hooks within a phase: an after-create hook with a
-    // lower `order` still runs after a before-create one.
+  it("keeps each stored phase together, never interleaving create and update hooks", () => {
+    // No single write runs a create hook and an update hook, so ordering them
+    // together by `order` would describe a sequence that never happens.
     const summaries = summarizeStoredHooks([
-      hook({ hookId: "audit-fields", hookType: "afterCreate", order: 0 }),
-      hook({ hookId: "auto-slug", hookType: "beforeCreate", order: 1 }),
+      hook({ hookId: "auto-slug", hookType: "beforeCreate", order: 0 }),
+      hook({ hookId: "audit-fields", hookType: "beforeUpdate", order: 1 }),
+      hook({ hookId: "unique-validation", hookType: "beforeCreate", order: 2 }),
     ]);
 
-    expect(summaries.map(s => s.hookId)).toEqual(["auto-slug", "audit-fields"]);
-  });
-
-  it("says a known hook stored where it cannot act changes nothing", () => {
-    // After the write the server ignores what a hook returns, so a slug hook
-    // there fills nothing and a uniqueness hook there refuses nothing.
-    const [slug, unique] = summarizeStoredHooks([
-      hook({ hookId: "auto-slug", hookType: "afterCreate", order: 0 }),
-      hook({ hookId: "unique-validation", hookType: "afterUpdate", order: 1 }),
+    expect(summaries.map(s => s.when)).toEqual([
+      "Before an entry is created",
+      "Before an entry is created",
+      "Before an entry is updated",
     ]);
-
-    expect(slug.does).toBe(
-      "Runs, but changes nothing: Auto-generate Slug only acts before an entry is created or updated."
-    );
-    expect(unique.does).toBe(
-      "Runs, but changes nothing: Validate Uniqueness only acts before an entry is created or updated."
-    );
   });
 
-  it("says a hook stored in a phase the server never runs never runs", () => {
-    for (const phase of ["beforeOperation", "beforeRead", "duringLunch"]) {
-      const [summary] = summarizeStoredHooks([
-        hook({ hookId: "auto-slug", hookType: phase as never }),
-      ]);
-      expect(summary.when).toBe(`Never (stored as "${phase}")`);
-      expect(summary.does).toBe(
-        "Never runs: the server does not run stored hooks at this point."
-      );
-    }
-  });
-
-  it("shows a malformed entry as unreadable, after the hooks that run", () => {
-    // The API stores `hooks` as an array of anything, so an entry may be null
-    // or missing its fields; reading one as a hook would throw.
-    const summaries = summarizeStoredHooks([
-      null,
-      { hookId: "audit-fields" },
-      hook({ hookId: "auto-slug" }),
-    ]);
-
-    expect(summaries.map(s => s.name)).toEqual([
-      "Auto-generate Slug",
-      "Unreadable entry",
-      "Unreadable entry",
-    ]);
-    expect(summaries[1].does).toBe(
-      "This stored entry is not in the shape a hook is stored in, so what it does cannot be shown."
-    );
-  });
-
-  it("lists a create's own before hooks ahead of its before-change ones", () => {
-    // A create runs its stored `beforeCreate` hooks, then the `beforeChange`
-    // ones in a separate pass, whatever their `order` across the two.
+  it("lists a write's own before hooks ahead of its before-change ones", () => {
+    // A create runs `beforeCreate` and then `beforeChange` in a separate pass.
     const summaries = summarizeStoredHooks([
       hook({ hookId: "audit-fields", hookType: "beforeChange", order: 0 }),
       hook({ hookId: "auto-slug", hookType: "beforeCreate", order: 5 }),
@@ -244,53 +263,38 @@ describe("summarizeStoredHooks", () => {
     expect(summaries.map(s => s.hookId)).toEqual(["auto-slug", "audit-fields"]);
   });
 
-  it("orders after-change hooks together with after-create ones", () => {
-    // `afterChange` is matched into the same pass as `afterCreate` and sorted
-    // with it by `order`, so neither phase goes first as a block.
-    // The after-change hook sits between the two after-create ones by
-    // `order`; ranking the phases as blocks would put it first or last.
-    const summaries = summarizeStoredHooks([
-      hook({ hookId: "audit-fields", hookType: "afterCreate", order: 0 }),
-      hook({ hookId: "auto-slug", hookType: "afterChange", order: 1 }),
-      hook({ hookId: "unique-validation", hookType: "afterCreate", order: 2 }),
-    ]);
-
-    expect(summaries.map(s => s.hookId)).toEqual([
-      "audit-fields",
-      "auto-slug",
-      "unique-validation",
-    ]);
-  });
-
-  it("says an audit hook stored for updates records only the updater", () => {
+  it("says after-change hooks are sorted among that write's after hooks", () => {
     const [summary] = summarizeStoredHooks([
-      hook({
-        hookId: "audit-fields",
-        hookType: "beforeUpdate",
-        config: { createdByField: "author", updatedByField: "editor" },
-      }),
+      hook({ hookId: "audit-fields", hookType: "afterChange", order: 1 }),
     ]);
 
-    expect(summary.does).toBe("Records who last changed an entry in editor.");
-  });
-
-  it("names wrongly typed settings instead of describing what they would do", () => {
-    // The server passes stored settings unparsed: a stored "false" is truthy
-    // there and overwrites, so reading it as "keeps the value" would be wrong.
-    const [summary] = summarizeStoredHooks([
-      hook({
-        hookId: "auto-slug",
-        config: {
-          sourceField: "title",
-          targetField: "slug",
-          overwriteExisting: "false",
-        },
-      }),
-    ]);
-
-    expect(summary.does).toBe(
-      "Runs with settings of the wrong type (overwriteExisting), so what it does cannot be described exactly."
+    expect(summary.when).toBe(
+      "After an entry is created or updated, sorted by order among that write's after hooks"
     );
+    expect(summary.order).toBe(1);
+  });
+
+  it("shows a malformed entry as unreadable, after the hooks that run", () => {
+    // The API stores `hooks` as an array of anything, so an entry may be null
+    // or missing its fields; reading one as a hook would throw.
+    const summaries = summarizeStoredHooks([
+      null,
+      { hookId: "audit-fields" },
+      hook({ hookId: "auto-slug", hookType: "beforeRead" }),
+      hook({ hookId: "auto-slug" }),
+    ]);
+
+    expect(summaries.map(s => s.name)).toEqual([
+      "Auto-generate Slug",
+      "Auto-generate Slug",
+      "Unreadable entry",
+      "Unreadable entry",
+    ]);
+    expect(summaries[1].when).toBe('Never (stored as "beforeRead")');
+    expect(summaries[2].does).toBe(
+      "This stored entry is not in the shape a hook is stored in, so what it does cannot be shown."
+    );
+    expect(summaries[2].order).toBeNull();
   });
 
   it("returns nothing for a collection without stored hooks", () => {

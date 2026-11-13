@@ -39,7 +39,10 @@ export function StoredHooksView({
         tabIndex={0}
         className="max-h-[50vh] overflow-y-auto pr-1"
       >
-        <ol aria-label="Stored hooks, by when they run" className="space-y-3">
+        <ol
+          aria-label="Stored hooks, grouped by when they run"
+          className="space-y-3"
+        >
           {summaries.map((summary, index) => (
             // Two stored hooks may share an id; their position tells them apart.
             <li
@@ -53,11 +56,15 @@ export function StoredHooksView({
                 </Badge>
               </div>
               <p className="text-sm">{summary.does}</p>
-              <p className="text-xs text-muted-foreground">{summary.when}</p>
+              <p className="text-xs text-muted-foreground">
+                {summary.when}
+                {/* The stored order, which orders hooks within one pass. */}
+                {summary.order !== null && ` · order ${summary.order}`}
+              </p>
               {summary.settings.length > 0 && (
                 <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
                   {summary.settings.map(setting => (
-                    <div key={setting.label} className="contents">
+                    <div key={setting.key} className="contents">
                       <dt className="text-muted-foreground">{setting.label}</dt>
                       <dd className="break-all">{setting.value}</dd>
                     </div>

@@ -85,6 +85,8 @@ describe("a collection's stored hooks, read-only", () => {
       "Fills slug from title, unless slug already has a value."
     );
     expect(item).toHaveTextContent("Before an entry is created or updated");
+    // Each hook shows its stored order, which orders it within its pass.
+    expect(item).toHaveTextContent("· order 0");
     expect(within(item).getByText("On")).toBeInTheDocument();
     expect(
       within(item).getByText("Field to generate slug from")
@@ -135,7 +137,9 @@ describe("a collection's stored hooks, read-only", () => {
     );
 
     const names = within(
-      screen.getByRole("list", { name: "Stored hooks, by when they run" })
+      screen.getByRole("list", {
+        name: "Stored hooks, grouped by when they run",
+      })
     )
       .getAllByRole("heading")
       .map(h => h.textContent);
