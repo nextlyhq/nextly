@@ -3171,6 +3171,7 @@ export function createPluginContext(
     publicAddresses: pluginPublicAddresses({
       bindTo: bindToTransaction,
       owner: hookOwner ?? "app",
+      dialect: () => getServiceFn("dialect"),
       // Withdrawn at teardown with the plugin's other subscriptions.
       onTeardown: undo => {
         if (pluginName) recordPluginSubscription(pluginName, undo);
