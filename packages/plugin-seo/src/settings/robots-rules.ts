@@ -64,6 +64,41 @@ interface ReadLine {
   value?: string;
   /** Nothing but space or a comment. */
   empty: boolean;
+  /**
+   * The standard rule the line is read as, as Google's parser reads it:
+   * a frequent misspelling or a name only begun (`Dissalow`, `Useragent`,
+   * `Disallowed`) counts, so the guards judge what Google applies.
+   */
+  rule?: StandardField;
+  /** Written with a space where the colon goes, which Google accepts. */
+  noColon?: boolean;
+}
+
+/** The standard rules, by lower-case name. */
+type StandardField = "user-agent" | "allow" | "disallow" | "sitemap";
+
+/**
+ * The names Google's parser reads as each standard rule: each by how it
+ * begins, misspellings it accepts included (github.com/google/robotstxt,
+ * robots.cc, read 2026-11-13). `disallow` is tried before `allow`, which it
+ * does not begin with.
+ */
+const GOOGLE_NAMES: readonly (readonly [StandardField, readonly string[]])[] = [
+  ["user-agent", ["user-agent", "useragent", "user agent"]],
+  [
+    "disallow",
+    ["disallow", "dissallow", "dissalow", "disalow", "diasllow", "disallaw"],
+  ],
+  ["allow", ["allow"]],
+  ["sitemap", ["sitemap", "site-map"]],
+];
+
+/** The standard rule Google reads a field name as, where it reads one. */
+function ruleNamed(field: string): StandardField | undefined {
+  const lower = field.toLowerCase();
+  return GOOGLE_NAMES.find(([, names]) =>
+    names.some(name => lower.startsWith(name))
+  )?.[0];
 }
 
 /** The rules every robots.txt reader knows, by lower-case name. */
@@ -123,12 +158,29 @@ function readLine(text: string, line: number): ReadLine {
   const bare = (hash === -1 ? text : text.slice(0, hash)).trim();
   if (bare === "") return { line, empty: true };
   const colon = bare.indexOf(":");
-  if (colon === -1) return { line, empty: false };
+  if (colon === -1) {
+    // Google takes a space for the colon where the line is a name and a
+    // value and nothing more.
+    const spaced = /^(\S+)[ \t]+(\S+)$/.exec(bare);
+    const rule = spaced === null ? undefined : ruleNamed(spaced[1] ?? "");
+    if (spaced === null || rule === undefined) return { line, empty: false };
+    return {
+      line,
+      field: spaced[1] ?? "",
+      value: spaced[2] ?? "",
+      empty: false,
+      rule,
+      noColon: true,
+    };
+  }
+  const field = bare.slice(0, colon).trim();
+  const rule = ruleNamed(field);
   return {
     line,
-    field: bare.slice(0, colon).trim(),
+    field,
     value: bare.slice(colon + 1).trim(),
     empty: false,
+    ...(rule === undefined ? {} : { rule }),
   };
 }
 
@@ -148,7 +200,7 @@ function groupsFrom(lines: readonly ReadLine[]): RuleGroup[] {
 
 /** `groups` with one more line read: a crawler's name, or a rule of the last group. */
 function addToGroups(groups: RuleGroup[], read: ReadLine): void {
-  const field = read.field?.toLowerCase();
+  const field = read.rule;
   const value = read.value ?? "";
   const current = groups.at(-1);
   if (field === "user-agent") {
@@ -431,15 +483,42 @@ function fieldFinding(
   read: ReadLine,
   inGroup: boolean
 ): RuleFinding | undefined {
-  const { line, field, value = "" } = read;
+  const { line, field, value = "", rule } = read;
   if (field === undefined) return notARule(line);
-  const lower = field.toLowerCase();
-  if (lower === "allow" || lower === "disallow") {
-    return pathRuleFinding(line, value, inGroup);
+  if (rule === undefined) return otherFieldFinding(line, field);
+  const spelling = spellingFinding(read, rule);
+  if (rule === "allow" || rule === "disallow") {
+    // A refusal says more than a spelling, so it wins over one.
+    const found = pathRuleFinding(line, value, inGroup);
+    return found?.level === "refused" ? found : (spelling ?? found);
   }
-  if (lower === "sitemap") return sitemapFinding(line, value);
-  if (lower === "user-agent") return undefined;
-  return otherFieldFinding(line, field);
+  if (rule === "sitemap") return spelling ?? sitemapFinding(line, value);
+  return spelling;
+}
+
+/**
+ * The warning for a rule Google reads but others may not: a name misspelt
+ * or only begun, or a space where the colon goes.
+ */
+function spellingFinding(
+  read: ReadLine,
+  rule: StandardField
+): RuleFinding | undefined {
+  const { line, field = "" } = read;
+  const spelled = SPELLED[rule] ?? rule;
+  if (read.noColon === true) {
+    return {
+      line,
+      level: "warning",
+      message: `Line ${line} has no colon after ${spelled}. Google reads it as a rule; other crawlers may skip it.`,
+    };
+  }
+  if (field.toLowerCase() === rule) return undefined;
+  return {
+    line,
+    level: "warning",
+    message: `Line ${line}: "${field}" is misspelt. Google reads it as ${spelled}; other crawlers may skip it.`,
+  };
 }
 
 /** Whether a pattern matches every path: `/`, `/*` or `*`, with no end. */
@@ -585,7 +664,7 @@ export function readOwnRules(text: string): OwnRulesRead {
     const parsed = readLine(each, line);
     read.push(parsed);
     if (parsed.empty) return;
-    if (parsed.field?.toLowerCase() === "user-agent") inGroup = true;
+    if (parsed.rule === "user-agent") inGroup = true;
     const finding = fieldFinding(parsed, inGroup);
     if (finding !== undefined) findings.push(finding);
   });

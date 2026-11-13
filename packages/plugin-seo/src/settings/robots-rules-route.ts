@@ -13,6 +13,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
+import { addressRecordReady } from "../address-record/catch-up";
 import { productionAddressesOf } from "../canonical";
 import { originOf } from "../origin";
 import { MANAGE_SEO_PERMISSION } from "../permissions";
@@ -44,6 +45,11 @@ export interface RobotsRulesCheckSetup {
    * serves either not, its rules cannot block a page its sitemap lists.
    */
   servesBoth: boolean;
+  /**
+   * Whether the record of each page's address has caught up, so the
+   * sitemap lists every page; the plugin's own unless a test says else.
+   */
+  recordReady?: () => boolean;
 }
 
 /**
@@ -121,6 +127,16 @@ export async function checkRobotsRules(
   // blocks a page its sitemap lists.
   if (!setup.servesBoth || readOwnRules(asked.text).refused) {
     return { lines: [], pagesKey: blockedPagesKey([]) };
+  }
+  // Until the address record catches up, the listing may leave pages out,
+  // and an answer then would let a rule through that blocks them: the
+  // screen is told to try again, as the sitemap answers 503 meanwhile.
+  if (!(setup.recordReady ?? addressRecordReady)()) {
+    throw NextlyError.serviceUnavailable({
+      publicMessage:
+        "The site's pages are still being recorded. Try again in a minute.",
+      logContext: { reason: "seo-robots-rules-check-record-behind" },
+    });
   }
   const rules = await setup.readRules(ctx, undefined);
   const groups = servedGroups({

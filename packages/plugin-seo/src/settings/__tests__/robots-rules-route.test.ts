@@ -88,3 +88,22 @@ describe("checkRobotsRules", () => {
     expect((await readRules(ctx, undefined)).hiddenTypes).toEqual([]);
   });
 });
+
+describe("checkRobotsRules before the address record is ready", () => {
+  it("answers try again, never a listing that may leave pages out", async () => {
+    const listPaths = vi.fn(async () => []);
+    await expect(
+      checkRobotsRules(
+        {} as never,
+        { text: "User-agent: *\nDisallow: /blog" },
+        {
+          readRules: () => Promise.resolve({ patterns: {} }),
+          listPaths,
+          servesBoth: true,
+          recordReady: () => false,
+        }
+      )
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+    expect(listPaths).not.toHaveBeenCalled();
+  });
+});

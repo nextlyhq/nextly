@@ -90,13 +90,13 @@ describe("readOwnRules: what is refused", () => {
 });
 
 describe("readOwnRules: warnings and notes", () => {
-  it("warns about a misspelt rule, naming the one it is close to", () => {
+  it("warns about a misspelt rule Google still reads, naming it", () => {
     expect(readOwnRules("User-agent: *\nDissalow: /tmp").findings).toEqual([
       {
         line: 2,
         level: "warning",
         message:
-          'Line 2: "Dissalow" isn\'t a rule crawlers know, so they will skip it. Did you mean Disallow?',
+          'Line 2: "Dissalow" is misspelt. Google reads it as Disallow; other crawlers may skip it.',
       },
     ]);
   });
@@ -278,5 +278,40 @@ describe("crawler names as crawlers read them", () => {
 
   it("keeps a crawler with a longer name apart", () => {
     expect(refusals("User-agent: Googlebot-Image\nDisallow: /")).toEqual([]);
+  });
+});
+
+describe("the forms Google reads that other crawlers may not", () => {
+  it.each([
+    ["User-agent: Googlebot\nDissalow: /", "Googlebot"],
+    ["User-agent: *\nDisallow /", "every crawler"],
+    ["Useragent: Bingbot\nDisalow: /", "Bingbot"],
+  ])("refuses %j, which Google reads as a whole-site rule", (text, who) => {
+    expect(refusals(text)[0]?.message).toContain(
+      `would keep ${who} away from the whole site`
+    );
+  });
+
+  it("reads a rule with no colon, and says other crawlers may skip it", () => {
+    const read = readOwnRules("User-agent: *\nDisallow /search");
+    expect(read.refused).toBe(false);
+    expect(read.findings).toEqual([
+      {
+        line: 2,
+        level: "warning",
+        message:
+          "Line 2 has no colon after Disallow. Google reads it as a rule; other crawlers may skip it.",
+      },
+    ]);
+    expect(blockingRule(read.groups, "x", "/search/a")?.line).toBe(2);
+  });
+
+  it("still warns about a misspelling no crawler reads", () => {
+    expect(
+      readOwnRules("User-agent: *\nDisalloww: /a").findings[0]
+    ).toBeDefined();
+    expect(
+      blockingRule(groupsOf("User-agent: *\nDisalloe: /a"), "x", "/a")
+    ).toBeUndefined();
   });
 });

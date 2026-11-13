@@ -246,7 +246,7 @@ describe("your own rules", () => {
     await pause();
     expect(
       screen.getByText(
-        'Line 3: "Dissalow" isn\'t a rule crawlers know, so they will skip it. Did you mean Disallow?'
+        'Line 3: "Dissalow" is misspelt. Google reads it as Disallow; other crawlers may skip it.'
       )
     ).toBeTruthy();
     expect(
