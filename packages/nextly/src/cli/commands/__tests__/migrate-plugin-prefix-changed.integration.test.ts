@@ -22,7 +22,7 @@ import { reconcileCore } from "../../../domains/schema/migrate/core-reconcile";
 import type { PluginMigration } from "../../../domains/schema/migrate/plugin/plugin-migration";
 import { CORE_TABLE_NAMES } from "../../../schemas/index";
 import { createLogger } from "../../utils/logger";
-import { runPluginPhase } from "../migrate";
+import { previewMigrate, runPluginPhase } from "../migrate";
 
 const DIALECT = "sqlite" as const;
 const PLUGIN = "prefix-fixture";
@@ -171,6 +171,29 @@ describe("a plugin upgrade that changes its schema prefix (sqlite)", () => {
     expect(
       sqlite.prepare("SELECT label FROM pa__notes").all() as unknown[]
     ).toEqual([{ label: "kept" }]);
+  });
+
+  it("is refused by a dry run too, as the run it previews would be", async () => {
+    const args = (prefix: string) =>
+      phase(prefix, [notes, tags], [v1]).then(deps => ({
+        adapter: deps.adapter,
+        db,
+        dialect: DIALECT,
+        migrationsDir: "/nonexistent-migrations",
+        plugins: [],
+        logger: deps.logger,
+        extensionSchema: deps.extensionSchema,
+      }));
+    await expect(previewMigrate((await args("pb")) as never)).rejects.toThrow(
+      /now has the schema prefix "pb", but its tables were created under "pa"/
+    );
+    // CONTROL: under the recorded prefix, whatever else the preview finds,
+    // it is not this refusal.
+    const kept = await previewMigrate((await args("pa")) as never).then(
+      () => "listed",
+      (error: unknown) => String(error)
+    );
+    expect(kept).not.toMatch(/schema prefix/);
   });
 
   it("control: an upgrade keeping the prefix applies its module", async () => {

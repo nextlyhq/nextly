@@ -2981,15 +2981,14 @@ async function assertBootPluginInstallStates(
   // A plugin whose prefix moved since its tables were created, refused here
   // for the same reason: before the migrations and the development push,
   // either of which would create its tables again under the new names.
-  const { assertRecordedPluginPrefixesKept } = await import(
+  const { assertPluginPrefixesKeptIn } = await import(
     "../domains/schema/ownership/plugin-prefix-check"
   );
-  await assertRecordedPluginPrefixesKept({
+  await assertPluginPrefixesKeptIn({
     prefixes: bootExtensionSchema?.pluginPrefixes,
-    declared: bootExtensionSchema?.owners,
-    readOwners: () =>
-      new SchemaOwnersRepository(adapterDrizzleDb, adapter.dialect).read(),
-    registryExists: () => schemaOwnersTableExists(adapter),
+    db: adapterDrizzleDb,
+    dialect: adapter.dialect,
+    adapter,
   });
 }
 

@@ -578,6 +578,7 @@ export async function runMigrate(
         step: options.step,
         logger,
         serverConstructs,
+        extensionSchema,
       });
       logger.success("Dry run complete (no changes made).");
       return;
@@ -1221,8 +1222,13 @@ export async function previewMigrate(args: {
     | DatabaseCapabilities
     | ServerConstructCapabilities
     | Record<string, unknown>;
+  /** The compiled schema, whose plugin prefixes a real run checks first. */
+  extensionSchema?: Pick<ExtensionSchema, "pluginPrefixes"> | undefined;
 }): Promise<void> {
   const { adapter, db, dialect, logger } = args;
+  // Refused as a real run refuses, before anything is listed: a plugin whose
+  // prefix moved since its tables were created (`assertPluginPrefixesHold`).
+  await assertPluginPrefixesHold(args);
   const hasLedger = await (
     adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
   ).tableExists("nextly_schema_events");
@@ -1838,26 +1844,22 @@ async function appliedPluginModules(
  * the run is planned or applied: its modules would create its tables again
  * under the new names, beside the old ones and their rows.
  */
-async function assertPluginPrefixesHold(deps: MigrateCoreDeps): Promise<void> {
-  const prefixes = deps.extensionSchema?.pluginPrefixes;
-  if (prefixes === undefined || prefixes.size === 0) return;
-  // Dynamic, as the owner repository is everywhere in this file: both
-  // modules sit on cycles that close through this command.
-  const [
-    { SchemaOwnersRepository: OwnersRepo, schemaOwnersTableExists },
-    { assertRecordedPluginPrefixesKept },
-  ] = await Promise.all([
-    import("../../domains/schema/ownership/schema-owners-repository"),
-    import("../../domains/schema/ownership/plugin-prefix-check"),
-  ]);
-  await assertRecordedPluginPrefixesKept({
-    prefixes,
-    declared: deps.extensionSchema?.owners,
-    readOwners: () => new OwnersRepo(deps.db, deps.dialect).read(),
-    registryExists: () =>
-      schemaOwnersTableExists(
-        deps.adapter as unknown as { listTables(): Promise<string[]> }
-      ),
+async function assertPluginPrefixesHold(deps: {
+  extensionSchema?: Pick<ExtensionSchema, "pluginPrefixes"> | undefined;
+  db: unknown;
+  dialect: SupportedDialect;
+  adapter: unknown;
+}): Promise<void> {
+  // Dynamic, as the owner repository is everywhere in this file: it sits on
+  // cycles that close through this command.
+  const { assertPluginPrefixesKeptIn } = await import(
+    "../../domains/schema/ownership/plugin-prefix-check"
+  );
+  await assertPluginPrefixesKeptIn({
+    prefixes: deps.extensionSchema?.pluginPrefixes,
+    db: deps.db,
+    dialect: deps.dialect,
+    adapter: deps.adapter,
   });
 }
 

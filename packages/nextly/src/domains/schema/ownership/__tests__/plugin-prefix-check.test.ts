@@ -10,7 +10,7 @@ import type { OwnerRecord } from "../owner-registry";
 import {
   assertPluginPrefixesKept,
   assertRecordedPluginPrefixesKept,
-  recordedPrefixes,
+  tablesOutsidePrefix,
 } from "../plugin-prefix-check";
 
 const row = (over: Partial<OwnerRecord>): OwnerRecord => ({
@@ -106,12 +106,9 @@ describe("assertPluginPrefixesKept", () => {
         })
       )
     ).toBe("not refused");
-    expect(recordedPrefixes("forms", [row({ tableName: "legacy" })]).size).toBe(
-      0
-    );
   });
 
-  it("passes an unchanged prefix that ends in an underscore", () => {
+  it("passes an unchanged prefix that ends in an underscore, and refuses its change", () => {
     // `pa_` names its table `pa___ledger`: the separator is the last two of
     // the three underscores.
     const owners = [row({ tableName: "pa___ledger" })];
@@ -126,49 +123,36 @@ describe("assertPluginPrefixesKept", () => {
     expect(
       refusal(() =>
         assertPluginPrefixesKept({
-          prefixes: new Map([["forms", "pa"]]),
+          prefixes: new Map([["forms", "pb_"]]),
           owners,
         })
       )
     ).toMatch(
-      /now has the schema prefix "pa", but its tables were created under "pa_" \(pa___ledger\)/
+      /now has the schema prefix "pb_", but its tables were created under "pa_" \(pa___ledger\)/
     );
   });
 
-  it("passes a table the plugin still declares by its recorded name", () => {
-    // Under `pa`, an authored `_ledger` is also `pa___ledger`: the split
-    // alone would read `pa_`, but the compile declares the table as the
-    // plugin's.
-    const owners = [row({ tableName: "pa___ledger" })];
+  it("passes an unchanged prefix whose recorded table's authored name starts with an underscore", () => {
+    // `pa` + `_ledger` is also `pa___ledger`, and the row stays after a
+    // later module retires the table: the prefix could have named it.
     expect(
       refusal(() =>
         assertPluginPrefixesKept({
           prefixes: new Map([["forms", "pa"]]),
-          owners,
-          declared: new Map([
-            ["pa___ledger", { kind: "plugin" as const, id: "forms" }],
-          ]),
+          owners: [row({ tableName: "pa___ledger" })],
         })
       )
     ).toBe("not refused");
-    // CONTROL: declared as another plugin's, it is no proof for this one.
-    expect(
-      refusal(() =>
-        assertPluginPrefixesKept({
-          prefixes: new Map([["forms", "pa"]]),
-          owners,
-          declared: new Map([
-            ["pa___ledger", { kind: "plugin" as const, id: "other" }],
-          ]),
-        })
-      )
-    ).toMatch(/created under "pa_"/);
   });
 
-  it("reads the prefix up to the first separator, which a prefix cannot hold", () => {
-    expect([
-      ...recordedPrefixes("forms", [row({ tableName: "forms__a__b" })]),
-    ]).toEqual([["forms", ["forms__a__b"]]]);
+  it("judges a table by whether the prefix could have named it, separator included", () => {
+    expect(
+      tablesOutsidePrefix("forms", "forms", [
+        row({ tableName: "forms__a__b" }),
+        // `forms_x` is another prefix, not `forms` with a table `x...`.
+        row({ tableName: "forms_x__t" }),
+      ])
+    ).toEqual(["forms_x__t"]);
   });
 });
 
