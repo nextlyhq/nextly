@@ -45,7 +45,19 @@ function RouteLoading() {
     const timer = setTimeout(() => setSlow(true), SPINNER_DELAY_MS);
     return () => clearTimeout(timer);
   }, []);
-  if (outline !== null) return <>{outline}</>;
+  // The screen's outline, as the frame drew it, is hidden from assistive
+  // technology; the wait is said beside it, at once, as below. After the
+  // outline and out of the flow, so the frame it draws is unchanged.
+  if (outline !== null) {
+    return (
+      <>
+        {outline}
+        <span role="status" aria-live="polite" className="sr-only">
+          Loading
+        </span>
+      </>
+    );
+  }
   return (
     <div
       role="status"
