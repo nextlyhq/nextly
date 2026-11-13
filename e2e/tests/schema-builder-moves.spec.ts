@@ -244,4 +244,35 @@ test.describe("moving fields in the Builder outline", () => {
       "summary_b",
     ]);
   });
+
+  test("a field added in this draft may go into repeating rows before the save", async ({
+    page,
+  }) => {
+    // It has no stored values yet, so no change of level can lose any: only
+    // fields already saved wait for a save that keeps values.
+    await gotoAdmin(page, `/builder/collections/${slug}`);
+    await expect(row(page, "sections")).toBeVisible();
+    await page.getByRole("button", { name: "Add field", exact: true }).click();
+    const search = page.getByRole("combobox", { name: "Search field types" });
+    await expect(search).toBeFocused();
+    await search.fill("text");
+    await page.keyboard.press("Enter");
+    await page.getByRole("textbox", { name: "Label" }).fill("Draft note");
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Add field", exact: true })
+      .click();
+    await page.getByRole("button", { name: "Close field settings" }).click();
+
+    await row(page, "draft_note").focus();
+    await page.keyboard.press("Shift+F10");
+    await page.getByRole("menuitem", { name: "Move to…" }).click();
+    const dialog = page.getByRole("dialog");
+    const sections = dialog.getByRole("radio", { name: /^Sections/ });
+    await expect(sections).toBeEnabled();
+    await sections.check();
+    await dialog.getByRole("button", { name: "Move" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(row(page, "sections/draft_note")).toBeVisible();
+  });
 });
