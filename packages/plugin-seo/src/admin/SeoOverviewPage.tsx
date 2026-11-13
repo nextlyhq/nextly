@@ -60,16 +60,13 @@ import {
   type ProblemSeverity,
 } from "../problems/contract";
 import {
+  newRedirectHref,
+  NOT_FOUND_TAB_HREF,
   REDIRECT_ROUTES,
-  REDIRECTS_PAGE,
   type NotFoundView,
   type ProxyStatus,
 } from "../redirects/contract";
-import {
-  SEO_ADMIN_SLUG,
-  SEO_PLUGIN_NAME,
-  SETTINGS_PAGE_HREF,
-} from "../settings/contract";
+import { SEO_PLUGIN_NAME, SETTINGS_PAGE_HREF } from "../settings/contract";
 
 import { useCheckedProblemList, type CheckedProblemList } from "./problem-list";
 import { AdminLink, SeoTrail } from "./section";
@@ -77,16 +74,6 @@ import { AdminLink, SeoTrail } from "./section";
 /** A list route's answer. */
 interface ListBody<T> {
   items: T[];
-}
-
-/** Where the redirects screen is. */
-const REDIRECTS_HREF = `/admin/plugins/${SEO_ADMIN_SLUG}/${REDIRECTS_PAGE.path}`;
-
-/** A new redirect from `row`'s address, its To the closest live page. */
-function redirectFromHref(row: NotFoundView): string {
-  const query = new URLSearchParams({ from: row.from });
-  if (row.suggestion !== null) query.set("to", row.suggestion);
-  return `${REDIRECTS_HREF}?${query.toString()}`;
 }
 
 /** A read's three states, as each card draws them. */
@@ -500,10 +487,7 @@ function NotFoundCard(): JSX.Element {
     <SmallCard
       title="Not found, last 7 days"
       footer={
-        <TextLink
-          href={`${REDIRECTS_HREF}?tab=notfound`}
-          className="text-muted-foreground"
-        >
+        <TextLink href={NOT_FOUND_TAB_HREF} className="text-muted-foreground">
           All not found
         </TextLink>
       }
@@ -534,7 +518,7 @@ function NotFoundCard(): JSX.Element {
                     </span>
                   }
                   end={
-                    <TextLink href={redirectFromHref(row)}>
+                    <TextLink href={newRedirectHref(row.from, row.suggestion)}>
                       <span aria-hidden="true">Redirect</span>
                       <span className="sr-only">{`Redirect ${row.path}`}</span>
                     </TextLink>

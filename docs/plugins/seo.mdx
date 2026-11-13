@@ -604,10 +604,12 @@ declares. Each row shows the title and description search is given for the page,
 comes from (its own value, the page's code, or the pattern it was made from), and its **Status**:
 the most serious problem the [problem list](#problems) holds for the page, else **Not connected**
 for a page built in code whose route doesn't call the plugin, **Hidden** for a page kept out of
-search, or **Good**. Search by address or name, and narrow the list by **Type** (each collection,
-the Singles, or the pages built in code) and by **Status**. It names only the entries you may read,
-as the collection's own list does, each language as its list in that language does: of a type
-whose read rule admits only some entries, those it admits, and none of a type you may not read. Every page built in code is listed.
+search, or **Good**. A page no check has reached for you says **Not checked** rather than **Good**:
+no problem listed for it is no evidence of none. Search by address or name, and narrow the list by
+**Type** (each collection, the Singles, or the pages built in code) and by **Status**. It names only
+the entries you may read, as the collection's own list does, each language as its list in that
+language does: of a type whose read rule admits only some entries, those it admits, and none of a
+type you may not read. Every page built in code is listed.
 
 Each row's menu offers **Edit SEO** (the entry's SEO tab, or the side panel of a page built in
 code), **Inspect what search engines receive**, **Add a redirect** from its address, and **Open
@@ -1252,7 +1254,11 @@ import { previewDraftGate } from "nextly/runtime";
 
 const { ContentPage, generateMetadata } = createContentPage({
   ...pageBuilderContent(),
-  pages: { collections: ["pages"], field: "content", draft: previewDraftGate() },
+  pages: {
+    collections: ["pages"],
+    field: "content",
+    draft: previewDraftGate(),
+  },
   notFound: notFoundLogged,
 });
 

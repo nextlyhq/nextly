@@ -80,7 +80,7 @@ export function problemRoutes(checks: ProblemChecks): PluginRoute[] {
           checks,
           await readerOf(ctx, readable)
         );
-        return respondDoc({ ...list, types: [...readable] });
+        return respondDoc({ ...list });
       },
     },
     {
@@ -108,10 +108,7 @@ export function problemRoutes(checks: ProblemChecks): PluginRoute[] {
           await readerOf(ctx, readable)
         );
         const pages = `${list.pagesChecked} ${list.pagesChecked === 1 ? "page" : "pages"}`;
-        return respondAction(`Checked ${pages}.`, {
-          ...list,
-          types: [...readable],
-        });
+        return respondAction(`Checked ${pages}.`, { ...list });
       },
     },
   ];

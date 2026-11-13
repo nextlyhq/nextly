@@ -92,7 +92,7 @@ import { problemsCollection } from "./problems/store";
 import { RECEIVED_PAGE } from "./received/contract";
 import { receivedRoutes } from "./received/route";
 import { redirectsCollection } from "./redirects/collection";
-import { REDIRECTS_PAGE } from "./redirects/contract";
+import { REDIRECTS_PAGE, REDIRECTS_PAGE_HREF } from "./redirects/contract";
 import { heldRedirectKeys } from "./redirects/held-keys";
 import { redirectsProxyHandler } from "./redirects/proxy-handler";
 import { redirectRoutes } from "./redirects/routes";
@@ -105,11 +105,7 @@ import {
   contentTypesRoute,
   settingsDocumentRoute,
 } from "./settings/content-types-route";
-import {
-  SETTINGS_PAGE,
-  SEO_ADMIN_SLUG,
-  SETTINGS_PAGE_HREF,
-} from "./settings/contract";
+import { SETTINGS_PAGE, SETTINGS_PAGE_HREF } from "./settings/contract";
 import {
   readBrandFacts,
   readSeoRules,
@@ -148,9 +144,6 @@ import {
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
-/** Where the redirects screen is, for the admin's menu. */
-const REDIRECTS_PAGE_HREF = `/admin/plugins/${SEO_ADMIN_SLUG}/${REDIRECTS_PAGE.path}`;
-
 const require = createRequire(import.meta.url);
 const { version: PLUGIN_VERSION } = require("../package.json") as {
   version: string;
