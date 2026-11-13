@@ -547,6 +547,11 @@ export class UserExtSchemaService {
         ? runRaw(db, statement, this.dialect)
         : applyMigrationStatements(busyTable.adapter, statement, busyTable));
     } catch (error) {
+      // A busy table's tries that ran out say so, whatever `strict` asks: the save changed
+      // nothing, and its report names the table and what holds it.
+      if (NextlyError.is(error) && error.code === "NEXTLY_TABLE_BUSY") {
+        throw error;
+      }
       if (!strict || isIdempotencyError(error)) return;
       if (this.isOwnForeignKeyRerun(error, statement)) return;
       throw this.textColumnUniqueRefusal(error, statement) ?? error;
