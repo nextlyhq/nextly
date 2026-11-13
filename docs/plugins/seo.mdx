@@ -809,6 +809,12 @@ gap. What a person typed always wins, so a route's code fills only what nobody t
   it is served as `title: { absolute }` and a root layout's `title.template` cannot add the
   name again. The route's own title, where it is the one served, keeps the form the route gave
   it. The social card's titles follow the same rule.
+- **The social card's title and description** have an order of their own: the social text a
+  person typed for the page, then the title or description a person typed for it, then the
+  social text the route's code sets, then the Page Builder design's, and else the page's title
+  or description as the table above works it out. A typed title beats the route's card text
+  because many routes copy their heading (such as "Blog") into `openGraph.title`; where nobody
+  typed anything for the page, the route's own card text is still the one shared.
 - **The canonical** is the page's own declared address, in the language it was read in, formed by
   the site's [language rule](/docs/localization#each-languages-address). A page whose type
   declares no address gets no canonical rather than a guessed one, and so does a page whose
