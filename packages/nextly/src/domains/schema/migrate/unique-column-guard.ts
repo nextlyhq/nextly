@@ -198,13 +198,16 @@ const LABELS: Record<RequiredColumnEntity["kind"], string> = {
   table: "Table",
 };
 
+/** What each column's line in the repeats refusal tells the reader to do. */
+export const UNIQUE_REPEATS_ADVICE =
+  "Give each entry its own value, or clear the repeats, then run `nextly migrate` again.";
+
 /** One column's line in a refusal: its first values, and how many more there are. */
 function repeatsMessage(column: UniqueColumnRepeats): string {
   const count = column.repeats.length;
   const thing = column.entity.kind === "table" ? "column" : "field";
   const subject = `${LABELS[column.entity.kind]} '${column.entity.slug}': ${thing} '${column.field}' cannot become unique while ${count} ${count === 1 ? "value repeats" : "values repeat"}`;
-  const advice =
-    "Give each entry its own value, or clear the repeats, then run `nextly migrate` again.";
+  const advice = UNIQUE_REPEATS_ADVICE;
   if (!column.showValues) {
     const most = Math.max(...column.repeats.map(r => r.entries));
     return `${subject}, the most repeated one in ${most} entries. ${advice}`;

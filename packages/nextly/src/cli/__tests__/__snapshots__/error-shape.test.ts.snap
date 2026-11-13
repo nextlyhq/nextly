@@ -1843,6 +1843,20 @@ exports[`each code, as a command ends with it > UNEXPECTED_ERROR 1`] = `
   Docs: https://nextlyhq.com/docs/cli/errors/unexpected-error  (UNEXPECTED_ERROR)"
 `;
 
+exports[`each code, as a command ends with it > UNIQUE_COLUMN_HAS_REPEATS 1`] = `
+"✗ \`20261111_120000_profiles.sql\` was not applied.
+  Why:  Collection 'profiles': field 'person' cannot become unique while 1 value repeats: "3f2c9a1e-7b44-4d2a-9c61-0e5d8b7a2f10" (2 entries).
+  Next: Give each entry its own value, or clear the repeats, then run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/unique-column-has-repeats  (UNIQUE_COLUMN_HAS_REPEATS)"
+`;
+
+exports[`each code, as a command ends with it > UNIQUE_INDEX_NAME_TAKEN 1`] = `
+"✗ Making one-to-one relationships unique was not applied.
+  Why:  profiles.person (its index uq_dc_profiles_person is the name of the index on dc_people).
+  Next: Rename or drop what holds the name, then run \`nextly migrate\` again.
+  Docs: https://nextlyhq.com/docs/cli/errors/unique-index-name-taken  (UNIQUE_INDEX_NAME_TAKEN)"
+`;
+
 exports[`each code, as a command ends with it > UPGRADE_BACKUP_NOT_CONFIRMED 1`] = `
 "✗ Refusing to upgrade without a confirmed backup.
   Why:  No terminal is attached to ask whether the database is backed up, and \`--confirm-backed-up\` was not passed. Nothing was changed.

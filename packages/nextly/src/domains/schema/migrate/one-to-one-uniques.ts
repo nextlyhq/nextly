@@ -242,10 +242,23 @@ async function refuseNamesHeldElsewhere(
     }
   }
   if (held.length === 0) return;
-  throw NextlyError.conflict({
+  throw uniqueIndexNameHeldError(held);
+}
+
+/** What the refusal of a uniqueness whose index name another object holds tells the reader to do. */
+export const UNIQUE_INDEX_NAME_HELD_ADVICE =
+  "Rename or drop what holds the name, then run `nextly migrate` again.";
+
+/**
+ * The refusal of uniquenesses whose index names other objects hold.
+ *
+ * @param held each one-to-one's field, its index name, and what holds that name
+ */
+export function uniqueIndexNameHeldError(held: readonly string[]): NextlyError {
+  return NextlyError.conflict({
     reason: "state",
-    message: `${ONE_TO_ONE_UNIQUES_STEP} was not applied: ${held.join("; ")}. Rename or drop what holds the name, then run \`nextly migrate\` again.`,
-    logContext: { reason: "unique-index-name-held", held },
+    message: `${ONE_TO_ONE_UNIQUES_STEP} was not applied: ${held.join("; ")}. ${UNIQUE_INDEX_NAME_HELD_ADVICE}`,
+    logContext: { reason: "unique-index-name-held", held: [...held] },
   });
 }
 

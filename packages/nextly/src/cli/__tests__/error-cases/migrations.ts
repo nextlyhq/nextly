@@ -14,11 +14,13 @@ import {
   assertNotPartiallyApplied,
   concurrentRunError,
 } from "../../../domains/schema/migrate/drift-reconcile";
+import { uniqueIndexNameHeldError } from "../../../domains/schema/migrate/one-to-one-uniques";
 import { planChangedAfterConsent } from "../../../domains/schema/migrate/plan-changed-after-consent";
 import {
   resolveMigration,
   type ResolveMigrationArgs,
 } from "../../../domains/schema/migrate/resolve";
+import { uniqueColumnRepeatsError } from "../../../domains/schema/migrate/unique-column-guard";
 import { parseSnapshotFile } from "../../../domains/schema/migrate-create/snapshot-io";
 import type { NextlySchemaSnapshot } from "../../../domains/schema/pipeline/diff/types";
 import { describeHolder } from "../../../domains/schema/pipeline/schema-lock";
@@ -452,6 +454,26 @@ export const MIGRATION_CASES = {
       field: "subtitle",
       cause: new Error("connection reset"),
     }),
+  UNIQUE_COLUMN_HAS_REPEATS: () =>
+    uniqueColumnRepeatsError(
+      [
+        {
+          entity: { kind: "collection", slug: "profiles" },
+          field: "person",
+          table: "dc_profiles",
+          column: "person",
+          repeats: [
+            { value: "3f2c9a1e-7b44-4d2a-9c61-0e5d8b7a2f10", entries: 2 },
+          ],
+          showValues: true,
+        },
+      ],
+      "20261111_120000_profiles.sql"
+    ),
+  UNIQUE_INDEX_NAME_TAKEN: () =>
+    uniqueIndexNameHeldError([
+      "profiles.person (its index uq_dc_profiles_person is the name of the index on dc_people)",
+    ]),
 } satisfies ErrorCases;
 
 /**
