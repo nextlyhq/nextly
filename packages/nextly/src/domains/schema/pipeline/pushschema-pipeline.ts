@@ -48,6 +48,7 @@ import {
   sessionIdOfRows,
 } from "../busy-table/ended-waiting";
 import { readHolders } from "../busy-table/holder";
+import { boundMysqlLockWaits } from "../busy-table/mysql-wait-bounds";
 import { tableBusyError, tryNotice } from "../busy-table/report";
 import {
   withBusyTableTries,
@@ -176,6 +177,7 @@ import {
   refuseSwitchesWithRename,
   refuseTargetSwitchesOverValues,
 } from "./several-references-refusal";
+import { splitStatements } from "./sql-statement-utils";
 import {
   sqliteRebuiltTables,
   untrackedConstraintCounts,
@@ -505,7 +507,7 @@ interface TransactionTryBound {
 }
 
 /** What one plan-and-apply of the pipeline leaves for the result and the journal. */
-interface PlannedApply {
+export interface PlannedApply {
   readonly statementsExecuted: number;
   readonly resolvedOps: Operation[];
   readonly renamesApplied: number;
@@ -855,13 +857,18 @@ export class PushSchemaPipeline {
       // Each question Phase B asks is asked once for the whole apply: a try that re-plans after one
       // that waited out its bound reads the answers given to the first.
       const promptDispatcher = askingOnce(this.deps.promptDispatcher);
-      // The statements a try sent and saw finish, counted where the apply hands its statements to
-      // the executor and as the pre-resolution phase reports them; on MySQL and SQLite each has
-      // committed, and stays when the try ends waiting. MySQL's and SQLite's are handed over one
-      // at a time while the tries are on, since each commits as it runs and a batch that waits
-      // part-way would not say how many before it did; on PostgreSQL a batch is handed over whole,
-      // as always, its try's transaction rolling back whole.
-      let finishedThisTry = 0;
+      // The statements a try sent and saw finish, each with whether it is a schema statement,
+      // recorded where the apply hands its statements to the executor and as the pre-resolution
+      // phase reports them. On SQLite each has committed as it ran; on MySQL a schema statement
+      // commits what ran before it, and itself, while a row change after the last one rolls back
+      // with the try's transaction (`committedOf`). MySQL's and SQLite's are handed over one at a
+      // time while the tries are on, SQLite's split as its executor splits them, since a batch that
+      // waits part-way would not say how many before it did; on PostgreSQL a batch is handed over
+      // whole, as always, its try's transaction rolling back whole.
+      let finishedThisTry: boolean[] = [];
+      // Whether the statement the try is about to send, or is waiting in, is a schema statement:
+      // on MySQL one that waits has already committed everything before it.
+      let nextIsSchema = false;
       let finishedEarlier = 0;
       const oneByOne = busyTable !== undefined && dialect !== "postgresql";
       // What each MySQL or SQLite try planned, and what the tries that ended waiting planned in
@@ -874,11 +881,20 @@ export class PushSchemaPipeline {
       const plannedEarlier: Pick<PlannedApply, "resolvedOps" | "moved">[] = [];
       const executor: DrizzleStatementExecutor = {
         executeStatements: async (tx, statements) => {
-          for (const batch of oneByOne
-            ? statements.map(statement => [statement])
-            : [statements]) {
-            await this.deps.executor.executeStatements(tx, batch);
-            finishedThisTry += batch.length;
+          if (!oneByOne) {
+            await this.deps.executor.executeStatements(tx, statements);
+            for (const statement of statements) {
+              finishedThisTry.push(isSchemaStatement(statement));
+            }
+            return;
+          }
+          for (const statement of statementsOneByOne(statements, dialect)) {
+            nextIsSchema = isSchemaStatement(statement);
+            await this.deps.executor.executeStatements(tx, [statement]);
+            finishedThisTry.push(nextIsSchema);
+            // What runs next is not known here; a wait outside these statements is judged by
+            // the last schema statement that ran.
+            nextIsSchema = false;
           }
         },
       };
@@ -898,7 +914,8 @@ export class PushSchemaPipeline {
         tryBound: TransactionTryBound | undefined,
         laterTry: boolean
       ): Promise<PlannedApply> => {
-        finishedThisTry = 0;
+        finishedThisTry = [];
+        nextIsSchema = false;
         // Resolved once per plan, before anything reads it. A desired schema is consumed by TWO
         // builders — the snapshot the diff compares and the Drizzle tables drizzle-kit turns into
         // DDL — and resolving inside either leaves the other on the raw fields, so a table would
@@ -1482,19 +1499,32 @@ export class PushSchemaPipeline {
             // Counted as each statement finishes: on MySQL and SQLite each commits as it runs, so a
             // try that ends waiting part-way names the ones that stay applied.
             let told = 0;
+            // The leading statements run first, then each rename or drop, a schema statement.
+            const schemaAt = (index: number): boolean =>
+              index < leading.length
+                ? isSchemaStatement(leading[index] ?? "")
+                : true;
+            nextIsSchema = schemaAt(0);
             const preResolved = await preResExecutor(
               tx,
               withoutSqliteDropsLeftToRebuild(resolvedOps, dialect),
               dialect,
               leading,
               () => {
+                finishedThisTry.push(schemaAt(told));
                 told += 1;
-                finishedThisTry += 1;
+                nextIsSchema = schemaAt(told);
               }
             );
             // An executor that does not tell each one (a stand-in) is counted once it returns, as
             // it reports itself: each rename or drop once.
-            finishedThisTry += Math.max(0, leading.length + preResolved - told);
+            for (
+              let index = told;
+              index < leading.length + preResolved;
+              index += 1
+            ) {
+              finishedThisTry.push(schemaAt(index));
+            }
           } catch (err) {
             // A refusal is not a failed statement. The pre-resolution phase can decline to start —
             // when the stored values would not survive a conversion, for instance — and that answer
@@ -2069,11 +2099,16 @@ export class PushSchemaPipeline {
                     () => {
                       // Numbered across the apply's tries, so a statement a later try finished is
                       // not named by the number of one an earlier try did.
+                      const kept = committedOf(
+                        finishedThisTry,
+                        dialect,
+                        nextIsSchema
+                      );
                       const committed = Array.from(
-                        { length: finishedThisTry },
+                        { length: kept },
                         (_, index) => finishedEarlier + index + 1
                       );
-                      finishedEarlier += finishedThisTry;
+                      finishedEarlier += kept;
                       plannedEarlier.push(plannedThisTry);
                       return { table: waitedTable, undone: false, committed };
                     }
@@ -2726,27 +2761,31 @@ function askingOnce(inner: PromptDispatcher): PromptDispatcher {
  * statements every try committed (`finishedEarlier` before `last`'s own), and each operation and
  * moved column an earlier try planned that `last` did not plan again, which that try had applied,
  * since `last` planned from the live database after it. An operation `last` planned again had not
- * been applied, and is counted once, as `last`'s.
+ * been applied, and is counted once, as `last`'s. Exported for its tests.
  */
-function withEarlierTries(
+export function withEarlierTries(
   last: PlannedApply,
   plannedEarlier: readonly Pick<PlannedApply, "resolvedOps" | "moved">[],
   finishedEarlier: number
 ): PlannedApply {
+  // Each item's key, built once: an earlier item counts where no item before it, nor any of
+  // `last`'s, has the same key.
+  const seenOps = new Set(last.resolvedOps.map(stableKey));
+  const seenMoved = new Set(last.moved.map(stableKey));
   const resolvedOps: Operation[] = [];
-  const moved: PlannedApply["moved"] = [];
+  const moved: PlannedApply["moved"][number][] = [];
   for (const plan of plannedEarlier) {
     for (const op of plan.resolvedOps) {
-      const again = [...resolvedOps, ...last.resolvedOps].some(seen =>
-        dequal(seen, op)
-      );
-      if (!again) resolvedOps.push(op);
+      const key = stableKey(op);
+      if (seenOps.has(key)) continue;
+      seenOps.add(key);
+      resolvedOps.push(op);
     }
     for (const column of plan.moved) {
-      const again = [...moved, ...last.moved].some(seen =>
-        dequal(seen, column)
-      );
-      if (!again) moved.push(column);
+      const key = stableKey(column);
+      if (seenMoved.has(key)) continue;
+      seenMoved.add(key);
+      moved.push(column);
     }
   }
   return {
@@ -2759,6 +2798,62 @@ function withEarlierTries(
       ).length,
     moved: [...moved, ...last.moved],
   };
+}
+
+/**
+ * The statements an apply hands its executor one at a time while its tries are on. SQLite's
+ * executor splits an element at its statement breakpoints, so one element can hold several
+ * statements: they are split here, so each is counted as it finishes. Exported for its tests.
+ */
+export function statementsOneByOne(
+  statements: readonly string[],
+  dialect: SupportedDialect
+): string[] {
+  return dialect === "sqlite"
+    ? splitStatements([...statements])
+    : [...statements];
+}
+
+/** A value as JSON with every object's keys in order, so two equal values give one key. */
+function stableKey(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner !== null && typeof inner === "object" && !Array.isArray(inner)
+      ? Object.fromEntries(
+          Object.entries(inner as Record<string, unknown>).sort(([x], [y]) =>
+            x < y ? -1 : x > y ? 1 : 0
+          )
+        )
+      : inner
+  );
+}
+
+/** Leading words of a schema statement, which MySQL commits on its own. */
+const SCHEMA_STATEMENT = /^\s*(ALTER|CREATE|DROP|RENAME|TRUNCATE)\b/i;
+
+/** Whether `statement` is a schema statement (`SCHEMA_STATEMENT`), past its leading comments. */
+export function isSchemaStatement(statement: string): boolean {
+  const body = statement
+    .split("\n")
+    .filter(line => !line.trim().startsWith("--"))
+    .join("\n")
+    .replace(/^\s*\/\*[\s\S]*?\*\//, "");
+  return SCHEMA_STATEMENT.test(body);
+}
+
+/**
+ * How many of the statements a try finished stay applied once it ended waiting. On SQLite every
+ * one, as each committed as it ran. On MySQL a schema statement commits what ran before it, and
+ * itself once it has run: where the statement that waited is a schema statement, everything
+ * before it; otherwise everything up to the last schema statement that ran, the row changes after
+ * it rolled back with the try's transaction. Exported for its tests.
+ */
+export function committedOf(
+  finished: readonly boolean[],
+  dialect: SupportedDialect,
+  waitingIsSchema: boolean
+): number {
+  if (dialect !== "mysql" || waitingIsSchema) return finished.length;
+  return finished.lastIndexOf(true) + 1;
 }
 
 /**
@@ -2806,8 +2901,18 @@ async function runBoundedTry<T>(
       `SET LOCAL lock_timeout = '${String(Math.round(bound.tryMs) + 500)}ms'`
     );
   }
+  // Both of MySQL's per-lock waits, half a second past the try, put back afterwards to what the
+  // session had (`boundMysqlLockWaits`).
   const restoreMysql =
-    dialect === "mysql" ? await boundMysqlWaits(tx, bound.tryMs) : undefined;
+    dialect === "mysql"
+      ? await boundMysqlLockWaits(
+          {
+            read: text => querySqlRows(tx, "mysql", sql.raw(text)),
+            run: text => runOnTransaction(tx, text),
+          },
+          (bound.tryMs + 500) / 1000
+        )
+      : undefined;
   try {
     const query = ownSessionId(dialect);
     if (query !== undefined) {
@@ -2822,50 +2927,6 @@ async function runBoundedTry<T>(
   } finally {
     await restoreMysql?.();
   }
-}
-
-/** A session setting read back as a whole number, or undefined for anything else. */
-function wholeSeconds(value: unknown): number | undefined {
-  const number = typeof value === "string" ? Number(value) : value;
-  return typeof number === "number" && Number.isSafeInteger(number)
-    ? number
-    : undefined;
-}
-
-/**
- * Bounds both of a MySQL session's lock waits half a second past the try, in whole seconds, and
- * returns what sets each back to the value the session had: a value that could not be read goes
- * back to the server's default, the nearest to it. Putting them back is best effort; the try has
- * already ended, and a failure here must not change how.
- */
-async function boundMysqlWaits(
-  tx: unknown,
-  tryMs: number
-): Promise<() => Promise<void>> {
-  const [row] = await querySqlRows<Record<string, unknown>>(
-    tx,
-    "mysql",
-    sql.raw(
-      "SELECT @@SESSION.lock_wait_timeout AS lock_wait, @@SESSION.innodb_lock_wait_timeout AS row_wait"
-    )
-  );
-  const before = [
-    ["lock_wait_timeout", wholeSeconds(row?.lock_wait)],
-    ["innodb_lock_wait_timeout", wholeSeconds(row?.row_wait)],
-  ] as const;
-  // Fixed text with a whole number of seconds, never caller input.
-  const seconds = String(Math.ceil((tryMs + 500) / 1000));
-  for (const [name] of before) {
-    await runOnTransaction(tx, `SET SESSION ${name} = ${seconds}`);
-  }
-  return async () => {
-    for (const [name, value] of before) {
-      await runOnTransaction(
-        tx,
-        `SET SESSION ${name} = ${value === undefined ? "DEFAULT" : String(value)}`
-      ).catch(() => undefined);
-    }
-  };
 }
 
 /**
