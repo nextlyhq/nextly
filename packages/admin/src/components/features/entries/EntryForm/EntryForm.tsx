@@ -42,6 +42,7 @@ import {
   versionAwareToolbarSlots,
 } from "@admin/components/features/versions/viewed-version-host";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
+import { useHeldReveal } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { toast } from "@admin/components/ui";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
@@ -214,6 +215,17 @@ export interface EntryFormProps {
    */
   embedded?: boolean;
   /**
+   * The page's outline of this editor, drawn in its place a moment longer
+   * while what finishes the editor is on its way (`useHeldReveal`): the claim
+   * on the document, and `revealWaiting`. Absent, the editor is drawn at once.
+   */
+  revealOutline?: ReactNode;
+  /**
+   * Whether reads the page started for the editor's parts are still on their
+   * way (`usePlaceStartupReads`): the editor holds its outline for them too.
+   */
+  revealWaiting?: boolean;
+  /**
    * Opens this entry's API response.
    *
    * Supplied by the route, which is what knows how to navigate. Without it the
@@ -366,6 +378,8 @@ export function EntryForm({
   sourceValues,
   translation,
   embedded = false,
+  revealOutline,
+  revealWaiting = false,
   className,
   onViewApi,
   documentActions,
@@ -810,6 +824,12 @@ export function EntryForm({
     // latest copy: one that cannot would say it shows what it does not.
     version: latest ? versionStartedFrom : undefined,
   });
+  // Drawn whole: the outline stays until the claim says who holds the entry
+  // and the parts' started reads are in, briefly at most, so a colleague's
+  // banner or a plugin's section does not push the fields down as it lands.
+  const holdReveal = useHeldReveal(
+    revealOutline !== undefined && (lockSurface.settling || revealWaiting)
+  );
   // A gained entry's latest version starts the whole form again, whatever
   // its `updatedAt` says, and the lock holds until it has; the document views
   // key on the count it carries. Someone else's change is said over it.
@@ -1370,6 +1390,8 @@ export function EntryForm({
       </EntryFormContextProvider>
     );
   }
+
+  if (holdReveal) return <>{revealOutline}</>;
 
   // Standalone mode: the trail in the admin's top bar, then the document bar,
   // the banners under it, the title and slug, the fields, and the (optional)

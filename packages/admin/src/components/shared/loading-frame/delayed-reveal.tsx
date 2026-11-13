@@ -78,3 +78,41 @@ export function DelayedReveal({
 }): JSX.Element | null {
   return useDelayedReveal(active, after) ? <>{children}</> : null;
 }
+
+/**
+ * The longest an editor waits, once its document has arrived, for the reads
+ * that finish it before it is drawn: its claim on the document, which says
+ * whether a colleague holds it, and the reads the parts plugins add to it
+ * declare (`startupReads`). Each is normally in before the document, so the
+ * wait holds nothing; past it the editor is drawn and a late part lands as it
+ * would have. Short beside the outline's own 0.4 s, so a slow plugin read
+ * never holds an editor that is otherwise ready.
+ */
+export const EDITOR_REVEAL_HOLD_MS = 250;
+
+/**
+ * Whether a screen whose own data is in still holds its outline, waiting for
+ * the parts that finish it (`waiting`): so the screen is drawn whole, its
+ * parts in their places, rather than drawn and then pushed apart as each
+ * lands. For {@link EDITOR_REVEAL_HOLD_MS} at most from the first render
+ * that asked, then never again for this mount, so a part that answers late
+ * after all can never take the screen away once shown.
+ */
+export function useHeldReveal(waiting: boolean): boolean {
+  const [since] = useState(() => Date.now());
+  const [expired, setExpired] = useState(false);
+  const [shown, setShown] = useState(false);
+  const holding = waiting && !expired && !shown;
+  useEffect(() => {
+    if (!holding) {
+      setShown(true);
+      return;
+    }
+    const timer = setTimeout(
+      () => setExpired(true),
+      Math.max(0, since + EDITOR_REVEAL_HOLD_MS - Date.now())
+    );
+    return () => clearTimeout(timer);
+  }, [holding, since]);
+  return holding;
+}

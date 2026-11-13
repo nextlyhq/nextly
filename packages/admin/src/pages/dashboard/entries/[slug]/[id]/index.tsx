@@ -53,6 +53,7 @@ import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import { usePlaceStartupReads } from "@admin/hooks/queries/usePluginRoute";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
 import { useEntry } from "@admin/hooks/queries/useEntry";
 import {
@@ -181,6 +182,15 @@ export default function EditEntryPage({
 }: EditEntryPageProps): React.ReactElement {
   const slug = params?.slug;
   const id = params?.id;
+  // What the parts plugins add to this page read as they open, started as
+  // the page first renders, beside its own reads rather than after them; the
+  // editor waits a moment for them, so their parts are drawn in place.
+  const partsStartup = usePlaceStartupReads(
+    "collection.edit",
+    slug !== undefined && id !== undefined
+      ? { collection: slug, entryId: id }
+      : null
+  );
 
   // Active content language for this editor. `undefined` = the app's default locale
   // (the backend resolves it). Switching triggers a refetch (useEntry is keyed by locale) and
@@ -759,6 +769,8 @@ export default function EditEntryPage({
           )}
           {schedule.dialog}
           <EntryForm
+            revealOutline={<EditEntryPageSkeleton />}
+            revealWaiting={partsStartup.pending}
             /* A standing fact about the whole document, so a band across the
              editor's column directly under its header, read before the fields.
              Inside the editor rather than above it: the editor's row pulls up

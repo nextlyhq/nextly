@@ -128,6 +128,14 @@ export function entryDesignPath(collection: string, entry: string): string {
 }
 
 /**
+ * {@link entryDesignPath} as a template over an entry edit page's ids, which
+ * the admin fills in, each URI-component encoded, to start the Design
+ * section's read as the page opens: the same path, so the section's own read
+ * takes the started one.
+ */
+export const ENTRY_DESIGN_STARTUP_PATH = `${ENTRY_DESIGNS_ROUTE_PATH}?${ENTRY_DESIGNS_PARAMS.collection}={collection}&${ENTRY_DESIGNS_PARAMS.entry}={entryId}`;
+
+/**
  * The read's path for the own designs of some of a collection's entries,
  * named by id in one comma-separated parameter. Each id is encoded on its
  * own, and the caller names none that holds a comma, which the route would

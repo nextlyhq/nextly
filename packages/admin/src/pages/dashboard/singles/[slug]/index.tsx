@@ -51,6 +51,7 @@ import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useSingleEditorDocument } from "@admin/hooks/queries/useSingleEditorDocument";
+import { usePlaceStartupReads } from "@admin/hooks/queries/usePluginRoute";
 import {
   singleDocumentKeys,
   useSingleSchema,
@@ -134,6 +135,12 @@ export default function SingleEditPage({
   params,
 }: SingleEditPageProps): React.ReactElement {
   const slug = params?.slug;
+  // What the parts plugins add to this page read as they open, started as
+  // the page first renders, as the entry editor's are.
+  const partsStartup = usePlaceStartupReads(
+    "single.edit",
+    slug === undefined ? null : { single: slug }
+  );
 
   // i18n: active content language for this editor. `undefined` = the app's default locale (the
   // backend resolves it). Switching triggers a refetch (useSingleDocument is keyed by locale) and
@@ -380,6 +387,8 @@ export default function SingleEditPage({
         <MeasuredPageFrame contentCarriesMeasure>
           {schedule.dialog}
           <SingleForm
+            revealOutline={<SingleEditPageSkeleton />}
+            revealWaiting={partsStartup.pending}
             /* Under the editor's header, for the reason the entry editor
              gives. */
             documentBanner={
