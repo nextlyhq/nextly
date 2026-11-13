@@ -1444,6 +1444,9 @@ async function registerServicesOnce(
   setInitializedPlugins(
     globalForReg.__nextly_pluginTeardown.map(entry => entry.plugin.name)
   );
+  // Which plugins take part in keeping public addresses unique, against the
+  // set the last start ran with.
+  await recordBootParticipation(adapter, metaService, storedMeta);
   // Which of the started plugins provides each capability, for code that asks
   // a provider at request time: the route helpers ask the page-metadata
   // provider for every page's head. From the same list, so a plugin that never
@@ -2627,6 +2630,31 @@ async function registerMigrationJournal(
       `[registerServices] Failed to register MigrationJournal: ${err instanceof Error ? err.message : String(err)}`
     );
   }
+}
+
+/**
+ * Record which plugins take part in keeping public addresses unique, against
+ * the set the last start ran with: written only when it changed, from the
+ * meta rows this start has read already. A lifecycle command's boot starts
+ * only the plugin it installs or uninstalls, so it records nothing.
+ */
+async function recordBootParticipation(
+  adapter: DrizzleAdapter,
+  metaService: MetaService,
+  storedMeta: () => Promise<Record<string, unknown>>
+): Promise<void> {
+  const { isLifecycleCommandBoot } = await import(
+    "../domains/schema/ownership/plugin-lifecycle-state"
+  );
+  if (isLifecycleCommandBoot()) return;
+  const { PARTICIPATION_META_KEY, recordParticipation } = await import(
+    "../domains/public-addresses/participation"
+  );
+  await recordParticipation(
+    adapter,
+    metaService,
+    (await storedMeta())[PARTICIPATION_META_KEY]
+  );
 }
 
 /** Layer 2.5: Initialize Media Storage, and its default adapter if any. */

@@ -7,6 +7,7 @@ import {
   firstHolder,
   hasParticipants,
   onParticipantsChange,
+  participatingOwners,
   recordEverywhere,
   removeParticipant,
   type AddressHolder,
@@ -196,5 +197,31 @@ describe("a plugin a reload switched off", () => {
     expect(off.asked).toEqual([]);
     expect(off.recorded).toEqual([]);
     expect(on.recorded).toEqual([[update]]);
+  });
+
+  it("is left out of the plugins a start or a reload records as taking part", async () => {
+    const { getActiveHookRegistry } = await import(
+      "../../../hooks/hook-registry"
+    );
+    const registry = getActiveHookRegistry();
+    const before = registry.getSuspendedOwners();
+    const off = fake();
+    addParticipant(off.runner, "plugin:off");
+    added.push(off.runner);
+    // Two participants of one plugin name it once.
+    const on = fake();
+    const onAgain = fake();
+    addParticipant(on.runner, "plugin:on");
+    added.push(on.runner);
+    addParticipant(onAgain.runner, "plugin:on");
+    added.push(onAgain.runner);
+
+    expect(participatingOwners()).toEqual(["plugin:off", "plugin:on"]);
+    registry.setSuspendedOwners(["plugin:off"]);
+    try {
+      expect(participatingOwners()).toEqual(["plugin:on"]);
+    } finally {
+      registry.setSuspendedOwners(before);
+    }
   });
 });

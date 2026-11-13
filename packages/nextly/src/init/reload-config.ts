@@ -1043,6 +1043,15 @@ function stageConfigHooks(newConfig: {
       registry.setSuspendedOwners(
         [...candidates].filter(owner => !stillRunning.has(owner))
       );
+      // A plugin switched off, or on again, may change which plugins keep
+      // public addresses unique; recorded after the reload, never failing it.
+      void import("../domains/public-addresses/participation")
+        .then(({ recordParticipationNow }) => recordParticipationNow())
+        .catch((error: unknown) => {
+          consoleLogger.warn(
+            `[Nextly] The plugins keeping public addresses could not be recorded after a reload: ${String(error)}`
+          );
+        });
     }
   };
 }
