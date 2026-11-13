@@ -131,6 +131,16 @@ async function boot(
       ...(localized
         ? [
             defineSingle({
+              slug: BLANKABLE,
+              localized: true,
+              status: true,
+              versions: { drafts: true },
+              fields: [
+                text({ name: "tagline", localized: true }),
+                text({ name: "layout", localized: false }),
+              ],
+            }),
+            defineSingle({
               slug: BANNERED,
               status: true,
               versions: true,
