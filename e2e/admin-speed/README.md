@@ -22,6 +22,11 @@ What it counts, for each dialect:
   **rounds** (the longest chain of requests each sent after an earlier one
   answered), and the **statements** sent while the screen loads.
 
+Beside those counts it reports, for each screen and never against a pin, how
+many milliseconds after the load began the startup request was sent
+(`timings`, the middle of the five loads): the admin sends it as the browser
+reads the page, so a later start is a slower screen even when no count moves.
+
 On PostgreSQL it also starts the server with every round trip held 100 ms, and
 with 45 more collections, and pins how many statements each adds to the start
 (`growth`). A start whose work is fixed adds none.

@@ -21,8 +21,12 @@ import { applyServerSwitch } from "@admin/lib/device-memory/server-answer";
 import { collectionsListPath } from "@admin/services/collectionApi";
 import { singlesListPath } from "@admin/services/singleApi";
 
-/** The paths the startup request names, as the screens ask for them. */
-function adminStartupPaths(): string[] {
+/**
+ * The paths the startup request names, as the screens ask for them. The one
+ * list: the admin sends it, and the prebuilt page's script sends what this
+ * returned when the page was built (`AdminStartupScript`).
+ */
+export function adminStartupPaths(): string[] {
   return [
     "/auth/setup-status",
     "/auth/session",
@@ -37,7 +41,10 @@ function adminStartupPaths(): string[] {
   ];
 }
 
-/** Send the admin's startup request, once per page, in the browser. */
+/**
+ * Send the admin's startup request, once per page, in the browser; or take
+ * the one the page's script already sent.
+ */
 export function beginAdminStartup(): void {
   beginStartupRequest(BASE_URL, adminStartupPaths());
   // Its answer says whether the site lets the admin remember anything on this
