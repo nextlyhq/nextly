@@ -11,6 +11,10 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../../i18n/per-language-storage";
 import type { SupportedDialect } from "../../../../database/schema-registry";
 import { getColumnDescriptor } from "../../services/field-column-descriptor";
 import { withColumnOverride } from "../../services/runtime-schema-generator";
@@ -273,6 +277,63 @@ describe("which columns an override reaches", () => {
       kind: "shortText",
       length: 100,
     });
+  });
+
+  it("refuses a width that leaves a hook's index past MySQL's key limit", async () => {
+    const indexed = (storage: ColumnBuilder) =>
+      buildExtensionSchema(
+        input(({ schema }) => schema.overrideColumn(TABLE, "city", storage), {
+          plugins: [
+            {
+              owner: { kind: "plugin", id: "fx" },
+              extend: [
+                ({ schema }) =>
+                  schema.extendTable(TABLE, {
+                    indexes: [{ columns: ["city"] }],
+                  }),
+              ],
+            },
+          ],
+        })
+      );
+    // 1,000 characters are 4,000 bytes under utf8mb4, past the 3,072 a key
+    // may hold; 500 are 2,000.
+    expect(await refusal(() => indexed(col.varchar(1000)))).toMatch(
+      /mysql limits an index key/
+    );
+    await expect(indexed(col.varchar(500))).resolves.toBeDefined();
+  });
+
+  it("refuses a field kept per language when every field is, which has no column on the main table", async () => {
+    setPerLanguageStorage(true);
+    try {
+      const translated: SeedEntityTable = {
+        ...posts(),
+        columns: entitySeedColumns(
+          {
+            entityKind: "collection",
+            tableName: TABLE,
+            fields: [
+              { name: "city", type: "text", localized: true },
+            ] as unknown as { name: string; type: string }[],
+          },
+          "postgresql"
+        ),
+      };
+      expect(
+        await refusal(() =>
+          buildExtensionSchema(
+            input(
+              ({ schema }) =>
+                schema.overrideColumn(TABLE, "city", col.varchar(10)),
+              { entities: [translated] }
+            )
+          )
+        )
+      ).toMatch(/has no column "city"/);
+    } finally {
+      _resetPerLanguageStorage();
+    }
   });
 
   it("leaves the table as it was when refused", async () => {

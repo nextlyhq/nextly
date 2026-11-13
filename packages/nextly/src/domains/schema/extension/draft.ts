@@ -1174,11 +1174,14 @@ function assertOverriddenIndexesBuildable(
   const opaque = table.opaqueColumns ?? new Set<string>();
   for (const index of table.indexes) {
     if (!index.columns.includes(replaced.name)) continue;
+    // Weighed whole where every column it names is typed, so the key width
+    // the override gives it is summed: a hook's index over a field widened
+    // past MySQL's key limit is refused here rather than by the server.
     assertIndexBuildable(
       index,
       columns.filter(existing => !opaque.has(existing.name)),
       table.name,
-      false
+      index.columns.every(name => !opaque.has(name))
     );
   }
   if (table.indexedColumns?.has(replaced.name) === true) {

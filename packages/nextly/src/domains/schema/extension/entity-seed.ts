@@ -19,6 +19,7 @@
  * @since 1.0.0
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
+import { storesPerLanguage } from "../../i18n/per-language-storage";
 import {
   buildDesiredTableFromComponentFields,
   buildDesiredTableFromFields,
@@ -52,6 +53,11 @@ export function entitySeedColumns(
   // entities come from, and the builder only decides column TYPES — the
   // names, which are what the draft checks, do not depend on it.
   const builtBy = "codeFirst" as const;
+  // Where the entity's translatable values live, as its desired and runtime
+  // tables decide it (`storesPerLanguage`): with every field kept per
+  // language, a translatable field's column is on the language table even
+  // for an entity not marked translatable, and the main table has none.
+  const localized = storesPerLanguage(entity);
   const fields = entity.fields as unknown as BuilderFields;
   const spec =
     entity.entityKind === "component"
@@ -61,13 +67,13 @@ export function entitySeedColumns(
           dialect,
           {
             builtBy,
-            localized: entity.localized === true,
+            localized,
           }
         )
       : buildDesiredTableFromFields(entity.tableName, fields, dialect, {
           builtBy,
           hasStatus: entity.status === true,
-          localized: entity.localized === true,
+          localized,
         });
 
   // Every kind a column of this table can have, by name: the fields', and
