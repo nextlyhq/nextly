@@ -17,6 +17,7 @@ import {
   lockWorld,
   type LockWorld,
 } from "../../../schema/pipeline/__tests__/helpers/schema-lock-world";
+import { getI18nArchiveDdl } from "../../../../schemas/nextly-i18n-archive";
 import { ensureI18nArchive } from "../ensure-archive";
 import { teardownEntityI18n } from "../teardown-entity-i18n";
 
@@ -114,7 +115,8 @@ describe("localization schema statements waiting for a busy table on sqlite", ()
       code: "NEXTLY_TABLE_BUSY",
       logContext: {
         stop: {
-          change: "the localization archive's setup: statement 1 of 1",
+          // The first of the archive's setup statements on this dialect, however many there are.
+          change: `the localization archive's setup: statement 1 of ${String(getI18nArchiveDdl("sqlite").length)}`,
           ended: { table: ARCHIVE },
           outcome: { kind: "nothing-changed" },
         },
