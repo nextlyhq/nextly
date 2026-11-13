@@ -3443,7 +3443,7 @@ export abstract class DrizzleAdapter {
    * CREATE or DROP/CREATE tables.
    *
    * @param tableName - Name of table to check
-   * @param schema - Optional schema name (defaults to 'public' for PostgreSQL)
+   * @param schema - Optional schema name (PostgreSQL defaults to the connection's current schema)
    * @returns True if table exists, false otherwise
    *
    * @throws {DatabaseError} If query fails
@@ -3497,7 +3497,7 @@ export abstract class DrizzleAdapter {
    * Uses dialect-specific information schema queries to list tables.
    * Useful for detecting orphaned tables or validating schema state.
    *
-   * @param schema - Optional schema name (defaults to 'public' for PostgreSQL)
+   * @param schema - Optional schema name (PostgreSQL defaults to the connection's current schema)
    * @returns Array of table names
    *
    * @throws {DatabaseError} If query fails
@@ -3534,11 +3534,14 @@ export abstract class DrizzleAdapter {
           sql = `
             SELECT table_name
             FROM information_schema.tables
-            WHERE table_schema = $1
+            WHERE table_schema = COALESCE($1, current_schema())
             AND table_type = 'BASE TABLE'
             ORDER BY table_name
           `;
-          params.push(schema ?? "public");
+          // With no schema named, the one the connection's `search_path`
+          // makes current: an installation in a schema of its own keeps its
+          // tables there, and listing `public` would report none of them.
+          params.push(schema ?? null);
           break;
 
         case "mysql":

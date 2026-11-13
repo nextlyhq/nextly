@@ -14,24 +14,22 @@ import { defineCodes } from "../define";
 import { contextString, sentences } from "../messages";
 
 /**
- * The refusal of a PostgreSQL schema other than `public`, as its three parts.
- *
- * The message is "db.postgres.schema is "x", but … is not supported yet: Nextly can only create
- * and migrate its tables in "public". Remove db.postgres.schema …, or set it to "public"." The
- * clause before the colon is what happened, the one after it why, and the last sentence next.
+ * The refusal of a start whose configured schema holds no installation while another schema of
+ * the database does, as its three parts: where the setting points and where the installation is,
+ * why starting would be wrong, and the two ways forward.
  */
-function unsupportedSchema(error: NextlyError): CliErrorParts {
-  const [first = error.publicMessage, ...rest] = sentences(error.publicMessage);
-  const colon = first.indexOf(": ");
+function movedSchema(error: NextlyError): CliErrorParts {
+  const [what = error.publicMessage, why, ...next] = sentences(
+    error.publicMessage
+  );
   return {
-    what: colon === -1 ? first : `${first.slice(0, colon)}.`,
+    what,
     why:
-      colon === -1
-        ? 'Nextly can only create and migrate its tables in "public".'
-        : first.slice(colon + 2),
+      why ??
+      "Starting would create a second, empty installation in the configured schema and serve it instead of the existing one.",
     next:
-      rest.join(" ") ||
-      'Remove db.postgres.schema, or set it to "public", in `nextly.config.ts`.',
+      next.join(" ") ||
+      "Point db.postgres.schema back at the schema the installation is in.",
   };
 }
 
@@ -117,10 +115,17 @@ export const SCHEMA_CODES = defineCodes({
   POSTGRES_SCHEMA_UNSUPPORTED: {
     cause:
       "`db.postgres.schema` names a PostgreSQL schema other than `public`, which Nextly cannot create its tables in yet.",
+    retired: {
+      why: "Nextly now creates and migrates its tables in any PostgreSQL schema `db.postgres.schema` names.",
+    },
+  },
+  POSTGRES_SCHEMA_MOVED: {
+    cause:
+      "`db.postgres.schema` names a PostgreSQL schema holding no Nextly installation, while another schema of the same database holds one.",
     from: [
       {
-        code: "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED",
-        describe: unsupportedSchema,
+        code: "NEXTLY_POSTGRES_SCHEMA_MOVED",
+        describe: movedSchema,
       },
     ],
   },

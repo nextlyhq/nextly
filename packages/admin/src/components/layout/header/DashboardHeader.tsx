@@ -11,7 +11,7 @@ import { RailAccount } from "../sidebar/RailAccount";
 
 import { pluginHeaderItems } from "./header-visibility";
 import { HeaderTrail } from "./HeaderTrail";
-import { TopBarPlaceTarget } from "./TopBarPlaces";
+import { STAND_IN_PLACE, TopBarPlaceTarget } from "./TopBarPlaces";
 
 interface DashboardHeaderProps {
   className?: string;
@@ -87,7 +87,13 @@ export function DashboardHeader({
         // against the room this part actually has, after the trail, as they did
         // against a bar of their own. Its width comes from the bar, not from
         // its content, so it can be one.
-        className="@container/toolbar flex min-w-0 flex-1 items-center justify-end gap-2 empty:hidden"
+        // Holding only a page's stand-in (an editor's outline) it has no box,
+        // so the box first appears with the page and its trail together, and
+        // the trail never pushes it (`STAND_IN_PLACE`).
+        className={cn(
+          "@container/toolbar flex min-w-0 flex-1 items-center justify-end gap-2 empty:hidden",
+          STAND_IN_PLACE
+        )}
       />
       {pluginItems.length > 0 && (
         <div

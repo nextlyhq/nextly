@@ -107,6 +107,9 @@ function fakeRepo() {
       markFailed: async (id: string) => {
         failed.push(id);
       },
+      // A plugin module in these tests never stops for a busy table, so no attempt is recorded
+      // as having applied nothing.
+      markNothingApplied: async () => {},
       discardAttempt: async () => {},
       supersede: async () => {},
       findFileApplies: async () => [],

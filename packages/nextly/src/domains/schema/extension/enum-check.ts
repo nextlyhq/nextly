@@ -242,7 +242,9 @@ function readEnumCheck(
   const canonical = normalizeCheckExpression(sql);
   // Only a column compared with string literals is a value set; the literal
   // list is matched whole, so `a IN (...) AND b IN (...)` is not read as one.
-  const column = `(\\w+|"(?:[^"]|"")*")`;
+  // Bare identifiers include `$` because schema validation allows it and
+  // normalizeCheckExpression prints `[a-z_][a-z0-9_$]*` without quotes.
+  const column = `([A-Za-z_][A-Za-z0-9_$]*|"(?:[^"]|"")*")`;
   const literal = `'(?:[^']|'')*'`;
   const match =
     new RegExp(`^\\s*${column}\\s*=\\s*(${literal})\\s*$`).exec(canonical) ??
@@ -269,6 +271,18 @@ function readEnumCheck(
 /** The values an enum check permits, or null when it is not one of ours. */
 export function enumValuesIn(sql: string): string[] | null {
   return readEnumCheck(sql)?.values ?? null;
+}
+
+/**
+ * The column an enum check constrains, or null when it is not one of ours.
+ *
+ * A narrowed set is refused over the rows still holding a value it takes
+ * away, and that refusal counts rows IN the column the check names — read
+ * here rather than re-parsed, so what counts and what constrains can never
+ * disagree.
+ */
+export function enumColumnIn(sql: string): string | null {
+  return readEnumCheck(sql)?.column ?? null;
 }
 
 /**

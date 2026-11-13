@@ -3003,7 +3003,13 @@ export function createPluginContext(
 
   return {
     services: {
-      collections: wrapCollectionsForPlugin(collectionService),
+      // Bound to this plugin's boot name, so what its services record names
+      // it, whatever the plugin itself says.
+      collections: wrapCollectionsForPlugin(
+        collectionService,
+        undefined,
+        pluginName
+      ),
       // The Singles service is resolved on the first own-Single read, for
       // the same reason `versions` and `singles` below are resolved on
       // access: a context built by a caller that never reads one asks

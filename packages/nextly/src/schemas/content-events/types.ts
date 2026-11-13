@@ -10,12 +10,15 @@ export type ContentEventSubjectKind = "collection" | "single" | "release";
 /**
  * Who or what made the change. `principal` is a plugin-defined signed-in
  * person, named by kind and id so its id is never read as a staff user's;
- * `agent` is reserved for an AI-agent identity and nothing writes it yet.
+ * `plugin` is a plugin acting on its own behalf, named by the name it booted
+ * under; `agent` is reserved for an AI-agent identity and nothing writes it
+ * yet.
  */
 export type ContentEventActorKind =
   | "person"
   | "apiKey"
   | "principal"
+  | "plugin"
   | "release"
   | "system"
   | "agent";

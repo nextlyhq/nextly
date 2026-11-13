@@ -131,6 +131,21 @@ describe("defineTable", () => {
     expect(() => col.decimal(31, 30)).not.toThrow();
   });
 
+  it("refuses a decimal precision MySQL cannot declare, at the widest one it can", () => {
+    // MySQL caps DECIMAL precision at 65 while PostgreSQL accepts up to
+    // 1000, so 66 would create on one dialect and fail on the other.
+    expect(validationPaths(() => col.decimal(66, 2))).toEqual([
+      "decimal.precision",
+    ]);
+    expect(col.decimal(65, 2).precision).toBe(65);
+  });
+
+  it("refuses a char wider than MySQL can declare, at the widest it can", () => {
+    // CHAR(256) is refused by MySQL; PostgreSQL and SQLite would accept it.
+    expect(validationPaths(() => col.char(256))).toEqual(["char.length"]);
+    expect(col.char(255).length).toBe(255);
+  });
+
   it("refuses two keys that collide once snake-cased", () => {
     // `fooBar` and `foo_bar` are one SQL column, so the table would declare it
     // twice and fail at CREATE rather than here.
@@ -178,6 +193,33 @@ describe("defineTable", () => {
       "t.foreignKeys[0]",
     ]);
     expect(() => declare(["ownerId"], ["id"])).not.toThrow();
+  });
+
+  it("refuses a foreign key whose column counts differ, naming the table and key", () => {
+    // Two local columns against one referenced column, and the reverse:
+    // every dialect refuses either only when the constraint is created.
+    const declare = (columns: string[], referenced: string[]) =>
+      defineTable(
+        "t",
+        { id: col.id(), ownerId: col.shortText(), tenantId: col.shortText() },
+        {
+          foreignKeys: [
+            { columns, references: { table: "owners", columns: referenced } },
+          ],
+        }
+      );
+    for (const [columns, referenced] of [
+      [["ownerId", "tenantId"], ["id"]],
+      [["ownerId"], ["id", "tenant_id"]],
+    ]) {
+      const issues = validationIssues(() => declare(columns, referenced));
+      expect(issues.map(issue => issue.path)).toEqual(["t.foreignKeys[0]"]);
+      expect(issues[0]?.message).toMatch(/exactly as many columns/);
+    }
+    // The control: two columns against two.
+    expect(() =>
+      declare(["ownerId", "tenantId"], ["id", "tenant_id"])
+    ).not.toThrow();
   });
 
   it("refuses an explicit foreign key name past 63 characters, and accepts 63", () => {

@@ -11,8 +11,14 @@
  * @module cli/commands/upgrade-steps/schema-events
  */
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 
+import {
+  busyTableBounds,
+  type BusyTableBounds,
+} from "../../../domains/schema/busy-table/bounds";
+import { runStatementsInTries } from "../../../domains/schema/busy-table/run-on-session";
 import {
   mapJournalRow,
   mapMigrationsRow,
@@ -22,8 +28,10 @@ import {
 import { detectLegacyBookkeeping } from "../../../domains/schema/events/legacy-detection";
 import { getSchemaEventsDdl } from "../../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
+import { quoteIdent } from "../../../domains/schema/pipeline/sql-templates/identifier-quoting";
 import { NextlyError } from "../../../errors";
 import type {
+  UpgradeAdapter,
   UpgradeDialect,
   UpgradeStep,
   UpgradeStepContext,
@@ -103,6 +111,51 @@ function toInsertValues(event: BackfillEvent): Record<string, unknown> {
     if (value !== undefined) out[key] = value;
   }
   return out;
+}
+
+/** What a busy-table report and the schema lock's mark call this step. */
+const UPGRADE_CHANGE = "nextly upgrade";
+
+/**
+ * The adapter as the command hands it over, a whole `DrizzleAdapter` whose sessions the step's
+ * schema statements run on; undefined for a narrower one offering no session, through whose
+ * Drizzle handle they run once each.
+ */
+function sessionAdapterOf(adapter: UpgradeAdapter): DrizzleAdapter | undefined {
+  const methods = ["withSession", "executeQuery", "queryStatement"];
+  return methods.every(name => typeof Reflect.get(adapter, name) === "function")
+    ? (adapter as unknown as DrizzleAdapter)
+    : undefined;
+}
+
+/**
+ * Runs the step's schema statements in order and returns what a report calls each one that ran.
+ * On the command's adapter each statement waits for a busy table in its own tries, bounded by
+ * `NEXTLY_LOCK_TIMEOUT` / `NEXTLY_LOCK_TIMEOUT_TOTAL`, each try's notice through the step's warning
+ * (`runStatementsInTries`); one that stays busy stops the upgrade with `NEXTLY_TABLE_BUSY`, naming
+ * the statements before it, which stay.
+ */
+async function runSchemaStatements(
+  context: UpgradeStepContext,
+  bounds: BusyTableBounds,
+  statements: readonly string[],
+  name: (index: number) => string,
+  appliedBefore: readonly string[]
+): Promise<readonly string[]> {
+  const adapter = sessionAdapterOf(context.adapter);
+  if (adapter === undefined) {
+    for (const statement of statements) {
+      await execRaw(context.db, context.dialect, statement);
+    }
+    return statements.map((_, index) => `${UPGRADE_CHANGE}: ${name(index)}`);
+  }
+  return runStatementsInTries(adapter, statements, {
+    change: UPGRADE_CHANGE,
+    bounds,
+    notify: context.warn,
+    appliedBefore,
+    name,
+  });
 }
 
 const eventsTableOf = (context: UpgradeStepContext) =>
@@ -212,14 +265,27 @@ async function backfillJournal(
 
 /** Create the events table, backfill it and drop the legacy tables. */
 async function run(context: UpgradeStepContext): Promise<number> {
+  // Read before anything else, so a bound outside its range is refused with the database as it
+  // was: the backfill below writes rows that a run stopped after it would write again.
+  const bounds = busyTableBounds({ env: process.env });
   const { adapter, db, dialect, log } = context;
   const eventsTable = eventsTableOf(context);
   const legacy = await detectLegacyBookkeeping(adapter);
 
+  // What this step applied, as a busy-table report names it.
+  const applied: string[] = [];
   if (!(await adapter.tableExists(eventsTable))) {
-    for (const statement of getSchemaEventsDdl(dialect)) {
-      await execRaw(db, dialect, statement);
-    }
+    const ddl = getSchemaEventsDdl(dialect);
+    applied.push(
+      ...(await runSchemaStatements(
+        context,
+        bounds,
+        ddl,
+        index =>
+          `the creation of ${eventsTable}, statement ${String(index + 1)} of ${String(ddl.length)}`,
+        applied
+      ))
+    );
     log(`Created ${eventsTable}`);
   }
 
@@ -241,7 +307,15 @@ async function run(context: UpgradeStepContext): Promise<number> {
   log("Synthesized 1 audit row for pre-existing core schema");
 
   for (const table of legacy.tables) {
-    await adapter.dropTable(table, { ifExists: true });
+    applied.push(
+      ...(await runSchemaStatements(
+        context,
+        bounds,
+        [`DROP TABLE IF EXISTS ${quoteIdent(table, dialect)}`],
+        () => `the drop of table ${JSON.stringify(table)}`,
+        applied
+      ))
+    );
     log(`Dropped ${table}`);
   }
   return written + 1;

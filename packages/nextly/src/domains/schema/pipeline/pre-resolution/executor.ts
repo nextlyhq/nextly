@@ -79,7 +79,13 @@ export async function executePreResolutionOps(
    * retyping a column they name. Run after the refusals below, so a refused
    * apply has changed nothing even on MySQL, where DDL commits as it runs.
    */
-  leadingStatements: readonly string[] = []
+  leadingStatements: readonly string[] = [],
+  /**
+   * Told after each leading statement and each op finishes, as it finishes. On MySQL and SQLite
+   * each commits as it runs, so a run stopped part-way knows how many stay applied; the count this
+   * returns is told only once every one has finished.
+   */
+  onFinished: () => void = () => undefined
 ): Promise<number> {
   const preOps = ops.filter(
     op => isPreResolutionOp(op) || isMysqlStringNarrowing(op, dialect)
@@ -99,10 +105,12 @@ export async function executePreResolutionOps(
 
   for (const statement of leadingStatements) {
     await runRaw(txOrDb, statement, dialect);
+    onFinished();
   }
 
   for (const op of ordered) {
     await runOrderedOp(txOrDb, op, dialect);
+    onFinished();
   }
 
   // A rename moves the column; it does not change what the column IS. When the two sides differ, the

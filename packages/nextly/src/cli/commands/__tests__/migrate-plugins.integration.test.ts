@@ -48,6 +48,7 @@ import { CORE_TABLE_NAMES } from "../../../schemas/index";
 import { createLogger } from "../../utils/logger";
 import {
   migrateCore,
+  migrationsStillPending,
   recordAppTableOwners,
   runPluginPhase,
   syncElementOwners,
@@ -1119,6 +1120,95 @@ describe("--step across plugin modules and app files (sqlite)", () => {
       const third = await run();
       expect([third.pluginModulesApplied, third.applied]).toEqual([0, 1]);
       expect(await adapter.listTables()).toContain("step_app");
+    } finally {
+      rmSync(migrationsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("counts a plugin module a step left as still pending, while no app file is", async () => {
+    // A run cut short among the plugin's modules leaves no app file pending, so a count of app
+    // files alone would let the work that follows the final schema run now.
+    const migrationsDir = mkdtempSync(join(tmpdir(), "nx-step-left-"));
+    const steps = defineTable("rows", { id: col.id() });
+    const more = defineTable("more", { id: col.id() });
+    const extensionSchema = await buildExtensionSchema({
+      dialect: DIALECT,
+      coreTableNames: CORE_TABLE_NAMES,
+      entities: [],
+      pluginPrefixes: new Map([["stepper", "stepper"]]),
+      plugins: [
+        { owner: { kind: "plugin", id: "stepper" }, tables: [steps, more] },
+      ],
+    });
+    const firstModule = buildPluginMigration({
+      pluginName: "stepper",
+      schemaVersion: 1,
+      name: "v1",
+      now: new Date(Date.UTC(2026, 8, 26, 10, 0, 0)),
+      tablesByDialect: await tablesByDialect("stepper", "stepper", [steps]),
+      existing: [],
+    })!.module;
+    const secondModule = buildPluginMigration({
+      pluginName: "stepper",
+      schemaVersion: 2,
+      name: "v2",
+      now: new Date(Date.UTC(2026, 8, 26, 10, 0, 1)),
+      tablesByDialect: await tablesByDialect("stepper", "stepper", [
+        steps,
+        more,
+      ]),
+      existing: [firstModule],
+    })!.module;
+    const sets = [
+      {
+        pluginName: "stepper",
+        pluginVersion: "1.0.0",
+        migrations: [firstModule, secondModule],
+      },
+    ];
+    const adapter = {
+      ...adapterFor(sqlite),
+      tableExists: async (name: string) =>
+        (await adapterFor(sqlite).listTables()).includes(name),
+    };
+    const logger = createLogger({ quiet: true });
+    const run = () =>
+      migrateCore({
+        extensionSchema,
+        dialect: DIALECT,
+        db,
+        adapter,
+        migrationsDir,
+        logger,
+        lockMode: "fail-fast",
+        withLock: async (
+          _adapter: unknown,
+          _dialect: unknown,
+          fn: () => Promise<unknown>
+        ) => ({
+          ran: true as const,
+          value: await fn(),
+        }),
+        pluginMigrationSets: sets,
+        pluginsWithMigrations: new Set(["stepper"]),
+        step: 1,
+      } as never);
+    const stillPending = () =>
+      migrationsStillPending({
+        adapter: adapter as never,
+        db,
+        dialect: DIALECT,
+        migrationsDir,
+        logger,
+        pluginMigrationSets: sets,
+      });
+
+    try {
+      expect(await stillPending()).toBe(2);
+      expect((await run()).pluginModulesApplied).toBe(1);
+      expect(await stillPending()).toBe(1);
+      expect((await run()).pluginModulesApplied).toBe(1);
+      expect(await stillPending()).toBe(0);
     } finally {
       rmSync(migrationsDir, { recursive: true, force: true });
     }

@@ -16,6 +16,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { SanitizedNextlyConfig } from "../../collections/config/define-config";
+import { publishRecordingPoliciesForCommand } from "../../di/register";
 import {
   publishDeclaredEntities,
   restoreDeclaredEntities,
@@ -71,6 +72,9 @@ async function followWorkflowsOn(
   logger: Logger
 ): Promise<void> {
   await withCommandServicesLent(adapter, logger, async () => {
+    // A part moved here records its `workflow.stage_changed` event under the same switches a
+    // request's does, so an entity with `webhooks: false` records none.
+    await publishRecordingPoliciesForCommand(adapter, config);
     const registry = await buildWorkflowRegistry(config, configPath, {
       components: config.fieldGroups ?? [],
     });

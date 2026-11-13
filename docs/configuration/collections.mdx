@@ -161,7 +161,7 @@ Only `slug` and `fields` are required.
 | **Type** | `string` |
 | **Required** | Yes |
 
-Unique identifier used as the database table name (unless `dbName` is set), the REST path (`/admin/api/collections/[slug]/entries`), and the internal reference. Must be lowercase, URL-friendly, and not a reserved SQL keyword.
+Unique identifier used as the database table name (with a `dc_` prefix, unless `dbName` is set), the REST path (`/admin/api/collections/[slug]/entries`), and the internal reference. Must be lowercase, URL-friendly, and not a reserved SQL keyword.
 
 #### The address rule
 
@@ -223,9 +223,11 @@ When `true`, every entry gets `createdAt` (set on insert) and `updatedAt` (refre
 | | |
 |---|---|
 | **Type** | `string` |
-| **Default** | Same as `slug` |
+| **Default** | `dc_<slug>`, with hyphens in the slug replaced by underscores |
 
 Custom database table name. Useful for legacy schemas or when the slug doesn't match your naming convention.
+
+Collection tables carry a `dc_` prefix. By default the table is `dc_` plus the slug, with hyphens turned into underscores, so the slug `blog-posts` gives `dc_blog_posts`. A `dbName` you supply is used as written, including any hyphens, and gets the `dc_` prefix added unless it already starts with `dc_`: `dbName: "articles"` gives `dc_articles`, while `dbName: "dc_articles"` is used as is.
 
 ### `description`
 

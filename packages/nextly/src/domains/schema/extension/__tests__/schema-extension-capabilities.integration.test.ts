@@ -1401,19 +1401,13 @@ const CAPABILITIES: Capability[] = [
     row: 24,
     title: "a PostgreSQL schema other than public",
     run: async ctx => {
-      // The recorded refusal, as `main` reads today: PostgreSQL refuses any
-      // schema but public rather than honour it partly (the support itself
-      // is R-24's work, and when it lands this row flips to a create-and-
-      // introspect there); the dialects with no schema namespace ignore the
-      // setting with a warning instead of failing an app that runs
-      // perfectly. Either way the install is never pointed at a schema its
-      // tables were not built in.
+      // PostgreSQL honours the named schema: an installation keeps every
+      // table in it (booted end to end in
+      // `services/__tests__/postgres-named-schema.integration.test.ts`). The
+      // dialects with no schema namespace ignore the setting with a warning
+      // instead of failing an app that runs perfectly.
       if (ctx.dialect === "postgresql") {
-        expect(() => resolvePostgresSchema("cms", ctx.dialect)).toThrow(
-          expect.objectContaining({
-            code: "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED",
-          })
-        );
+        expect(resolvePostgresSchema("cms", ctx.dialect)).toBe("cms");
         expect(resolvePostgresSchema("public", ctx.dialect)).toBe("public");
       } else {
         const warnings: string[] = [];

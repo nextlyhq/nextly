@@ -41,7 +41,7 @@ interface PluginDefinition {
     opts: { keepData: boolean }
   ) => void | Promise<void>; // `nextly plugins uninstall`, before its DOWN migrations; @experimental
   destroy?: (ctx: PluginContext) => void | Promise<void>;
-  rename?: (map: Record<string, string>) => PluginDefinition; // integrator-side remap (D54)
+  rename?: (map: Record<string, string>) => PluginDefinition; // integrator-side remap
 }
 ```
 
@@ -139,13 +139,13 @@ interface PluginContext {
   audit?: PluginAuditApi; // with contributes.audit
   hooks: PluginHookRegistry; // in-transaction, modify/abort
   events: PluginEvents; // post-commit, observe-only, best-effort
-  filters: PluginFilterRegistry; // transform values on typed seams (D63)
-  actions: PluginActionRegistry; // ordered side-effects on typed seams (D63)
+  filters: PluginFilterRegistry; // transform values on typed seams
+  actions: PluginActionRegistry; // ordered side-effects on typed seams
   self: {
     name: string;
     collections: Record<string, string>;
     singles: Record<string, string>;
-  }; // resolved slugs (D54)
+  }; // resolved slugs
   config: PluginConfig; // @experimental; a copy of the plain configuration values, frozen all the way down — see below
   logger: Logger;
   nextlyVersion: string;
@@ -230,7 +230,7 @@ ctx.services.collections.withTransaction(work: (tx: PluginCollectionTransaction)
 // tx is an opaque token for createEntryInTransaction / updateEntryInTransaction / deleteEntryInTransaction
 ```
 
-### Secure-by-default services (D35)
+### Secure-by-default services
 
 ```ts
 // Acts as the current user (RBAC enforced):

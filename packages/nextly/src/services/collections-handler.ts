@@ -500,6 +500,18 @@ export class CollectionsHandler {
     return this.entryService.releaseHeldDraftLocales(params);
   }
 
+  /**
+   * Rewrite one field of an entry on its live copy and on every pending draft
+   * that holds it, without publishing. See the mutation service.
+   *
+   * @experimental
+   */
+  async rewriteField(
+    call: Parameters<CollectionEntryService["rewriteField"]>[0]
+  ): ReturnType<CollectionEntryService["rewriteField"]> {
+    return this.entryService.rewriteField(call);
+  }
+
   private resolveUserParam<
     T extends {
       userId?: string;
@@ -721,6 +733,9 @@ export class CollectionsHandler {
           | undefined,
         fields: originalFields,
         slug: data.slug as string | undefined,
+        // An explicit answer from the stored record, where no `localized`
+        // means untranslated; absent is kept for older plugin callers.
+        localized: data.localized === true,
       });
       Object.assign(data, draftSplitResponseFields(draftSplit));
     }

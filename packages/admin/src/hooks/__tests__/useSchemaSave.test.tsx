@@ -103,7 +103,7 @@ function setup(overrides: Overrides = {}) {
   const onNoChanges = overrides.onNoChanges ?? vi.fn();
   const onApplied = overrides.onApplied ?? vi.fn();
 
-  const { result, rerender } = renderHook(() =>
+  const { result, rerender, unmount } = renderHook(() =>
     useSchemaSave({
       slug: "slug" in overrides ? overrides.slug : "posts",
       missingSlugMessage: "Collection slug is missing",
@@ -123,6 +123,7 @@ function setup(overrides: Overrides = {}) {
   return {
     result,
     rerender,
+    unmount,
     confirmation,
     previewFn,
     applyFn,
@@ -322,6 +323,33 @@ describe("confirmApply", () => {
   // While the preview is on its way nothing is on screen to say a save has
   // started, yet what it answers is acted on: the page is told it is busy so
   // Discard all cannot clear what the save is about to keep.
+  // Leaving the page drops its pending changes; a preview that answers after
+  // that must not save them, nor put a confirmation in front of nobody.
+  it("persists nothing when the preview answers after the page has gone", async () => {
+    let answer: (value: SchemaPreviewResponse) => void = () => {};
+    const confirmation = confirmationStub();
+    const { result, unmount, onNoChanges } = setup({
+      confirmation,
+      previewFn: vi.fn(
+        () =>
+          new Promise<SchemaPreviewResponse>(resolve => {
+            answer = resolve;
+          })
+      ),
+    });
+    await act(async () => {
+      result.current.handleSave();
+      await Promise.resolve();
+    });
+
+    unmount();
+    await act(async () => answer(preview({ hasChanges: false })));
+    await act(async () => answer(preview()));
+
+    expect(onNoChanges).not.toHaveBeenCalled();
+    expect(confirmation.request).not.toHaveBeenCalled();
+  });
+
   it("marks the save busy while its preview is on its way", async () => {
     let answer: (value: SchemaPreviewResponse) => void = () => {};
     const confirmation = confirmationStub();

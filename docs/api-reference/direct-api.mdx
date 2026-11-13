@@ -253,6 +253,45 @@ To have the update judged by the version you read, put that `_rev` in `data` and
 since one version can't speak for every document the clause could match, so it needs
 `_overwrite: true`.
 
+### rewriteField
+
+<Callout type="warn">`rewriteField` is `@experimental`.</Callout>
+
+Change one field of an entry on its live copy and on every pending draft that holds it, in one
+transaction, without publishing. Each draft stays a draft, the entry's status doesn't change, and
+the rewrite applies only if the entry is still at the version you read.
+
+```typescript
+const page = await nextly.findByID({ collection: "pages", id });
+const { item } = await nextly.rewriteField({
+  collection: "pages",
+  id,
+  field: "layout",
+  expectedVersion: page._rev,
+  set: { value: null },
+  reason: "The layout was deleted",
+});
+item.version; // the version the entry is at now
+item.copies; // [{ form: "live", locale: null }, { form: "draft", locale: null }]
+```
+
+| Argument          | Type                                     | Default  | Description                                                                                         |
+| ----------------- | ---------------------------------------- | -------- | --------------------------------------------------------------------------------------------------- |
+| `collection`      | `string`                                 | required | Collection slug.                                                                                    |
+| `id`              | `string`                                 | required | Document ID.                                                                                        |
+| `field`           | `string`                                 | required | A top-level field.                                                                                  |
+| `locale`          | `string`                                 | default  | For a translated field, the language rewritten. A shared field takes none.                          |
+| `expectedVersion` | `string`                                 | required | The `_rev` you read. A later save refuses the rewrite with `STALE_VERSION`, changing nothing.       |
+| `set`             | `{ value }` or `{ from(current, copy) }` | required | The new value, or a function called once per copy with that copy's stored value.                    |
+| `reason`          | `string`                                 | required | Why, kept in the entry's history. At most 4,000 characters.                                         |
+| `overrideAccess`  | `boolean`                                | `true`   | Bypass access control. With `false`, `user` needs permission to update the entry and to publish it. |
+| `user`            | `{ id, role? }`                          | —        | Whose access is judged when `overrideAccess: false`.                                                |
+
+**Returns:** `MutationResult<{ version, copies }>`. Runs no save hooks; the live change records the
+`entry.updated` event and revalidates the entry's pages. See
+[Rewriting one field](/docs/plugins/services#rewriting-one-field-on-the-live-copy-and-its-drafts)
+for what it refuses and how history records it.
+
 ### delete
 
 Delete by ID or by `where`. The two paths return different shapes because a multi-row delete cannot collapse into a single mutation envelope, and the return type is the union either way — narrow it before reading a path-specific field:
@@ -619,7 +658,7 @@ The Direct API exposes auth operations as methods on the root `nextly` object. T
 
 ### login
 
-Verify credentials and issue a signed JWT. The token expiry is 30 days, and it ends earlier, within ten seconds, if the account is deactivated or an administrator sets its password, wherever it is read through `getSession` or `requireAuth` ([Authentication](/docs/guides/authentication)). `verifyAccessToken` alone checks only its signature. The Direct API does **not** set cookies — that responsibility belongs to your route handler / server action wrapper.
+Verify credentials and issue a signed JWT. The token is valid for 24 hours. It ends earlier, within ten seconds, if the account is deactivated or an administrator sets its password, wherever it is read through `getSession` or `requireAuth` ([Authentication](/docs/guides/authentication)). That includes a change made while the login is running, after the password was checked. `verifyAccessToken` alone checks only its signature. The Direct API does **not** set cookies — that responsibility belongs to your route handler / server action wrapper.
 
 ```typescript
 const result = await nextly.login({
@@ -635,6 +674,12 @@ result.exp; // unix timestamp
 **Returns:** `LoginResult` — `{ user, token, exp }`. Throws `NextlyError` (`AUTH_INVALID_CREDENTIALS`) on bad credentials.
 
 The credentials are checked the way the login endpoint checks them: a wrong password counts toward the account lockout, and an account that is locked, deactivated, or must replace an admin-set password is refused with the same `AUTH_INVALID_CREDENTIALS` error, so the caller cannot tell which applied. An account that has not verified its email is refused with `EMAIL_NOT_VERIFIED` once the password is proven correct, unless an administrator deactivated it, and with `AUTH_INVALID_CREDENTIALS` otherwise.
+
+The token carries the account's roles in force when it was signed, so `getSession` reads it with them, and it ends no later than the first of those roles expires. A role that has already expired is not carried.
+
+Every call is recorded on the audit trail, like a sign-in at the login page: a `login-succeeded` row naming the account, or a `login-failed` row naming none. Both carry `metadata.strategy: "password"` and `metadata.via: "direct-api"`, which tells them apart from sign-ins at the login page.
+
+A token from a release before 24-hour tokens keeps the 30 days it was signed with, and still ends when the account's sessions do. A server that signed in once a month signs in once a day now; a machine caller that needs a longer-lived credential uses an [API key](/docs/guides/authentication#api-key-authentication).
 
 `login` is for trusted server code. It runs no plugin login hooks and no second-factor challenge, so do not use it to sign a person in on their behalf; send them through the admin login page, which does both.
 

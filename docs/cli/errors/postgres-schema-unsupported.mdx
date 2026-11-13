@@ -7,12 +7,12 @@ description: "`db.postgres.schema` names a PostgreSQL schema other than `public`
 
 `db.postgres.schema` names a PostgreSQL schema other than `public`, which Nextly cannot create its tables in yet.
 
-Nextly creates and migrates its tables in PostgreSQL's `public` schema only, for now. Its push reads the tables it wants as belonging to `public`, so asked to reconcile any other schema it would create nothing there, and the option is refused outright rather than half-honoured.
+This code is retired. Nextly now creates and migrates its tables in any PostgreSQL schema `db.postgres.schema` names. No command ends with it any more; it is kept so a script or a log search that names it still reads correctly. Releases before the change refused every schema but `public` with it.
 
 ## Fix
 
-- Remove `db.postgres.schema` from `nextly.config.ts`, or set it to `public`.
-- Remove any schema option given to the database adapter as well, so both name `public`.
+- Upgrade Nextly: a release with the change keeps every table in the schema `db.postgres.schema` names.
+- On an existing site, keep `db.postgres.schema` pointing at the schema its tables are already in. Pointing it at another one is refused as [`POSTGRES_SCHEMA_MOVED`](/docs/cli/errors/postgres-schema-moved).
 
 ## Example
 

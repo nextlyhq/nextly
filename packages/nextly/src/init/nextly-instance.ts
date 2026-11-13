@@ -789,7 +789,8 @@ export interface Nextly {
    * const uploadData = await nextly.storage.getClientUploadUrl(
    *   'video.mp4',
    *   'video/mp4',
-   *   'media'
+   *   'media',
+   *   { size: file.size }
    * );
    *
    * // Get signed URL for private file access

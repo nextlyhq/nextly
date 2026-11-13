@@ -204,32 +204,53 @@ async function titlesReadable(
   visible: readonly VisibleNotice[],
   caller: ReadCaller
 ): Promise<Set<string>> {
-  const shown = new Set<string>();
+  const { untitled, groups } = groupedByRead(visible);
+  const shown = new Set(untitled);
+  for (const group of groups) {
+    for (const id of await titlesShownInGroup(group, caller)) shown.add(id);
+  }
+  return shown;
+}
+
+/**
+ * The notices with no title field, which have nothing to withhold, and the rest grouped by the read
+ * that judges them: one per collection or Single and language.
+ */
+function groupedByRead(visible: readonly VisibleNotice[]): {
+  untitled: string[];
+  groups: VisibleNotice[][];
+} {
+  const untitled: string[] = [];
   const groups = new Map<string, VisibleNotice[]>();
   for (const each of visible) {
     if (each.notice.data.titleField === undefined) {
-      shown.add(each.notice.id);
+      untitled.push(each.notice.id);
       continue;
     }
     const { kind, slug, locale } = each.document;
     const key = JSON.stringify([kind, slug, locale ?? null]);
     groups.set(key, [...(groups.get(key) ?? []), each]);
   }
-  for (const group of groups.values()) {
-    const { kind, slug, locale } = group[0].document;
-    const fields = [
-      ...new Set(group.map(each => each.notice.data.titleField ?? "")),
-    ];
-    const rows = await rowsAsRead(kind, slug, group, caller, fields, locale);
-    for (const each of group) {
+  return { untitled, groups: [...groups.values()] };
+}
+
+/** The notices of one group whose title field `caller`'s read of the document returns. */
+async function titlesShownInGroup(
+  group: readonly VisibleNotice[],
+  caller: ReadCaller
+): Promise<string[]> {
+  const { kind, slug, locale } = group[0].document;
+  const fields = [
+    ...new Set(group.map(each => each.notice.data.titleField ?? "")),
+  ];
+  const rows = await rowsAsRead(kind, slug, group, caller, fields, locale);
+  return group
+    .filter(each => {
       const row = rows.get(each.document.entryId);
       const field = each.notice.data.titleField ?? "";
-      if (row !== undefined && row[field] !== undefined) {
-        shown.add(each.notice.id);
-      }
-    }
-  }
-  return shown;
+      return row !== undefined && row[field] !== undefined;
+    })
+    .map(each => each.notice.id);
 }
 
 /** The documents of one collection or Single as `caller` reads them, by id, with `fields`. */

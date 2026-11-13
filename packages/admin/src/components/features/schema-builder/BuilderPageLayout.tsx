@@ -39,6 +39,7 @@ import {
   markPending,
 } from "@admin/lib/builder/outline/pending-rows";
 import { navigateTo } from "@admin/lib/navigation";
+import type { StoredHookConfig } from "@admin/types/collection";
 
 import type { BuilderConfig } from "./builder-config";
 import { BuilderFieldSettings } from "./BuilderFieldSettings";
@@ -71,6 +72,8 @@ type Props = {
   onSave: () => void;
   settings: BuilderSettingsValues;
   onSettingsChange: (next: BuilderSettingsValues) => void;
+  /** A collection's stored hooks, shown read-only in its settings modal. */
+  storedHooks?: readonly StoredHookConfig[];
   active: ActiveOverlay;
   onActiveChange: (next: ActiveOverlay) => void;
   onDuplicateField: (fieldId: string) => void;
@@ -99,6 +102,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     onSave,
     settings,
     onSettingsChange,
+    storedHooks,
     active,
     onActiveChange,
     isSaving,
@@ -108,9 +112,15 @@ export function BuilderPageLayout(props: Props): JSX.Element {
   // While changes are pending, every way out asks first: an in-app link, the
   // field group's editor, the browser's back, a reload and closing the tab.
   // The guard is the admin's one, which entries use too. A read-only entity
-  // holds no changes to lose.
+  // holds no changes to lose. While a save is on its way the guard asks even
+  // with nothing pending (an undo since may have brought the count to none)
+  // and offers no Discard Changes, so leaving cannot let the save land unseen.
   return (
-    <UnsavedChangesGuard isDirty={unsavedCount > 0} disabled={locked}>
+    <UnsavedChangesGuard
+      isDirty={unsavedCount > 0 || isSaving}
+      disabled={locked}
+      busy={isSaving}
+    >
       <div className="flex flex-col min-h-screen bg-background">
         <BuilderToolbar
           config={config}
@@ -133,6 +143,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           settings={settings}
           onSettingsChange={onSettingsChange}
           readOnly={locked}
+          storedHooks={storedHooks}
         />
 
         {children}

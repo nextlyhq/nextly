@@ -284,6 +284,28 @@ describe("DocumentBar — discard working draft menu", () => {
     ).toBeInTheDocument();
   });
 
+  // A collection that no longer holds drafts can still hold one saved before:
+  // the read says so (`_isWorkingDraft`), and the editor offers to publish or
+  // discard it, so it is never stranded.
+  it("offers Discard draft and Publish changes for a draft held while drafts are off", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        mode="edit"
+        draftsEnabled={false}
+        entry={{ id: "x", status: "published", _isWorkingDraft: true }}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: /publish changes/i })
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /more actions/i }));
+    expect(
+      screen.getByRole("menuitem", { name: /discard draft/i })
+    ).toBeInTheDocument();
+  });
+
   it("hides Discard draft when there is no pending working draft", async () => {
     const user = userEvent.setup();
     render(

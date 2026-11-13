@@ -5,11 +5,25 @@
  * @module domains/schema/migrate/migration-transaction
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { sql } from "drizzle-orm";
+import type {
+  SqlParam,
+  StatementSession,
+  SupportedDialect,
+} from "@nextlyhq/adapter-drizzle/types";
+import { sql, type SQL } from "drizzle-orm";
+import { MySqlDialect } from "drizzle-orm/mysql-core";
+import { PgDialect } from "drizzle-orm/pg-core";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
+import {
+  causeChain,
+  endedWaiting,
+  ownSessionId,
+  ownSessionIdText,
+  sessionIdOfRows,
+} from "../busy-table/ended-waiting";
 import { isPluginLedgerRow } from "../events/ledger-scope";
 import {
   assertSchemaLockHeld,
@@ -17,6 +31,7 @@ import {
 } from "../pipeline/schema-lock";
 
 import { requiredColumnCheckpoint } from "./required-column-guard";
+import { leadingWords } from "./split-sql";
 import {
   refusingNewDanglingReferences,
   sqliteForeignKeysOn,
@@ -40,6 +55,53 @@ export interface MigrationTransaction {
    * through `db` (`restoreSessionDefaults`).
    */
   restoreSession(): Promise<void>;
+  /**
+   * The database's id for the connection the unit's statements run on (PostgreSQL's pid, MySQL's
+   * connection id), so a try for a busy table can be watched from another; undefined on SQLite.
+   */
+  session(): Promise<string | undefined>;
+}
+
+/**
+ * One try for a busy table, as the runner bounds it (`busy-table/run-unit`): the try's bound, and
+ * what the runner tells the tries about the try as it goes.
+ */
+export interface StatementTryBound {
+  /** How long one try may wait for locks, in milliseconds. */
+  readonly tryMs: number;
+  /** Told the id of the connection the unit's statements run on, once it is known. */
+  readonly onSession?: (session: string) => void;
+  /**
+   * Told each statement's index just before it is sent, and the number of statements once every
+   * one has run, so a wait after the last (the ledger's write) is told apart from one on it.
+   */
+  readonly onStatement?: (index: number) => void;
+  /**
+   * The index of the first statement this try sends, 0 by default: the statements before it were
+   * made durable by an earlier try and are not sent again, except a connection setting (`SET`),
+   * which is sent again first so it is in force on this try's connection. Indexes stay those of
+   * the whole unit, for `onStatement` and the required-column count alike.
+   */
+  readonly from?: number;
+  /**
+   * Awaited once every statement has run, before the unit's ledger write and its commit, while
+   * the try's connection still runs this unit: the try's watch stops here, so nothing it sends can
+   * reach a connection the pool has since handed to other work.
+   */
+  readonly settle?: () => Promise<void>;
+  /**
+   * Awaited before each statement is sent: the try's watch finishes a cancel under way first, so
+   * a cancel meant for the statement that waited can never end the next one.
+   */
+  readonly beforeStatement?: () => Promise<void>;
+  /**
+   * A statement whose failure this accepts is passed over, and the unit goes on to the next, as
+   * a runner that tolerates a statement already applied does; it counts as run. Honoured only
+   * where a refused statement leaves the unit able to go on: outside a transaction, and on MySQL,
+   * which rolls back the statement alone. In a PostgreSQL or SQLite transaction a refused
+   * statement aborts the transaction, so there it is never consulted.
+   */
+  readonly passOver?: (error: unknown, statement: string) => boolean;
 }
 
 /**
@@ -131,6 +193,13 @@ export async function executeTransaction<T>(
             dialect === "postgresql"
               ? restoreSessionDefaults(ctx)
               : Promise.resolve(),
+          session: async () => {
+            const query = ownSessionId(dialect);
+            if (query === undefined) return undefined;
+            return sessionIdOfRows(
+              await ctx.queryStatement<Record<string, unknown>>(query)
+            );
+          },
         }),
       // A migration runs with nobody there to read a warning, so on MySQL it
       // runs in strict mode whatever the server's own mode: a statement that
@@ -167,6 +236,8 @@ export async function executeTransaction<T>(
             // SQLite has no setting a statement can change that reroutes a
             // table name: ATTACH and DETACH are refused before anything runs.
             restoreSession: () => Promise.resolve(),
+            // SQLite names no connection: its busy timeout bounds the one write lock.
+            session: () => Promise.resolve(undefined),
           }),
         (count, pairs) =>
           `This migration would leave ${String(count)} row(s) referencing rows that do not exist (${pairs}). It was rolled back, and nothing was applied.`
@@ -239,6 +310,11 @@ export function outsideTransactionNotice(source: string): string {
  * mode, as a unit run in a transaction does, so a statement that would cut a
  * stored value short fails rather than applying with a warning.
  *
+ * Bounded as one try for a busy table (`bound`), a unit is watched on the connection its
+ * statements run on: in a transaction, the transaction's; outside one on the servers, one
+ * connection a session holds for the whole unit (`boundSessionTry`). A try that resumes
+ * (`bound.from`) skips the statements an earlier try made durable.
+ *
  * On SQLite a unit run outside a transaction keeps the foreign-key contract
  * `executeTransaction` gives one run in a transaction, except the rollback:
  * enforcement is switched off before its first statement (and the unit
@@ -254,7 +330,214 @@ export async function runMigrationStatements(
   adapter: DrizzleAdapter,
   statements: readonly string[],
   unit: MigrationUnit,
-  after?: (db: unknown, statementsExecuted: number) => Promise<void>
+  after?: (db: unknown, statementsExecuted: number) => Promise<void>,
+  bound?: StatementTryBound
+): Promise<number> {
+  // On SQLite one try's bound is the busy timeout of the one connection, for every wait of the
+  // unit, set before it and put back after it whatever its outcome.
+  if (bound !== undefined && adapter.getCapabilities().dialect === "sqlite") {
+    const restore = await boundSqliteWait(adapter, bound.tryMs);
+    try {
+      return await runUnitStatements(adapter, statements, unit, after, bound);
+    } finally {
+      await restore();
+    }
+  }
+  return runUnitStatements(adapter, statements, unit, after, bound);
+}
+
+/**
+ * Sets SQLite's busy timeout to `tryMs` and returns what puts the connection's own back. Putting
+ * it back is best effort: the unit has already ended, and a failure here must not change how.
+ */
+export async function boundSqliteWait(
+  adapter: DrizzleAdapter,
+  tryMs: number
+): Promise<() => Promise<void>> {
+  const [row] = await adapter.executeQuery<Record<string, unknown>>(
+    "PRAGMA busy_timeout"
+  );
+  const previous = Number(Object.values(row ?? {})[0] ?? 0);
+  await adapter.executeQuery(
+    `PRAGMA busy_timeout = ${String(Math.round(tryMs))}`
+  );
+  return () =>
+    adapter
+      .executeQuery(
+        `PRAGMA busy_timeout = ${String(Number.isFinite(previous) ? previous : 0)}`
+      )
+      .then(
+        () => undefined,
+        () => undefined
+      );
+}
+
+/** MySQL's per-try bounds, whole seconds half a second past the try: metadata locks and rows. */
+function mysqlTryBounds(tryMs: number): string[] {
+  const seconds = String(Math.ceil((tryMs + 500) / 1000));
+  return [
+    `SET SESSION lock_wait_timeout = ${seconds}`,
+    `SET SESSION innodb_lock_wait_timeout = ${seconds}`,
+  ];
+}
+
+/** What sets MySQL's per-try bounds back to the server's own defaults. */
+const MYSQL_TRY_BOUNDS_RESET = [
+  "SET SESSION lock_wait_timeout = DEFAULT",
+  "SET SESSION innodb_lock_wait_timeout = DEFAULT",
+];
+
+/**
+ * Runs `work` in a MySQL transaction with each wait for a lock, a table's metadata lock or a
+ * row's, bounded half a second past the try, as a backstop for a watch that could not ask (a pool
+ * with no connection to spare). A session setting outlives the transaction on its pooled
+ * connection, so both are set back to the server's defaults before the transaction ends,
+ * whatever its outcome. Anywhere else, `work` runs as it is.
+ */
+async function withMysqlTryBackstop<T>(
+  tx: MigrationTransaction,
+  dialect: SupportedDialect,
+  bound: StatementTryBound | undefined,
+  work: () => Promise<T>
+): Promise<T> {
+  if (bound === undefined || dialect !== "mysql") return work();
+  for (const statement of mysqlTryBounds(bound.tryMs))
+    await tx.execute(statement);
+  try {
+    return await work();
+  } finally {
+    for (const statement of MYSQL_TRY_BOUNDS_RESET) {
+      await tx.execute(statement).catch(() => undefined);
+    }
+  }
+}
+
+/**
+ * Bounds a try in a transaction on PostgreSQL (`SET LOCAL lock_timeout`, half a second past the
+ * try, as a backstop for the watch) and tells the try the transaction's session, so the watch can
+ * follow it; on MySQL the session alone (its bounds are `withMysqlTryBackstop`'s). Nothing on
+ * SQLite, whose busy timeout bounds the unit.
+ */
+async function boundTransactionTry(
+  tx: MigrationTransaction,
+  dialect: SupportedDialect,
+  bound: StatementTryBound | undefined
+): Promise<void> {
+  if (bound === undefined || dialect === "sqlite") return;
+  if (dialect === "postgresql") {
+    await tx.execute(
+      `SET LOCAL lock_timeout = '${String(Math.round(bound.tryMs) + 500)}ms'`
+    );
+  }
+  const session = await tx.session();
+  if (session !== undefined) bound.onSession?.(session);
+}
+
+/**
+ * Sends one statement of a transaction, passing over a failure the try tolerates where the
+ * transaction can go on after it: only on MySQL, which rolls back the statement alone.
+ */
+async function executeTolerated(
+  tx: MigrationTransaction,
+  marked: string,
+  statement: string,
+  dialect: SupportedDialect,
+  bound: StatementTryBound | undefined
+): Promise<void> {
+  try {
+    await tx.execute(marked);
+  } catch (error) {
+    if (dialect !== "mysql" || !passesOver(bound, error, statement, dialect)) {
+      throw error;
+    }
+  }
+}
+
+/** MySQL's ER_LOCK_DEADLOCK: the transaction was rolled back whole, the deadlock's victim. */
+const MYSQL_DEADLOCK = { code: "ER_LOCK_DEADLOCK", errno: 1213 };
+
+/**
+ * Whether a try passes over `statement`'s failure: the caller's `passOver` accepts it, and it is
+ * not one that ended the try or the transaction. A lock wait ended or cancelled is the try's to
+ * judge, never a statement already applied, and a MySQL deadlock rolled back the whole
+ * transaction, so the unit cannot go on in it.
+ */
+function passesOver(
+  bound: StatementTryBound | undefined,
+  error: unknown,
+  statement: string,
+  dialect: SupportedDialect
+): boolean {
+  if (bound?.passOver === undefined) return false;
+  if (endedWaiting(error, dialect, true)) return false;
+  const deadlock = causeChain(error).some(
+    ({ code, errno }) =>
+      code === MYSQL_DEADLOCK.code || errno === MYSQL_DEADLOCK.errno
+  );
+  return !deadlock && bound.passOver(error, statement);
+}
+
+/**
+ * Whether `statement` sets something on its connection (`SET`): sent again before a try that
+ * resumes past it, since the try may run on another connection than the one it was set on.
+ */
+export function isConnectionSetting(
+  statement: string,
+  dialect: SupportedDialect
+): boolean {
+  return leadingWords(statement, dialect, 1)[0] === "SET";
+}
+
+/**
+ * Bounds each lock wait of a session that runs a unit outside a transaction, half a second past
+ * the try's bound, as a backstop for a watch that could not ask; and tells the try the session's
+ * id, so the watch can follow it. The session is one `withSession` holds and closes afterwards,
+ * so the setting ends with it; on PostgreSQL it is put back all the same, best effort, before the
+ * session runs anything else.
+ */
+export async function boundSessionTry<T>(
+  session: StatementSession,
+  dialect: "postgresql" | "mysql",
+  bound: StatementTryBound,
+  work: () => Promise<T>
+): Promise<T> {
+  // Fixed text with a whole number of milliseconds or seconds, never caller input.
+  const setting =
+    dialect === "postgresql"
+      ? [`SET lock_timeout = '${String(Math.round(bound.tryMs) + 500)}ms'`]
+      : mysqlTryBounds(bound.tryMs);
+  for (const statement of setting) await session.execute(statement);
+  const query = ownSessionIdText(dialect);
+  const id =
+    query === undefined
+      ? undefined
+      : sessionIdOfRows(await session.execute<Record<string, unknown>>(query));
+  if (id !== undefined) bound.onSession?.(id);
+  try {
+    return await work();
+  } finally {
+    const reset =
+      dialect === "postgresql"
+        ? ["RESET lock_timeout"]
+        : MYSQL_TRY_BOUNDS_RESET;
+    for (const statement of reset) {
+      await session.execute(statement).then(
+        () => undefined,
+        () => undefined
+      );
+    }
+  }
+}
+
+/** `runMigrationStatements`'s unit, run once, bounded as one try where `bound` is given. */
+async function runUnitStatements(
+  adapter: DrizzleAdapter,
+  statements: readonly string[],
+  unit: MigrationUnit,
+  after:
+    | ((db: unknown, statementsExecuted: number) => Promise<void>)
+    | undefined,
+  bound: StatementTryBound | undefined
 ): Promise<number> {
   const dialect = adapter.getCapabilities().dialect;
   // A column made required after an earlier statement of the unit filled its rows is counted at
@@ -271,44 +554,101 @@ export async function runMigrationStatements(
     dialect === "sqlite"
       ? statement
       : markedForSchemaLock(statement, unit.source);
+  // A try that resumes starts at `from`; the settings made before it are made again first.
+  const from = Math.max(0, Math.min(bound?.from ?? 0, statements.length));
+  const settingsBefore = statements
+    .slice(0, from)
+    .filter(statement => isConnectionSetting(statement, dialect));
   if (unit.transaction) {
-    await executeTransaction(adapter, async tx => {
-      for (const [index, statement] of statements.entries()) {
-        await checkpoint?.(tx.db, index);
-        // A run that lost the lock starts no further statement (`assertSchemaLockHeld`).
-        await assertSchemaLockHeld();
-        await tx.execute(sent(statement));
-      }
-      // A unit may rewrite registry rows (a schema save's upsert of its own
-      // row): what the transaction read of them before is read again.
-      clearRegistryRowCache();
-      if (after !== undefined) {
-        await tx.restoreSession();
-        await after(tx.db, statements.length);
-      }
-      // The commit is what lands the file: refused, and the transaction undone, as a statement.
-      // Not on MySQL, whose DDL committed as it ran: the file has landed by now, and refusing here
-      // would report it as not recorded.
-      if (dialect !== "mysql") await assertSchemaLockHeld();
-    });
+    await executeTransaction(adapter, tx =>
+      withMysqlTryBackstop(tx, dialect, bound, async () => {
+        await boundTransactionTry(tx, dialect, bound);
+        for (const setting of settingsBefore) await tx.execute(sent(setting));
+        for (const [offset, statement] of statements.slice(from).entries()) {
+          const index = from + offset;
+          // A run that lost the lock starts no further statement (`assertSchemaLockHeld`).
+          await assertSchemaLockHeld();
+          await bound?.beforeStatement?.();
+          // Told before the statement's checkpoint, which belongs to it: a wait the checkpoint
+          // ends on is the statement's, so a try that resumes starts at it, never before it.
+          bound?.onStatement?.(index);
+          await checkpoint?.(tx.db, index);
+          // A cancel the checkpoint's wait drew is settled before the statement is sent.
+          await bound?.beforeStatement?.();
+          await executeTolerated(
+            tx,
+            sent(statement),
+            statement,
+            dialect,
+            bound
+          );
+        }
+        bound?.onStatement?.(statements.length);
+        await bound?.settle?.();
+        // A unit may rewrite registry rows (a schema save's upsert of its own
+        // row): what the transaction read of them before is read again.
+        clearRegistryRowCache();
+        if (after !== undefined) {
+          await tx.restoreSession();
+          await after(tx.db, statements.length);
+        }
+        // The commit is what lands the file: refused, and the transaction undone, as a statement.
+        // Not on MySQL, whose DDL committed as it ran: the file has landed by now, and refusing
+        // here would report it as not recorded.
+        if (dialect !== "mysql") await assertSchemaLockHeld();
+      })
+    );
     return statements.length;
   }
+  // On SQLite outside a transaction each statement takes the write lock anew, and the busy timeout
+  // bounds each wait on its own, so several waits could add up past the try. The try has one
+  // deadline instead: before each statement the timeout is set to what is left of it, at least a
+  // millisecond, so the waits together end within the try. A statement that has the lock at once
+  // waits for nothing, whatever is left.
+  const sqliteDeadline =
+    dialect === "sqlite" && bound !== undefined
+      ? performance.now() + bound.tryMs
+      : undefined;
   const runEach = async (
-    execute: (statement: string) => Promise<unknown>
+    execute: (statement: string) => Promise<unknown>,
+    // What the checkpoints read through: the connection the statements run on where a session
+    // holds one, so a checkpoint neither waits for a pooled connection the session holds nor
+    // escapes the try's bounds.
+    checkpointDb: unknown
   ): Promise<void> => {
-    for (const [index, statement] of statements.entries()) {
-      // Outside a transaction each statement has committed, so the pool reads what they left. The
-      // refusal names the statements that ran and says they stayed applied, so it reaches the
-      // caller as it is, not as a statement that failed part-way.
-      await checkpoint?.(adapter.getDrizzle(), index);
+    for (const setting of settingsBefore) await execute(sent(setting));
+    for (const [offset, statement] of statements.slice(from).entries()) {
+      const index = from + offset;
       // Asked before the statement, outside the failure below: refused here, nothing of it ran.
       await assertSchemaLockHeld();
+      await bound?.beforeStatement?.();
+      // Told before the statement's checkpoint, which belongs to it: the statements before it
+      // committed as they ran, so a try that ends in the checkpoint resumes at this statement and
+      // never sends the one before it again.
+      bound?.onStatement?.(index);
+      // Outside a transaction each statement has committed, so the checkpoint reads what they
+      // left. The refusal names the statements that ran and says they stayed applied, so it
+      // reaches the caller as it is, not as a statement that failed part-way.
+      await checkpoint?.(checkpointDb, index);
+      // A cancel the checkpoint's wait drew is settled before the statement is sent.
+      await bound?.beforeStatement?.();
+      if (sqliteDeadline !== undefined) {
+        // A whole number of milliseconds, never caller input.
+        const left = Math.max(
+          1,
+          Math.round(sqliteDeadline - performance.now())
+        );
+        await adapter.executeQuery(`PRAGMA busy_timeout = ${String(left)}`);
+      }
       try {
         await execute(sent(statement));
       } catch (error) {
+        if (passesOver(bound, error, statement, dialect)) continue;
         throw partialFailure(unit, index, statements.length, error);
       }
     }
+    bound?.onStatement?.(statements.length);
+    await bound?.settle?.();
   };
   const onPool = (statement: string) => adapter.executeQuery(statement);
   if (dialect === "sqlite") {
@@ -322,7 +662,7 @@ export async function runMigrationStatements(
       await assertForeignKeysOff(session);
       await refusingNewDanglingReferences(
         session,
-        () => runEach(onPool),
+        () => runEach(onPool, adapter.getDrizzle()),
         (count, pairs) =>
           `${unit.source} ran outside a transaction, and left ${String(count)} row(s) referencing rows that do not exist (${pairs}). Its statements stayed applied: repair or remove those rows${unit.direction === "down" ? "" : `, then ${markAppliedAdvice(unit.source)}`}.`
       );
@@ -335,17 +675,94 @@ export async function runMigrationStatements(
     // connection, so every statement runs on the one connection the session
     // holds, which is closed afterwards rather than pooled.
     await adapter.withSession(
-      session => runEach(statement => session.execute(statement)),
+      session => {
+        const each = () =>
+          runEach(
+            statement => session.execute(statement),
+            sessionReader(session, dialect)
+          );
+        return bound === undefined
+          ? each()
+          : boundSessionTry(session, dialect, bound, each);
+      },
       { strictSqlMode: true }
     );
+  } else if (bound !== undefined) {
+    // A try is watched on one session, so a bounded unit runs on one connection the session
+    // holds and closes afterwards, rather than each statement on whichever pooled one is free.
+    await adapter.withSession(session =>
+      boundSessionTry(session, dialect, bound, () =>
+        runEach(
+          statement => session.execute(statement),
+          sessionReader(session, dialect)
+        )
+      )
+    );
   } else {
-    await runEach(onPool);
+    await runEach(onPool, adapter.getDrizzle());
   }
   if (after !== undefined) {
     await assertSchemaLockHeld();
-    await after(adapter.getDrizzle(), statements.length);
+    await afterBounded(adapter, dialect, bound, db =>
+      after(db, statements.length)
+    );
   }
   return statements.length;
+}
+
+/**
+ * Runs a unit's `after` (its ledger write) once its statements have run outside a transaction,
+ * bounded as the try was: on PostgreSQL and MySQL in a short transaction of its own whose lock
+ * waits end half a second past the try, so a ledger table another session holds ends the try as
+ * a busy table does, and the next try, which resumes past every statement, writes it again. The
+ * session the statements ran on has closed by now, so this takes no connection a one-connection
+ * pool has to spare. On SQLite, whose busy timeout still bounds the connection, and where no try
+ * is bounded, it runs as it did, through the adapter's own handle.
+ */
+async function afterBounded(
+  adapter: DrizzleAdapter,
+  dialect: SupportedDialect,
+  bound: StatementTryBound | undefined,
+  write: (db: unknown) => Promise<void>
+): Promise<void> {
+  if (bound === undefined || dialect === "sqlite") {
+    await write(adapter.getDrizzle());
+    return;
+  }
+  await executeTransaction(adapter, tx =>
+    withMysqlTryBackstop(tx, dialect, bound, async () => {
+      if (dialect === "postgresql") {
+        // Fixed text with a whole number of milliseconds, never caller input.
+        await tx.execute(
+          `SET LOCAL lock_timeout = '${String(Math.round(bound.tryMs) + 500)}ms'`
+        );
+      }
+      await write(tx.db);
+    })
+  );
+}
+
+/**
+ * A reader over the session the unit's statements run on, shaped as the adapter's own Drizzle
+ * handle answers `execute` (PostgreSQL's `{ rows }`, MySQL's `[rows, fields]`), for the
+ * required-column checkpoints, which read through `execute` alone on these dialects.
+ */
+function sessionReader(
+  session: StatementSession,
+  dialect: "postgresql" | "mysql"
+): { execute(query: SQL): Promise<unknown> } {
+  const compiler =
+    dialect === "postgresql" ? new PgDialect() : new MySqlDialect();
+  return {
+    execute: async (query: SQL) => {
+      const compiled = compiler.sqlToQuery(query);
+      const rows = await session.execute(
+        compiled.sql,
+        compiled.params as SqlParam[]
+      );
+      return dialect === "postgresql" ? { rows } : [rows, []];
+    },
+  };
 }
 
 /**

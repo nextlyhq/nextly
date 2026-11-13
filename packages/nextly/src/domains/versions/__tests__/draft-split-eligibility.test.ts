@@ -13,6 +13,10 @@ import {
   isDraftSplitEligible,
   type DraftSplitEligibilityInput,
 } from "../draft-split-eligibility";
+import {
+  _resetPerLanguageStorage,
+  setPerLanguageStorage,
+} from "../../i18n/per-language-storage";
 import type { ComponentSchemas } from "../restore-snapshot";
 
 const textFields = [
@@ -45,6 +49,7 @@ const base: DraftSplitEligibilityInput = {
   draftsVersioningEnabled: true,
   fields: textFields,
   componentSchemas: new Map(),
+  documentLocalized: true,
 };
 
 describe("isDraftSplitEligible", () => {
@@ -159,35 +164,54 @@ describe("isDraftSplitEligible", () => {
     });
   });
 
-  it("is off for a non-localized Single that reaches a localized component", () => {
-    // Its working draft is keyed with no language while the component stores
-    // a value per language, so one draft would mix several languages' edits.
+  // Without per-language storage an unlocalized document's working draft is
+  // keyed with no language, while the component stores a value per language,
+  // so one draft would mix several languages' edits: a collection's as well as
+  // a Single's.
+  it("is off for a non-localized document that reaches a localized component", () => {
+    for (const entityKind of ["single", "collection"] as const) {
+      expect(
+        evaluateDraftSplitEligibility({
+          ...base,
+          entityKind,
+          documentLocalized: false,
+          componentSchemas: components({ localized: true }),
+        }),
+        entityKind
+      ).toEqual({
+        eligible: false,
+        reason: "localized-component",
+        componentSlug: "hero",
+      });
+    }
+    // A localized document keys its draft by language, so it stays eligible.
     expect(
-      evaluateDraftSplitEligibility({
+      isDraftSplitEligible({
         ...base,
-        entityKind: "single",
-        documentLocalized: false,
+        documentLocalized: true,
         componentSchemas: components({ localized: true }),
       })
-    ).toEqual({
-      eligible: false,
-      reason: "localized-component",
-      componentSlug: "hero",
-    });
-    // A localized Single keys its draft by language, so it stays eligible, and
-    // a collection is judged without this rule.
-    for (const input of [
-      { entityKind: "single" as const, documentLocalized: true },
-      { entityKind: "collection" as const, documentLocalized: false },
-      {},
-    ]) {
-      expect(
-        isDraftSplitEligible({
-          ...base,
-          ...input,
-          componentSchemas: components({ localized: true }),
-        })
-      ).toBe(true);
+    ).toBe(true);
+  });
+
+  // Under per-language storage every document's draft is keyed by its
+  // language, so the component's values never share one draft.
+  it("keeps a non-localized document's drafts under per-language storage", () => {
+    setPerLanguageStorage(true);
+    try {
+      for (const entityKind of ["single", "collection"] as const) {
+        expect(
+          isDraftSplitEligible({
+            ...base,
+            entityKind,
+            documentLocalized: false,
+            componentSchemas: components({ localized: true }),
+          }),
+          entityKind
+        ).toBe(true);
+      }
+    } finally {
+      _resetPerLanguageStorage();
     }
   });
 

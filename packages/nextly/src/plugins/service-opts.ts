@@ -20,6 +20,10 @@ import { withCurrentLanguages } from "../domains/i18n/configured-locales";
 import { isLocaleSelector } from "../domains/i18n/locale-selector";
 import type { SingleEntryService } from "../domains/singles/services/single-entry-service";
 import type { SingleDocument } from "../domains/singles/types";
+import type {
+  FieldRewriteRequest,
+  FieldRewriteResult,
+} from "../domains/versions/field-rewrite";
 import { holdsFieldOfType } from "../domains/versions/tag-component-types";
 import { NextlyError } from "../errors/nextly-error";
 import { collectingWarnings } from "../hooks/side-effect-warnings";
@@ -422,6 +426,7 @@ type AccessMethod =
   | "count"
   | "createMany"
   | "updateMany"
+  | "rewriteField"
   | InTransactionMethod;
 
 const CONTEXT_INDEX: Record<AccessMethod, number> = {
@@ -436,6 +441,10 @@ const CONTEXT_INDEX: Record<AccessMethod, number> = {
   // The entries carry their own ids, so the context stays at index 2 as on
   // `createMany` rather than moving out to make room for one.
   updateMany: 2,
+  // The request carries the entry, so the context follows it directly. The
+  // plugin making the rewrite is appended after the context by core, from the
+  // plugin's identity (see `translateServiceOpts`), never taken from a call.
+  rewriteField: 1,
   // The transactional writes run the same access check as the writes above,
   // so their context is a `ServiceOpts` too. Taken raw, it let a plugin name
   // `overrideAccess` or hand in a caller carrying whatever roles it liked.
@@ -507,6 +516,7 @@ const PLUGIN_COLLECTION_METHODS = [
   "findEntryById",
   "updateEntry",
   "deleteEntry",
+  "rewriteField",
   "warmLocalizedReadiness",
   "withTransaction",
   "createEntryInTransaction",
@@ -596,8 +606,31 @@ export type PluginCollectionService = Pick<
 > & {
   [K in Exclude<
     AccessMethod,
-    WriteMethod | InTransactionMethod
+    WriteMethod | InTransactionMethod | "rewriteField"
   >]: ReplaceTrailingContext<CollectionService[K]>;
+} & {
+  /**
+   * @experimental Rewrite one field of an entry on its live copy and on every
+   * pending draft that holds it, in one transaction, without publishing: each
+   * draft stays a draft and the entry's status is unchanged. Applied only if
+   * the entry is still at `expectedVersion`, the version the plugin read;
+   * otherwise refused with `STALE_VERSION` and nothing changes. There is no
+   * overwrite: read again and decide again.
+   *
+   * Runs no save hooks and no in-transaction handlers. The entry's history
+   * records one "rewritten" event naming this plugin (or, with `as: "user"`,
+   * the person, with this plugin named beside them) and the `reason`. The
+   * live change records the `entry.updated` event and revalidates the entry's
+   * pages once it commits.
+   *
+   * Made as a person (`as: "user"`), it needs their permission to update the
+   * entry and, where the collection has a publish lifecycle, to publish it,
+   * and every field rule that applies to their own update.
+   */
+  rewriteField(
+    request: FieldRewriteRequest,
+    opts?: ServiceOpts
+  ): Promise<FieldRewriteResult>;
 } & {
   [K in WriteMethod]: PluginWriteMethod<K>;
 } & {
@@ -773,9 +806,16 @@ export function transactionOf(token: unknown): PluginTransactionRecord {
  */
 export function wrapCollectionsForPlugin(
   collections: CollectionService,
-  deps: ServiceOptsDeps = REAL_DEPS
+  deps: ServiceOptsDeps = REAL_DEPS,
+  /**
+   * The plugin these services belong to, by the name it booted under: a
+   * rewrite it makes names it in history. Absent for services no plugin owns.
+   */
+  pluginName?: string
 ): PluginCollectionService {
-  const translated = translateServiceOpts(collections, deps);
+  const translated = translateServiceOpts(collections, deps, undefined, {
+    rewriteField: pluginName === undefined ? [] : [pluginName],
+  });
   const facade = methodFacade(translated, PLUGIN_COLLECTION_METHODS);
   // The transaction a plugin's work receives is a token, mapped back to the
   // adapter's transaction where a method needs it. Async, so an unknown or
@@ -916,7 +956,13 @@ export function wrapCollectionsForPlugin(
 function translateServiceOpts(
   collections: CollectionService,
   deps: ServiceOptsDeps,
-  readsOn?: TransactionContext
+  readsOn?: TransactionContext,
+  /**
+   * Arguments core passes after a method's context, by method: what only core
+   * may say, such as which plugin is calling. Appended after the arguments a
+   * plugin named are cut at the context, so a plugin can't supply them.
+   */
+  trusted: Partial<Record<string, readonly unknown[]>> = {}
 ): CollectionService {
   return new Proxy(collections, {
     get(target, prop, receiver) {
@@ -955,6 +1001,7 @@ function translateServiceOpts(
         // implementation of what `resolveServiceOpts` already decided. A
         // spread cannot forget a field.
         next[idx] = { ...resolved } satisfies RequestContext;
+        next.push(...(trusted[prop as string] ?? []));
         // The scope this call runs under becomes the ambient one for its whole
         // duration, so a route that NARROWED its scope is narrowed at every
         // gate underneath and not only at the one it passed the scope to.

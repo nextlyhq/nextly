@@ -9,6 +9,10 @@
 
 import { resolve } from "node:path";
 
+import {
+  busyTableBounds,
+  type BusyTableBounds,
+} from "../domains/schema/busy-table/bounds";
 import type { ExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import {
   pluginMigrationArgs,
@@ -75,6 +79,8 @@ interface MigrateCoreLike {
     declaredPlugins?: ReadonlySet<string>;
     /** See `MigrateCoreDeps.seedPermissions`. */
     seedPermissions?: () => Promise<void>;
+    /** See `MigrateCoreDeps.busyTable`. */
+    busyTable?: { bounds: BusyTableBounds; notify: (line: string) => void };
   }): Promise<{ applied: number; coreChanged: boolean; ran: boolean }>;
 }
 
@@ -282,6 +288,9 @@ async function applyBootMigrations(
   run: BootMigrationRun
 ): Promise<void> {
   const { adapter, logger } = args;
+  // The busy-table bounds from the environment, checked first: a value outside its range refuses
+  // the start before anything is read or changed.
+  const bounds = busyTableBounds({ env: process.env });
   logger.info("[Nextly] Running production migrations on boot...");
   const resolvedSchema = await resolveDeclaredSchema({
     projectRoot: process.cwd(),
@@ -309,6 +318,9 @@ async function applyBootMigrations(
     // Waits as a command-line run does, and refuses to start below when the lock stays held.
     lockMode: "wait",
     lockCommand: "boot migrations (db.runMigrationsOnBoot)",
+    // An app file waits for a busy table in tries, as `nextly migrate` does, each try's notice in
+    // the log; a boot whose tries run out refuses to start, as for a held schema lock.
+    busyTable: { bounds, notify: line => logger.warn(line) },
     // Inside a server: a SIGTERM may begin a graceful shutdown that lets the work run on, so the
     // lock is left to lapse within one lease rather than released under it.
     lockReleaseOnInterrupt: false,
@@ -389,11 +401,12 @@ async function applyBootMigrations(
  * The refusal a failed run amounts to, or undefined when the failure is one
  * the app can serve through.
  *
- * Three fatal shapes: the refusal itself; the schema lock's own refusal,
+ * The fatal shapes: the refusal itself; the schema lock's own refusal,
  * `NEXTLY_MIGRATE_LOCK_BUSY`, which it throws on every dialect when the wait
  * ends with the lock still held; and `MIGRATION_MISSING`, an older build
- * whose folder lacks a migration a newer build applied. Each means this
- * process would serve a schema it cannot account for.
+ * whose folder lacks a migration a newer build applied; a busy table waited
+ * out (`NEXTLY_TABLE_BUSY`), and a busy-table bound set out of its range. Each
+ * means this process would serve a schema it cannot account for.
  */
 function fatalBootMigrationError(err: unknown): NextlyError | undefined {
   if (!(err instanceof NextlyError)) return undefined;
@@ -402,6 +415,17 @@ function fatalBootMigrationError(err: unknown): NextlyError | undefined {
   if (err.code === "MIGRATION_MISSING") return err;
   if (err.code === "NEXTLY_MIGRATE_LOCK_BUSY") {
     return bootMigrationsNotRun(err);
+  }
+  // A busy table waited out, refused as itself, as for a held schema lock: its message names the
+  // table, what holds it and what to do. So is a busy-table bound set out of its range, refused
+  // before anything was read or changed.
+  if (err.code === "NEXTLY_TABLE_BUSY") return err;
+  if (
+    err.code === "INVALID_INPUT" &&
+    (err.logContext as { reason?: unknown } | undefined)?.reason ===
+      "busy-table-bound-invalid"
+  ) {
+    return err;
   }
   return undefined;
 }

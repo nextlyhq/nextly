@@ -529,6 +529,20 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     injected.mockRestore();
     expect(refusedOnce).toBe(true);
     expect(await mainHeading("dc_posts", id)).toBeUndefined();
+    // The registry still records the field shared: the next apply is a retry of this one.
+    const [registry] = await query<{ fields: unknown }>(
+      `SELECT ${quote(dialect, "fields")} AS fields FROM ${quote(dialect, "dynamic_collections")} WHERE ${quote(dialect, "slug")} = 'posts'`
+    );
+    const recorded = (
+      typeof registry?.fields === "string"
+        ? JSON.parse(registry.fields)
+        : registry?.fields
+    ) as { name: string; localized?: unknown }[];
+    // Recorded, and recorded shared as the seed declared it: a field missing from the record, or
+    // recorded with no answer either way, is another state.
+    const heading = recorded.find(f => f.name === "heading");
+    expect(heading).toBeDefined();
+    expect(heading?.localized).toBe(false);
 
     await dialog.change(TRANSLATED);
 

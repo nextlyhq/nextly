@@ -21,6 +21,8 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { busyTableBounds } from "../domains/schema/busy-table/bounds";
+import { runStatementsInTries } from "../domains/schema/busy-table/run-on-session";
 import {
   type ExtensionSchema,
   getActiveExtensionSchema,
@@ -911,7 +913,8 @@ async function setUpNewDatabase(
  * and the plugin whose `init` needs it then fails with the query that names it.
  */
 export async function prepareExtensionTablesBeforeInit(args: {
-  adapter: AdapterLike;
+  /** The site's adapter: the additions run on one session of it (`runTableStatements`). */
+  adapter: DrizzleAdapter;
   logger: LoggerLike;
   extensionSchema: ExtensionSchema | null | undefined;
   deps?: Partial<Pick<EnsureFirstRunSetupDeps, "freshPushSchema">>;
@@ -1002,7 +1005,7 @@ const ADDITIVE_OP_TYPES = new Set<Operation["type"]>([
  * classification, so "needs no decision" has one answer.
  */
 async function addUndecidedChanges(
-  adapter: AdapterLike,
+  adapter: DrizzleAdapter,
   logger: LoggerLike,
   existing: readonly TableSpec[]
 ): Promise<string[]> {
@@ -1110,17 +1113,25 @@ function undecidedStatements(
   ];
 }
 
-/** Run one table's statements in order; reports and stops at a failure. */
+/**
+ * Run one table's statements in order; reports and stops at a failure. Each statement waits for
+ * a busy table in tries (`runStatementsInTries`), bounded by `NEXTLY_LOCK_TIMEOUT` /
+ * `NEXTLY_LOCK_TIMEOUT_TOTAL`, each try's notice through the logger; one that stays busy is
+ * reported as any other failure is, naming the statements before it, which stay.
+ */
 async function runTableStatements(
-  adapter: AdapterLike,
+  adapter: DrizzleAdapter,
   logger: LoggerLike,
   table: string,
   statements: readonly string[]
 ): Promise<boolean> {
   try {
-    for (const statement of statements) {
-      await adapter.executeQuery(statement);
-    }
+    await runStatementsInTries(adapter, statements, {
+      change: `extension table ${table}`,
+      bounds: busyTableBounds({ env: process.env }),
+      notify: line => logger.warn(line),
+      appliedBefore: [],
+    });
     return true;
   } catch (error) {
     logger.warn(

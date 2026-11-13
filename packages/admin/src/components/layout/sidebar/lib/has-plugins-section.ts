@@ -13,6 +13,11 @@ interface PluginsSectionInputs {
    * open: a destination of its own, whatever the two arms below say.
    */
   hasVisibleMenuItem?: boolean;
+  /**
+   * True when the panel lists a plugin settings page this user may open but
+   * cannot reach through the overview (`pluginSettingsLinks`).
+   */
+  hasReachablePluginSettings?: boolean;
 }
 
 /**
@@ -46,6 +51,7 @@ export function hasPluginsSection(
 ): boolean {
   if (capabilities.canManageSettings) return true;
   if (inputs.hasVisibleMenuItem === true) return true;
+  if (inputs.hasReachablePluginSettings === true) return true;
 
   if (!capabilities.canViewCollections) return false;
 

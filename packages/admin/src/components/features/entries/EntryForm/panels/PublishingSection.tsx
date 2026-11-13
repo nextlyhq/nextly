@@ -69,6 +69,9 @@ export function PublishingSection({
   );
 }
 
+/** "Not scheduled." over the offer to schedule, and the place both hold while the answer is out. */
+const NOT_SCHEDULED_LAYOUT = "flex flex-col items-start gap-2";
+
 function PublishingBody({
   releases,
   isError,
@@ -88,16 +91,24 @@ function PublishingBody({
     );
   }
   if (isPending || releases === undefined) {
+    // Laid out as the answer most documents get, "Not scheduled." over the
+    // offer to schedule: a bar on the sentence's line, and the offer's own
+    // button held unseen, so the sections under this one stay where they are
+    // when that answer lands.
     return (
-      <div aria-busy="true">
+      <div aria-busy="true" className={NOT_SCHEDULED_LAYOUT}>
         <span className="sr-only">Checking releases</span>
-        <Skeleton className="h-4 w-40" />
+        <p className="flex items-center text-sm">
+          {"\u200b"}
+          <Skeleton className="h-4 w-40" />
+        </p>
+        <ScheduleButton holdingPlace />
       </div>
     );
   }
   if (releases.length === 0) {
     return (
-      <div className="flex flex-col items-start gap-2">
+      <div className={NOT_SCHEDULED_LAYOUT}>
         <p className="text-sm text-muted-foreground">Not scheduled.</p>
         <ScheduleButton />
       </div>
@@ -130,7 +141,15 @@ function PublishingBody({
  * Held with its reason as visible text, as a menu row says it: a disabled
  * button's title reaches neither a keyboard nor a touch screen.
  */
-function ScheduleButton() {
+function ScheduleButton({
+  holdingPlace = false,
+}: {
+  /**
+   * Whether this only holds the button's place while the schedule is checked:
+   * the same button, unseen and out of reach, with no reason line under it.
+   */
+  holdingPlace?: boolean;
+}) {
   const reasonId = useId();
   const documentActions = useDocumentActionsContext();
   const action = documentActions?.actions.find(
@@ -145,6 +164,21 @@ function ScheduleButton() {
     return null;
   }
   const reason = reasonFor(action, binding);
+  if (holdingPlace) {
+    return (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled
+        tabIndex={-1}
+        aria-hidden="true"
+        className="invisible"
+      >
+        {action.label}
+      </Button>
+    );
+  }
   return (
     <>
       <Button

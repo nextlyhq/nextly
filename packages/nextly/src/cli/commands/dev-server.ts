@@ -42,6 +42,8 @@ import {
   mainTableFields,
   storesPerLanguage,
 } from "../../domains/i18n/per-language-storage";
+import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
+import { runStatementsInTries } from "../../domains/schema/busy-table/run-on-session";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -82,6 +84,7 @@ import {
 } from "../../domains/singles/services/reconcile-single-tables";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
 import { describeError, immediateMessage } from "../../errors/index";
+import { NextlyError } from "../../errors/nextly-error";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
@@ -205,16 +208,35 @@ async function ensureSystemTables(
  * case and stays silent. Branch on the IMMEDIATE message only: a wrapped
  * failure whose cause chain happens to mention "already exists" is a different
  * error and must not be swallowed.
+ *
+ * Each statement waits for a busy database in tries (`runStatementsInTries`),
+ * bounded by `NEXTLY_LOCK_TIMEOUT` / `NEXTLY_LOCK_TIMEOUT_TOTAL`, each try's
+ * notice through the logger. One that stays busy past its tries stops the
+ * setup with `NEXTLY_TABLE_BUSY`, naming the statements before it, which stay;
+ * every other failure is let go as before, and the next statement runs.
  */
-async function applyCoreStatements(
+export async function applyCoreStatements(
   drizzleAdapter: DrizzleAdapter,
   logger: CommandContext["logger"],
   statements: string[] = generateSqliteCoreTableStatements()
 ): Promise<void> {
-  for (const statement of statements) {
+  const bounds = busyTableBounds({ env: process.env });
+  const applied: string[] = [];
+  for (const [index, statement] of statements.entries()) {
     try {
-      await drizzleAdapter.executeQuery(statement);
+      // One statement a list, so a failure the setup lets go ends only that statement.
+      applied.push(
+        ...(await runStatementsInTries(drizzleAdapter, [statement], {
+          change: "the core tables' setup",
+          bounds,
+          notify: line => logger.warn(line),
+          appliedBefore: applied,
+          name: () =>
+            `statement ${String(index + 1)} of ${String(statements.length)}`,
+        }))
+      );
     } catch (error) {
+      if (NextlyError.isCode(error, "NEXTLY_TABLE_BUSY")) throw error;
       if (!immediateMessage(error).includes("already exists")) {
         logger.debug(
           `Table creation statement failed: ${describeError(error)}`

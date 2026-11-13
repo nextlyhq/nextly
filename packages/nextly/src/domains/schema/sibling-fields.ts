@@ -21,16 +21,15 @@
 import { NextlyError } from "../../errors/nextly-error";
 import { configuredTable } from "../../shared/address-rule";
 
+import { siblingNameClash, type SiblingClashKind } from "./field-rules";
 import {
   fieldProducesColumn,
   toSnakeCase,
 } from "./services/field-column-descriptor";
 
-/** Why two sibling fields clash, in the order the rule asks. */
-export type SiblingClashKind =
-  | "same-name"
-  | "same-name-ignoring-case"
-  | "same-column";
+// The comparison itself is the browser-safe field rules', which the Builder
+// applies too; the kind is re-exported for this module's callers.
+export type { SiblingClashKind } from "./field-rules";
 
 /** A pair of sibling fields the rule refuses. */
 export interface SiblingClash {
@@ -103,13 +102,6 @@ function namedFieldsOf(
   return out;
 }
 
-function clashKind(a: string, b: string): SiblingClashKind | null {
-  if (a === b) return "same-name";
-  if (a.toLowerCase() === b.toLowerCase()) return "same-name-ignoring-case";
-  if (toSnakeCase(a) === toSnakeCase(b)) return "same-column";
-  return null;
-}
-
 function sharedValue(
   a: NamedField,
   b: NamedField,
@@ -162,7 +154,7 @@ function walk(
   const named = namedFieldsOf(fields, open);
   for (let i = 0; i < named.length; i++) {
     for (let j = i + 1; j < named.length; j++) {
-      const kind = clashKind(named[i].name, named[j].name);
+      const kind = siblingNameClash(named[i].name, named[j].name);
       if (kind === null) continue;
       const clash: SiblingClash = {
         container: containerLabel(path, type),

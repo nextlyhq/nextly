@@ -132,6 +132,22 @@ function workflowsFor(
   entity: StrandedEntity
 ): RegisteredWorkflow[] {
   const all = [...workflows];
+  const named = namedScope(entity);
+  if (named === undefined) return all;
+  const attached = attachedTo(all, named);
+  return [
+    {
+      ...attached,
+      collections: named.kind === "collection" ? [named.slug] : [],
+      singles: named.kind === "single" ? [named.slug] : [],
+    },
+  ];
+}
+
+/** The one collection or Single `entity` names, if any. Naming both is refused. */
+function namedScope(
+  entity: StrandedEntity
+): { kind: "collection" | "single"; slug: string } | undefined {
   if (entity.collection !== undefined && entity.single !== undefined) {
     throw NextlyError.validation({
       errors: [
@@ -143,13 +159,20 @@ function workflowsFor(
       ],
     });
   }
-  const named =
-    entity.collection !== undefined
-      ? { kind: "collection" as const, slug: entity.collection }
-      : entity.single !== undefined
-        ? { kind: "single" as const, slug: entity.single }
-        : undefined;
-  if (named === undefined) return all;
+  if (entity.collection !== undefined) {
+    return { kind: "collection", slug: entity.collection };
+  }
+  if (entity.single !== undefined) {
+    return { kind: "single", slug: entity.single };
+  }
+  return undefined;
+}
+
+/** The workflow attached to `named`, among `all`. One attached to nothing named is refused. */
+function attachedTo(
+  all: readonly RegisteredWorkflow[],
+  named: { kind: "collection" | "single"; slug: string }
+): RegisteredWorkflow {
   const attached = all.find(registered =>
     (named.kind === "collection"
       ? registered.collections
@@ -167,13 +190,7 @@ function workflowsFor(
       ],
     });
   }
-  return [
-    {
-      ...attached,
-      collections: named.kind === "collection" ? [named.slug] : [],
-      singles: named.kind === "single" ? [named.slug] : [],
-    },
-  ];
+  return attached;
 }
 
 /** Which stranded parts to read: of these workflows' documents, or one collection's or Single's. */

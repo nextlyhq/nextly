@@ -6,7 +6,7 @@ description: Declare custom permissions from a plugin, gate routes and admin UI,
 Nextly has a single permission primitive: `{ action, resource }`, identified by the
 slug `"<action>-<resource>"` (e.g. `"export-submissions"`). Plugins **declare** the
 permissions they need; they **never grant** them. An administrator assigns permissions
-to roles (D36).
+to roles.
 
 ## Declare a permission
 
@@ -36,7 +36,7 @@ made assignable to roles (super-admin can always assign them). On uninstall they
 removed with the rest of your plugin's footprint — see
 [Schema & data lifecycle](/docs/plugins/schema).
 
-## Gate a route (server, D28)
+## Gate a route (server)
 
 Routes are **secure by default**. Set `requiredPermission` to the slug and the
 dispatcher enforces authentication **and** that permission before your handler runs:
@@ -71,9 +71,9 @@ REST write by the same key is. A write as the system, or as another user, is rec
 as that. A plugin cannot name whom a write is attributed to.
 
 `PermissionSlug` narrows to the union of real seeded slugs once you run
-`nextly generate:types` in the consuming app (D47), so typos are caught at compile time.
+`nextly generate:types` in the consuming app, so typos are caught at compile time.
 
-## Gate the admin UI (client UX, D36)
+## Gate the admin UI (client UX)
 
 `requiredPermission` on a menu item, page, or widget hides it for users who lack the
 permission. For finer-grained, in-component checks use `useCan` / `<Can>` from

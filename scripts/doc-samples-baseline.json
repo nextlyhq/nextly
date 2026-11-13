@@ -13,8 +13,8 @@
       "compiled": 3
     },
     "docs/api-reference/direct-api.mdx": {
-      "samples": 44,
-      "compiled": 43
+      "samples": 45,
+      "compiled": 44
     },
     "docs/api-reference/rest-api.mdx": {
       "samples": 3,
@@ -64,13 +64,17 @@
       "samples": 5,
       "compiled": 3
     },
+    "docs/database/coming-from-payload.mdx": {
+      "samples": 21,
+      "compiled": 21
+    },
     "docs/database/encrypted-connections.mdx": {
       "samples": 2,
       "compiled": 2
     },
     "docs/database/extending-the-schema.mdx": {
-      "samples": 12,
-      "compiled": 5
+      "samples": 13,
+      "compiled": 6
     },
     "docs/database/index.mdx": {
       "samples": 1,
@@ -145,7 +149,7 @@
       "compiled": 5
     },
     "docs/localization/index.mdx": {
-      "samples": 6,
+      "samples": 7,
       "compiled": 5
     },
     "docs/notices/index.mdx": {
@@ -265,8 +269,8 @@
       "compiled": 15
     },
     "docs/plugins/services.mdx": {
-      "samples": 17,
-      "compiled": 1
+      "samples": 18,
+      "compiled": 2
     },
     "docs/plugins/signed-in-people.mdx": {
       "samples": 10,
@@ -327,6 +331,10 @@
     "packages/builder/README.md": {
       "samples": 2,
       "compiled": 2
+    },
+    "packages/eslint-plugin/README.md": {
+      "samples": 1,
+      "compiled": 1
     },
     "packages/module-specifiers/README.md": {
       "samples": 1,
@@ -392,9 +400,10 @@
     "docs/plugins/lifecycle.mdx": 2,
     "packages/blocks-react/README.md": 1,
     "packages/builder/README.md": 1,
+    "docs/api-reference/direct-api.mdx": 3,
     "docs/database/mysql.mdx": 3,
     "docs/guides/isr-caching.mdx": 1,
-    "docs/plugins/services.mdx": 4
+    "docs/plugins/services.mdx": 7
   },
   "findings": {
     "docs/getting-started/build-a-blog.mdx": {
@@ -431,6 +440,21 @@
       "reader-name #0 error TS2304: Cannot find name 'MyBreadcrumb'.": 1,
       "reader-name #0 error TS2304: Cannot find name 'MyCanvas'.": 1
     },
+    "docs/api-reference/direct-api.mdx": {
+      "#9 error TS18004: No value exists in scope for the shorthand property 'id'. Either declare one or provide an initializer.": 2,
+      "#9 error TS18047: 'page' is possibly 'null'.": 1,
+      "suppressed #44 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
+      "suppressed #44 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
+      "suppressed #44 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1,
+      "suppressed #10 error TS2322: Type 'unknown' is not assignable to type 'string'.": 1,
+      "suppressed #14 error TS2322: Type 'unknown' is not assignable to type 'string'.": 1,
+      "suppressed #15 error TS2322: Type 'unknown' is not assignable to type 'string'.": 1,
+      "suppressed #9 error TS2322: Type 'unknown' is not assignable to type 'string'.": 1,
+      "context #9 error TS18004: No value exists in scope for the shorthand property 'id'. Either declare one or provide an initializer.": 2,
+      "context #9 error TS18047: 'page' is possibly 'null'.": 1,
+      "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #44 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
+    },
     "docs/database/mysql.mdx": {
       "#6 error TS2304: Cannot find name 'orderData'.": 1,
       "#6 error TS2304: Cannot find name 'stockUpdate'.": 1,
@@ -443,17 +467,16 @@
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/services.mdx": {
+      "#14 error TS2304: Cannot find name 'ctx'.": 3,
       "#5 error TS2304: Cannot find name 'ctx'.": 2,
       "#5 error TS2304: Cannot find name 'slug'.": 2,
+      "context #8 error TS2304: Cannot find name 'ctx'.": 2,
+      "context #8 error TS2304: Cannot find name 'id'.": 1,
+      "context #8 error TS18004: No value exists in scope for the shorthand property 'id'. Either declare one or provide an initializer.": 1,
+      "context #8 error TS2304: Cannot find name 'layout'.": 1,
       "context #4 error TS2304: Cannot find name 'ctx'.": 1,
-      "context #4 error TS2304: Cannot find name 'slug'.": 1
-    },
-    "docs/api-reference/direct-api.mdx": {
-      "suppressed #43 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
-      "suppressed #43 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
-      "suppressed #43 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1,
-      "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #43 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
+      "context #4 error TS2304: Cannot find name 'slug'.": 1,
+      "implicit-any #14 error TS7006: Parameter 'tx' implicitly has an 'any' type.": 1
     },
     "docs/getting-started/index.mdx": {
       "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,

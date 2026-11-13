@@ -69,6 +69,29 @@ function lockRefusal(error: NextlyError): CliErrorParts {
 }
 
 /**
+ * A change that stopped waiting for a busy table, as its three parts.
+ *
+ * `tableBusyError` writes its message as one line of what happened, the lines of why (what the
+ * outcome left, the wait and its holder, the changes applied before it), and one line of what to
+ * do next. Split rather than reworded, so the CLI and the boot log keep one wording.
+ */
+function tableBusyParts(error: NextlyError): CliErrorParts {
+  const lines = error.publicMessage.split("\n");
+  if (lines.length < 3) {
+    return {
+      what: lines[0] ?? error.publicMessage,
+      why: "Another database session held a table the change needed, past its bounds.",
+      next: "Run it again once the holding session ends.",
+    };
+  }
+  return {
+    what: lines[0],
+    why: lines.slice(1, -1).join("\n"),
+    next: lines[lines.length - 1],
+  };
+}
+
+/**
  * A data-loss refusal, as its three parts, in the consent's own wording.
  *
  * The verdict's message is a header ("Deleting data needs consent, and nobody can be asked (no
@@ -459,6 +482,11 @@ export const MIGRATION_CODES = defineCodes({
     cause:
       "Another run holds the schema lock, so the command did not start and changed nothing.",
     from: [{ code: "NEXTLY_MIGRATE_LOCK_BUSY", describe: lockRefusal }],
+  },
+  TABLE_BUSY: {
+    cause:
+      "A schema change waited for a table another database session was using, past its bounds, and stopped.",
+    from: [{ code: "NEXTLY_TABLE_BUSY", describe: tableBusyParts }],
   },
   DATA_LOSS_CONSENT_REQUIRED: {
     cause:

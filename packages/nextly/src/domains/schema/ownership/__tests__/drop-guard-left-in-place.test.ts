@@ -14,6 +14,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { SupportedDialect } from "../../../../database/schema-registry";
+import { sqliteTableRebuildStatements } from "../../pipeline/sql-templates/sqlite-rebuild";
 import { tablesLeftInPlace } from "../drop-guard";
 
 const TABLES = ["fx__notes", "fx__tags"];
@@ -64,5 +65,35 @@ describe("a DOWN holding a data statement where triggers run no DDL", () => {
         TABLES
       )
     ).toEqual(["fx__notes"]);
+  });
+
+  it("follows a generated SQLite rebuild of another table, guard row and all", () => {
+    // What a contributor's DOWN holds when it takes its key off the table it
+    // contributed to: the rebuild the pipeline writes, guard table included,
+    // whose catalogue query names `il.name` and `ix.key`.
+    const rebuild = sqliteTableRebuildStatements({
+      name: "hs__items",
+      columns: [
+        { name: "id", type: "text", nullable: false, primaryKey: true },
+        { name: "label", type: "text", nullable: true },
+      ],
+    });
+    expect(rebuild.some(statement => statement.includes("il.name"))).toBe(true);
+    expect(tablesLeftInPlace([...rebuild, ...DROPS], "sqlite", TABLES)).toEqual(
+      []
+    );
+  });
+
+  it("still counts every table as left for a qualified name in any other INSERT", () => {
+    expect(
+      tablesLeftInPlace(
+        [
+          "INSERT INTO other_log (id) SELECT t.id FROM temp.fx__notes AS t",
+          ...DROPS,
+        ],
+        "sqlite",
+        TABLES
+      )
+    ).toEqual(TABLES);
   });
 });

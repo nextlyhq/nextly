@@ -1468,6 +1468,36 @@ function resolveChecks(
 }
 
 /**
+ * Resolve foreign keys, checks and relations against a table that already
+ * exists, by the rules `defineTable` applies to its own: what `extendTable`
+ * adds to a table is validated exactly as a declared table's are, so the two
+ * answers cannot drift. `columns` are the table's columns as they stand,
+ * contributed ones included, since a key may sit on a column added with it.
+ */
+export function resolveTableConstraints(
+  tableName: string,
+  columns: readonly ResolvedColumn[],
+  opts: Omit<TableDefinitionOptions, "indexes">
+): Pick<TableDefinition, "foreignKeys" | "checks" | "relations"> {
+  const byName = new Map(columns.map(column => [column.name, column.key]));
+  return {
+    foreignKeys: resolveForeignKeys(
+      tableName,
+      columns,
+      byName,
+      opts.foreignKeys ?? []
+    ),
+    checks: resolveChecks(tableName, opts.checks ?? []),
+    relations: resolveRelations(
+      tableName,
+      columns,
+      byName,
+      opts.relations ?? []
+    ),
+  };
+}
+
+/**
  * Describe a table.
  *
  * Validation happens here rather than at compile time because the failures that

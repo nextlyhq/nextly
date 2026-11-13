@@ -45,7 +45,7 @@
     "lint:design": "node scripts/lint-design.mjs",
     "lint:fix": "node scripts/bounded.mjs node scripts/lint.mjs --fix",
     "lint:workspace": "sherif",
-    "lint:scripts": "oxlint -c oxlint.scripts.config.mjs scripts lint packages/eslint-plugin/src packages/admin-css",
+    "lint:scripts": "oxlint -c oxlint.scripts.config.mjs scripts lint packages/eslint-plugin/src packages/eslint-plugin/scripts packages/admin-css",
     "fallow": "fallow",
     "fallow:audit": "fallow audit --base origin/dev",
     "_comment_testing": "=== Testing ===",

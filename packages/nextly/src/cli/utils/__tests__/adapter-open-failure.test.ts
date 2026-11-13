@@ -67,8 +67,9 @@ describe("a database that cannot be opened", () => {
 
   it("keeps an error that already has its code", async () => {
     const refusal = new NextlyError({
-      code: "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED",
-      publicMessage: "The PostgreSQL schema `cms` is not supported yet.",
+      code: "NEXTLY_POSTGRES_SCHEMA_MOVED",
+      publicMessage:
+        'db.postgres.schema is "cms", but this database\'s Nextly installation is in "public".',
     });
     createAdapterFromEnv.mockRejectedValue(refusal);
     await expect(open()).rejects.toBe(refusal);

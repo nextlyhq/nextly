@@ -219,6 +219,8 @@ export async function pluginsInstallAction(
     all?: boolean;
     acceptDataLoss?: AcceptDataLossOption;
     dryRun?: boolean;
+    lockTimeout?: string;
+    lockTimeoutTotal?: string;
   },
   cmd: Command
 ): Promise<void> {
@@ -241,6 +243,9 @@ export async function pluginsInstallAction(
       cwd: globalOpts.cwd,
       consent,
       dryRun: cmdOptions.dryRun === true,
+      // Checked by the runner before anything is read (`busyTableBounds`).
+      lockTimeout: cmdOptions.lockTimeout,
+      lockTimeoutTotal: cmdOptions.lockTimeoutTotal,
     };
     const { runPluginInstall, runPluginInstallAll } = await import(
       "./plugin-lifecycle-runner"
@@ -260,6 +265,8 @@ export async function pluginsUninstallAction(
     yes?: boolean;
     acceptDataLoss?: AcceptDataLossOption;
     dryRun?: boolean;
+    lockTimeout?: string;
+    lockTimeoutTotal?: string;
   },
   cmd: Command
 ): Promise<void> {
@@ -280,6 +287,9 @@ export async function pluginsUninstallAction(
         yes: cmdOptions.yes === true,
         consent,
         dryRun: cmdOptions.dryRun === true,
+        // Checked by the runner before anything is read (`busyTableBounds`).
+        lockTimeout: cmdOptions.lockTimeout,
+        lockTimeoutTotal: cmdOptions.lockTimeoutTotal,
       },
       context
     );

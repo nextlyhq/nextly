@@ -29,6 +29,13 @@ const SHARED = [
   { name: "heading", type: "text", localized: false },
   { name: "views", type: "number" },
 ];
+/** `heading` with a width, as a Builder collection states one: a short text of 100. */
+const HEADING_WITH_WIDTH = {
+  name: "heading",
+  type: "text",
+  options: { variant: "short" },
+  validation: { maxLength: 100 },
+};
 
 /** What the preview reports for one field leaving translation. */
 interface LeavingTranslation {
@@ -348,9 +355,15 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
   });
 
   // Five entries in two groups sharing an English heading, of two and of three: every entry in
-  // either is in the way, so the preview counts five, as Apply's refusal does.
+  // either is in the way, so the preview counts five, as Apply's refusal does. The field states
+  // a width in both shapes: shared on MySQL, a unique text field without one is refused before
+  // anything is counted (its column would be keyed whole), which
+  // `migrate-check-builder-columns.test.ts` pins.
   it("counts the entries of every group that would share a value for a Unique field", async () => {
-    await seedCollection();
+    await seedCollection([
+      { ...HEADING_WITH_WIDTH },
+      { name: "views", type: "number" },
+    ]);
     const entries = handler().getEntryService();
     for (const heading of ["One", "Two", "Two"]) {
       const entry = await entries.createEntry(
@@ -361,7 +374,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     }
 
     const preview = await previewShared([
-      { name: "heading", type: "text", unique: true, localized: false },
+      { ...HEADING_WITH_WIDTH, unique: true, localized: false },
       { name: "views", type: "number" },
     ]);
 

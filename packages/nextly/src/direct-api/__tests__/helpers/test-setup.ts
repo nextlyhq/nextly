@@ -164,12 +164,27 @@ export function createMockAdapter(): Record<string, Mock> {
   });
 }
 
+/**
+ * What the Direct API's `login` reads besides the password check: the roles a
+ * token carries (none, never lapsing, unless a test says otherwise) and the
+ * audit trail it records each attempt on.
+ */
+export function createMockDirectLoginDeps() {
+  return {
+    fetchSessionRoles: vi
+      .fn()
+      .mockResolvedValue({ roleIds: [], validUntil: undefined }),
+    auditLog: { write: vi.fn().mockResolvedValue(undefined) },
+  };
+}
+
 export interface TestMocks {
   collectionsHandler: ReturnType<typeof createMockCollectionsHandler>;
   singleEntryService: ReturnType<typeof createMockSingleEntryService>;
   singleRegistryService: ReturnType<typeof createMockSingleRegistryService>;
   authService: ReturnType<typeof createMockAuthService>;
   credentialDeps: ReturnType<typeof createMockCredentialDeps>;
+  directLoginDeps: ReturnType<typeof createMockDirectLoginDeps>;
   userAccountService: ReturnType<typeof createMockUserAccountService>;
   userService: ReturnType<typeof createMockUserService>;
   mediaService: ReturnType<typeof createMockMediaService>;
@@ -193,6 +208,7 @@ export function setupTestNextly(): {
     singleRegistryService: createMockSingleRegistryService(),
     authService: createMockAuthService(),
     credentialDeps: createMockCredentialDeps(),
+    directLoginDeps: createMockDirectLoginDeps(),
     userAccountService: createMockUserAccountService(),
     userService: createMockUserService(),
     mediaService: createMockMediaService(),
@@ -221,6 +237,7 @@ export function setupTestNextly(): {
   // Inject auth/account services directly (bypasses globalDrizzleDb dependency)
   (nextly as any)._authService = mocks.authService;
   (nextly as any)._passwordCredentialDeps = mocks.credentialDeps;
+  (nextly as any)._directLoginDeps = mocks.directLoginDeps;
   (nextly as any)._userAccountService = mocks.userAccountService;
 
   const cleanup = () => {

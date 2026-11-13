@@ -117,6 +117,43 @@ export function foreignKeyNameForColumns(
 }
 
 /**
+ * The name a relationship's key takes when it moves to another target table.
+ *
+ * The new key is added before the old one is dropped, so the column is never left without one
+ * (MySQL commits each schema statement), and two keys cannot share a name. So a move alternates
+ * between the column's usual name (`foreignKeyNameForColumns`) and one naming the new target: a key
+ * under the usual name moves to `fk_<table>_<column>_to_<target>`, and one under any other name
+ * moves back to the usual name. Bounded as every derived identifier is.
+ */
+export function movedForeignKeyName(
+  tableName: string,
+  column: string,
+  currentName: string,
+  targetTable: string,
+  // Names the table's other keys hold or will hold: another column's usual name can spell the
+  // same as this one's moved name (`owner` and `owner_to_dc_editors`), so a taken one is skipped.
+  taken: ReadonlySet<string> = new Set()
+): string {
+  const usual = foreignKeyNameForColumns(tableName, [column]);
+  const held = new Set([...taken].map(name => name.toLowerCase()));
+  const free = (name: string) => !held.has(name.toLowerCase());
+  if (currentName.toLowerCase() !== usual.toLowerCase() && free(usual)) {
+    return usual;
+  }
+  const moved = foreignKeyNameForColumns(tableName, [
+    column,
+    "to",
+    targetTable,
+  ]);
+  // The first of `moved`, `moved_2`, `moved_3`, ... that no other key holds.
+  const candidate = (attempt: number) =>
+    attempt === 1 ? moved : boundedIdentifier(`${moved}_${attempt}`);
+  let attempt = 1;
+  while (!free(candidate(attempt))) attempt++;
+  return candidate(attempt);
+}
+
+/**
  * The SQL name of a check constraint, from the table and the check's own name.
  *
  * Scoped by the table because MySQL, unlike PostgreSQL, requires check names to be unique across

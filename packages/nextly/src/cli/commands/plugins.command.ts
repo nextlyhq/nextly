@@ -6,6 +6,7 @@
 import type { Command } from "commander";
 
 import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
+import { withBusyTableBounds } from "../busy-table-options";
 import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
@@ -27,13 +28,15 @@ export function registerPluginsCommand(program: Command): void {
       lazyAction(async () => (await import("./plugins")).pluginsListAction)
     );
 
-  // `--dry-run` carries the one meaning and help line it has everywhere.
-  withDryRun(
-    plugins
-      .command("install [name]")
-      .description(
-        "Apply a plugin's migrations and run its onInstall hook, or every configured plugin's with --all"
-      )
+  // `--dry-run` and the busy-table bounds carry the one meaning and help they have everywhere.
+  withBusyTableBounds(
+    withDryRun(
+      plugins
+        .command("install [name]")
+        .description(
+          "Apply a plugin's migrations and run its onInstall hook, or every configured plugin's with --all"
+        )
+    )
   )
     .option(
       "--all",
@@ -47,10 +50,13 @@ export function registerPluginsCommand(program: Command): void {
       lazyAction(async () => (await import("./plugins")).pluginsInstallAction)
     );
 
-  withDryRun(
-    plugins
-      .command("uninstall <name>")
-      .description("Undo a plugin's schema and run its onUninstall hook")
+  // A module's DOWN waits for a busy table as its UP does.
+  withBusyTableBounds(
+    withDryRun(
+      plugins
+        .command("uninstall <name>")
+        .description("Undo a plugin's schema and run its onUninstall hook")
+    )
   )
     .option("--keep-data", "Leave the plugin's tables in place", false)
     // A full uninstall drops the plugin's tables, which takes the data-loss

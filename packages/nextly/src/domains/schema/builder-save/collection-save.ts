@@ -55,6 +55,9 @@ import type { AddressKind } from "../../../shared/address-rule";
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
 import { mainTableFields } from "../../i18n/per-language-storage";
+import { busyTableBounds } from "../busy-table/bounds";
+import { runUnitInTries } from "../busy-table/run-unit";
+import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { checksumOf } from "../migrate/applied-checksums";
 import {
@@ -63,7 +66,6 @@ import {
   runRecordedAttempt,
   snapshotsEquivalent,
 } from "../migrate/drift-reconcile";
-import { runMigrationStatements } from "../migrate/migration-transaction";
 import { refuseRequiredColumnsOverNulls } from "../migrate/required-column-guard";
 import { resolveMigration } from "../migrate/resolve";
 import { marksNoTransaction, splitSqlStatements } from "../migrate/split-sql";
@@ -272,8 +274,21 @@ export async function writeCollectionSave(
      * it has run, each written file is recorded applied where the database
      * stands as its snapshot says, and the save is refused, its files kept,
      * where it does not.
+     *
+     * It answers `"partly-applied"` where it changed the database and then
+     * failed part way: the files are kept, as the change they describe has
+     * partly run, and recorded applied nowhere, so the next `nextly migrate`
+     * names them rather than the database holding a change no file records.
      */
-    appliedBy?: () => Promise<void>;
+    appliedBy?: () => Promise<void | "partly-applied">;
+    /**
+     * Outside development, the change made here once its files are written,
+     * as a field group's or a Single's own DDL makes it (a collection's
+     * leaves it to the deploy's `nextly migrate`). A failure withdraws the
+     * files, as one in development does, so the deploy never applies a change
+     * that was refused; `"partly-applied"` keeps them, recorded nowhere.
+     */
+    appliedAfter?: () => Promise<void | "partly-applied">;
   } = {}
 ): Promise<CollectionSaveResult> {
   const written = await writeSave(deps, save, options);
@@ -281,11 +296,17 @@ export async function writeCollectionSave(
   let pushed = false;
   try {
     if (deps.applies && options.appliedBy !== undefined) {
-      await options.appliedBy();
+      const applied = await options.appliedBy();
       pushed = true;
+      if (applied === "partly-applied") {
+        return { files: [...written.names], applied: false };
+      }
       await recordWhatWasPushed(deps, written.files, written.table);
     } else if (deps.applies) {
       await runWritten(deps, written.files, written.table);
+    } else if (options.appliedAfter !== undefined) {
+      await options.appliedAfter();
+      pushed = true;
     }
     return { files: [...written.names], applied: deps.applies };
   } catch (error) {
@@ -917,6 +938,13 @@ async function writeFiles(
     ...(save.keys === undefined
       ? {}
       : { newTableKeys: new Map([[plan.table, save.keys.after]]) }),
+    // An existing table's keys before and after, which SQLite changes by rebuilding the table
+    // (`foreignKeysOfExistingTables`); PostgreSQL and MySQL take the appended statements.
+    ...(save.keys === undefined ||
+    save.entity === null ||
+    save.previous === null
+      ? {}
+      : { existingTableKeys: new Map([[plan.table, save.keys]]) }),
   });
   onWritten(change);
   return { adopt, change: [...convert, ...change] };
@@ -1103,6 +1131,7 @@ async function generateFor(
     tablesAsTheyStand?: TableSpec[];
     appended?: { up: AddedStatements; down: AddedStatements };
     newTableKeys?: ReadonlyMap<string, readonly ForeignKeySpec[]>;
+    existingTableKeys?: GenerateArgs["foreignKeysOfExistingTables"];
     resolutions?: readonly ColumnResolution[];
     /** Collections the database holds that no snapshot records (`appMigrationInputs`). */
     held?: readonly UiSchemaEntity[];
@@ -1165,6 +1194,9 @@ async function generateFor(
     ...(args.newTableKeys === undefined
       ? {}
       : { foreignKeysOfNewTables: args.newTableKeys }),
+    ...(args.existingTableKeys === undefined
+      ? {}
+      : { foreignKeysOfExistingTables: args.existingTableKeys }),
     ...(args.resolutions === undefined
       ? {}
       : { resolutions: args.resolutions }),
@@ -1228,7 +1260,8 @@ const emptyAdded = (): { up: AddedStatements; down: AddedStatements } => ({
  * went or changed is dropped before the generated statements (before its
  * column can go), and one that came or changed is added after them (once its
  * column exists). The down undoes each the other way round. None on SQLite,
- * which cannot alter a key in place; the Builder's DDL adds none there either.
+ * which cannot alter a key in place: there the generator rebuilds the table
+ * with its keys after the change (`foreignKeysOfExistingTables`).
  */
 function keyChanges(
   dialect: SupportedDialect,
@@ -1239,6 +1272,24 @@ function keyChanges(
   const same = (a: ForeignKeySpec, b: ForeignKeySpec) =>
     JSON.stringify(a) === JSON.stringify(b);
   const kept = keys.before.filter(k => keys.after.some(a => same(k, a)));
+  // A key that another on the same columns, under a new name, replaces: dropped with the adds,
+  // after its replacement, so the columns are never left unkeyed (MySQL commits each statement).
+  const replaced = (
+    from: readonly ForeignKeySpec[],
+    to: readonly ForeignKeySpec[]
+  ) =>
+    from.filter(
+      k =>
+        !kept.some(c => same(k, c)) &&
+        to.some(
+          a =>
+            !kept.some(c => same(a, c)) &&
+            a.name !== k.name &&
+            a.columns.join("\u0000") === k.columns.join("\u0000")
+        )
+    );
+  const upKept = [...kept, ...replaced(keys.before, keys.after)];
+  const downKept = [...kept, ...replaced(keys.after, keys.before)];
   const between = (
     from: readonly ForeignKeySpec[],
     to: readonly ForeignKeySpec[]
@@ -1252,10 +1303,13 @@ function keyChanges(
       []
     );
   return {
-    up: { first: between(keys.before, kept), last: between(kept, keys.after) },
+    up: {
+      first: between(keys.before, upKept),
+      last: between(upKept, keys.after),
+    },
     down: {
-      first: between(keys.after, kept),
-      last: between(kept, keys.before),
+      first: between(keys.after, downKept),
+      last: between(downKept, keys.before),
     },
   };
 }
@@ -1361,16 +1415,26 @@ async function runWritten(
   const db = deps.adapter.getDrizzle();
   const dialect = deps.adapter.getCapabilities().dialect;
   const repo = new SchemaEventsRepository(db, dialect);
+  // A table another session holds is waited for in short tries, as `nextly migrate` waits, within
+  // the bounds the environment sets (`NEXTLY_LOCK_TIMEOUT`, `NEXTLY_LOCK_TIMEOUT_TOTAL`); a bound
+  // out of range refuses the save here, before any file runs.
+  const bounds = busyTableBounds({ env: process.env });
+  const applied: string[] = [];
   const executeSql = (
     sql: string,
     unit: { source: string; transaction: boolean },
     after: (db: unknown, statementsExecuted: number) => Promise<void>
   ) =>
-    runMigrationStatements(
+    runUnitInTries(
       deps.adapter,
       splitSqlStatements(sql, dialect, unit),
       unit,
-      after
+      after,
+      {
+        bounds,
+        notify: line => deps.logger.warn(line),
+        appliedBefore: () => [...applied],
+      }
     );
   const ordered =
     files.change.length === 0 && files.adopt !== undefined
@@ -1383,6 +1447,7 @@ async function runWritten(
   let before = await scopedSnapshotBefore(deps, ordered[0], table);
   for (const filename of ordered) {
     await runJudgingWhatStayed(deps, table, filename, () => runOne(filename));
+    applied.push(filename);
   }
 
   async function runOne(filename: string): Promise<void> {
@@ -1717,7 +1782,14 @@ async function settleAttempts(
   repo: SchemaEventsRepository,
   filename: string
 ): Promise<void> {
-  if ((await repo.findFileApplies(filename)).length === 0) return;
+  // Only an attempt still unresolved needs clearing: one that ended with nothing applied (a
+  // busy table's tries that ran out, say) resolved itself, and there is nothing to clear.
+  if (
+    unresolvedAttempts(filename, await repo.findFileApplies(filename))
+      .length === 0
+  ) {
+    return;
+  }
   const removed = () =>
     Promise.reject(
       new NextlyError({
@@ -1740,11 +1812,27 @@ async function settleAttempts(
 }
 
 /** Whether the error says some of a file's statements stayed applied. */
-function partlyApplied(error: unknown): boolean {
+export function partlyApplied(error: unknown): boolean {
   if (!NextlyError.is(error)) return false;
-  if (error.code === "NEXTLY_MIGRATION_PARTIALLY_APPLIED") return true;
+  if (keptPart(error)) return true;
   const cause = (error as { cause?: unknown }).cause;
-  return (
-    NextlyError.is(cause) && cause.code === "NEXTLY_MIGRATION_PARTIALLY_APPLIED"
-  );
+  return NextlyError.is(cause) && keptPart(cause);
+}
+
+/**
+ * Whether `error` says statements of the file stayed: a part-way failure, or a busy table's tries
+ * that stopped after statements had committed (on MySQL, or outside a transaction), which the
+ * stop's outcome says, whatever the schema shows: a committed row change leaves none.
+ */
+function keptPart(error: NextlyError): boolean {
+  if (error.code === "NEXTLY_MIGRATION_PARTIALLY_APPLIED") return true;
+  if (error.code !== "NEXTLY_TABLE_BUSY") return false;
+  const outcome = (
+    error.logContext as
+      | { stop?: { outcome?: { kind?: unknown; restUndone?: unknown } } }
+      | undefined
+  )?.stop?.outcome;
+  // Read failing closed: an outcome that does not say nothing was kept keeps the files.
+  if (outcome?.kind === "nothing-changed") return false;
+  return !(outcome?.kind === "no-retry" && outcome.restUndone === true);
 }
