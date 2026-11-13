@@ -228,7 +228,12 @@ function versionOperations(defaultConfig: DirectAPIConfig): VersionsNamespace {
       actor
         ? {
             actor,
-            personName: (person as { name?: string } | undefined)?.name ?? null,
+            // A person's name only for a person: a call made as an API key is
+            // the key's, never its owner's, so it keeps the key's identity alone.
+            personName:
+              actor.type === "user"
+                ? ((person as { name?: string } | undefined)?.name ?? null)
+                : null,
           }
         : undefined
     );

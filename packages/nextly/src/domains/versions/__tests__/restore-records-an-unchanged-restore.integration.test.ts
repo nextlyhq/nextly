@@ -1,11 +1,13 @@
 /**
- * A restore is recorded in history even when the working draft already holds
- * the version's content.
+ * A restore of what the working draft already holds is recorded in history,
+ * and pins no version.
  *
  * A save that changes nothing records nothing, and a restore writes through
- * the same draft save. But a restore is an act someone made, with a source
- * the history shows ("Restored from version 1") and retention keeps: answered
- * "Version restored" while history gains no row, it would leave no trace.
+ * the same draft save. But a restore is an act someone made: answered
+ * "Version restored", it leaves its event in the document's history, naming
+ * the version it came from. It captures no version of its own, as it changed
+ * nothing: a restore's version is one retention keeps, so a repeated restore
+ * that captured one each time would keep every one of them past the cap.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -25,7 +27,7 @@ afterEach(async () => {
 const SLUG = "sameposts";
 
 describe("a restore of what the draft already holds", () => {
-  it("is still recorded, with the version it came from", async () => {
+  it("is recorded as an event naming its version, and captures no version", async () => {
     current = await createTestNextly({
       collections: [
         defineCollection({
@@ -63,14 +65,28 @@ describe("a restore of what the draft already holds", () => {
       (
         await current!.getService("versionsService").list(ref, { limit: 50 })
       ).filter(row => row.sourceVersionNo === 1).length;
+    const restoreEventsOf = async () =>
+      (
+        await current!.nextly.contentEvents.list({
+          subject: { kind: "collection", slug: SLUG, id },
+          limit: 100,
+        })
+      ).items.filter(
+        event =>
+          event.kind === "restored" &&
+          (event.payload as { from?: unknown } | null)?.from === 1
+      ).length;
 
     await restore();
-    const afterFirst = await restoresOf();
+    const versionsAfterFirst = await restoresOf();
+    const eventsAfterFirst = await restoreEventsOf();
     // The draft now holds version 1's content; restoring it again changes
-    // nothing, and is still recorded.
+    // nothing: it is recorded as an event, and captures no version.
+    await restore();
     await restore();
 
-    expect(afterFirst).toBeGreaterThan(0);
-    expect(await restoresOf()).toBe(afterFirst + 1);
+    expect(versionsAfterFirst).toBeGreaterThan(0);
+    expect(await restoreEventsOf()).toBe(eventsAfterFirst + 2);
+    expect(await restoresOf()).toBe(versionsAfterFirst);
   });
 });

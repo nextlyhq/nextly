@@ -18,7 +18,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
 import { buildClaims } from "../../../auth/jwt/claims";
@@ -407,6 +407,41 @@ describe.each(getConfiguredTestDialects())(
           .filter(e => e.kind === "named")
           .map(e => [e.payload?.label, e.actorId])
       ).toContainEqual(["Kept for later", ADMIN]);
+    }, 120_000);
+
+    it("hands no person's name with a version named on a trusted call made as an API key", async () => {
+      const id = await publishedTwice();
+      // What the trusted call hands the history: the actor, and the name kept
+      // with it.
+      const setLabel = vi
+        .spyOn(t.getService("versionsService"), "setLabel")
+        .mockResolvedValue({
+          versionNo: 1,
+          label: "By the key",
+          snapshot: {},
+        } as never);
+
+      await versions().name({
+        collection: POSTS,
+        id,
+        versionNo: 1,
+        label: "By the key",
+        overrideAccess: true,
+        // The key's owner, named on the call beside the key it is made as.
+        user: {
+          id: ADMIN as AuthUserId,
+          email: `${ADMIN}@example.test`,
+          name: "The key's owner",
+        },
+        actor: { actorType: "apiKey", permissions: [] },
+      });
+      const record = setLabel.mock.calls[0]?.[3] as
+        | { actor: { type: string }; personName: string | null }
+        | undefined;
+      setLabel.mockRestore();
+
+      expect(record?.actor.type).toBe("apiKey");
+      expect(record?.personName).toBeNull();
     }, 120_000);
 
     it("hands a trusted restore's request and person to the update it makes", async () => {
