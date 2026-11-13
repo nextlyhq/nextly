@@ -89,13 +89,15 @@ describe.each(getConfiguredTestDialects())(
     async function roundTrip(
       values: Record<string, unknown>
     ): Promise<Record<string, unknown>> {
-      const created = (await here.nextly.create({
+      const created = await here.nextly.create({
         collection: slug,
         data: values,
-      })) as { item: { id: string } };
+      });
+      const id = created.item.id;
+      expect(typeof id).toBe("string");
       const read = await here.nextly.findByID({
         collection: slug,
-        id: created.item.id,
+        id: String(id),
       });
       return (read ?? {}) as Record<string, unknown>;
     }
