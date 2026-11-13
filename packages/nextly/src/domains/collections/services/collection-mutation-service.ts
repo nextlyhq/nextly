@@ -6498,6 +6498,12 @@ export class CollectionMutationService extends BaseService {
         localized &&
         resolveLocalizedFieldNames([...fields], true).includes(field.name);
       const locale = this.rewriteLocale(request, translated);
+      // A translated field's language is judged on its own counter, so the
+      // version must be a read of that language: a read of another language
+      // names none of its saves.
+      if (translated && check.kind === "judge") {
+        judgedLanguage(check.given, locale);
+      }
       const denied = await this.rewriteRefusal(params, collection, locale);
       if (denied) return denied;
       // Resolved before the transaction: they take a pooled connection.
@@ -6610,6 +6616,15 @@ export class CollectionMutationService extends BaseService {
         message: `The field "${request.field}" is translated, so a rewrite of it names one language.`,
       });
     }
+    // A language the site does not configure would be read as the default
+    // when written, rewriting another language than the one named.
+    if (this.localization && !isValidLocale(this.localization, locale)) {
+      throw NextlyError.invalidInput({
+        message: `Unknown locale '${locale}'. Configured locales: ${this.localization.locales
+          .map(l => l.code)
+          .join(", ")}.`,
+      });
+    }
     return locale;
   }
 
@@ -6640,11 +6655,12 @@ export class CollectionMutationService extends BaseService {
     );
     if (update) return update;
     if ((collection as { status?: boolean }).status !== true) return null;
-    // Never route-authorized: a route attests an update, never a publish.
-    return this.accessService.checkCollectionAccess<FieldRewriteResult>({
-      ...asked,
-      operation: "publish",
-    });
+    // Never route-authorized: a route attests an update, never a publish. A
+    // publish rule that answers a filter allows it where the entry matches.
+    return this.refusalOfStoredUpdate<FieldRewriteResult>(
+      { ...asked, operation: "publish" },
+      locale
+    );
   }
 
   /** The body of {@link rewriteField}, in its transaction. */
@@ -6665,7 +6681,7 @@ export class CollectionMutationService extends BaseService {
       scopeSlug: params.collectionName,
       entryId: params.entryId,
     };
-    const languagesTable = await this.judgeRewriteUnderLock(
+    const { languagesTable, filteredWrites } = await this.judgeRewriteUnderLock(
       tx,
       args,
       translatedIn
@@ -6691,6 +6707,18 @@ export class CollectionMutationService extends BaseService {
       translatedIn,
       at: new Date(),
     });
+    // The rewritten row may not move the entry out of a filter that judged
+    // the rewrite: refused, the whole rewrite rolls back.
+    const [firstFilter] = filteredWrites;
+    const movedOut =
+      firstFilter &&
+      (await this.refusalMovedOutOfWriteFilters(
+        tx,
+        firstFilter.schema,
+        params.entryId,
+        filteredWrites
+      ));
+    if (movedOut) throw errorFromServiceEnvelope(movedOut);
     const liveAfter = await this.rewriteLiveDocument(tx, args, translatedIn);
     const captured = await this.captureRewrittenLive(
       tx,
@@ -6763,30 +6791,42 @@ export class CollectionMutationService extends BaseService {
     tx: TransactionContext,
     args: RewriteInTx,
     translatedIn: string | null
-  ): Promise<string | null> {
+  ): Promise<{
+    languagesTable: string | null;
+    filteredWrites: FilteredTransactionWrite[];
+  }> {
     const { params, tableName, check } = args;
     // The lock every save and publish of this entry takes, so nothing moves
     // the copies between the judgement below and the writes.
     await tx.lockRow(tableName, params.entryId);
     // Asked again on the locked row, so a change since the check above
-    // cannot move the entry out of a rule's filter and still be written.
+    // cannot move the entry out of a rule's filter and still be written. A
+    // rule that answers a filter has it kept, so the row the rewrite leaves
+    // is judged against it before the transaction commits.
+    const filteredWrites: FilteredTransactionWrite[] = [];
     if (!params.overrideAccess) {
-      const deniedUnderLock = await this.refusalOfWriteInTransaction(
-        tx,
-        {
-          collectionName: params.collectionName,
-          operation: "update",
-          entryId: params.entryId,
-          user: params.user,
-          overrideAccess: false,
-          routeAuthorized: false,
-          authenticatedScope: params.authenticatedScope,
-          executor: tx.getDrizzle(),
-        },
-        [],
-        translatedIn ?? undefined
-      );
-      if (deniedUnderLock) throw errorFromServiceEnvelope(deniedUnderLock);
+      const operations: FilteredWrite[] =
+        (args.collection as { status?: boolean }).status === true
+          ? ["update", "publish"]
+          : ["update"];
+      for (const operation of operations) {
+        const deniedUnderLock = await this.refusalOfWriteInTransaction(
+          tx,
+          {
+            collectionName: params.collectionName,
+            operation,
+            entryId: params.entryId,
+            user: params.user,
+            overrideAccess: false,
+            routeAuthorized: false,
+            authenticatedScope: params.authenticatedScope,
+            executor: tx.getDrizzle(),
+          },
+          filteredWrites,
+          translatedIn ?? undefined
+        );
+        if (deniedUnderLock) throw errorFromServiceEnvelope(deniedUnderLock);
+      }
     }
     const companion = await this.fileManager.loadCompanionSchema(
       params.collectionName,
@@ -6820,7 +6860,7 @@ export class CollectionMutationService extends BaseService {
         },
       });
     }
-    return languagesTable;
+    return { languagesTable, filteredWrites };
   }
 
   /**
@@ -6880,18 +6920,22 @@ export class CollectionMutationService extends BaseService {
     const versionsConfig = (
       args.collection as { versions?: ResolvedVersionsConfig | null }
     ).versions;
-    const parts = await this.readTxDocumentParts(tx, {
-      collectionName: params.collectionName,
+    // The relations in the language rewritten, so the version and the event
+    // never pair one language's values with another's field groups.
+    const relations = await this.buildFullSnapshotRelations(
+      tx,
+      params.entryId,
+      params.collectionName,
       tableName,
-      entryId: params.entryId,
-      parentRow,
       fields,
-      manyToManyFields: fields.filter(
+      fields.filter(
         f =>
           f.type === "relationship" && f.options?.relationType === "manyToMany"
       ),
-      needsRelations: true,
-    });
+      translatedIn ?? undefined
+    );
+    const documentParts = { parentRow, ...relations };
+    const parts = { documentParts, document: assembleDocument(documentParts) };
     const versionNo = await this.captureTxVersion(tx, {
       collectionName: params.collectionName,
       entryId: params.entryId,
@@ -7073,24 +7117,28 @@ export class CollectionMutationService extends BaseService {
             params.entryId,
             translatedIn
           );
+    // Redacted as every recorded copy of a row is: a password hash or a
+    // server-only column never reaches a version, an event or a comparison.
+    const reach = await this.passwordReach(fields, tx.getDrizzle());
     const main = this.deserializeJsonFieldsForSnapshot(
       { ...own, ...translations },
       fields
     );
-    const { live, shared, views, byHand } = await this.liveSharedDocument(tx, {
+    this.redactSnapshotRow(main, fields, tableName, reach);
+    const shared = this.deserializeJsonFieldsForSnapshot(own, fields);
+    this.redactSnapshotRow(shared, fields, tableName, reach);
+    const { live, ...comparison } = await this.liveSharedDocument(tx, {
       collectionName: params.collectionName,
       entryId: params.entryId,
       tableName,
       fields,
-      main: this.deserializeJsonFieldsForSnapshot(own, fields),
+      main: shared,
       locale: translatedIn,
     });
     return {
+      ...comparison,
       main,
       document: translatedIn === null ? live : { ...live, ...translations },
-      shared,
-      views,
-      byHand,
       value: translatedIn === null ? live[field] : main[field],
     };
   }

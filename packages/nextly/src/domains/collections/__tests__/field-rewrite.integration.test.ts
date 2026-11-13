@@ -11,7 +11,7 @@ import {
   grantTo,
   userWhoMay,
 } from "../../../__tests__/fixtures/permission-holders";
-import { defineCollection, text } from "../../../config";
+import { defineCollection, password, text } from "../../../config";
 import { Nextly } from "../../../direct-api/nextly";
 import {
   definePlugin,
@@ -32,6 +32,10 @@ const PAGES = "rwpages";
 const PLAIN = "rwplain";
 /** Translated, with drafts. */
 const LOCALIZED = "rwlpages";
+/** A person may update and publish only the entries they own. */
+const OWNED = "rwowned";
+/** Versions kept, and a password stored on the row. */
+const SECRET = "rwsecret";
 const PLUGIN = "@test/rewriter";
 const REASON = "Layout 'Wide' was deleted";
 const EDITOR = { id: "rw-editor" };
@@ -76,6 +80,22 @@ async function boot(
         slug: PLAIN,
         status: true,
         fields: [text({ name: "layout" })],
+      }),
+      defineCollection({
+        slug: OWNED,
+        status: true,
+        access: {
+          read: () => true,
+          update: ({ user }) => ({ owner: { equals: user?.id ?? "" } }),
+          publish: ({ user }) => ({ owner: { equals: user?.id ?? "" } }),
+        },
+        fields: [text({ name: "owner" }), text({ name: "layout" })],
+      }),
+      defineCollection({
+        slug: SECRET,
+        status: true,
+        versions: true,
+        fields: [text({ name: "layout" }), password({ name: "secret" })],
       }),
       ...(localized
         ? [
@@ -407,6 +427,76 @@ describe.each(getConfiguredTestDialects())("a field rewrite (%s)", dialect => {
     expect((await read(t, PAGES, id)).layout).toBe("narrow");
   });
 
+  it("matches a filtered publish rule, and refuses a rewrite that moves the entry out of it", async () => {
+    const t = await boot(dialect);
+    await userWhoMay(t, EDITOR.id, "read", [OWNED]);
+    await grantTo(t, EDITOR.id, "update", [OWNED]);
+    await grantTo(t, EDITOR.id, "publish", [OWNED]);
+    const id = await create(t, OWNED, {
+      owner: EDITOR.id,
+      layout: "wide",
+      status: "published",
+    });
+    const asEditor = new Nextly({
+      overrideAccess: false,
+      user: { id: EDITOR.id } as never,
+    });
+    const rewrite = async (field: string, value: string) =>
+      asEditor.rewriteField({
+        collection: OWNED,
+        id,
+        field,
+        expectedVersion: (await read(t, OWNED, id))._rev as string,
+        set: { value },
+        reason: REASON,
+        overrideAccess: false,
+        user: { id: EDITOR.id } as never,
+      });
+    // The entry is theirs, so both rules' filters match it.
+    await rewrite("layout", "narrow");
+    expect((await read(t, OWNED, id)).layout).toBe("narrow");
+    // Handing the entry to someone else would move it out of both.
+    await expect(rewrite("owner", "someone-else")).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect((await read(t, OWNED, id)).owner).toBe(EDITOR.id);
+  });
+
+  it("records no password in the version it captures", async () => {
+    const t = await boot(dialect);
+    const id = await create(t, SECRET, {
+      layout: "wide",
+      secret: "hunter22-secret",
+      status: "published",
+    });
+    await t.nextly.rewriteField({
+      collection: SECRET,
+      id,
+      field: "layout",
+      expectedVersion: (await read(t, SECRET, id))._rev as string,
+      set: { value: "narrow" },
+      reason: REASON,
+    });
+    const { items } = await t.nextly.versions.list({
+      collection: SECRET,
+      id,
+    } as never);
+    const newest = items[0] as { versionNo: number };
+    const version = await t.nextly.versions.get({
+      collection: SECRET,
+      id,
+      versionNo: newest.versionNo,
+    } as never);
+    const snapshot = (
+      typeof version.snapshot === "string"
+        ? JSON.parse(version.snapshot)
+        : version.snapshot
+    ) as Record<string, unknown>;
+    // POPULATION CONTROL: this is the rewrite's version.
+    expect(snapshot.layout).toBe("narrow");
+    expect(snapshot.secret ?? null).toBeNull();
+  });
+
   it("names the plugin that made it, from its own identity", async () => {
     const t = await boot(dialect);
     const id = await create(t, PAGES, { layout: "wide", status: "published" });
@@ -497,6 +587,43 @@ describe.each(getConfiguredTestDialects())(
       expect((await read(t, LOCALIZED, id, { locale: "de" })).layout).toBe(
         "full-x"
       );
+    });
+
+    it("refuses a language the site does not configure", async () => {
+      const t = await boot(dialect, true);
+      const id = await withDrafts(t);
+      await expect(
+        t.nextly.rewriteField({
+          collection: LOCALIZED,
+          id,
+          field: "title",
+          locale: "fr",
+          expectedVersion: (await read(t, LOCALIZED, id, { locale: "en" }))
+            ._rev as string,
+          set: { value: "Bonjour" },
+          reason: REASON,
+        })
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      expect((await read(t, LOCALIZED, id, { locale: "en" })).title).toBe("EN");
+    });
+
+    it("refuses a translated rewrite from a read of another language", async () => {
+      const t = await boot(dialect, true);
+      const id = await withDrafts(t);
+      const englishRead = (await read(t, LOCALIZED, id, { locale: "en" }))
+        ._rev as string;
+      await expect(
+        t.nextly.rewriteField({
+          collection: LOCALIZED,
+          id,
+          field: "title",
+          locale: "de",
+          expectedVersion: englishRead,
+          set: { value: "Neu" },
+          reason: REASON,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      expect((await read(t, LOCALIZED, id, { locale: "de" })).title).toBe("DE");
     });
 
     it("changes a translated field in the named language only", async () => {
