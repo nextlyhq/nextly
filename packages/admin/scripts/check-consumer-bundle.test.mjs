@@ -357,6 +357,62 @@ describe("consumerFindings", () => {
     );
   });
 
+  it("lets the first load hold the code of the kit areas the fixture plugin imports", () => {
+    const input = passing();
+    input.pkg.modules.add("kit/plugin-parts.mjs");
+    input.pkg.modules.add("stepper-PPPPPPPP.mjs");
+    input.pkg.closureOf = file =>
+      new Set(
+        file === "kit/plugin-parts.mjs"
+          ? ["kit/plugin-parts.mjs", "stepper-PPPPPPPP.mjs"]
+          : []
+      );
+    addFactory(
+      input,
+      "static/chunks/shell.js",
+      [41],
+      [src("kit/plugin-parts.mjs"), src("stepper-PPPPPPPP.mjs")]
+    );
+    input.record = {
+      chunks: {
+        "kit/plugin-parts.mjs": ["src/kit/plugin-parts.ts"],
+        "stepper-PPPPPPPP.mjs": ["src/components/ui/stepper.tsx"],
+      },
+    };
+    expect(kinds(input)).toEqual([]);
+  });
+
+  it("reports a part of the kit the fixture plugin does not import, naming it", () => {
+    const input = passing();
+    input.pkg.modules.add("media-MMMMMMMM.mjs");
+    addFactory(
+      input,
+      "static/chunks/shell.js",
+      [42],
+      [src("media-MMMMMMMM.mjs")]
+    );
+    input.record = {
+      chunks: {
+        "media-MMMMMMMM.mjs": [
+          "src/components/features/media-library/MediaLibrary.tsx",
+        ],
+      },
+    };
+    const { problems } = consumerFindings(input);
+    const found = problems.find(
+      p => p.kind === "first-load-holds-unimported-kit"
+    );
+    expect(found?.message).toMatch(
+      /holds media-MMMMMMMM\.mjs, code of the media library/
+    );
+  });
+
+  it("cannot judge the kit's areas without the build's record of its modules", () => {
+    const input = passing();
+    input.record = null;
+    expect(kinds(input)).toContain("nothing-read");
+  });
+
   it("reports a pinned route nothing loads on demand", () => {
     const input = passing();
     input.output.chunks.get("static/chunks/shell.js").factories.splice(3, 1);

@@ -1877,6 +1877,10 @@ async function prepareBootSchema(
     // see the same set.
     plugins: transformedPlugins,
     config: transformedConfig,
+    // The connected server's limits, so a declared check it will not enforce
+    // or an expression index it cannot build is refused at the compile,
+    // before the push applies anything.
+    server: adapter.getCapabilities(),
     logger,
   });
 }
@@ -3830,7 +3834,30 @@ function collectSlugs(
   return slugs;
 }
 
-function publishWebhookRecordingPolicies(config: NextlyServiceConfig): void {
+/**
+ * The webhook-recording decisions a start publishes, for a command that runs without one, such as
+ * `nextly migrate`'s workflow pass: the configuration's own (`publishWebhookRecordingPolicies`),
+ * then the opt-outs the registries store for entities the configuration does not own, read once.
+ * An entity with `webhooks: false` then records no event from the command, as from a request.
+ */
+export async function publishRecordingPoliciesForCommand(
+  adapter: DrizzleAdapter,
+  config: RecordingPolicyConfig
+): Promise<void> {
+  publishWebhookRecordingPolicies(config);
+  await publishStoredWebhookRecordingPolicies(adapter, {
+    collections: collectSlugs(config.collections),
+    singles: collectSlugs(config.singles),
+  });
+}
+
+/** What the recording decisions are read from: the entities and the plugins that contribute some. */
+type RecordingPolicyConfig = Pick<
+  NextlyServiceConfig,
+  "plugins" | "collections" | "singles"
+>;
+
+function publishWebhookRecordingPolicies(config: RecordingPolicyConfig): void {
   // Provenance comes from the plugin contribution list, not the optional
   // `admin.isPlugin` flag: a plugin's opt-out must be tagged `plugin` (so a
   // code-first reconcile never prunes it) even when the plugin never sets that

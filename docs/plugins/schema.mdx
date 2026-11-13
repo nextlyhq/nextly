@@ -4,7 +4,7 @@ description: Contribute collections, extend existing entities (including Builder
 ---
 
 A plugin's schema contributions flow through the **same unified merge pipeline** as your
-app's own code-first schema and the Visual Schema Builder's schema (D3). The host can read them
+app's own code-first schema and the Visual Schema Builder's schema. The host can read them
 _without running your plugin_, so the admin and codegen can reason about them.
 
 ## Contribute new entities
@@ -46,7 +46,7 @@ tagged with your plugin's [provenance](#provenance) and locked from Builder edit
 
 ## Extend existing entities
 
-`contributes.extend` adds fields to an entity you don't own, by slug (D12):
+`contributes.extend` adds fields to an entity you don't own, by slug:
 
 ```ts
 contributes: {
@@ -60,7 +60,7 @@ contributes: {
 }
 ```
 
-As of the Builder schema lane (P8), `extend` may target a **Builder-made collection**,
+`extend` may also target a **Builder-made collection**,
 not just a code-first one — the extra fields materialize (a migration adds the columns)
 and are present at runtime. The added fields are attributed to your plugin in provenance,
 so they're cleaned up if your plugin is removed.
@@ -241,13 +241,13 @@ constraints that Postgres/MySQL do, so test against a real database too (see
 
 A plugin relationship (`relationship(...)`) may target **any** slug in the merged schema
 — core (`users`, `media`), another plugin's collection, an app collection, or a
-Builder-made one (D15). Targets are validated at boot; an unknown `relationTo` fails
+Builder-made one. Targets are validated at boot; an unknown `relationTo` fails
 fast.
 
 ## Reference your own slugs via `ctx.self`
 
 Never hardcode your own collection slugs in `init`/handlers — an integrator can rename
-them with `plugin.rename({...})` (D54). Read the resolved slug from `ctx.self`:
+them with `plugin.rename({...})`. Read the resolved slug from `ctx.self`:
 
 ```ts
 const slug = ctx.self.collections.redirects; // resolved, post-rename
@@ -257,7 +257,7 @@ declare const ctx: PluginContext;
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 ```
 
-## Provenance (D14)
+## Provenance
 
 Every schema entity carries a `source`: `"code"`, `"ui"` (Builder), `"built-in"`, or
 `"plugin:<name>"`. This is what makes uninstall safe — Nextly knows which tables, fields,
@@ -294,10 +294,10 @@ Tables a plugin declares with `defineTable` and ships migration modules for are
 installed and removed with two commands, run while the plugin is in your config:
 
 ```bash
-nextly plugins install <name>                # apply its pending modules, then onInstall
-nextly plugins install --all                 # the same for every enabled plugin, dependencies first
-nextly plugins uninstall <name>              # onUninstall, then every module's DOWN
-nextly plugins uninstall <name> --keep-data  # onUninstall only; the tables stay, orphaned
+nextly plugins install <name>                       # apply its pending modules, then onInstall
+nextly plugins install --all                        # the same for every enabled plugin, dependencies first
+nextly plugins uninstall <name> --accept-data-loss  # onUninstall, then every module's DOWN
+nextly plugins uninstall <name> --keep-data         # onUninstall only; the tables stay, orphaned
 ```
 
 A production boot refuses an enabled plugin until the install command has run on
@@ -305,8 +305,9 @@ that database (`PLUGIN_NOT_INSTALLED`); a disabled one boots without it. `nextly
 migrate` applies a plugin's modules but does not install it. Install refuses while a plugin it depends on is not installed
 (`PLUGIN_DEPENDENCY_NOT_INSTALLED`). Uninstall refuses while another enabled plugin
 depends on it (`PLUGIN_HAS_DEPENDENTS`) or when a module has no DOWN
-(`PLUGIN_UNINSTALL_IRREVERSIBLE`), and asks for `--yes` before dropping anything
-(`PLUGIN_UNINSTALL_UNCONFIRMED`). A full uninstall also refuses (`PLUGIN_UNINSTALL_WOULD_DROP_OTHERS`) while
+(`PLUGIN_UNINSTALL_IRREVERSIBLE`), and asks before dropping anything: at a terminal it
+asks once, and without one it needs `--accept-data-loss`, alone or naming each table it
+drops (`PLUGIN_UNINSTALL_UNCONFIRMED`; `--yes` does not consent to deleting data). A full uninstall also refuses (`PLUGIN_UNINSTALL_WOULD_DROP_OTHERS`) while
 another owner has built on the plugin's schema: a column, index, foreign key or check the
 app or another plugin added to one of its tables, a key or a relationship field elsewhere
 pointing into them, or an index or key using or referencing a column the plugin added to
@@ -372,16 +373,29 @@ definePlugin({
 That table is created as `auth__identities`. The prefix is yours; declare it,
 or let it default to your plugin's admin slug.
 
+For a whole plugin built this way, see the
+[reading-lists fixture](https://github.com/nextlyhq/nextly/tree/dev/apps/playground/src/plugins/reading-lists-fixture)
+in the Nextly repository: two tables with a foreign key and a relation, their
+generated migration module, a hidden column on a collection, an idempotent
+`onInstall`, and a test that installs, uses and uninstalls it with the real
+commands on PostgreSQL, MySQL and SQLite.
+
 ### The column kinds
 
-`text`, `shortText`, `longText`, `varchar(n)`, `boolean`, `integer`, `double`,
-`decimal(p, s)`, `timestamp`, `json<T>()`, plus two conveniences: `col.id()` (a
-`varchar(36)` primary key for a UUIDv7) and `col.timestamps()` (`created_at`
-and `updated_at`).
+- Text: `text`, `shortText`, `longText`, `varchar(n)`, `char(n)`, `uuid`, and
+  `enum([...])`, a text column whose values a check constraint holds to the list.
+- Numbers: `smallint`, `integer`, `bigint` (read as a JavaScript number, exact
+  up to 2^53), `real`, `double` and `decimal(p, s)`.
+- Others: `boolean`, `timestamp`, `json<T>()` and `bytes`.
+- Keys and conveniences: `col.id()` (a `varchar(36)` primary key for a
+  UUIDv7), `col.serial()` (a primary key the database numbers, in place of
+  `col.id()`), `col.ref(table)` (a recorded reference, with a relation) and
+  `col.timestamps()` (`created_at` and `updated_at`).
 
-The list is deliberately short. Every kind here renders on PostgreSQL, MySQL
-and SQLite, so a table you declare works on all three — what cannot be
-expressed cannot drift between them.
+Every kind here renders on PostgreSQL, MySQL and SQLite, so a table you
+declare works on all three — what cannot be expressed cannot drift between
+them. [Coming from Payload](/docs/database/coming-from-payload#11-any-drizzle-column-type)
+says how each one is stored.
 
 ## Reading and writing
 
@@ -414,6 +428,8 @@ contributes: {
   schema: {
     extend: [
       ({ schema }) => {
+        // Absent when your own migration modules are generated: see below.
+        if (!schema.getTable("dc_posts")) return;
         schema.extendTable("dc_posts", {
           indexes: [{ columns: ["authorId", "publishedAt"] }],
         });
@@ -426,19 +442,28 @@ contributes: {
 The declarative `tables` form is sugar for a hook calling `addTable`. They
 produce identical output.
 
+`nextly migrate:create --plugin` compiles your migration modules from your plugin
+and its `dependsOn` alone, never from a site's collections, Singles and field
+groups, which differ per installation. A hook that extends one of those tables
+must skip it there, by checking `schema.getTable(name)` first as above, or
+generation stops with `PLUGIN_EXTENDS_OUTSIDE_ITS_SCHEMA`. The site's own
+`nextly migrate:create` compiles it with every table present, and writes your
+addition into the site's migration.
+
 ## What you may change
 
-| Target                                                                                | Columns     | Indexes |
-| ------------------------------------------------------------------------------------- | ----------- | ------- |
-| Your own tables                                                                       | yes         | yes     |
-| A plugin you name in `dependsOn` / `optionalDependsOn`                                | yes, hidden | yes     |
-| Any other plugin's tables                                                             | no          | no      |
-| Entity tables (`dc_*`, `single_*`, `comp_*`)                                          | yes, hidden | yes     |
-| Extendable core tables (`users`, `media`, `nextly_jobs`, `audit_log`, `activity_log`) | yes, hidden | yes     |
-| Every other core table                                                                | no          | no      |
+| Target                                                                                | Columns     | Indexes | Foreign keys, checks, relations |
+| ------------------------------------------------------------------------------------- | ----------- | ------- | ------------------------------- |
+| Your own tables                                                                       | yes         | yes     | yes                             |
+| A plugin you name in `dependsOn` / `optionalDependsOn`                                | yes, hidden | yes     | yes                             |
+| Any other plugin's tables                                                             | no          | no      | no                              |
+| Entity tables (`dc_*`, `single_*`, `comp_*`)                                          | yes, hidden | yes     | no                              |
+| Extendable core tables (`users`, `media`, `nextly_jobs`, `audit_log`, `activity_log`) | yes, hidden | yes     | no                              |
+| Every other core table                                                                | no          | no      | no                              |
 
-The app may add columns and indexes to any plugin's table, under the same
-rules.
+The app may add columns, indexes, foreign keys, checks and relations to any
+plugin's table, under the same rules. See
+[Keys, checks and relations on a table you do not own](/docs/database/extending-the-schema#keys-checks-and-relations-on-a-table-you-do-not-own).
 
 Which migrations carry what you add depends on the table. On your own tables
 and on a dependency's, your plugin's own migration modules carry it. On an
@@ -480,6 +505,10 @@ back and the index would be planned again on every push. `col.ref()` alone recor
 for documentation and validation; a constraint comes from the `foreignKeys`
 option. A foreign key may not use `onDelete` or `onUpdate: "set default"`,
 which MySQL cannot create.
+
+Your tables hold exactly what you declare: a check or foreign key added to one
+any other way is dropped by the next development push. See
+[What is not supported](/docs/database/extending-the-schema#what-is-not-supported).
 
 ## Production
 
@@ -651,3 +680,72 @@ the result of its latest module, so `nextly migrate` records every module up to
 the one whose result the database matches as applied, without running them,
 and runs any after it. A database matching no point in the plugin's history is
 refused, with the recovery for a plugin's tables.
+
+### Moving data from one place to another
+
+A migration module changes the schema before the new release serves, but the
+old release keeps serving for a while during every deploy (see
+[Upgrades while old instances still run](/docs/guides/production-migrations#upgrades-while-old-instances-still-run)).
+Its code still reads and writes your plugin's data where it used to. So a
+release that moves data from one place to another (a collection to a table of
+your own, one table to another, a column to a new shape) moves it in steps,
+over more than one release:
+
+1. **Add the new place, keep the old.** The module only creates. The old
+   collection or table stays declared, so the old release goes on working
+   against it.
+2. **Move at start, and keep the old place's shape.** Copy the rows in your
+   plugin's `onReady`, once, under a note that says the move is done, in one
+   transaction with the copy. In the same transaction, keep something that
+   changes whenever the old release writes the old place, whether it adds,
+   updates or deletes a row. A row count and the newest update time are a
+   shortcut that is only safe where every write sets that time from one clock
+   and nothing is changed in the same second as the look: an old instance can
+   update a row without moving the count, a slower clock can stamp a later
+   write as older, and a delete and an insert can leave the count where it
+   was. For other data, keep a durable record of what you took in (the ids of
+   the rows, or a note on each row once it is moved) and compare against that,
+   rather than trusting a count and a time. Take the time at which you read the
+   old place, not the time you finished. A move made in a SQL module
+   cannot know the old place's name on a site that renamed your collection
+   (`rename`), and runs before any plugin code, so the move belongs in code.
+3. **Take in what the old release wrote afterwards.** At each start, compare
+   the old place's shape with the one you kept. When it changed, an old
+   instance wrote there after your move: take those writes in (or, where your
+   data can be worked out again from something else, rebuild it), then keep the
+   new shape. A start where nothing changed should cost a read or two and
+   write nothing. A long-running server may not start again until the next
+   deploy, so look once more a while after start, with a timer that does not
+   keep the process alive (`unref()`), cleared in `destroy`.
+4. **Record when the old place is drained, and what it looked like then.**
+   Write a durable marker in your own tables once the old place's writes are
+   taken in, never a flag in memory, and keep in it the change signal you read
+   when you took them in. A marker on its own goes stale the moment an old
+   instance writes again; the signal beside it is what tells a later release
+   whether it still holds.
+5. **Remove the old place much later, behind the marker and its signal.** At
+   least two releases after the move ships, a release may stop declaring the
+   old place and delete the move code. That release checks at start whether
+   the old place still exists (`ctx.services.collections.holdCollectionInTransaction`
+   answers whether a collection's registry row is there). If it does, it reads
+   the old place's change signal again and compares it with the one kept in
+   the marker. When the marker is absent, or the signal moved since it was
+   kept, something was written that was never taken in: the release refuses to
+   start with a `NextlyError` naming the release to install (and start once)
+   first, rather than leave that write to be dropped. It drops nothing itself:
+   the old place becomes an orphan the site owner removes with `nextly prune`.
+
+The SEO plugin's move of its address record (from the `nx_seo_addresses`
+collection to `seo__addresses` and `seo__notes`) follows these steps, and is a
+worked example in this repository.
+
+Two things are deliberately not built yet:
+
+- **A fence.** Core does not yet let a module declare that older code must stop
+  writing a plugin's data once the module is applied. That would make the old
+  instances refuse the writes during the overlap rather than leave them to be
+  repaired. It will be added, opt-in per module, when a data move needs it; until
+  then, step 3 is how a move stays correct.
+- **Retiring the SEO plugin's old collections.** They stay declared until at
+  least two releases after the moves ship, and then go only behind their drained
+  markers and the start check in step 5.

@@ -127,6 +127,16 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     reason: PIPELINE,
   },
   {
+    // The same row count, for a column the kit would drop: a removed
+    // plugin's column on a collection's table, whose drop the push then
+    // leaves out.
+    dialect: "mysql",
+    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select dc_*",
+    witness:
+      "packages/nextly/src/domains/schema/extension/removed-plugin-keeps-elements.integration.test.ts",
+    reason: PIPELINE,
+  },
+  {
     dialect: "mysql",
     key: "packages/nextly/src/domains/audit/erase-principal.ts#reportPrincipalDeleted \u00b7 select tables",
     witness:

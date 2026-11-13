@@ -39,6 +39,7 @@ import {
   removedAndAddedFields as renameCandidates,
 } from "../../field-groups/storage/field-group-rename";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import { builderColumnIsUnique } from "../../schema/field-rules";
 import type {
   ForeignKeySpec,
   ReferentialAction,
@@ -88,6 +89,11 @@ import type { CollectionTables } from "./collection-tables";
 // checks a file against them too.
 import { dropFileHeader, dropFileLabel } from "./drop-file-name";
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
+import {
+  STATED_TEXT_TYPES,
+  statedDefaultFits,
+  statedMoment,
+} from "./stated-default";
 
 /** A field-group field renamed with no column of its own: its instances move with it. */
 type AssociationRename = { from: FieldDefinition; to: FieldDefinition };
@@ -201,22 +207,10 @@ const NO_REFERENTIAL_ACTION_CHANGE: ReferentialActionChange = {
   emitAfterColumnWork: false,
 };
 
-/**
- * Whether a Builder field's column is unique.
- *
- * A one-to-one relationship is unique by its cardinality, not by anything the author ticks, so
- * the flag alone does not decide it. Asked in one place because the answer has to be the same
- * whether the column arrives with its table or is added to one that already exists (a table
- * that gained its one-to-one by an edit was not enforcing the cardinality it declared), and
- * whether a later save keeps the constraint its table holds.
- */
-export function builderColumnIsUnique(field: FieldDefinition): boolean {
-  return (
-    field.unique === true ||
-    (field.type === "relationship" &&
-      field.options?.relationType === "oneToOne")
-  );
-}
+// Whether a Builder field's column is unique: the browser-safe field rules'
+// answer, which the Builder's move rule asks too. Re-exported for this
+// module's callers; used here as before.
+export { builderColumnIsUnique };
 
 /**
  * Field types whose value is a structured object or array, stored in the
@@ -1083,6 +1077,141 @@ export class DynamicCollectionSchemaService {
     );
   }
 
+  /**
+   * Whether a field's default is written onto its column. Not for a Single's table: a Single's
+   * field defaults are the application's, applied when its document is written, as a collection's
+   * are wherever a Builder save is written as a migration, and as the schema a migration is
+   * written from describes the column. A collection's table made here, where no such writer is
+   * set up, keeps them as it always has.
+   */
+  private fieldDefaultsAreColumns(isSingle: boolean | undefined): boolean {
+    return isSingle !== true;
+  }
+
+  /**
+   * A column added to a table holding rows, filled with `fill` and left with no default.
+   * PostgreSQL and MySQL take the value as the column's default for the one statement that adds
+   * it, then drop the default. SQLite can drop no default, so there the column is added open and
+   * filled; a required one is handed to the caller's rebuild to be made NOT NULL
+   * (`onSqliteNullability`).
+   */
+  private fillThenDropDefault(
+    tableName: string,
+    columnName: string,
+    type: string,
+    fill: string,
+    required: boolean,
+    onSqliteNullability:
+      | ((column: string, required: boolean) => void)
+      | undefined
+  ): string[] {
+    const table = this.quoteIdentifier(tableName);
+    const column = this.quoteIdentifier(columnName);
+    if (this.dialect === "sqlite") {
+      if (required) onSqliteNullability?.(columnName, true);
+      return [
+        `ALTER TABLE ${table} ADD COLUMN ${column} ${type};`,
+        `UPDATE ${table} SET ${column} = ${fill};`,
+      ];
+    }
+    // MySQL takes no literal default on a TEXT or BLOB column, which a Single's text field is
+    // there, but takes an expression in parentheses on any column, and the default is dropped
+    // straight after.
+    const given = this.dialect === "mysql" ? `(${fill})` : fill;
+    return [
+      `ALTER TABLE ${table} ADD COLUMN ${column} ${type}${required ? " NOT NULL" : ""} DEFAULT ${given};`,
+      `ALTER TABLE ${table} ALTER COLUMN ${column} DROP DEFAULT;`,
+    ];
+  }
+
+  /**
+   * The SQL value a Single's existing row is filled with when a required field is added: the
+   * default the field states (`default`, or `defaultValue` as code and the Schema Builder spell
+   * it), where that value can be written as a literal of the column's own form; otherwise the
+   * type's empty, as before a default was read here (`requiredColumnBackfill`).
+   *
+   * Only built-in types whose value needs no check beyond its form are taken:
+   * - text kinds as text, which MySQL gets as a hex literal (`quoteExpressionSqlDefault`), since
+   *   there a backslash escapes the quote after it and a doubled quote alone could end the
+   *   literal early;
+   * - a number that is finite, a checkbox's boolean, a JSON value, and a date as the moment it
+   *   names, in the form the dialect stores (`storedDateValue`), never a JavaScript date string.
+   * A relationship's or upload's id may name no row, and the statements adding the column would
+   * already be applied when the foreign key refuses it; a contributed type's value is that type's
+   * to validate; a password is only ever stored as a hash; a function default is the
+   * application's to work out per document. None of these are taken.
+   */
+  private singleRowFill(field: FieldDefinition): string | null {
+    return (
+      this.statedFill(field)?.literal ??
+      this.requiredColumnBackfill({ ...field, default: undefined })
+    );
+  }
+
+  /**
+   * The stated default a Single's existing row is filled with when this field is added,
+   * as the application would write it, or `undefined` where the row takes its type's empty
+   * instead. The value `singleRowFill` writes, for the precondition that judges it against the
+   * field's own rules before any statement runs.
+   */
+  singleRowFillValue(field: FieldDefinition): unknown {
+    return this.statedFill(field)?.value;
+  }
+
+  /** The stated default `singleRowFill` takes, with its SQL literal; null where none is taken. */
+  private statedFill(
+    field: FieldDefinition
+  ): { value: unknown; literal: string } | null {
+    const stated =
+      field.default !== undefined
+        ? field.default
+        : (field as { defaultValue?: unknown }).defaultValue;
+    if (stated === undefined || stated === null) return null;
+    const literal = this.statedFillLiteral(field, stated);
+    return literal === null ? null : { value: stated, literal };
+  }
+
+  /**
+   * `stated` as the SQL literal `statedFill` takes, or null where it is not taken: whether it is
+   * taken is `statedDefaultFits`, the one answer the first document's default is held to as well.
+   */
+  private statedFillLiteral(
+    field: FieldDefinition,
+    stated: unknown
+  ): string | null {
+    if (!statedDefaultFits(field, stated)) return null;
+    if (STATED_TEXT_TYPES.has(field.type)) {
+      return quoteExpressionSqlDefault(String(stated), this.dialect);
+    }
+    switch (field.type) {
+      case "number":
+        return String(stated);
+      case "checkbox":
+        return this.formatDefaultValue(stated, "checkbox");
+      case "json":
+        // Serialized whatever it is, as the first document's write does, so the string "hello"
+        // is stored as `"hello"` and not as the bare text `hello`, which is no JSON.
+        return this.formatDefaultValue(JSON.stringify(stated), "json");
+      case "date":
+        return this.statedDateLiteral(stated);
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * A stated date as the moment it names, in the form the dialect stores it (`storedDateValue`):
+   * epoch seconds on SQLite, an ISO moment elsewhere, which holds no quote.
+   */
+  private statedDateLiteral(stated: unknown): string | null {
+    const at = statedMoment(stated);
+    if (at === null) return null;
+    const stored = storedDateValue(at, this.dialect);
+    return typeof stored === "number"
+      ? String(stored)
+      : quotedSqlString(stored);
+  }
+
   private requiredColumnBackfill(field: FieldDefinition): string | null {
     const literal =
       field.default !== undefined
@@ -1183,6 +1312,8 @@ export class DynamicCollectionSchemaService {
   ): string {
     // Refuse an unusable decimal shape before any of it becomes SQL.
     this.assertDecimalDimensions(fields);
+    // A Single's field defaults are the application's (`fieldDefaultsAreColumns`).
+    const columnDefaults = this.fieldDefaultsAreColumns(_options?.isSingle);
 
     const constraints: string[] = [];
     const checks: string[] = [];
@@ -1218,7 +1349,7 @@ export class DynamicCollectionSchemaService {
             : "";
 
         const defaultVal =
-          f.default !== undefined && f.default !== null
+          columnDefaults && f.default !== undefined && f.default !== null
             ? `DEFAULT ${this.formatDefaultValue(f.default, f.type)}`
             : "";
 
@@ -1574,10 +1705,13 @@ ${allColumnDefs.join(",\n")}
        * from its slug, as before any collection could be renamed.
        */
       targetTables?: CollectionTables;
+      /** The table is a Single's, whose field defaults are the application's (`fieldDefaultsAreColumns`). */
+      isSingle?: boolean;
     }
   ): string {
     // The added columns become SQL here too, so the same refusal applies.
     this.assertDecimalDimensions(newFields);
+    const columnDefaults = this.fieldDefaultsAreColumns(options?.isSingle);
 
     // A precondition, so it runs before a single statement is written. Making a
     // column NOT NULL while a row still holds a null is refused by the server,
@@ -1757,9 +1891,24 @@ ${allColumnDefs.join(",\n")}
         // accepted by all three. With rows, the value has to come from the author, so the
         // edit is refused and names the order that works.
         let defaultVal = "";
-        if (field.required || field.default !== undefined) {
-          const backfill = this.requiredColumnBackfill(field);
-          if (backfill !== null) {
+        // A Single's existing row is filled with the same value, given once and then taken away
+        // (`fillThenDropDefault`); a field's own default is never kept on its column.
+        let fillThenDrop: string | null = null;
+        // An optional field of a Single is filled too where it states a default that is taken
+        // (`singleRowFillValue`), as a column default would have filled it: the entry already
+        // there gets the field's default, not NULL.
+        const statesDefault = columnDefaults
+          ? field.default !== undefined
+          : this.singleRowFillValue(field) !== undefined;
+        if (field.required || statesDefault) {
+          // A Single's existing row takes the default the field states where it can be written
+          // safely (`singleRowFill`); a collection's reads `default` alone, as it always has.
+          const backfill = columnDefaults
+            ? this.requiredColumnBackfill(field)
+            : this.singleRowFill(field);
+          if (backfill !== null && !columnDefaults) {
+            fillThenDrop = backfill;
+          } else if (backfill !== null) {
             defaultVal = `DEFAULT ${backfill}`;
           } else if (field.required && options?.tableHasRows !== false) {
             throw NextlyError.validation({
@@ -1788,9 +1937,22 @@ ${allColumnDefs.join(",\n")}
         if (this.columnIsUnique(field) && !this.uniquenessCanBeAnIndex(type)) {
           throw this.uniquenessNotEnforceable(tableName, field);
         }
-        statements.push(
-          `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier(addColName)} ${type} ${nullable} ${defaultVal};`.trim()
-        );
+        if (fillThenDrop !== null) {
+          statements.push(
+            ...this.fillThenDropDefault(
+              tableName,
+              addColName,
+              type,
+              fillThenDrop,
+              field.required === true,
+              options?.onSqliteNullability
+            )
+          );
+        } else {
+          statements.push(
+            `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier(addColName)} ${type} ${nullable} ${defaultVal};`.trim()
+          );
+        }
 
         // SQLite doesn't support adding constraints separately via ALTER TABLE
         // Foreign keys and unique constraints must be defined at table creation
@@ -2034,7 +2196,8 @@ ${allColumnDefs.join(",\n")}
         previous,
         field,
         options?.foreignKeysByColumn,
-        options?.targetTables
+        options?.targetTables,
+        columnDefaults
       );
       (change.emitAfterColumnWork
         ? fkActionsAfterColumns
@@ -2165,7 +2328,13 @@ ${allColumnDefs.join(",\n")}
                     field
                   ));
               statements.push(
-                this.modifyColumnSql(tableName, alterCol, field, restated)
+                this.modifyColumnSql(
+                  tableName,
+                  alterCol,
+                  field,
+                  restated,
+                  columnDefaults
+                )
               );
             }
           } else if (!columnChanged) {
@@ -2306,7 +2475,8 @@ ${allColumnDefs.join(",\n")}
     oldField: FieldDefinition,
     newField: FieldDefinition,
     liveForeignKeys?: ReadonlyMap<string, readonly string[]>,
-    targetTables?: CollectionTables
+    targetTables?: CollectionTables,
+    columnDefaults = true
   ): ReferentialActionChange {
     // Only a relationship that carries a key has actions to change: one stored as JSON, a
     // many-to-many, or one whose target has no table never had a constraint to replace.
@@ -2464,7 +2634,12 @@ ${allColumnDefs.join(",\n")}
     const columnPassStatesNullability = oldField.required !== newField.required;
     if (installsSetNull && !columnPassStatesNullability) {
       statements.unshift(
-        this.relaxColumnForSetNull(tableName, columnName, newField)
+        this.relaxColumnForSetNull(
+          tableName,
+          columnName,
+          newField,
+          columnDefaults
+        )
       );
     }
 
@@ -2485,7 +2660,8 @@ ${allColumnDefs.join(",\n")}
   private relaxColumnForSetNull(
     tableName: string,
     columnName: string,
-    field: FieldDefinition
+    field: FieldDefinition,
+    columnDefaults = true
   ): string {
     if (this.dialect === "mysql") {
       // The type asked for is THIS generator's — the one that created the
@@ -2502,7 +2678,8 @@ ${allColumnDefs.join(",\n")}
           field.options,
           field.validation,
           field
-        )
+        ),
+        columnDefaults
       );
     }
     return `ALTER TABLE ${this.quoteIdentifier(tableName)} ALTER COLUMN ${this.quoteIdentifier(columnName)} DROP NOT NULL;`;
@@ -2522,11 +2699,12 @@ ${allColumnDefs.join(",\n")}
     tableName: string,
     columnName: string,
     field: FieldDefinition,
-    type: string
+    type: string,
+    columnDefaults = true
   ): string {
     const nullability = field.required ? " NOT NULL" : " NULL";
     const defaultClause =
-      field.default !== undefined && field.default !== null
+      columnDefaults && field.default !== undefined && field.default !== null
         ? ` DEFAULT ${this.formatDefaultValue(field.default, field.type)}`
         : "";
     return `ALTER TABLE ${this.quoteIdentifier(tableName)} MODIFY COLUMN ${this.quoteIdentifier(columnName)} ${type}${nullability}${defaultClause};`;
@@ -3878,7 +4056,7 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
       type === "select" ||
       type === "radio"
     ) {
-      return `'${String(value)}'`;
+      return quotedSqlString(value);
     }
 
     // Handle checkbox (SQLite uses 0/1, PostgreSQL uses TRUE/FALSE)
@@ -3905,7 +4083,7 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
         const timestamp = new Date(value).getTime() / 1000;
         return String(Math.floor(timestamp));
       }
-      return `'${String(value)}'`;
+      return quotedSqlString(value);
     }
 
     // Handle numeric types (no quotes)
@@ -3956,4 +4134,13 @@ CREATE INDEX IF NOT EXISTS ${q(j.idxTarget)} ON ${q(j.table)}(${q(j.targetColumn
     };
     return actionMap[action.toLowerCase()] || "NO ACTION";
   }
+}
+
+/**
+ * A value as an SQL string literal: in single quotes, each quote inside doubled, which every
+ * supported dialect reads back as one quote. A value holding an apostrophe ("Editor's pick")
+ * otherwise ends the literal early and the statement is refused.
+ */
+function quotedSqlString(value: unknown): string {
+  return `'${String(value).replace(/'/g, "''")}'`;
 }

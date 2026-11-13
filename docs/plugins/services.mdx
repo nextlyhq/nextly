@@ -5,7 +5,7 @@ description: Read and write data from a plugin through the managed, secure-by-de
 
 `ctx.services` is the **managed** data path for plugins. Prefer it over the unmanaged
 `ctx.db` surface: it enforces validation, hooks, events, and RBAC, and it stays
-portable across database dialects. It is `@public` and semver-protected (D56).
+portable across database dialects. It is `@public` and semver-protected.
 
 ```ts
 init(ctx) {
@@ -17,7 +17,7 @@ init(ctx) {
 }
 ```
 
-## Secure by default (D35)
+## Secure by default
 
 Every access method takes a trailing `ServiceOpts` (`{ as, user }`) that decides whose
 permissions apply:
@@ -137,7 +137,7 @@ its methods.
 background work) and `plugins` (services other plugins contribute). The
 service types are `@experimental` and exported from `@nextlyhq/plugin-sdk`.
 
-## Querying (D56)
+## Querying
 
 `listEntries` takes a `QueryOptions`:
 
@@ -636,7 +636,7 @@ await ctx.services.collections.withTransaction(async tx => {
 validation, hooks, RBAC, and events. Reach for it only for things the services
 layer doesn't cover yet (aggregations beyond `count`), or for the tables your
 plugin declared itself. If you find yourself needing it often, that's a signal
-worth raising — the goal (D56) is that most plugins never touch it.
+worth raising — the goal is that most plugins never touch it.
 
 It comes in two layers:
 

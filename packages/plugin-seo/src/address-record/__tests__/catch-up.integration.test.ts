@@ -144,7 +144,10 @@ describe.each(getConfiguredTestDialects())(
 
       expect(report?.ran).toBe(false);
       expect(writesAmong(statements)).toEqual([]);
-      expect(statements.length).toBeLessThanOrEqual(4);
+      // Measured 5 on every dialect: the site's types (2), the notes (1),
+      // and the earlier collection's newest row and count (2), which find
+      // what a process of the earlier version wrote during a deploy.
+      expect(statements.length).toBeLessThanOrEqual(5);
     });
 
     it("runs again once a content type is added, though no page changed", async () => {
