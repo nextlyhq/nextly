@@ -30,15 +30,31 @@ const KB = 1024;
  * A shipped total over the budget, derived from it, so raising the budget
  * leaves these tests measuring a breach.
  */
-const OVER_TOTAL_KB = BUDGETS.totalMinifiedKB + 20;
+const OVER_TOTAL_KB = BUDGETS.totalGzipKB + 20;
 
+/**
+ * A report whose shipped total is `totalKB` gzipped, held by the entry chunk,
+ * beside a test-only entry of `testingKB` that the total leaves out.
+ */
 function report(
   routes,
-  { totalKB = 1000, shellKB = BUDGETS.shellGzipKB - 30 } = {}
+  { totalKB = 1000, shellKB = BUDGETS.shellGzipKB - 30, testingKB = 50 } = {}
 ) {
+  const chunk = (file, kb, category) => ({
+    file,
+    category,
+    minifiedBytes: kb * 3 * KB,
+    gzippedBytes: kb * KB,
+    staticImports: [],
+    dynamicImports: [],
+  });
   return {
+    entryChunk: "index.mjs",
+    chunks: [
+      chunk("index.mjs", totalKB, SHELL_CATEGORY),
+      chunk("testing.mjs", testingKB, "other-entry"),
+    ],
     totals: {
-      browser: { count: 3, minifiedBytes: totalKB * KB },
       firstScreen: { gzippedBytes: shellKB * KB },
     },
     routes: routes.map(([root, kb]) => ({
@@ -146,7 +162,7 @@ describe("budgetBreaches", () => {
 
   it("counts each boundary itself as within: the budgets say at most", () => {
     const r = report([["page.a-AAAAAAAA.mjs", 330]], {
-      totalKB: BUDGETS.totalMinifiedKB,
+      totalKB: BUDGETS.totalGzipKB,
       shellKB: BUDGETS.shellGzipKB,
     });
     // 300 KB pinned plus 10% is 330 KB.
@@ -202,12 +218,36 @@ describe("budgetBreaches", () => {
     expect(breach.budget).toContain(`${BUDGETS.shellGzipKB} KB`);
   });
 
+  it("leaves a test-only entry out of the shipped total, whatever its size", () => {
+    const r = report([], { totalKB: BUDGETS.totalGzipKB, testingKB: 500 });
+    expect(budgetBreaches(r, pins([]))).toEqual([]);
+  });
+
+  it("counts a chunk a test-only entry shares with the application", () => {
+    const r = report([], { totalKB: BUDGETS.totalGzipKB - 10, testingKB: 5 });
+    r.chunks.push({
+      file: "shared-SSSSSSSS.mjs",
+      category: SHELL_CATEGORY,
+      minifiedBytes: 60 * KB,
+      gzippedBytes: 20 * KB,
+      staticImports: [],
+      dynamicImports: [],
+    });
+    r.chunks[0].staticImports.push("shared-SSSSSSSS.mjs");
+    r.chunks[1].staticImports.push("shared-SSSSSSSS.mjs");
+    const [breach] = budgetBreaches(r, pins([]));
+    expect(breach?.kind).toBe("total");
+    expect(breach.measured).toContain(
+      `${(BUDGETS.totalGzipKB + 10).toFixed(2)} KB gzipped`
+    );
+  });
+
   it("fails a shipped total over its budget", () => {
     const r = report([], { totalKB: OVER_TOTAL_KB });
     const [breach] = budgetBreaches(r, pins([]));
     expect(breach.kind).toBe("total");
     expect(breach.measured).toContain(`${OVER_TOTAL_KB.toFixed(2)} KB`);
-    expect(breach.budget).toContain(`${BUDGETS.totalMinifiedKB}`);
+    expect(breach.budget).toContain(`${BUDGETS.totalGzipKB} KB gzipped`);
   });
 
   it("reports every breaching route, not only the first", () => {
@@ -234,7 +274,7 @@ describe("describeBreaches", () => {
     expect(describeBreaches(budgetBreaches(r, pins([])))).toEqual([
       expect.stringMatching(
         new RegExp(
-          `total.*${OVER_TOTAL_KB}\\.00 KB minified.*${BUDGETS.totalMinifiedKB} KB minified`
+          `total.*${OVER_TOTAL_KB}\\.00 KB gzipped.*${BUDGETS.totalGzipKB} KB gzipped`
         )
       ),
     ]);

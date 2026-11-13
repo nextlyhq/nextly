@@ -16,7 +16,7 @@
  */
 import { createHash } from "node:crypto";
 
-import { getColumns, isTable, type Table } from "drizzle-orm";
+import { getColumns, getTableName, isTable, type Table } from "drizzle-orm";
 
 import { loadDialectTables } from "../../../database/dialect-tables";
 import {
@@ -51,6 +51,7 @@ import {
   toTableSpec,
 } from "./compile";
 import { type SeedEntityTable, SchemaDraftStore } from "./draft";
+import { foreignKeyRelations, type TableRelationInput } from "./dsl";
 import { enumChecks } from "./enum-check";
 import { assertMysqlRowFits, foreignKeyColumnProblem } from "./naming";
 import {
@@ -334,9 +335,13 @@ function fingerprintOf(
 function relationEdgesOf(
   table: ExtensionTable,
   byName: ReadonlyMap<string, ExtensionTable>,
-  coreTables: Readonly<Record<string, unknown>>
+  coreTables: Readonly<Record<string, unknown>>,
+  entityTables: ReadonlySet<string> = new Set()
 ): DynamicRelationEdge[] {
-  return (table.relations ?? []).map((rel, position) => {
+  return [
+    ...(table.relations ?? []),
+    ...keyRelationsOf(table, byName, coreTables, entityTables),
+  ].map((rel, position) => {
     const path = `${table.name}.relations[${String(position)}]`;
     if (rel.fromColumn === undefined) {
       throw NextlyError.internal({
@@ -365,6 +370,106 @@ function relationEdgesOf(
         : {}),
     };
   });
+}
+
+/**
+ * The one-edges the table's own foreign keys carry (`foreignKeyRelations`),
+ * so a key is queryable with `with` as a `ref()` column is.
+ *
+ * Its own keys only: a key another owner added to this table is that
+ * owner's, and an edge for it would take a name on a table the contributor
+ * does not own. And only to a table the registry will hold, since an edge to
+ * any other fails the boot's check that every relation resolves, where the
+ * key itself is the database's to judge:
+ *
+ * - a table this compile declares or adopts, or a core table, with the
+ *   referenced column named, so it is checked and carried through an
+ *   `afterDrizzle` hook's re-keying like a declared `toColumn`;
+ * - a seeded collection's, Single's or field group's table, by its `id`
+ *   only and left implied, as a `ref()` column's is: the compile does not
+ *   know such a table's other columns, and no hook may reshape it.
+ *
+ * A key to anything else (a table outside Nextly, or a Builder-made
+ * collection's) carries none.
+ */
+function keyRelationsOf(
+  table: ExtensionTable,
+  byName: ReadonlyMap<string, ExtensionTable>,
+  coreTables: Readonly<Record<string, unknown>>,
+  entityTables: ReadonlySet<string>
+): TableRelationInput[] {
+  const own = (table.foreignKeys ?? []).filter(
+    fk => fk.contributedBy === undefined
+  );
+  return foreignKeyRelations(own, table.columns, table.relations ?? []).flatMap(
+    (rel): TableRelationInput[] => {
+      const targetTable = relationTargetKey(
+        rel.targetTable,
+        byName,
+        coreTables
+      );
+      if (byName.has(targetTable) || isTable(coreTables[targetTable])) {
+        return [{ ...rel, targetTable }];
+      }
+      if (entityTables.has(targetTable) && rel.toColumn === "id") {
+        const { toColumn: _implied, ...edge } = rel;
+        return [{ ...edge, targetTable }];
+      }
+      return [];
+    }
+  );
+}
+
+/**
+ * Drop a key's own edge whose name an `afterDrizzle` hook gave to a column.
+ *
+ * A relation and a column share the row's namespace, and the key edges are
+ * named against the compiled table's column keys. A hook that rebuilt the
+ * table may hold a column under that name, and the pair would fail the
+ * relations' assembly at boot. The key edge yields: it is derived, not
+ * declared, while the hook's table is the app's own choice. A declared
+ * relation is the author's and is left to that refusal.
+ */
+function dropKeyEdgesAHookShadowed(
+  relations: Map<string, DynamicRelationEdge[]>,
+  tables: readonly ExtensionTable[],
+  compiled: Record<string, unknown>,
+  returned: Record<string, unknown>
+): void {
+  for (const [name, edges] of relations) {
+    const table = returned[name];
+    if (table === compiled[name] || !isTable(table)) continue;
+    const columns = new Set(Object.keys(getColumns(table)));
+    const declared = new Set(
+      (tables.find(one => one.name === name)?.relations ?? []).map(
+        relation => relation.name
+      )
+    );
+    const kept = edges.filter(
+      edge => declared.has(edge.key) || !columns.has(edge.key)
+    );
+    if (kept.length === edges.length) continue;
+    if (kept.length === 0) relations.delete(name);
+    else relations.set(name, kept);
+  }
+}
+
+/**
+ * The name the registry finds a key's target by. A key names its target's
+ * SQL table, and the registry holds a core table under its bundle key
+ * (`dynamicCollections` for `dynamic_collections`), so a core target is
+ * translated; any other table is registered under its SQL name already.
+ */
+function relationTargetKey(
+  sqlName: string,
+  byName: ReadonlyMap<string, ExtensionTable>,
+  coreTables: Readonly<Record<string, unknown>>
+): string {
+  if (byName.has(sqlName) || isTable(coreTables[sqlName])) return sqlName;
+  const core = Object.entries(coreTables).find(
+    ([, table]) => isTable(table) && getTableName(table) === sqlName
+  );
+  return core?.[0] ?? sqlName;
 }
 
 function invalidTargetColumn(path: string, message: string): never {
@@ -553,11 +658,12 @@ function collectElementOwners(
 function relationsOf(
   tables: readonly ExtensionTable[],
   byName: ReadonlyMap<string, ExtensionTable>,
-  coreTables: Readonly<Record<string, unknown>>
+  coreTables: Readonly<Record<string, unknown>>,
+  entityTables: ReadonlySet<string>
 ): Map<string, DynamicRelationEdge[]> {
   const relations = new Map<string, DynamicRelationEdge[]>();
   for (const table of tables) {
-    const edges = relationEdgesOf(table, byName, coreTables);
+    const edges = relationEdgesOf(table, byName, coreTables, entityTables);
     if (edges.length > 0) relations.set(table.name, edges);
   }
   return relations;
@@ -635,8 +741,10 @@ function assertForeignKeyTargetsExist(
         assertReferencesAKey(fk, declaredTarget, path);
       }
       if (!adopted.has(fk.referencesTable)) {
+        // A key another owner added to this table rides that owner's
+        // migration stream, so it is that stream whose order it must keep.
         assertForeignKeyTargetInAnEarlierStream(
-          table.owner,
+          fk.contributedBy ?? table.owner,
           fk,
           target,
           path,
@@ -1084,7 +1192,6 @@ export async function buildExtensionSchema(
   );
   // The core tables a relation may target, as the registry will resolve them.
   const coreTables = staticRelationTables(input.dialect);
-  const relations = relationsOf(tables, byName, coreTables);
 
   const { entityIndexes, entityColumns } = foreignTableContributions(store);
 
@@ -1101,6 +1208,15 @@ export async function buildExtensionSchema(
     input.dialect
   );
   assertForeignKeyTargetsExist(tables, store, input);
+  // After the keys' targets are judged: a key's own edge names its target
+  // column, and a key to a column its target lacks is refused as a key, by
+  // the check above, rather than as the edge it carries.
+  const relations = relationsOf(
+    tables,
+    byName,
+    coreTables,
+    new Set(input.entities.map(entity => entity.name))
+  );
   // Each table whole, its own columns and every one a hook added, so a row
   // only MySQL cannot hold is refused on every dialect alike.
   for (const table of tables) assertMysqlRowFits(table);
@@ -1122,10 +1238,6 @@ export async function buildExtensionSchema(
       (spec.foreignKeys ?? []).map(fk => ({ table: spec.name, fk }))
     ),
   });
-
-  // The edges were keyed to the compiled tables; the registry resolves them
-  // against the ones the hooks returned. See `rekeyRelationEdges`.
-  rekeyRelationEdges({ edges: relations, compiled, returned: drizzle });
 
   // The migration model follows the hook, rather than describing the shape the
   // hook was handed.
@@ -1203,6 +1315,14 @@ export async function buildExtensionSchema(
       input.server
     );
   }
+
+  // The edges were keyed to the compiled tables; the registry resolves them
+  // against the ones the hooks returned. See `rekeyRelationEdges`. After the
+  // keys are judged at both ends: a key's own edge joins the key's columns,
+  // and a hook that removed one is refused naming the key it broke rather
+  // than the edge the key carries.
+  rekeyRelationEdges({ edges: relations, compiled, returned: drizzle });
+  dropKeyEdgesAHookShadowed(relations, tables, compiled, drizzle);
 
   const { adopted, adoptedRelations } = compileAdoptedTables(
     store,
