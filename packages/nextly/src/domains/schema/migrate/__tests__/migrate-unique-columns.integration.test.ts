@@ -511,6 +511,26 @@ describe.each(LOCK_DIALECTS)(
       120_000
     );
 
+    it("refuses, changing nothing, a one-to-one whose index name an index of another kind on its table holds", async () => {
+      await recordOneToOnes("person");
+      await run([
+        `CREATE INDEX ${q(UNIQUE)} ON ${q(PROFILES)} (${q("person")})`,
+        profile("p1", "ada"),
+      ]);
+
+      const error = await refusal();
+
+      expect(error.publicMessage).toContain(
+        `profiles.person (its index ${UNIQUE} is the name of`
+      );
+      expect(
+        (
+          await readIndexUniqueness(adapter.getDrizzle(), dialect, PROFILES)
+        ).get(UNIQUE)
+      ).toEqual({ unique: false });
+      expect(await refusedAsRepeat(profile("p2", "ada"))).toBe(false);
+    }, 120_000);
+
     it.runIf(dialect === "postgresql")(
       "makes a translated one-to-one unique within each language past an index a failed concurrent build left under its name",
       async () => {
