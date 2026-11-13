@@ -561,7 +561,7 @@ function ambiguousPlaceRefusal(
   fields: readonly BuilderField[],
   container: BuilderField | null
 ): MoveVerdict | null {
-  return container && containersWithId(fields, container.id) > 1
+  return container && fieldsWithId(fields, container.id) > 1
     ? refuse(
         "ambiguous-place",
         `${called(container)} shares its id with a copy of it, so a move there could not tell the two apart. Add a new field there instead.`
@@ -569,13 +569,14 @@ function ambiguousPlaceRefusal(
     : null;
 }
 
-/** How many containers in `fields`, at any depth, have this id. */
-function containersWithId(fields: readonly BuilderField[], id: string): number {
+/**
+ * How many fields in `fields`, at any depth, have this id: every one the insert could match, a
+ * group holding nothing and carrying no `fields` among them, whatever its type.
+ */
+function fieldsWithId(fields: readonly BuilderField[], id: string): number {
   return fields.reduce(
     (count, each) =>
-      count +
-      (each.id === id && Array.isArray(each.fields) ? 1 : 0) +
-      containersWithId(each.fields ?? [], id),
+      count + (each.id === id ? 1 : 0) + fieldsWithId(each.fields ?? [], id),
     0
   );
 }
