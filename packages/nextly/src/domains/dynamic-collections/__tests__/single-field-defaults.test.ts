@@ -202,6 +202,33 @@ describe.each(DIALECTS)(
       );
     });
 
+    it("fills the row with an icon id the field states, and not with one no icon has", () => {
+      const sql = added(
+        field({
+          name: "badge",
+          type: "icon",
+          required: true,
+          default: "lucide:star",
+        })
+      );
+
+      expect(sql).toContain(
+        dialect === "mysql"
+          ? `X'${Buffer.from("lucide:star", "utf8").toString("hex")}'`
+          : "'lucide:star'"
+      );
+      expect(
+        added(
+          field({
+            name: "badge",
+            type: "icon",
+            required: true,
+            default: "Not An Icon!",
+          })
+        )
+      ).not.toContain("Not An Icon!");
+    });
+
     it("never writes a password field's stated default into the column", () => {
       const sql = added(
         field({
