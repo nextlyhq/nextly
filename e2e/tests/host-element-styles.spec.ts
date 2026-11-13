@@ -159,7 +159,8 @@ test("the admin's dashboard looks the same in a site that styles bare elements",
   ).toBe(true);
 
   // Each card title in the title style of the card type ramp, and wholly
-  // inside its line: the truncating span shows the whole height of the text.
+  // inside its lines: the title's own span, cut to one line under a subtitle
+  // and to two lines without one, shows the whole height of its text.
   // Read once the cards have drawn, which the dashboard does after its data.
   await expect(cardTitles(page).first()).toBeVisible({ timeout: 30_000 });
   const titles = await cardTitles(page).all();
@@ -168,7 +169,7 @@ test("the admin's dashboard looks the same in a site that styles bare elements",
     await expect(title).toHaveCSS("font-size", "14px");
     await expect(title).toHaveCSS("line-height", "20px");
     const fits = await title
-      .locator("span.truncate")
+      .locator(":scope > span")
       .first()
       .evaluate(span => span.scrollHeight <= span.clientHeight);
     expect(fits).toBe(true);
