@@ -15,6 +15,7 @@ import type {
   PluginAdminPage,
   PluginListFilterDeclaration,
   PluginMenuItem,
+  PluginPanelGroup,
   PluginUserMenuItem,
 } from "./admin-contributions";
 import { contributedListFilters } from "./admin-filters";
@@ -40,6 +41,7 @@ import {
   resolvedPluginPlacement,
   resolvePluginLanding,
 } from "./plugin-landing";
+import { publishedPluginPanel } from "./plugin-panel";
 import { pluginAdminSlug } from "./plugin-slug";
 import { collectPluginTranslations } from "./plugin-translations";
 import { collectPluginRoutes } from "./routes/collect-routes";
@@ -152,8 +154,21 @@ export interface PluginAdminMeta {
    * this cannot keep.
    */
   whenEnabled?: { routes?: PluginAdminMeta["routes"] };
-  /** Sidebar menu items — present only for enabled plugins. */
+  /**
+   * Sidebar menu items — present only for enabled plugins. Each is kept as
+   * `publishedPluginPanel` checks it: an item linking to a page of the
+   * plugin's own that it does not register is left out, a `group` names one
+   * of `panel.groups`, and a `count` or `badge` names a collection the plugin
+   * contributes, by the slug the host registered it under, or an attention
+   * item it declares.
+   */
   menu?: PluginMenuItem[];
+  /**
+   * @experimental How the plugin's own standalone panel lists its menu items:
+   * its groups, in the order declared — present only for an enabled plugin
+   * that declares any.
+   */
+  panel?: { groups: PluginPanelGroup[] };
   /** Custom admin pages — present only for enabled plugins. */
   pages?: PluginAdminPage[];
   /**
@@ -537,11 +552,16 @@ export function buildPluginAdminMeta(
 
     const admin = plugin.contributes?.admin;
     if (isEnabled && admin) {
-      if (admin.menu && admin.menu.length > 0) {
-        meta.menu = admin.menu.map(item =>
+      // Checked against what the plugin registers and owns. What is left out
+      // is left out in silence: this runs on every request, and start-up has
+      // already reported it (`pluginPanelWarnings`).
+      const panel = publishedPluginPanel(plugin);
+      if (panel.menu.length > 0) {
+        meta.menu = panel.menu.map(item =>
           resolvedMenuItem(item, plugin.renameMap ?? {})
         );
       }
+      if (panel.groups) meta.panel = { groups: panel.groups };
       if (admin.pages && admin.pages.length > 0) meta.pages = admin.pages;
       // With the permission the request gate asks for, from the same function,
       // so the page gate is derived from it rather than decided again.

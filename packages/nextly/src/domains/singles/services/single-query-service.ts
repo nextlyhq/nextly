@@ -204,6 +204,7 @@ import type {
 } from "../types";
 
 import { resolveSingleForRequest } from "./ensure-runtime-table";
+import { readSingleForCreation } from "./single-first-row";
 import { applyReadShape } from "./single-read-shape";
 import type { SingleRegistryService } from "./single-registry-service";
 import {
@@ -2484,11 +2485,14 @@ export class SingleQueryService extends BaseService {
    * another process created first.
    *
    * Several processes reading a Single for the first time at once, such as
-   * `next build`'s workers on a fresh database, each find no row and each try
-   * to create it. The table holds one row by its unique slug, so all but one
-   * insert fail; the row that won is the document every reader should get, so
-   * a loser reads it back rather than failing the read. Any other failure, or
-   * a violation that leaves no row behind, is still the read's failure.
+   * `next build`'s workers on a fresh database, each find no row and each go
+   * on to create it. The creation reads the row again under the Single's
+   * creation lock and takes the one another process created first (see
+   * `readSingleForCreation`). A process that inserts without that lock, such
+   * as one still running an earlier release during a deploy, can still win
+   * the table's unique slug first, so a loser that hits the duplicate reads
+   * the winner back rather than failing the read. Any other failure, or a
+   * violation that leaves no row behind, is still the read's failure.
    */
   private async createDefaultDocumentOnce(
     singleMeta: DynamicSingleRecord
@@ -2556,18 +2560,102 @@ export class SingleQueryService extends BaseService {
       ? (this.localization?.defaultLocale ?? null)
       : null;
 
+    // Each creation first reads the row under the Single's creation lock, and
+    // takes the row it finds rather than inserting a second: another request
+    // may have created it since this one found none. Only the request whose
+    // insert runs seeds, snapshots and records the creation, so the defaults
+    // are written once and the creation is recorded once.
+    //
     // Non-versioned: insert the main row, seed the companion when the Single
     // is localized, and record its creation, in one transaction, so a failed
     // seed or event rolls the insert back rather than leaving a main row
     // without its localized defaults or its history.
     if (!shouldCapture) {
-      const inserted = await this.adapter.transaction(async tx => {
-        const row = await tx.insert<SingleDocument>(
-          singleMeta.tableName,
-          snakeCaseDefaults,
-          { returning: "*" }
-        );
-        if (needsCompanionSeed) {
+      const outcome = await this.adapter.transaction(tx =>
+        this.unlessStanding(tx, singleMeta, async () => {
+          const row = await tx.insert<SingleDocument>(
+            singleMeta.tableName,
+            snakeCaseDefaults,
+            { returning: "*" }
+          );
+          if (needsCompanionSeed) {
+            await this.seedLocalizedDefaultsCompanion(
+              tx,
+              singleMeta,
+              id,
+              localizedDefaults,
+              status,
+              companionExists
+            );
+          }
+          await this.recordCreated(tx, singleMeta.slug, row, null);
+          return row;
+        })
+      );
+      return this.createdOrFound(singleMeta.slug, outcome);
+    }
+
+    // Versioned Single: insert the default row and record its v1 snapshot in one
+    // transaction, so the Single never ends up with a live row but no history.
+    // Retry on a version_no allocation race, mirroring the write paths.
+    const outcome = await this.adapter.transaction(
+      tx =>
+        this.unlessStanding(tx, singleMeta, async () => {
+          const row = await tx.insert<SingleDocument>(
+            singleMeta.tableName,
+            snakeCaseDefaults,
+            { returning: "*" }
+          );
+          // Match the read shape: keep user field keys (which may contain
+          // underscores like `site_title`) exactly, converting only the timestamp
+          // columns; strip password hashes and the system owner column so history
+          // never retains them; parse JSON-backed fields (stored as strings on
+          // SQLite) so a restore equals a normal read. A freshly materialized
+          // default has no component subtrees yet, so components is empty.
+          const parentRow = convertTimestampsToCamelCase({
+            ...(row as Record<string, unknown>),
+          });
+          // Overlay the seeded localized defaults (keyed by field name) onto the
+          // snapshot so v1 carries the default locale's content, mirroring how a
+          // normal localized write overlays its companion values before capturing.
+          // Without this, restoring v1 could not bring back the seeded defaults
+          // (including a localized title/slug), since they live on the companion.
+          // Gated on `seedApplied`: when the companion table does not yet exist the
+          // seed no-ops, so overlaying here would record defaults that were never
+          // persisted.
+          if (seedApplied) {
+            for (const [name, value] of Object.entries(localizedDefaults)) {
+              parentRow[name] = value;
+            }
+          }
+          applyReadShape(
+            parentRow,
+            singleMeta.fields,
+            singleMeta.tableName,
+            await passwordReachOf(
+              singleMeta.fields,
+              this.fieldGroupDataService,
+              tx.getDrizzle()
+            )
+          );
+          const { versionNo } = await captureInTx(tx, this.versionCapture, {
+            lifecycle: hasLifecycle(singleMeta),
+            ref: {
+              scopeKind: "single",
+              scopeSlug: singleMeta.slug,
+              entryId: (row as { id: string }).id,
+            },
+            contentStatus: (parentRow as { status?: unknown }).status,
+            // System-materialized default: no authoring user.
+            parts: { parentRow, components: {} },
+            createdBy: null,
+            // Tagged with the default locale when the snapshot carries seeded
+            // translatable defaults; null for a non-localized single (main row only).
+            locale: seedLocale,
+            maxPerDoc: versionsConfig.maxPerDoc,
+          });
+          // Seed the default-locale companion with the localized defaults in the
+          // same transaction as the insert and version snapshot.
           await this.seedLocalizedDefaultsCompanion(
             tx,
             singleMeta,
@@ -2576,93 +2664,50 @@ export class SingleQueryService extends BaseService {
             status,
             companionExists
           );
-        }
-        await this.recordCreated(tx, singleMeta.slug, row, null);
-        return row;
-      });
-      this.logger.debug("Created default Single document", {
-        slug: singleMeta.slug,
-        id,
-      });
-      return inserted;
-    }
+          await this.recordCreated(tx, singleMeta.slug, row, versionNo);
+          return row;
+        }),
+      versionConflictRetries()
+    );
 
-    // Versioned Single: insert the default row and record its v1 snapshot in one
-    // transaction, so the Single never ends up with a live row but no history.
-    // Retry on a version_no allocation race, mirroring the write paths.
-    const inserted = await this.adapter.transaction(async tx => {
-      const row = await tx.insert<SingleDocument>(
-        singleMeta.tableName,
-        snakeCaseDefaults,
-        { returning: "*" }
-      );
-      // Match the read shape: keep user field keys (which may contain
-      // underscores like `site_title`) exactly, converting only the timestamp
-      // columns; strip password hashes and the system owner column so history
-      // never retains them; parse JSON-backed fields (stored as strings on
-      // SQLite) so a restore equals a normal read. A freshly materialized
-      // default has no component subtrees yet, so components is empty.
-      const parentRow = convertTimestampsToCamelCase({
-        ...(row as Record<string, unknown>),
-      });
-      // Overlay the seeded localized defaults (keyed by field name) onto the
-      // snapshot so v1 carries the default locale's content, mirroring how a
-      // normal localized write overlays its companion values before capturing.
-      // Without this, restoring v1 could not bring back the seeded defaults
-      // (including a localized title/slug), since they live on the companion.
-      // Gated on `seedApplied`: when the companion table does not yet exist the
-      // seed no-ops, so overlaying here would record defaults that were never
-      // persisted.
-      if (seedApplied) {
-        for (const [name, value] of Object.entries(localizedDefaults)) {
-          parentRow[name] = value;
-        }
-      }
-      applyReadShape(
-        parentRow,
-        singleMeta.fields,
-        singleMeta.tableName,
-        await passwordReachOf(
-          singleMeta.fields,
-          this.fieldGroupDataService,
-          tx.getDrizzle()
-        )
-      );
-      const { versionNo } = await captureInTx(tx, this.versionCapture, {
-        lifecycle: hasLifecycle(singleMeta),
-        ref: {
-          scopeKind: "single",
-          scopeSlug: singleMeta.slug,
-          entryId: (row as { id: string }).id,
-        },
-        contentStatus: (parentRow as { status?: unknown }).status,
-        // System-materialized default: no authoring user.
-        parts: { parentRow, components: {} },
-        createdBy: null,
-        // Tagged with the default locale when the snapshot carries seeded
-        // translatable defaults; null for a non-localized single (main row only).
-        locale: seedLocale,
-        maxPerDoc: versionsConfig.maxPerDoc,
-      });
-      // Seed the default-locale companion with the localized defaults in the
-      // same transaction as the insert and version snapshot.
-      await this.seedLocalizedDefaultsCompanion(
-        tx,
-        singleMeta,
-        id,
-        localizedDefaults,
-        status,
-        companionExists
-      );
-      await this.recordCreated(tx, singleMeta.slug, row, versionNo);
-      return row;
-    }, versionConflictRetries());
+    return this.createdOrFound(singleMeta.slug, outcome);
+  }
 
-    this.logger.debug("Created default Single document", {
-      slug: singleMeta.slug,
-      id,
-    });
-    return inserted;
+  /**
+   * The Single's document as `tx` finds it under the creation lock, or the
+   * one `create` inserts on `tx` when there is none. `create` runs only for
+   * the transaction that inserts, so what it writes beside the row (the
+   * translated defaults, the first version, the created event) is written
+   * once however many requests race to create the document.
+   */
+  private async unlessStanding(
+    tx: TransactionContext,
+    singleMeta: DynamicSingleRecord,
+    create: () => Promise<SingleDocument>
+  ): Promise<{ row: SingleDocument; created: boolean }> {
+    const standing = await readSingleForCreation<SingleDocument>(
+      tx,
+      singleMeta
+    );
+    if (standing) return { row: standing, created: false };
+    return { row: await create(), created: true };
+  }
+
+  /**
+   * The document a creation ends with: the one it inserted, or the one
+   * another request created first and the creation found under its lock.
+   */
+  private createdOrFound(
+    slug: string,
+    outcome: { row: SingleDocument; created: boolean }
+  ): SingleDocument {
+    this.logger.debug(
+      outcome.created
+        ? "Created default Single document"
+        : "Default Single document was created concurrently",
+      { slug, id: (outcome.row as { id?: unknown }).id }
+    );
+    return outcome.row;
   }
 
   /**

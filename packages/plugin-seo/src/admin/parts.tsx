@@ -5,6 +5,7 @@
  *
  * @module admin/parts
  */
+import { Alert, AlertDescription } from "@nextlyhq/plugin-sdk/admin";
 import { TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -143,56 +144,122 @@ export function inSentence(name: string): string {
     : first.toLowerCase() + name.slice(1);
 }
 
+/**
+ * Where an automatic value comes from, decided once: the type's pattern, one
+ * of the page's own fields, its template or design, its route's code, or
+ * the site's default. Both ways a source is said, the chip's line and the
+ * "Empty uses" sentence, word this one answer.
+ */
+type SourceDescription =
+  | { kind: "pattern"; type: string; pattern: string }
+  | { kind: "field"; type: string; field: string }
+  | { kind: "template"; design: boolean }
+  | { kind: "code" }
+  | { kind: "site"; what: string };
+
+function describeSource(
+  sourced: Pick<Sourced<unknown>, "from" | "pattern" | "field">,
+  value: SourcedValue,
+  names: SourceNames
+): SourceDescription {
+  const level: SeoLevel = sourced.from;
+  if (level === "pattern" && sourced.pattern !== undefined) {
+    return { kind: "pattern", type: names.typeLabel, pattern: sourced.pattern };
+  }
+  if (level === "content" && sourced.field !== undefined) {
+    return {
+      kind: "field",
+      type: inSentence(names.typeLabel),
+      field: names.fieldLabels[sourced.field] ?? sourced.field,
+    };
+  }
+  if (level === "template") {
+    return { kind: "template", design: names.drawnBy === "design" };
+  }
+  if (level === "code") return { kind: "code" };
+  return { kind: "site", what: SITE_DEFAULT[value] };
+}
+
 /** The words after the chip, for each level that can supply a value. */
 function sourceWords(
   sourced: Pick<Sourced<unknown>, "from" | "pattern" | "field">,
   value: SourcedValue,
   names: SourceNames
 ): ReactNode {
-  const level: SeoLevel = sourced.from;
-  if (level === "pattern" && sourced.pattern !== undefined) {
-    return (
-      <>
-        from the{" "}
-        <b className="font-semibold text-foreground">{names.typeLabel}</b>{" "}
-        pattern <Code>{sourced.pattern}</Code>
-      </>
-    );
+  const source = describeSource(sourced, value, names);
+  switch (source.kind) {
+    case "pattern":
+      return (
+        <>
+          from the{" "}
+          <b className="font-semibold text-foreground">{source.type}</b> pattern{" "}
+          <Code>{source.pattern}</Code>
+        </>
+      );
+    case "field":
+      return (
+        <>
+          from the {source.type}&apos;s{" "}
+          <b className="font-semibold text-foreground">{source.field}</b>
+        </>
+      );
+    case "template":
+      return source.design
+        ? "from this page's design"
+        : "from this page's template";
+    case "code":
+      return "by this page's route. Anything you type here wins over it.";
+    case "site":
+      return source.what;
   }
-  if (level === "content" && sourced.field !== undefined) {
-    return (
-      <>
-        from the {inSentence(names.typeLabel)}&apos;s{" "}
-        <b className="font-semibold text-foreground">
-          {names.fieldLabels[sourced.field] ?? sourced.field}
-        </b>
-      </>
-    );
-  }
-  if (level === "template") {
-    return names.drawnBy === "design"
-      ? "from this page's design"
-      : "from this page's template";
-  }
-  if (level === "code")
-    return "by this page's route. Anything you type here wins over it.";
-  return SITE_DEFAULT[value];
 }
 
-/** A note's frame and icon colour for each tone. */
-const NOTE_TONES = {
-  plain: { box: "border-border bg-muted", icon: "text-muted-foreground" },
-  warning: {
-    box: "border-warning-border bg-warning-surface",
-    icon: "text-warning-text",
-  },
-  success: {
-    box: "border-success-border bg-success-surface",
-    icon: "text-success-text",
-  },
+/**
+ * What an empty field falls back to, as one sentence: "Empty uses the Posts
+ * pattern: {Title} | {Site name}", "Empty uses the post's summary".
+ */
+export function EmptyUses({
+  sourced,
+  value,
+  names,
+}: {
+  sourced: Pick<Sourced<unknown>, "from" | "pattern" | "field">;
+  value: SourcedValue;
+  names: SourceNames;
+}): ReactNode {
+  const source = describeSource(sourced, value, names);
+  switch (source.kind) {
+    case "pattern":
+      return (
+        <>
+          Empty uses the {source.type} pattern: <Code>{source.pattern}</Code>
+        </>
+      );
+    case "field":
+      return `Empty uses the ${source.type}'s ${inSentence(source.field)}`;
+    case "template":
+      return source.design
+        ? "Empty uses this page's design"
+        : "Empty uses this page's template";
+    case "code":
+      return "Empty uses what this page's route sets. Anything you type here wins over it.";
+    case "site":
+      return `Empty uses ${source.what}`;
+  }
+}
+
+/** The admin's notice each tone is drawn as. */
+const NOTE_VARIANTS = {
+  plain: "info",
+  warning: "warning",
+  success: "success",
 } as const;
 
-/** A boxed note: a plain one, a warning, or the word that something worked. */
+/**
+ * A note: the admin's own notice, plain, a warning, or the word that
+ * something worked. A note says how things stand rather than interrupting,
+ * so it is announced as a note, not as an alert.
+ */
 export function Note({
   tone = "plain",
   icon,
@@ -203,20 +270,17 @@ export function Note({
   children: ReactNode;
 }): ReactNode {
   return (
-    <div
-      className={cx(
-        "flex items-start gap-2.5 rounded-md border px-3 py-2.5 text-[13px] leading-[1.45] text-foreground",
-        NOTE_TONES[tone].box
-      )}
+    <Alert
+      variant={NOTE_VARIANTS[tone]}
+      role="note"
+      // The icon sits straight inside, where the notice colours it by tone.
+      className="px-3 py-2.5 text-[13px] leading-[1.45] [&>svg]:mt-px [&>svg]:size-4 [&>svg]:flex-none"
     >
-      <span
-        aria-hidden="true"
-        className={cx("mt-px flex-none", NOTE_TONES[tone].icon)}
-      >
-        {icon ?? <TriangleAlert className="size-4" />}
-      </span>
-      <div className="min-w-0 flex-1">{children}</div>
-    </div>
+      {icon ?? <TriangleAlert aria-hidden="true" />}
+      <AlertDescription className="min-w-0 flex-1 text-[13px] leading-[1.45]">
+        {children}
+      </AlertDescription>
+    </Alert>
   );
 }
 

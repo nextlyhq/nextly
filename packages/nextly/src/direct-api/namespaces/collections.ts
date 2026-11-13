@@ -88,6 +88,7 @@ export async function find<TSlug extends CollectionSlug>(
     select: args.select,
     sort: args.sort,
     richTextFormat: config.richTextFormat,
+    richTextStyles: config.richTextStyles,
     ...accessOptions(config),
     // i18n M4: forward the content locale + fallback so localized fields resolve.
     locale: config.locale,
@@ -142,6 +143,7 @@ export async function findByID<TSlug extends CollectionSlug>(
       depth: config.depth,
       select: args.select,
       richTextFormat: config.richTextFormat,
+      richTextStyles: config.richTextStyles,
       ...accessOptions(config),
       // Overlay the pending working draft when the caller opts in; the service
       // still gates it on an update-capability probe.

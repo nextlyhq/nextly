@@ -31,9 +31,13 @@ import {
   draftSplitResponseFields,
   schemaDraftSplit,
 } from "../domains/versions/draft-split-eligibility";
+import type { FieldSources } from "../domains/versions/restored-from";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
-import type { RichTextOutputFormat } from "../lib/rich-text-html";
+import type {
+  RichTextOutputFormat,
+  RichTextStyles,
+} from "../lib/rich-text-html";
 import type { CacheRevalidator } from "../revalidation/types";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { ValidationIssue } from "../shared/lib/entry-validation";
@@ -791,6 +795,8 @@ export class CollectionsHandler {
      * - "both": Return object with both { json, html } properties
      */
     richTextFormat?: RichTextOutputFormat;
+    /** How rich text HTML is styled: `"none"` for classes only. */
+    richTextStyles?: RichTextStyles;
     /**
      * Sort order for results.
      * Prefix with `-` for descending.
@@ -934,6 +940,8 @@ export class CollectionsHandler {
      * - "both": Return object with both { json, html } properties
      */
     richTextFormat?: RichTextOutputFormat;
+    /** How rich text HTML is styled: `"none"` for classes only. */
+    richTextStyles?: RichTextStyles;
     /** User context for access control */
     user?: UserContext;
     /** When true, bypass all access control checks */
@@ -1145,6 +1153,18 @@ export class CollectionsHandler {
        */
       sourceVersionNo?: number;
       /**
+       * The fields this write restored, and the version each came from,
+       * recorded per field on the version it captures (see `restored-from`).
+       *
+       * @experimental
+       */
+      restoredFrom?: FieldSources;
+      /**
+       * Set when this write restores a version: held as the working draft, and
+       * refused where the document cannot hold one rather than written live.
+       */
+      requireHeldDraft?: boolean;
+      /**
        * The caller's authenticated scope. For a scoped API-key REST write, the
        * publish/unpublish transition gate judges the key's OWN grants.
        */
@@ -1166,6 +1186,11 @@ export class CollectionsHandler {
         // a silently dropped lineage marker would leave a restore
         // indistinguishable from an ordinary edit.
         sourceVersionNo: params.sourceVersionNo,
+        // Named for the same reason: dropped, a restore's fields would record
+        // no source.
+        restoredFrom: params.restoredFrom,
+        // Named for the same reason: dropped, a restore could write live.
+        requireHeldDraft: params.requireHeldDraft,
         // The API-key scope gates the publish transition; naming it explicitly
         // (like sourceVersionNo) keeps it from being silently dropped.
         authenticatedScope: params.authenticatedScope,

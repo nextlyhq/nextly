@@ -94,7 +94,7 @@ export const MAIN_MENU_ITEMS: MainMenuItem[] = [
   },
   // One item for both content sections: finding a piece of content and
   // editing it is one job, whether it is a collection entry or a Single. Its
-  // panel switches between the two (`ContentPanel`).
+  // panel lists both, each under its heading (`ContentPanel`).
   { id: CONTENT_RAIL_ID, label: "Content", icon: Feather, href: "#" },
   { id: "media", label: "Media Library", icon: ImageIcon, href: ROUTES.MEDIA },
   // Beside Media rather than under Settings: a release is editorial work on a

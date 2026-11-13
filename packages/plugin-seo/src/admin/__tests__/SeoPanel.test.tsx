@@ -5,7 +5,13 @@
  * back to automatic, Advanced starts closed, and a typed official address on
  * another site is used only once confirmed.
  */
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useMemo, useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -159,15 +165,19 @@ function Harness({
 }
 
 const titleField = () => screen.getByLabelText("Title on Google");
+/** The Advanced section, its rows and all. */
+const inAdvanced = () =>
+  screen
+    .getByRole("button", { name: /Advanced/ })
+    .closest("section") as HTMLElement;
 const searchTitle = () => screen.getByTestId("seo-search-title");
 
 describe("the SEO panel at rest", () => {
   it("shows the preview and the two fields, with everything else closed under Advanced", () => {
     render(<Harness />);
-    expect(screen.getByRole("tab", { name: "Google" })).toHaveAttribute(
-      "aria-selected",
-      "true"
-    );
+    // The page on Google beside its shared card, both at once.
+    expect(screen.getByText("On Google")).toBeVisible();
+    expect(screen.getByTestId("seo-share-card")).toBeVisible();
     expect(titleField()).toBeVisible();
     expect(screen.getByLabelText("Description on Google")).toBeVisible();
     const advanced = screen.getByRole("button", { name: /Advanced/ });
@@ -195,27 +205,26 @@ describe("the SEO panel at rest", () => {
     expect(screen.queryByText("You can't change this page's SEO.")).toBeNull();
   });
 
-  it("shows each automatic value, its count and the level it came from", () => {
+  it("shows each automatic value and the level it came from", () => {
     render(<Harness />);
     expect(titleField()).toHaveValue("");
     expect(titleField()).toHaveAttribute(
       "placeholder",
       "Surfer SEO vs Rext AI: Which Fits Your Workflow? | Rext AI"
     );
-    expect(screen.getByText("58 / 60")).toBeVisible();
     const titleSource = titleField().parentElement as HTMLElement;
     expect(titleSource).toHaveTextContent(
-      "Automaticfrom the Blog post pattern {Title} | {Site name}"
+      "Empty uses the Blog post pattern: {Title} | {Site name}"
     );
     const description = screen.getByLabelText("Description on Google");
     expect(description.parentElement).toHaveTextContent(
-      "Automaticfrom the blog post's Excerpt"
+      "Empty uses the blog post's excerpt"
     );
     expect(searchTitle()).toHaveTextContent(
       "Surfer SEO vs Rext AI: Which Fits Your Workflow? | Rext AI"
     );
     expect(
-      screen.getByText("https://rext.ai › blog › surfer-seo-vs-rext-ai")
+      screen.getByText("rext.ai › blog › surfer-seo-vs-rext-ai")
     ).toBeVisible();
   });
 });
@@ -237,14 +246,14 @@ describe("a value the page's design gives", () => {
   it("comes from this page's design where the page's own blocks draw it", () => {
     render(<Harness context={drawn("design")} />);
     expect(titleField().parentElement).toHaveTextContent(
-      "Automaticfrom this page's design"
+      "Empty uses this page's design"
     );
   });
 
   it("comes from this page's template where a template draws it", () => {
     render(<Harness context={drawn("template")} />);
     expect(titleField().parentElement).toHaveTextContent(
-      "Automaticfrom this page's template"
+      "Empty uses this page's template"
     );
   });
 });
@@ -277,7 +286,6 @@ describe("typing in a field", () => {
     render(<Harness />);
     await user.type(titleField(), "Surfer vs Rext");
     expect(searchTitle()).toHaveTextContent(/^Surfer vs Rext$/);
-    expect(screen.getByText("14 / 60")).toBeVisible();
     expect(screen.getByText("Typed for this page")).toBeVisible();
 
     await user.click(
@@ -290,17 +298,21 @@ describe("typing in a field", () => {
     expect(screen.queryByText("Typed for this page")).toBeNull();
   });
 
-  it("marks a count over what Google shows", async () => {
+  it("says above the fields when a title is longer than Google shows", async () => {
     const user = userEvent.setup();
     render(<Harness />);
+    expect(
+      screen.queryByText("The title is longer than Google shows.")
+    ).toBeNull();
     await user.type(titleField(), "x".repeat(61));
-    expect(screen.getByText("61 / 60")).toHaveAttribute("data-over", "true");
+    expect(
+      screen.getByText("The title is longer than Google shows.")
+    ).toBeVisible();
   });
 
   it("shows the shared card with the same title until a different one is set", async () => {
     const user = userEvent.setup();
     render(<Harness />);
-    await user.click(screen.getByRole("tab", { name: "When shared" }));
     expect(screen.getByTestId("seo-share-title")).toHaveTextContent(
       "Surfer SEO vs Rext AI: Which Fits Your Workflow? | Rext AI"
     );
@@ -352,7 +364,7 @@ describe("Advanced", () => {
       ["canonicalElsewhere", null],
     ]);
     expect(screen.getByTestId("seo-search-result")).toHaveTextContent(
-      "https://rext.ai › blog › surfer-seo-vs-rext-ai"
+      "rext.ai › blog › surfer-seo-vs-rext-ai"
     );
     expect(
       screen.getByText(
@@ -438,7 +450,7 @@ describe("Advanced", () => {
     );
     await user.type(screen.getByLabelText("Description when shared"), "Card");
     expect(writes.at(-1)).toEqual(["socialDescription", "Card"]);
-    await user.click(screen.getByRole("tab", { name: "When shared" }));
+    // The shared card shows it, beside the page on Google.
     expect(screen.getByTestId("seo-share-card")).toHaveTextContent("Card");
   });
 
@@ -451,14 +463,13 @@ describe("Advanced", () => {
     expect(advanced).toHaveTextContent("structured data1");
     await user.click(advanced);
     const type = screen.getByRole("combobox", { name: "Structured data type" });
-    expect(type).toHaveValue("");
+    expect(type).toHaveTextContent("Article · automatic");
+    expect(within(inAdvanced()).getByText("Missing: author.")).toBeVisible();
+    await user.click(type);
     expect(
-      within(type)
-        .getAllByRole("option")
-        .map(option => option.textContent)
+      (await screen.findAllByRole("option")).map(option => option.textContent)
     ).toEqual(["Article · automatic", "Article", "Web page"]);
-    expect(screen.getByText("Missing: author.")).toBeVisible();
-    await user.selectOptions(type, "webPage");
+    await user.click(screen.getByRole("option", { name: "Web page" }));
     expect(writes.at(-1)).toEqual(["structuredDataType", "webPage"]);
   });
 
@@ -479,6 +490,27 @@ describe("Advanced", () => {
     expect(screen.queryByText("Share image")).toBeNull();
     expect(
       screen.queryByRole("combobox", { name: "Structured data type" })
+    ).toBeNull();
+  });
+
+  it("offers no share image to make where the group declares no share image field", () => {
+    const { structuredData: _none, ...rest } = CONTEXT;
+    render(
+      <Harness
+        context={{
+          ...rest,
+          fields: ["metaTitle", "metaDescription"],
+          shareImage: {
+            problems: [
+              { message: "800 × 600, LinkedIn will crop it", fix: "make" },
+            ],
+          },
+        }}
+        onMakeShareImage={() => Promise.resolve("copy")}
+      />
+    );
+    expect(
+      screen.queryByRole("button", { name: "Make a share image" })
     ).toBeNull();
   });
 
@@ -519,6 +551,97 @@ describe("Advanced", () => {
     expect(opened).toEqual(["author"]);
   });
 
+  it("says a share image that couldn't be made, beside the notice and in its row", async () => {
+    const user = userEvent.setup();
+    const imaged: SeoTabContext = {
+      ...CONTEXT,
+      levels: {
+        ...LEVELS,
+        content: {
+          ...LEVELS.content,
+          image: {
+            value: { url: "/media/cover.webp", width: 800, height: 600 },
+            field: "coverImage",
+          },
+        },
+      },
+      shareImage: {
+        problems: [
+          { message: "800 × 600, LinkedIn will crop it", fix: "make" },
+        ],
+      },
+    };
+    render(
+      <Harness
+        context={imaged}
+        onMakeShareImage={() => Promise.resolve(undefined)}
+      />
+    );
+    const [fromNotice] = screen.getAllByRole("button", {
+      name: "Make a share image",
+    });
+    await user.click(fromNotice as HTMLElement);
+    expect(
+      await screen.findByText(
+        /The share image couldn't be made\. Try again, or choose\s+another image under Advanced\./
+      )
+    ).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    await user.click(
+      within(inAdvanced()).getByRole("button", { name: "Make a share image" })
+    );
+    expect(
+      await within(inAdvanced()).findByText(
+        /The share image couldn't be made\. Try again, or choose another\s+image\./
+      )
+    ).toBeVisible();
+  });
+
+  it("lets go of a copy that couldn't be made once another image is chosen", async () => {
+    const user = userEvent.setup();
+    const imaged: SeoTabContext = {
+      ...CONTEXT,
+      shareImage: {
+        problems: [
+          { message: "800 × 600, LinkedIn will crop it", fix: "make" },
+        ],
+      },
+    };
+    render(
+      <Harness
+        context={imaged}
+        initial={{ ogImage: "cover" }}
+        reloaded={{ ogImage: "another" }}
+        onMakeShareImage={() => Promise.resolve(undefined)}
+      />
+    );
+    // Regions kept in place, so the failure is announced as it happens.
+    const announced = () =>
+      screen
+        .getAllByRole("status")
+        .filter(region =>
+          /The share image couldn't be made/.test(region.textContent ?? "")
+        );
+    expect(announced()).toHaveLength(0);
+    const [fromNotice] = screen.getAllByRole("button", {
+      name: "Make a share image",
+    });
+    await user.click(fromNotice as HTMLElement);
+    await waitFor(() => expect(announced()).toHaveLength(1));
+    await user.click(screen.getByRole("button", { name: /Advanced/ }));
+    await user.click(
+      within(inAdvanced()).getByRole("button", { name: "Make a share image" })
+    );
+    // Said beside the notice and in the row, and announced from both.
+    await waitFor(() => expect(announced()).toHaveLength(2));
+
+    await user.click(screen.getByRole("button", { name: "Reload" }));
+    expect(
+      screen.queryAllByText(/The share image couldn't be made\./)
+    ).toHaveLength(0);
+  });
+
   it("says what keeps the share image from showing, and makes one of the right size", async () => {
     const user = userEvent.setup();
     const imaged: SeoTabContext = {
@@ -557,18 +680,34 @@ describe("Advanced", () => {
     expect(
       screen.getByText("1 thing to fix: 800 × 600, LinkedIn will crop it.")
     ).toBeVisible();
+    // The note names what every network shows, a size and a format alike.
+    expect(
+      screen
+        .getByText("1 thing to fix: 800 × 600, LinkedIn will crop it.")
+        .closest("div")
+    ).toHaveTextContent(
+      "Share images show in full on every network as a 1200 × 630 JPEG or PNG."
+    );
     expect(screen.getByText("800 × 600")).toBeVisible();
     expect(
       screen.getAllByText(/from the blog post's/).map(line => line.textContent)
     ).toContain("from the blog post's Cover image");
+    // Offered above the fields too, beside the problem it fixes.
+    const offered = screen.getAllByRole("button", {
+      name: "Make a share image",
+    });
+    expect(offered).toHaveLength(2);
     await user.click(
-      screen.getByRole("button", { name: "Make a share image" })
+      within(inAdvanced()).getByRole("button", {
+        name: "Make a share image",
+      })
     );
     expect(made).toBe(1);
+    await user.click(offered[0] as HTMLElement);
+    expect(made).toBe(2);
   });
 
-  it("says how the share image fits the shared card, and marks where it is cut", async () => {
-    const user = userEvent.setup();
+  it("marks where the shared card cuts a picture taller than itself", () => {
     const withImage = (width: number, height: number): SeoTabContext => ({
       ...CONTEXT,
       levels: {
@@ -583,18 +722,10 @@ describe("Advanced", () => {
       },
     });
     const { unmount } = render(<Harness context={withImage(800, 600)} />);
-    await user.click(screen.getByRole("tab", { name: "When shared" }));
-    expect(screen.getByTestId("seo-share-fit")).toHaveTextContent(
-      "This 800 × 600 image is cut at the top and bottom to fit. Fix it under Advanced, Share image."
-    );
     expect(screen.getByTestId("seo-share-crop")).toBeInTheDocument();
     unmount();
 
     render(<Harness context={withImage(1200, 630)} />);
-    await user.click(screen.getByRole("tab", { name: "When shared" }));
-    expect(screen.getByTestId("seo-share-fit")).toHaveTextContent(
-      "The image is 1200 × 630, the size every network shows in full."
-    );
     expect(screen.queryByTestId("seo-share-crop")).toBeNull();
   });
 
@@ -628,7 +759,7 @@ describe("Advanced", () => {
     );
     await user.click(screen.getByRole("button", { name: /Advanced/ }));
     await user.click(
-      screen.getByRole("button", { name: "Make a share image" })
+      within(inAdvanced()).getByRole("button", { name: "Make a share image" })
     );
     // Made from the page's cover image: the row names it, and says the
     // picture on the page is left as it was.
@@ -646,7 +777,7 @@ describe("Advanced", () => {
     expect(screen.queryByText(/Made a 1200 × 630 copy/)).toBeNull();
     expect(screen.getByText("Chosen for this page")).toBeVisible();
     expect(
-      screen.getByRole("button", { name: "Make a share image" })
+      within(inAdvanced()).getByRole("button", { name: "Make a share image" })
     ).toBeVisible();
   });
 

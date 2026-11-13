@@ -262,7 +262,7 @@ export function schemaVersionStoreSql(dialect: SupportedDialect): string {
 
 /**
  * How `stored` stands against `build`, the build's newest migration. Names
- * compare in run order, which their timestamps give (`newestMigrationName`).
+ * compare by recency, which their timestamps give (`newestMigrationName`).
  */
 export function compareSchemaVersion(
   stored: StoredSchemaVersion,
@@ -331,19 +331,30 @@ export async function reportSchemaVersionAtStart(args: {
 }
 
 /**
- * The newest app migration the ledger records applied, by base name, or null
- * where none is: what `migration` says once that migration's registry rows
- * are written. Plugin modules are left out; they are not the app's history.
+ * Each app migration the ledger records applied, by base name. Plugin
+ * modules are left out; they are not the app's history.
+ */
+export function appliedAppMigrations(
+  fileApplies: readonly SchemaEventRow[]
+): Set<string> {
+  const applied = new Set<string>();
+  for (const [filename, standing] of standingsByFilename(fileApplies)) {
+    if (isPluginLedgerRow(filename) || standing.state !== "applied") continue;
+    applied.add(filename.replace(/\.sql$/i, ""));
+  }
+  return applied;
+}
+
+/**
+ * The newest app migration the ledger records applied, by base name
+ * (`newestMigrationName`, the rule the build's own version is named by), or
+ * null where none is: what `migration` says once that migration's registry
+ * rows are written, and the point the registry record is taken at.
  */
 export function newestAppliedAppMigration(
   fileApplies: readonly SchemaEventRow[]
 ): string | null {
-  const applied: string[] = [];
-  for (const [filename, standing] of standingsByFilename(fileApplies)) {
-    if (isPluginLedgerRow(filename) || standing.state !== "applied") continue;
-    applied.push(filename.replace(/\.sql$/i, ""));
-  }
-  return newestMigrationName(applied) ?? null;
+  return newestMigrationName(appliedAppMigrations(fileApplies)) ?? null;
 }
 
 /** A registry write in progress in the calling flow (`writeRegistryRows`). */
@@ -413,6 +424,26 @@ export async function writeRegistryRows<T>(
     // rolled back, or one that has since committed.
     clearRegistryRowCache();
   }
+}
+
+/**
+ * Count a write of registry rows made on `tx`, a transaction its caller
+ * opened and commits: inside an open registry write ({@link writeRegistryRows})
+ * it counts towards that write's version, stored once at its end; otherwise
+ * the version is stored on `tx` now, so its count commits or rolls back with
+ * the rows. The caller clears the cached registry rows once `tx` has ended,
+ * as after any registry write.
+ */
+export async function countRegistryWriteOn(
+  tx: TransactionContext,
+  dialect: SupportedDialect
+): Promise<void> {
+  const outer = registryWrite.getStore();
+  if (outer?.live === true) {
+    outer.wrote = true;
+    return;
+  }
+  await storeSchemaVersion(tx.getDrizzle(), dialect, { wrote: true });
 }
 
 /**

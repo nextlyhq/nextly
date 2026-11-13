@@ -289,18 +289,18 @@ describe("what a single executes", () => {
 });
 
 describe("refreshing the single sources from the registry", () => {
-  const getAllSingles = vi.fn();
+  const getAllSinglesForRead = vi.fn();
 
   beforeEach(() => {
     clearSources();
     vi.mocked(container.get).mockImplementation((name: string) => {
-      if (name === "singleRegistryService") return { getAllSingles };
+      if (name === "singleRegistryService") return { getAllSinglesForRead };
       throw new Error(`unexpected container.get("${name}")`);
     });
   });
 
   it("publishes a source per registered single", async () => {
-    getAllSingles.mockResolvedValue([
+    getAllSinglesForRead.mockResolvedValue([
       {
         slug: "site-settings",
         label: "Site settings",
@@ -322,7 +322,7 @@ describe("refreshing the single sources from the registry", () => {
     // same label reading. A deferred single is ahead of its table and would
     // publish columns the table lacks; a `pending` label says nothing about
     // the table at all.
-    getAllSingles.mockResolvedValue([
+    getAllSinglesForRead.mockResolvedValue([
       { slug: "deferred", migrationStatus: "synced", fields: [] },
       { slug: "pending", migrationStatus: "pending", fields: [] },
       { slug: "ready", migrationStatus: "applied", fields: [] },
@@ -344,7 +344,7 @@ describe("refreshing the single sources from the registry", () => {
     // Hidden from the navigation (an internal single is stored the same way): no source, so no
     // card is generated and a query naming it is refused as unknown -- for a super-admin too,
     // since nothing here depends on the caller.
-    getAllSingles.mockResolvedValue([
+    getAllSinglesForRead.mockResolvedValue([
       { slug: "shown", migrationStatus: "synced", fields: [] },
       {
         slug: "hidden",
@@ -362,11 +362,11 @@ describe("refreshing the single sources from the registry", () => {
   });
 
   it("leaves the published sources standing when the registry cannot be read", async () => {
-    getAllSingles.mockResolvedValue([
+    getAllSinglesForRead.mockResolvedValue([
       { slug: "site-settings", migrationStatus: "synced", fields: [] },
     ]);
     await refreshSingleSources();
-    getAllSingles.mockRejectedValue(new Error("pool timeout"));
+    getAllSinglesForRead.mockRejectedValue(new Error("pool timeout"));
 
     await refreshSingleSources();
 

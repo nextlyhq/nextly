@@ -17,6 +17,7 @@ import type {
   HookExemptRead,
   TrustBound,
 } from "../../services/collections/trust-grant";
+import type { FieldSources } from "../versions/restored-from";
 
 /**
  * User context for Single operations.
@@ -226,6 +227,14 @@ export interface UpdateSingleOptions {
    * ordinary write that happens to reproduce an earlier state.
    */
   sourceVersionNo?: number;
+  /**
+   * The fields this write restored, and the version each came from, as server
+   * code states it. A client states it as `_restoredFrom` in the body, read
+   * at the write's boundary when this is absent.
+   *
+   * @experimental
+   */
+  restoredFrom?: FieldSources;
   /**
    * Set when this write restores a recorded save of a working draft: its
    * content was never live, so on a published Single it must be held as the

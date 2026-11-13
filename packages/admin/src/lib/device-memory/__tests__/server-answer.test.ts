@@ -17,6 +17,9 @@ const answer = vi.hoisted(() => ({
 }));
 vi.mock("@admin/lib/api/startup-request", () => ({
   startupResponseHeaders: () => Promise.resolve(answer.headers),
+  // The request a page without a startup answer sends for its headers: not
+  // answered here, so only the startup answer's headers label anything.
+  sendStartupRequest: () => Promise.reject(new TypeError("offline")),
 }));
 
 import {

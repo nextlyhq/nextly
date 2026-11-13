@@ -10,6 +10,7 @@
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { asWritten } from "../../../__tests__/helpers/statement-as-written";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
@@ -423,9 +424,11 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     const id = await seedCollection();
     const dialog = PATHS.find(p => p.path.includes("schema dialog"));
     if (!dialog) throw new Error("the collection dialog path is missing");
+    // Matched anywhere in the statement: on PostgreSQL and MySQL a schema
+    // statement carries the run's lock claim ahead of it (`markedForSchemaLock`).
     const injected = failStatementsMatching(
       statement =>
-        statement.startsWith("INSERT INTO") &&
+        statement.includes("INSERT INTO") &&
         statement.includes("dc_posts_locales")
     );
 
@@ -485,21 +488,41 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     const id = await seedCollection();
     const dialog = PATHS.find(p => p.path.includes("schema dialog"));
     if (!dialog) throw new Error("the collection dialog path is missing");
-    // The registry write after the apply is refused, once.
-    const adapter = current.adapter as unknown as {
-      update(...args: unknown[]): Promise<unknown>;
-    };
-    const original = adapter.update.bind(adapter);
+    // The registry write after the apply is refused, once. It runs on the
+    // transaction it shares with the stored schema version, so the refusal
+    // sits on that transaction's `update` of the registry row.
+    const adapter = current.adapter;
+    const original = adapter.transaction.bind(adapter);
     let refusedOnce = false;
-    const injected = vi
-      .spyOn(adapter, "update")
-      .mockImplementation((...args: unknown[]) => {
-        if (!refusedOnce && args[0] === "dynamic_collections") {
-          refusedOnce = true;
-          return Promise.reject(new Error("injected registry failure"));
-        }
-        return original(...args);
-      });
+    const injected = vi.spyOn(adapter, "transaction").mockImplementation(((
+      work: Parameters<typeof original>[0],
+      options?: Parameters<typeof original>[1]
+    ) =>
+      original(
+        tx =>
+          work(
+            new Proxy(tx, {
+              get(target, property) {
+                const value: unknown = Reflect.get(target, property);
+                if (property !== "update" || typeof value !== "function") {
+                  return typeof value === "function"
+                    ? (value as (...a: unknown[]) => unknown).bind(target)
+                    : value;
+                }
+                return (...args: Parameters<typeof tx.update>) => {
+                  if (!refusedOnce && args[0] === "dynamic_collections") {
+                    refusedOnce = true;
+                    return Promise.reject(
+                      new Error("injected registry failure")
+                    );
+                  }
+                  return tx.update(...args);
+                };
+              },
+            })
+          ),
+        options
+      )) as typeof original);
 
     // The registry write is not fatal to the apply, so it reports the change made.
     await dialog.change(TRANSLATED).catch(() => undefined);
@@ -769,9 +792,15 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       getDrizzle(...args: unknown[]): unknown;
     };
     const realGetDrizzle = adapter.getDrizzle.bind(adapter);
-    const textOf = (query: unknown) =>
-      ((query as { queryChunks?: { value?: unknown }[] }).queryChunks ?? [])
-        .map(chunk => (Array.isArray(chunk.value) ? chunk.value.join("") : ""))
+    // The text of a Drizzle query, nested queries included: a statement marked with the lock's
+    // comment is the marker followed by the statement as a query of its own.
+    const textOf = (query: unknown): string =>
+      ((query as { queryChunks?: unknown[] }).queryChunks ?? [])
+        .map(chunk => {
+          const { value } = chunk as { value?: unknown };
+          if (Array.isArray(value)) return value.join("");
+          return textOf(chunk);
+        })
         .join("");
     const wrap = (db: object): object =>
       new Proxy(db, {
@@ -780,7 +809,9 @@ describeEachDialect("a shared field that becomes translated", dialect => {
           if (typeof value !== "function") return value;
           if (property === "execute" || property === "run") {
             return (query: unknown, ...rest: unknown[]) => {
-              if (matches(textOf(query))) {
+              // Judged as written: a schema apply under the lock sends each statement behind
+              // the lock's comments.
+              if (matches(asWritten(textOf(query)))) {
                 throw new Error("injected copy failure");
               }
               return Reflect.apply(value, target, [query, ...rest]);

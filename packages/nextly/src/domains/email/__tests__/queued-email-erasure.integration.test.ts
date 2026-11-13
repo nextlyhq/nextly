@@ -869,6 +869,7 @@ function deletingAfterFirstRead(
   const real = t.adapter as unknown as {
     getCapabilities(): unknown;
     getDrizzle(relations?: unknown): object;
+    transaction(work: (tx: unknown) => Promise<unknown>): Promise<unknown>;
   };
   let done = false;
   const tableName = (table: unknown): string =>
@@ -912,6 +913,10 @@ function deletingAfterFirstRead(
     getCapabilities: () => real.getCapabilities(),
     getDrizzle: (relations?: unknown) =>
       wrap(real.getDrizzle(relations), false),
+    // The attempt changes the email's row in a transaction of its own, after
+    // the first read this double holds back: that transaction is the real one.
+    transaction: (work: (tx: unknown) => Promise<unknown>) =>
+      real.transaction(work),
   };
 }
 

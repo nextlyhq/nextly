@@ -67,6 +67,7 @@ import {
   provisionUserFieldsAtStart,
   runPostInitTasks,
 } from "./init/post-init-tasks";
+import { isProductionStart } from "./init/production-start";
 import { reloadNextlyConfig } from "./init/reload-config";
 import {
   awaitBootSeeding,
@@ -152,6 +153,14 @@ const globalForInit = globalThis as unknown as {
    */
   __nextly_stopped?: boolean;
 };
+
+/**
+ * Run `task` once the current turn of the event loop, the rest of the start
+ * included, has finished: background work the start does not wait for.
+ */
+function afterThisStart(task: () => Promise<void>): Promise<void> {
+  return new Promise<void>(resolve => setImmediate(resolve)).then(task);
+}
 
 /**
  * Settles once the work the newest `getNextly()` start left running after it
@@ -430,7 +439,9 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // boot has seeded, the request-path boot finds them registered and
         // waits on this hold rather than serving.
         releaseSeeding = holdBootSeeding();
-        await registerServices(finalConfig);
+        // A start, so in production it writes no bookkeeping
+        // (`isProductionStart`).
+        await registerServices(finalConfig, { start: true });
         // What these services hold, so the request path can tell an
         // unchanged `localization` block from an edited one rather than
         // registering them again on its first request.
@@ -568,18 +579,25 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // migrations ran THROWS, because serving a schema nobody verified is
         // worse than not starting.
 
-        // Permissions and roles are seeded BEFORE getNextly() resolves, as the
-        // request-path boot already does. Left to run in the background, a
-        // serverless instance could be frozen after its first response with a
-        // role's permissions half-written, and every cold start rewrote them
-        // against every other. The seeding writes only what differs, so an
-        // unchanged boot pays for its reads alone. Next.js's `after()` would not
-        // do: it can only be called inside a request, and getNextly() also runs
-        // from instrumentation and scripts.
-        await seedPermissionsAndRolePresets();
+        // A development start seeds the permissions and roles BEFORE
+        // getNextly() resolves, as the request-path boot already does. Left to
+        // run in the background, a serverless instance could be frozen after
+        // its first response with a role's permissions half-written. The
+        // seeding writes only what differs, so an unchanged boot pays for its
+        // reads alone. Next.js's `after()` would not do: it can only be called
+        // inside a request, and getNextly() also runs from instrumentation and
+        // scripts.
+        //
+        // A production start seeds nothing: the permissions, the roles and
+        // their grants arrive through `nextly migrate` and a plugin's install
+        // and uninstall, so a build older or newer than the one that migrated
+        // the database cannot change them, and the start's statements do not
+        // grow with the number of entities.
+        if (!isProductionStart()) await seedPermissionsAndRolePresets();
         releaseSeeding();
         // The merged user fields too, before getNextly() resolves: a request
-        // served before they load sees the code's user fields alone.
+        // served before they load sees the code's user fields alone. Read only
+        // in production (`provisionUserFieldsAtStart`).
         await provisionUserFieldsAtStart();
 
         // What this development start brought in line, for the next to skip. Written only when it
@@ -590,8 +608,11 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // and the like) run in the background so that getNextly() returns as
         // soon as the database is ready. Each is idempotent and catches its own
         // errors.
-        // Kept, so `startSettled` can tell when this work has finished.
-        globalForInit.__nextly_postInitTasks = runPostInitTasks();
+        // Kept, so `startSettled` can tell when this work has finished. Begun
+        // once this start has handed its instance over, not inside it: on
+        // SQLite, whose driver blocks, a task begun here would run its first
+        // statements before getNextly() resolved, on the start's own time.
+        globalForInit.__nextly_postInitTasks = afterThisStart(runPostInitTasks);
       } else {
         // Registered by the request-path boot, which may still be seeding: wait
         // for it, so this boot does not serve before the roles are written.

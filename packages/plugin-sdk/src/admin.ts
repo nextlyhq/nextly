@@ -631,11 +631,97 @@ export {
   FormActions,
 } from "@nextlyhq/admin";
 export type {
+  FieldLayout,
   FieldShellProps,
   FieldShellRenderProps,
   FieldWidth,
   FormSectionProps,
   FormActionsProps,
+} from "@nextlyhq/admin";
+
+/**
+ * The status badge a table cell or a header carries (@experimental here; the
+ * component is `@public` in `@nextlyhq/ui`). Its `success`, `warning`,
+ * `destructive` and `info` variants are quiet chips with a status dot, so a
+ * column of statuses reads calm and the word carries the meaning. Forwarded
+ * so a plugin page assembles a table, its statuses and its form from one
+ * import, the same component the admin's own lists draw.
+ */
+export { Badge } from "@nextlyhq/admin";
+export type { BadgeProps } from "@nextlyhq/admin";
+
+/**
+ * The parts a plugin page needs beyond a form (@experimental here): a notice
+ * above the content, a panel that slides in from the edge, tabs inside a card,
+ * a progress bar, a menu of row actions and a hint on hover. The same objects
+ * the admin's own pages draw, forwarded through `@nextlyhq/admin` like the
+ * controls above, so a plugin page needs no look of its own for any of them.
+ *
+ * - `Alert` takes `variant`: `info`, `success`, `warning` or `destructive`.
+ * - `Sheet` is the admin's side panel; `SheetContent` takes `side`.
+ * - `Tabs` switches between panels inside a page. For tabs that are routes,
+ *   use `PageTabs`.
+ * - `Progress` takes a `value` out of `max` (100 by default), and `variant`
+ *   `default`, `success` or `error`.
+ * - `DropdownMenu` is the menu behind a button, such as a row's actions.
+ * - `Tooltip` needs a `TooltipProvider` above it; the admin provides one, so a
+ *   plugin page adds its own only when it renders outside the admin.
+ */
+export {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+  Progress,
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@nextlyhq/admin";
+export type {
+  AlertDescriptionProps,
+  AlertProps,
+  AlertTitleProps,
+  SheetCloseProps,
+  SheetContentProps,
+  SheetDescriptionProps,
+  SheetFooterProps,
+  SheetHeaderProps,
+  SheetProps,
+  SheetTitleProps,
+  SheetTriggerProps,
+  TabsContentProps,
+  TabsListProps,
+  TabsProps,
+  TabsTriggerProps,
+  ProgressProps,
+  DropdownMenuCheckboxItemProps,
+  DropdownMenuContentProps,
+  DropdownMenuItemProps,
+  DropdownMenuLabelProps,
+  DropdownMenuRadioItemProps,
+  DropdownMenuSeparatorProps,
 } from "@nextlyhq/admin";
 
 /**
@@ -804,6 +890,158 @@ export type {
   RowAction,
   BulkAction,
 } from "@nextlyhq/admin";
+
+/**
+ * Rows in groups and rows that open a region below them (@experimental),
+ * taken by `DataTableView` and `ListView` as `grouping` and `rowDetail`.
+ * `DataTableGrouping` places each row in a `DataTableGroup` and draws the
+ * group under a header row with its title, a badge, a count (by default its
+ * rows, in words) and actions; each group is a row group named by its title,
+ * and with `collapsible` its title is the button that folds its rows.
+ * `DataTableRowDetail` gives a row a toggle in its first column, a button with
+ * `aria-expanded` that opens a region below the row, named by the row's
+ * identifying cell. Either state is the list's, or the page's when it passes
+ * the ids. The narrow card view draws the same groups as sections and the
+ * same toggle inside each card.
+ *
+ * Intended to be stable: they are the table's own props, and they graduate
+ * with `ListView` once a first-party plugin's list exercises them.
+ */
+export type {
+  DataTableGroup,
+  DataTableGrouping,
+  DataTableRowDetail,
+} from "@nextlyhq/admin";
+
+/**
+ * The admin's list surface around that table (@experimental): `ListView`
+ * composes `DataTableView` with the one toolbar every admin list draws — the
+ * search field, filters in a dropdown or inline, the columns menu and
+ * list-wide actions — the empty state (with a separate one for a search that
+ * matched nothing), and slots above and below the table. Every table prop is
+ * forwarded untouched. `useTableColumns` gives the columns to render and the
+ * columns menu's control from one remembered choice per list, keeping the
+ * row's identifying column out of the menu; `useListColumns` is the lower
+ * half, for a list that offers every column. `ListToolbar`, `ListColumnsMenu`
+ * and `ListEmptyState` are the parts, for a surface that lays out its own
+ * list.
+ *
+ * Intended to be stable: these are the components the admin's own lists draw
+ * today, and they graduate once a first-party plugin's list exercises them.
+ */
+export {
+  ListView,
+  ListToolbar,
+  ListColumnsMenu,
+  ListEmptyState,
+  useListColumns,
+  useTableColumns,
+} from "@nextlyhq/admin";
+export type {
+  ListViewProps,
+  ListToolbarProps,
+  ListColumnsControl,
+  ListEmpty,
+  ListSearch,
+  ListSlots,
+  UseListColumnsOptions,
+  UseTableColumnsOptions,
+  UseTableColumnsResult,
+} from "@nextlyhq/admin";
+
+/**
+ * Where a plugin's page sits, drawn in the admin's top bar (@experimental).
+ * Pass `<Breadcrumbs items={...} />` as `PageHeader`'s `breadcrumbs`: inside
+ * the admin shell the trail is drawn in the top bar's left part, the last item
+ * as the page itself and the one before it as the way back on a narrow bar;
+ * rendered outside the shell (a test, a standalone page) it is drawn where it
+ * stands. `placement: "inline"` keeps a trail inside the page's content, such
+ * as a folder path.
+ *
+ * Intended to be stable: every core page draws its trail with it.
+ */
+export { Breadcrumbs } from "@nextlyhq/admin";
+export type { BreadcrumbItem, BreadcrumbsProps } from "@nextlyhq/admin";
+
+/**
+ * A segmented control (@experimental): a radio group drawn as one row of
+ * options, for a short choice that should stay in view — a page's View / Edit
+ * switch, a filter of three states, a setting such as a title separator.
+ * Arrow keys, Home and End move the choice, as a radio group does. `compact`
+ * (the default) sits on a muted track for a header or toolbar; `bordered` is
+ * the form setting's look. Name it with `aria-label` or `aria-labelledby`.
+ *
+ * Intended to be stable: it is the control the dashboard's card settings use.
+ */
+export { SegmentedChoice } from "@nextlyhq/admin";
+export type {
+  SegmentedChoiceProps,
+  SegmentedChoiceSize,
+  SegmentedOption,
+} from "@nextlyhq/admin";
+
+/**
+ * A checklist with progress (@experimental), the one the dashboard's "Set up
+ * your project" card draws: `Checklist` puts a progress bar over an ordered
+ * list, and `ChecklistItem` is one step, marked open, done or skipped, with
+ * its name, a hint line and its buttons. The bar is a picture only; say the
+ * count in words beside the list's title ("4 of 6 done"). `columns={2}` lays
+ * the steps in two columns where the list is wide enough, and
+ * `doneStyle="struck"` strikes a done step's name through. `ChecklistMark`
+ * and `ChecklistProgress` are the parts, for a layout of its own.
+ *
+ * Intended to be stable once a first-party plugin's setup list exercises it.
+ */
+export {
+  Checklist,
+  ChecklistItem,
+  ChecklistMark,
+  ChecklistProgress,
+} from "@nextlyhq/admin";
+export type {
+  ChecklistProps,
+  ChecklistItemProps,
+  ChecklistMarkProps,
+  ChecklistProgressProps,
+  ChecklistStatus,
+  ChecklistDoneStyle,
+} from "@nextlyhq/admin";
+
+/**
+ * A settings row whose control is a group (@experimental): label and help on
+ * the left, several controls on the right, named as one group with
+ * `role="group"`. For a single control use `FieldShell` with
+ * `layout="row"`, which draws the same two-column grid and points its label
+ * at the control.
+ *
+ * Intended to be stable: the admin's own settings pages draw their grouped
+ * rows with it.
+ */
+export { SettingsRowGroup } from "@nextlyhq/admin";
+export type { SettingsRowGroupProps } from "@nextlyhq/admin";
+
+/**
+ * Where a flow of a few steps is (@experimental): a numbered row of steps,
+ * each done, current or to come, the one the email provider setup draws.
+ * `current` is the current step's index from 0; it carries
+ * `aria-current="step"`, and a done step says "(done)" in words as well as
+ * with a tick. A done step with an `href` links back to its page, or with
+ * `onSelect` runs it from a button; a step not yet reached never does.
+ *
+ * Intended to be stable: the admin's own guided setup draws its steps with it.
+ */
+export { Stepper } from "@nextlyhq/admin";
+export type { StepperProps, StepperStep, StepState } from "@nextlyhq/admin";
+
+/**
+ * The admin's drop area for a file a plugin screen reads itself, rather than
+ * uploads to the media library (@experimental): drag a file onto it or press
+ * it to choose one, and it is handed to `onFiles` as it is; what the file
+ * must be is the screen's to judge and say. It looks as the Media library's
+ * upload area does, and is meant to stay part of this surface.
+ */
+export { FileDropArea } from "@nextlyhq/admin";
+export type { FileDropAreaProps } from "@nextlyhq/admin";
 
 /**
  * The field-UI kit (@experimental): controlled, form-library-agnostic
@@ -1148,6 +1386,7 @@ export type {
   JsonValue,
   PluginAdminContributions,
   PluginAdminPage,
+  PluginPageStartupRead,
   PluginCollectionView,
   OverridableDocumentAction,
   PluginDocumentActionOverride,
@@ -1156,6 +1395,16 @@ export type {
   PluginFieldTypeDocumentView,
   PluginMenuItem,
   PluginPanelSection,
+} from "nextly";
+/**
+ * @experimental A standalone plugin's panel declarations, as the package root
+ * exports them: its groups, and the count or badge on a menu item.
+ */
+export type {
+  PluginAdminPanel,
+  PluginItemCount,
+  PluginMenuItemFields,
+  PluginPanelGroup,
 } from "nextly";
 
 /**

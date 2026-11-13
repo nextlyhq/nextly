@@ -4,7 +4,7 @@
  *
  * @module admin/rows
  */
-import { Button } from "@nextlyhq/ui";
+import { Button } from "@nextlyhq/plugin-sdk/admin";
 import type { ReactNode } from "react";
 
 /** One row of the section: its label and sentence, a control, and below. */

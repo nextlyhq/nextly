@@ -11,6 +11,7 @@
  * @module domains/i18n/runtime/companion-io
  */
 
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import type {
   SqlParam,
   SupportedDialect,
@@ -1951,7 +1952,26 @@ async function buildSeedingCreateStatements(
   );
 }
 
-export async function ensureCompanionTable(
+/**
+ * Create a translated entity's translation table where it is missing, or
+ * finish what an existing one still owes (`createOrCompleteCompanionTable`).
+ *
+ * Not in `next build`, which creates no table: a translated entity whose
+ * translation table is missing is one the deploy has not migrated, and
+ * `nextly migrate` makes it. Nothing was created, which is what the answer
+ * says.
+ */
+export function ensureCompanionTable(
+  ...args: Parameters<typeof createOrCompleteCompanionTable>
+): Promise<boolean> {
+  if (isNextBuildPhase()) return Promise.resolve(false);
+  return createOrCompleteCompanionTable(...args);
+}
+
+// The body `ensureCompanionTable` had before the build gate moved in front of
+// it, unchanged; its size is that function's, not new branching.
+// fallow-ignore-next-line complexity
+async function createOrCompleteCompanionTable(
   adapter: CompanionIntrospectAdapter,
   args: {
     /**
