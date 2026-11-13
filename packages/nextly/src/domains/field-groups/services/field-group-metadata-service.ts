@@ -966,6 +966,7 @@ export class FieldGroupMetadataService {
     );
 
     const moved = await reconcileComponentCompanion({
+      busyTable: { adapter, notify: line => this.logger.warn(line) },
       slug: args.existing.slug,
       tableName: args.existing.tableName,
       oldFields: args.existing.fields as unknown as FieldDefinition[],
@@ -1213,6 +1214,7 @@ export class FieldGroupMetadataService {
     // thrown: the main table exists and the row describes it, which is what makes a retry possible.
     try {
       await reconcileComponentCompanion({
+        busyTable: { adapter, notify: line => this.logger.warn(line) },
         slug: input.slug,
         tableName: input.tableName,
         oldFields: [],

@@ -2,7 +2,8 @@
  * The same busy database, met by every path that changes a table's structure outside the schema
  * pipeline, gives the same tries and the same stop: `nextly migrate`'s app file, `migrate:down`'s
  * down section, a collection's Builder save, the runner Singles' saves apply through, the runner
- * field groups' saves apply through, and a user field's column.
+ * field groups' saves apply through, a translations table's change in either, and a user field's
+ * column.
  *
  * An integration test, not a unit one: what it compares is each path's own seam reaching the
  * tries against a real held database, which a stand-in for the database could only assume. It runs
@@ -43,6 +44,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import { _resetEnvCache } from "../../../shared/lib/env";
+import { applyCompanionStatements } from "../../i18n/migration/held-leaving-drops";
 import type { UserExtSchemaService } from "../../users/services/user-ext-schema-service";
 import type { UserFieldDefinitionService } from "../../users/services/user-field-definition-service";
 import { writeCollectionSave } from "../builder-save/collection-save";
@@ -263,6 +265,21 @@ describe("a busy database, met by every path outside the schema pipeline (sqlite
     );
   }, 30_000);
 
+  it("a translations table's change, in a Single's or field group's save", async () => {
+    stops.companion = await stopOf(() =>
+      applyCompanionStatements(
+        adapter,
+        {
+          needsArchive: false,
+          statements: [
+            "ALTER TABLE btp_target ADD COLUMN companion_col integer",
+          ],
+        },
+        { adapter, notify }
+      )
+    );
+  }, 30_000);
+
   it("a user field's column", async () => {
     const definitions = handle.getService(
       "userFieldDefinitionService"
@@ -284,11 +301,73 @@ describe("a busy database, met by every path outside the schema pipeline (sqlite
     );
   }, 30_000);
 
+  // A user field's plan is one change: a stop after its table was made says what of it stayed,
+  // never that nothing changed.
+  it("reports a user field's plan stopped part-way as part-way", async () => {
+    const definitions = handle.getService(
+      "userFieldDefinitionService"
+    ) as unknown as UserFieldDefinitionService;
+    await definitions.createField({
+      name: "btpCode",
+      label: "Code",
+      type: "text",
+      unique: true,
+    } as never);
+    const schema = handle.getService(
+      "userExtSchemaService"
+    ) as unknown as UserExtSchemaService;
+    await schema.reloadMergedFields();
+    await adapter.executeQuery("DROP TABLE IF EXISTS user_ext");
+    // The hold starts once the plan's first statement, the table's CREATE, has committed.
+    const run = adapter.executeQuery.bind(adapter);
+    let held = false;
+    const spy = vi
+      .spyOn(adapter, "executeQuery")
+      .mockImplementation(async (statement, params) => {
+        const rows = await run(statement, params);
+        if (
+          !held &&
+          /^CREATE TABLE IF NOT EXISTS\s+"?user_ext"?/i.test(statement.trim())
+        ) {
+          held = true;
+          await holdTheDatabase();
+        }
+        return rows;
+      });
+    let error: unknown;
+    try {
+      error = await schema
+        .ensureUserExtSchema(adapter.getDrizzle(), {
+          strict: true,
+          busyTable: { adapter, notify },
+        })
+        .then(
+          () => undefined,
+          (e: unknown) => e
+        );
+    } finally {
+      spy.mockRestore();
+      free();
+      await holding.catch(() => {});
+    }
+    expect(held).toBe(true);
+    expect(NextlyError.is(error) ? error.code : error).toBe(
+      "NEXTLY_TABLE_BUSY"
+    );
+    const outcome = (
+      (error as NextlyError).logContext as {
+        stop?: { outcome?: { kind?: unknown } };
+      }
+    )?.stop?.outcome?.kind;
+    expect(outcome).toBe("part-way");
+  }, 30_000);
+
   it("stops every one of them the same way, after the same tries", () => {
     const planned = plannedTryStarts(bounds()).length;
     expect(Object.keys(stops).sort()).toEqual(
       [
         "collection",
+        "companion",
         "down",
         "fieldGroup",
         "migrate",

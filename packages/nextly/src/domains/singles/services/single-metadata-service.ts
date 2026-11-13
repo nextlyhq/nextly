@@ -86,6 +86,7 @@ import { writeRegistryRowsWith } from "../../schema/schema-version";
 import {
   applyMigrationStatements,
   applyMigrationWhole,
+  applyStatementsInTries,
   type BusyTableWait,
 } from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
@@ -1696,10 +1697,17 @@ export class SingleMetadataService {
     const rename = await this.companionRenameFirst(adapter, input, plan);
     if (!rename) return [];
     try {
-      for (const statement of rename.forward) {
-        await adapter.executeQuery(statement);
-      }
+      // Waits for a busy translations table in short tries, as `nextly migrate` waits.
+      await applyStatementsInTries(
+        this.busyTableWait(adapter),
+        rename.forward,
+        "the translations table's rename"
+      );
     } catch (error) {
+      // Tries that ran out say so themselves: the table, what holds it, and that nothing changed.
+      if (NextlyError.is(error) && error.code === "NEXTLY_TABLE_BUSY") {
+        throw error;
+      }
       throw new NextlyError({
         code: "NEXTLY_MIGRATION_APPLY_FAILED",
         publicMessage:
@@ -1940,6 +1948,7 @@ export class SingleMetadataService {
       );
       try {
         await reconcileSingleCompanion({
+          busyTable: this.busyTableWait(adapter),
           slug: input.slug,
           tableName,
           oldFields: plan.previousFields,
@@ -2384,6 +2393,7 @@ export class SingleMetadataService {
         "./reconcile-single-companion"
       );
       await reconcileSingleCompanion({
+        busyTable: this.busyTableWait(adapter),
         slug: input.slug,
         tableName: input.tableName,
         oldFields: [],

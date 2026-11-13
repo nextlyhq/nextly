@@ -100,7 +100,7 @@ import { runRaw } from "../../schema/pipeline/pre-resolution/executor";
 import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
 import { columnIndexSql } from "../../schema/pipeline/sql-templates/create-index";
 import {
-  applyMigrationStatements,
+  applyStatementsInTries,
   type BusyTableWait,
 } from "../../schema/services/apply-migration-statements";
 import {
@@ -486,9 +486,7 @@ export class UserExtSchemaService {
     // 1. CREATE TABLE IF NOT EXISTS (with all columns). runRaw picks the
     //    dialect's call: SQLite's Drizzle database has no .execute(), so
     //    calling it threw and was taken for "already exists".
-    for (const stmt of statements.filter(isCreateTable)) {
-      await this.runDdl(db, stmt, strict, busyTable);
-    }
+    const plan = [...statements.filter(isCreateTable)];
 
     // 2. ALTER TABLE ADD COLUMN for each field (handles case where
     //    table exists but is missing columns for newly created fields)
@@ -507,12 +505,54 @@ export class UserExtSchemaService {
         alterSQL = `ALTER TABLE ${this.q}${TABLE_NAME}${this.q} ADD COLUMN ${this.q}${columnName}${this.q} ${columnType}`;
       }
 
-      await this.runDdl(db, alterSQL, strict, busyTable);
+      plan.push(alterSQL);
     }
 
     // 3. The indexes and constraints, now that every column exists.
-    for (const stmt of statements.filter(s => !isCreateTable(s))) {
-      await this.runDdl(db, stmt, strict, busyTable);
+    plan.push(...statements.filter(s => !isCreateTable(s)));
+
+    if (busyTable !== undefined) {
+      await this.runPlanInTries(plan, strict, busyTable);
+      return;
+    }
+    for (const stmt of plan) {
+      await this.runDdl(db, stmt, strict);
+    }
+  }
+
+  /**
+   * The plan as one change that waits for a busy table in short tries, as `nextly migrate` waits,
+   * so a stop after an earlier statement says what of it stayed. What `runDdl` passes over is
+   * passed over here too; a busy table's stop is reported whatever `strict` asks.
+   */
+  private async runPlanInTries(
+    plan: readonly string[],
+    strict: boolean,
+    busyTable: BusyTableWait
+  ): Promise<void> {
+    let refusal: NextlyError | null = null;
+    try {
+      await applyStatementsInTries(
+        busyTable,
+        plan,
+        "the user fields' table change",
+        (error, statement) => {
+          if (
+            !strict ||
+            isIdempotencyError(error) ||
+            this.isOwnForeignKeyRerun(error, statement)
+          ) {
+            return true;
+          }
+          refusal = this.textColumnUniqueRefusal(error, statement);
+          return false;
+        }
+      );
+    } catch (error) {
+      if (NextlyError.is(error) && error.code === "NEXTLY_TABLE_BUSY") {
+        throw error;
+      }
+      throw refusal ?? error;
     }
   }
 
@@ -537,21 +577,11 @@ export class UserExtSchemaService {
   private async runDdl(
     db: unknown,
     statement: string,
-    strict: boolean,
-    busyTable?: BusyTableWait
+    strict: boolean
   ): Promise<void> {
     try {
-      // With a wait for a busy table, through the runner a Builder save's statements run through,
-      // which passes over what the schema already satisfies as the catch below does.
-      await (busyTable === undefined
-        ? runRaw(db, statement, this.dialect)
-        : applyMigrationStatements(busyTable.adapter, statement, busyTable));
+      await runRaw(db, statement, this.dialect);
     } catch (error) {
-      // A busy table's tries that ran out say so, whatever `strict` asks: the save changed
-      // nothing, and its report names the table and what holds it.
-      if (NextlyError.is(error) && error.code === "NEXTLY_TABLE_BUSY") {
-        throw error;
-      }
       if (!strict || isIdempotencyError(error)) return;
       if (this.isOwnForeignKeyRerun(error, statement)) return;
       throw this.textColumnUniqueRefusal(error, statement) ?? error;

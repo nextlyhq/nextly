@@ -193,6 +193,23 @@ export interface BusyTableWait {
 }
 
 /**
+ * Runs `statements` one at a time, each committing as it runs, as one change that waits for a busy
+ * table in short tries, so a stop reports what of it stayed. Strict by default, as a plan that must
+ * not pass over a re-run is (a translations table's change): any refusal ends it. `source` names
+ * the change in the report.
+ */
+export async function applyStatementsInTries(
+  wait: BusyTableWait,
+  statements: readonly string[],
+  source: string,
+  /** A refusal the caller takes as already applied; none by default, which is strict. */
+  passOver?: (error: unknown, statement: string) => boolean
+): Promise<void> {
+  if (statements.length === 0) return;
+  await runInTries(wait, statements, { source, transaction: false }, passOver);
+}
+
+/**
  * Runs `statements` as one unit in tries for a busy table (`runUnitInTries`), within the bounds the
  * environment sets (`NEXTLY_LOCK_TIMEOUT`, `NEXTLY_LOCK_TIMEOUT_TOTAL`); a bound out of range
  * refuses the change before anything runs. `after` runs once every statement has, inside the
