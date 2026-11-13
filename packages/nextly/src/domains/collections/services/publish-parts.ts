@@ -31,7 +31,7 @@ import type {
 
 import type { LifecycleParts } from "./all-locales-lifecycle";
 import type { CollectionServiceResult } from "./collection-types";
-import type { PublishGate, PublishPart } from "./publish-gate";
+import type { PublishCaller, PublishGate, PublishPart } from "./publish-gate";
 
 /** Which way the chosen parts move. */
 export type PublishDirection = "publish" | "unpublish";
@@ -124,9 +124,9 @@ export interface PublishPartsEngines {
     shared: boolean;
   }): Promise<PartsReads | CollectionServiceResult>;
   gate: PublishGate;
-  /** The entry's collection and the caller, for the gate. */
+  /** The entry's collection and who asks, for the gate. */
   collection: string;
-  userId?: string;
+  caller: PublishCaller;
   /**
    * The transition of `parts` (every part, where absent) in `direction`, in one transaction; or,
    * where `describe`, what a publish of them would do, changing nothing.
@@ -276,7 +276,7 @@ async function gateIssues(
     entryId: judged.id,
     direction: judged.direction,
     parts,
-    userId: engines.userId,
+    caller: engines.caller,
   });
   return held.map(({ part, message }) =>
     part.kind === "shared"

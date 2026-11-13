@@ -62,6 +62,7 @@ async function run(
       }),
     gate,
     collection: "posts",
+    caller: { kind: "trusted" },
     move: (direction, parts) => {
       moves.push({ direction, parts });
       return Promise.resolve({

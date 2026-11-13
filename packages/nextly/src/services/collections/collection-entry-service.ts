@@ -48,7 +48,10 @@ import type {
   BulkOperationOptions,
   BulkUpdateEntry,
 } from "../../domains/collections/services/collection-types";
-import { publishGate } from "../../domains/collections/services/publish-gate";
+import {
+  publishGate,
+  type PublishCaller,
+} from "../../domains/collections/services/publish-gate";
 import {
   publishParts,
   publishValueRefusal,
@@ -123,6 +126,27 @@ function refusedFilter<T>(where: unknown): CollectionServiceResult<T> | null {
       ...errorEnvelopeFields(error),
     };
   }
+}
+
+/**
+ * Who asks a publish of chosen parts to move, as its gate is told: trusted code, an API key on its
+ * own grants (with the owner the request carries), a person, or a visitor with neither.
+ */
+function publishCallerOf(params: {
+  overrideAccess?: boolean;
+  user?: UserContext;
+  authenticatedScope?: AuthenticatedScope;
+}): PublishCaller {
+  if (params.overrideAccess === true) return { kind: "trusted" };
+  const userId = params.user?.id;
+  if (params.authenticatedScope?.actorType === "apiKey") {
+    return {
+      kind: "api-key",
+      ...(userId === undefined ? {} : { userId }),
+      scope: params.authenticatedScope,
+    };
+  }
+  return userId === undefined ? { kind: "visitor" } : { kind: "user", userId };
 }
 
 /** What publishing or unpublishing every language of an entry takes. */
@@ -1055,7 +1079,7 @@ export class CollectionEntryService extends BaseService {
         }),
       gate: publishGate(),
       collection: params.collectionName,
-      userId: params.user?.id,
+      caller: publishCallerOf(params),
       // The transition of every language, told which parts it moves.
       move: (direction, parts, describe) => {
         const scoped = parts === undefined ? params : { ...params, parts };

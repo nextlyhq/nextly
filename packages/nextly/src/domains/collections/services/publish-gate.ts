@@ -9,6 +9,7 @@
  *
  * @module domains/collections/services/publish-gate
  */
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { container } from "../../../di/container";
 
 import type { PublishDirection } from "./publish-parts";
@@ -18,14 +19,24 @@ export type PublishPart =
   | { kind: "language"; locale: string }
   | { kind: "shared" };
 
+/**
+ * Who asks to move the parts, as a gate decides by it: trusted code (`overrideAccess`), a person,
+ * an API key judged on its own grants (with the person who owns it, where one does), or a visitor
+ * with neither. A key is never passed off as its owner.
+ */
+export type PublishCaller =
+  | { kind: "trusted" }
+  | { kind: "user"; userId: string }
+  | { kind: "api-key"; userId?: string; scope: AuthenticatedScope }
+  | { kind: "visitor" };
+
 /** What a gate is asked: every part the request would move, the added shared part included. */
 export interface PublishGateQuestion {
   collection: string;
   entryId: string;
   direction: PublishDirection;
   parts: readonly PublishPart[];
-  /** The caller, where one is known; trusted code has none. */
-  userId?: string;
+  caller: PublishCaller;
 }
 
 /** A part a gate holds back, and why, as the caller is told. */

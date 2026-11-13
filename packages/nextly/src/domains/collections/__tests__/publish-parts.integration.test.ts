@@ -548,6 +548,45 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     }));
   }
 
+  // A gate decides by who is asking, so it is told: a person, an API key with its own grants,
+  // or trusted code. A key is never passed off as the person who owns it.
+  it("tells the gate an API key is asking, with the key's own grants", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" } });
+    const owner = await userWhoMay(t!, "owner", "read", ["posts"]);
+    const asked: unknown[] = [];
+    container.registerSingleton<PublishGate>("publishGate", () => ({
+      refusals: question => {
+        asked.push(question);
+        return Promise.resolve([]);
+      },
+    }));
+    const permissions = ["read-posts", "update-posts", "publish-posts"];
+    const handler = t!.getService("collectionsHandler") as unknown as {
+      publishParts(
+        params: Record<string, unknown>,
+        request: Record<string, unknown>
+      ): Promise<{ success: boolean }>;
+    };
+
+    await handler.publishParts(
+      {
+        collectionName: "posts",
+        entryId: id,
+        user: { id: owner, email: "owner@example.test", roles: [] },
+        overrideAccess: false,
+        authenticatedScope: { actorType: "apiKey", permissions },
+        data: { _overwrite: true },
+      },
+      { direction: "publish", locales: ["es"], describe: true }
+    );
+
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({
+      caller: { kind: "api-key", userId: owner, scope: { permissions } },
+    });
+  });
+
   it("publishes no language when the gate holds one of those chosen back", async () => {
     await boot(posts());
     const id = await entry({ es: { title: "Hola" }, fr: { title: "Bonjour" } });
