@@ -1143,20 +1143,36 @@ export class DynamicCollectionSchemaService {
    * application's to work out per document. None of these are taken.
    */
   private singleRowFill(field: FieldDefinition): string | null {
+    return (
+      this.statedFill(field)?.literal ??
+      this.requiredColumnBackfill({ ...field, default: undefined })
+    );
+  }
+
+  /**
+   * The stated default a Single's existing row is filled with when this required field is added,
+   * as the application would write it, or `undefined` where the row takes its type's empty
+   * instead. The value `singleRowFill` writes, for the precondition that judges it against the
+   * field's own rules before any statement runs.
+   */
+  singleRowFillValue(field: FieldDefinition): unknown {
+    return this.statedFill(field)?.value;
+  }
+
+  /** The stated default `singleRowFill` takes, with its SQL literal; null where none is taken. */
+  private statedFill(
+    field: FieldDefinition
+  ): { value: unknown; literal: string } | null {
     const stated =
       field.default !== undefined
         ? field.default
         : (field as { defaultValue?: unknown }).defaultValue;
-    const literal =
-      stated === undefined || stated === null
-        ? null
-        : this.statedFillLiteral(field, stated);
-    return (
-      literal ?? this.requiredColumnBackfill({ ...field, default: undefined })
-    );
+    if (stated === undefined || stated === null) return null;
+    const literal = this.statedFillLiteral(field, stated);
+    return literal === null ? null : { value: stated, literal };
   }
 
-  /** `stated` as the SQL literal `singleRowFill` takes, or null where it is not taken. */
+  /** `stated` as the SQL literal `statedFill` takes, or null where it is not taken. */
   private statedFillLiteral(
     field: FieldDefinition,
     stated: unknown
@@ -1177,14 +1193,27 @@ export class DynamicCollectionSchemaService {
           ? this.formatDefaultValue(stated, "checkbox")
           : null;
       case "json":
-        return typeof stated === "function"
-          ? null
-          : this.formatDefaultValue(stated, "json");
+        return this.statedJsonLiteral(stated);
       case "date":
         return this.statedDateLiteral(stated);
       default:
         return null;
     }
+  }
+
+  /**
+   * A JSON field's stated value as the JSON text it is stored as: serialized whatever it is, as
+   * the first document's write does, so the string "hello" is stored as `"hello"` and not as the
+   * bare text `hello`, which is no JSON. Null for a value JSON cannot hold.
+   */
+  private statedJsonLiteral(stated: unknown): string | null {
+    let text: string | undefined;
+    try {
+      text = JSON.stringify(stated);
+    } catch {
+      return null;
+    }
+    return text === undefined ? null : this.formatDefaultValue(text, "json");
   }
 
   /**

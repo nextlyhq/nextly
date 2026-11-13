@@ -1112,6 +1112,14 @@ export class SingleMetadataService {
       schemaService
     );
 
+    if (liveFacts.tableHasRows !== false) {
+      await refuseFillsTheirFieldsRefuse(
+        alterInput.oldFields,
+        alterInput.newFields,
+        schemaService
+      );
+    }
+
     // Detected from the FULL field lists: a renamed LOCALIZED field-group
     // field sits in neither side of alterInput (the localized filter removes
     // both spellings), and its association migration must not be excluded
@@ -2448,4 +2456,52 @@ export class SingleMetadataService {
       );
     }
   }
+}
+
+/**
+ * Refuses the save, before any statement runs, when a required field added to a Single that holds
+ * its row states a default its own rules refuse: a `defaultValue` of 0 under `min: 1`, a text
+ * longer than its `maxLength`. The row would be filled with that value (`singleRowFillValue`, the
+ * value the ADD writes), and every later write of the Single would then refuse what it holds. The
+ * value is judged by the entry validator every write answers to, so the two cannot disagree.
+ *
+ * @throws NextlyError `VALIDATION_ERROR` naming each field and the rule its default breaks
+ */
+async function refuseFillsTheirFieldsRefuse(
+  oldFields: FieldDefinition[],
+  newFields: FieldDefinition[],
+  schemaService: Pick<
+    DynamicCollectionSchemaService,
+    "detectFieldRename" | "singleRowFillValue"
+  >
+): Promise<void> {
+  const before = new Set(oldFields.map(field => field.name));
+  // A renamed field keeps its column and its value; only a field new to the table is filled.
+  const renamedTo = schemaService.detectFieldRename(oldFields, newFields)?.to
+    .name;
+  const { validateEntryData } = await import(
+    "../../../shared/lib/entry-validation"
+  );
+  const errors: { path: string; code: string; message: string }[] = [];
+  for (const field of newFields) {
+    if (!field.required || before.has(field.name) || field.name === renamedTo) {
+      continue;
+    }
+    const fill = schemaService.singleRowFillValue(field);
+    if (fill === undefined) continue;
+    const issues = await validateEntryData({ [field.name]: fill }, [field], {
+      mode: "create",
+    });
+    for (const issue of issues) {
+      errors.push({
+        path: `fields.${field.name}`,
+        code: "DEFAULT_FAILS_FIELD_RULES",
+        message:
+          `The default "${field.name}" states would fill the entry this Single already holds, ` +
+          `but the field's own rules refuse it. ${issue.message} Change the default or the rule, ` +
+          `then save again.`,
+      });
+    }
+  }
+  if (errors.length > 0) throw NextlyError.validation({ errors });
 }
