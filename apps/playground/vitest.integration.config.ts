@@ -1,6 +1,6 @@
 import { defineConfig } from "vitest/config";
 
-// Integration tests for the playground's fixture plugins: they run the real
+// Integration tests for the playground's fixture plugins and its upgrade gate: they run the real
 // `nextly` command against a real database on each dialect, so they stay out
 // of `vitest.config.ts`, whose unit run has no database. Each dialect's server
 // is read from TEST_POSTGRES_URL / TEST_MYSQL_URL, as in every package's
@@ -12,7 +12,11 @@ export default defineConfig({
     experimental: { recordDependencies: true },
     name: "playground-integration",
     environment: "node",
-    include: ["src/**/*.integration.test.ts"],
+    // The fixture plugins' tests, and the upgrade gate (`upgrade-gate/`).
+    include: [
+      "src/**/*.integration.test.ts",
+      "upgrade-gate/**/*.integration.test.ts",
+    ],
     exclude: ["**/node_modules/**", "**/.next/**"],
     // Each step spawns the `nextly` command, which loads the config and opens
     // the database afresh.
