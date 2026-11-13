@@ -67,7 +67,7 @@
       "edit": {
         "requests": 16,
         "rounds": 6,
-        "statements": 44,
+        "statements": 42,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,

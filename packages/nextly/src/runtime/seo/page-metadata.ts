@@ -255,6 +255,46 @@ function cardOver(
   return Object.keys(card).length > 0 ? card : undefined;
 }
 
+type Verification = NonNullable<Metadata["verification"]>;
+type VerificationValue = NonNullable<Verification["other"]>[string];
+
+/** A tag's values as a list, however the route gave them. */
+function valuesOf(value: VerificationValue | undefined): (string | number)[] {
+  if (value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+/**
+ * The route's own verification tags joined by the answer's. A name both set
+ * keeps both values, since a service reads every tag of its name and two
+ * owners may each have one; a value both set is written once.
+ */
+function verificationOver(
+  own: Metadata["verification"],
+  answered: Metadata["verification"]
+): Metadata["verification"] {
+  const added = answered?.other;
+  if (added === undefined) return own;
+  const other: Record<string, VerificationValue> = { ...own?.other };
+  for (const [name, value] of Object.entries(added)) {
+    const values = [...valuesOf(other[name])];
+    for (const each of valuesOf(value)) {
+      if (!values.includes(each)) values.push(each);
+    }
+    other[name] = values.length === 1 ? (values[0] ?? "") : values;
+  }
+  return { ...own, other };
+}
+
+/** `merged`, the route's own metadata, with the answer's verification tags joined to its own. */
+function joinVerification(
+  merged: Metadata,
+  answered: Metadata["verification"]
+): void {
+  const joined = verificationOver(merged.verification, answered);
+  if (joined !== undefined) merged.verification = joined;
+}
+
 /**
  * The route's own metadata with the answer laid over it.
  *
@@ -300,6 +340,8 @@ function overCode(code: Metadata | undefined, answered: Metadata): Metadata {
   if (Object.keys(mergedAlternates).length > 0) {
     merged.alternates = mergedAlternates;
   }
+
+  joinVerification(merged, answered.verification);
 
   const card = cardOver(openGraph, answered.openGraph, answersAddress);
   if (card !== undefined) merged.openGraph = card as Metadata["openGraph"];
@@ -485,6 +527,11 @@ const pageMetadataAnswerSchema = z.object({
   // JSON only, the one form a cached answer and a script element both hold:
   // a node holding anything else refuses the answer.
   structuredData: z.array(z.record(z.string(), z.json())).optional(),
+  // Each name is one a meta tag can carry, so no name can reach the head as
+  // anything but the name of one tag.
+  verification: z
+    .record(z.string().regex(/^[A-Za-z][A-Za-z0-9._:-]{0,99}$/), z.string())
+    .optional(),
 });
 
 /**

@@ -396,9 +396,8 @@ async function applyBootMigrations(
   // Inside this step, which is `nextly migrate`'s: the one place a production
   // start may create a translation table the migrations left missing. At the
   // stored version read first, so the first follow does not load again.
-  await loadingDefinitions(
-    () => reloadDynamicTables("[Nextly]", { createMissingCompanions: true }),
-    { loaded: done => done }
+  await loadingDefinitions(() =>
+    reloadDynamicTables("[Nextly]", { createMissingCompanions: true })
   );
 
   allowBootMigrations();
@@ -484,9 +483,8 @@ async function settleFailedBootMigrations(
     "../route-handler/schema-version"
   );
   // Still this step's, as on the success path.
-  await loadingDefinitions(
-    () => reloadDynamicTables("[Nextly]", { createMissingCompanions: true }),
-    { loaded: done => done }
+  await loadingDefinitions(() =>
+    reloadDynamicTables("[Nextly]", { createMissingCompanions: true })
   );
 
   // The app continues on this path, so the gate must open — a swallowed

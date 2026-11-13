@@ -165,6 +165,19 @@ describe("assertDocumentSurfaces", () => {
     ]);
     expect(error.code).toBe("NEXTLY_PLUGIN_DOCUMENT_SURFACE_INVALID");
   });
+
+  it("refuses a folded panel that is neither true nor false, naming it", () => {
+    expect(() =>
+      assertDocumentSurfaces([
+        plugin("forms", { forms: { foldedPanel: true } }),
+        plugin("drafts", { drafts: { foldedPanel: false } }),
+      ])
+    ).not.toThrow();
+    const error = refusal([plugin("forms", { forms: { foldedPanel: "yes" } })]);
+    expect(error.logMessage).toContain(
+      'declares foldedPanel on "forms" that is neither true nor false'
+    );
+  });
 });
 
 describe("publishedDocumentSurfaces", () => {

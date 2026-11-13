@@ -30,6 +30,7 @@ import {
 } from "./admin-place-contributions";
 import type { AdminContributionKind } from "./admin-places";
 import type { OrderedEntry } from "./contribution-order";
+import { typesExtendedBy } from "./extended-types";
 import type { PluginDefinition } from "./plugin-context";
 import { resolveRoutePermission } from "./routes/route-permission";
 import { rowPredicateFields } from "./row-predicate";
@@ -65,7 +66,7 @@ type OmitEach<T, K extends PropertyKey> = T extends unknown
 /** @experimental A contribution as the admin receives it, already placed. */
 export type DeliveredAdminContribution = OmitEach<
   AdminContribution,
-  "order" | "before" | "after" | "requiredPermission" | "place"
+  "order" | "before" | "after" | "requiredPermission" | "place" | "extendedWith"
 > & { plugin: string };
 
 /** @experimental One entry of a place's list: a built-in part, or a contribution. */
@@ -145,6 +146,71 @@ async function offeredOn(
   return candidates.filter((_, i) => verdicts[i]);
 }
 
+/** What a contribution is delivered as, before the reader's own checks. */
+type DeliveredShape = DeliveredAdminContribution;
+
+/**
+ * The contribution as delivered, with each named Single and collection under
+ * the slug the admin serves it as: its own under the host's rename, the
+ * site's as written.
+ */
+function namedAsServed(
+  contribution: ContributedAdminContribution,
+  owner: PluginDefinition | undefined,
+  contributors: ReadonlyMap<string, PluginDefinition>
+): { delivered: DeliveredShape; declared: string[] | undefined } {
+  const {
+    order: _order,
+    before: _before,
+    after: _after,
+    requiredPermission: _permission,
+    place: _place,
+    extendedWith: _extendedWith,
+    ...shape
+  } = contribution;
+  const delivered =
+    owner && shape.singles
+      ? {
+          ...shape,
+          singles: shape.singles.map(slug => servedSingleSlug(owner, slug)),
+        }
+      : shape;
+  const declared =
+    owner && contribution.collections
+      ? contribution.collections.map(slug =>
+          servedCollectionSlug(owner, slug, contributors)
+        )
+      : contribution.collections;
+  return { delivered, declared };
+}
+
+/**
+ * The served shape narrowed to the types the plugin's own fields were added
+ * to, where it asks (`extendedWith`): the Singles on a Single's page, the
+ * collections elsewhere. Nothing when it reached none of that kind, or when
+ * no plugin owns it, so it is offered nowhere.
+ */
+function narrowedToExtended(
+  contribution: ContributedAdminContribution,
+  owner: PluginDefinition | undefined,
+  served: { delivered: DeliveredShape; declared: string[] | undefined }
+): { delivered: DeliveredShape; declared: string[] | undefined } | undefined {
+  const { extendedWith } = contribution;
+  if (extendedWith === undefined) return served;
+  if (owner === undefined) return undefined;
+  const reached = typesWithEvery(owner.name, extendedWith);
+  if (contribution.place === "single.edit") {
+    const singles = within(served.delivered.singles, reached.singles);
+    return singles.length === 0
+      ? undefined
+      : { ...served, delivered: { ...served.delivered, singles } };
+  }
+  const collections = within(served.declared, reached.collections);
+  return collections.length === 0
+    ? undefined
+    : { ...served, declared: collections };
+}
+
 /** The contribution as this reader receives it, or `undefined` when it is left out. */
 async function deliveredFor(
   contribution: ContributedAdminContribution,
@@ -156,31 +222,13 @@ async function deliveredFor(
   if (asked.some(p => p === UNCOMPUTABLE_PERMISSION || !audience.holds(p))) {
     return undefined;
   }
-  const {
-    order: _order,
-    before: _before,
-    after: _after,
-    requiredPermission: _permission,
-    place: _place,
-    ...declaredDelivery
-  } = contribution;
-  // Each named Single under the slug the admin serves it as.
-  const delivered =
-    owner && declaredDelivery.singles
-      ? {
-          ...declaredDelivery,
-          singles: declaredDelivery.singles.map(slug =>
-            servedSingleSlug(owner, slug)
-          ),
-        }
-      : declaredDelivery;
-  // Each named collection under the slug the admin serves it as.
-  const declared =
-    owner && contribution.collections
-      ? contribution.collections.map(slug =>
-          servedCollectionSlug(owner, slug, contributors)
-        )
-      : contribution.collections;
+  const narrowed = narrowedToExtended(
+    contribution,
+    owner,
+    namedAsServed(contribution, owner, contributors)
+  );
+  if (narrowed === undefined) return undefined;
+  const { delivered, declared } = narrowed;
   if (contribution.visibleWhen === undefined) {
     if (declared === undefined) return delivered;
     // Only the named collections the reader may read: a list or page they
@@ -200,6 +248,37 @@ async function deliveredFor(
   return offered.length > 0
     ? { ...delivered, collections: offered }
     : undefined;
+}
+
+/**
+ * The collections and Singles where `plugin`'s `extend` added every one of
+ * `fields`, as the latest start resolved them.
+ */
+function typesWithEvery(
+  plugin: string,
+  fields: readonly string[]
+): { collections: string[]; singles: string[] } {
+  const [first, ...rest] = fields.map(field =>
+    typesExtendedBy(plugin, field).map(type => `${type.kind}:${type.slug}`)
+  );
+  const keys = (first ?? []).filter(key =>
+    rest.every(other => other.includes(key))
+  );
+  const of = (kind: string): string[] =>
+    keys
+      .filter(key => key.startsWith(`${kind}:`))
+      .map(key => key.slice(kind.length + 1));
+  return { collections: of("collection"), singles: of("single") };
+}
+
+/** `reached`, or the part of it `named` also lists where it lists any. */
+function within(
+  named: readonly string[] | undefined,
+  reached: readonly string[]
+): string[] {
+  return named === undefined
+    ? [...reached]
+    : reached.filter(slug => named.includes(slug));
 }
 
 /**

@@ -68,9 +68,15 @@ function callOf(
   // A name the route gave, which the page is otherwise named from its address.
   const title = textOf(source.entry.title);
   const named = title !== undefined && title !== nameOfAddress(path);
+  // The date the route states, handed with the page (`codePageDocument`).
+  const lastModified = textOf(source.entry.lastModified);
   return {
     path,
-    connection: { ...(named ? { name: title } : {}), code: input.code },
+    connection: {
+      ...(named ? { name: title } : {}),
+      code: input.code,
+      ...(lastModified === undefined ? {} : { lastModified }),
+    },
   };
 }
 

@@ -37,15 +37,14 @@ describe("the start's record of the schema version it loaded at", () => {
 
   it("records it after the definitions load, and only for a complete load", () => {
     const load = at("const registry = await initializeSchemaRegistry(");
-    const condition = at(
-      "if (registry !== undefined && completeness.complete) {"
-    );
-    const record = at("definitionsLoaded(adapter, definitionsVersion)");
-    expect(load).toBeLessThan(condition);
-    expect(condition).toBeLessThan(record);
-    // The record is the condition's own statement, nothing between them.
-    expect(registerText.slice(condition, record).replace(/\s+/g, " ")).toBe(
-      "if (registry !== undefined && completeness.complete) { "
+    const record = at("definitionsLoaded(");
+    expect(load).toBeLessThan(record);
+    // The completeness is the record's own argument: no record without it.
+    const call = registerText
+      .slice(record, registerText.indexOf(");", record))
+      .replace(/\s+/g, " ");
+    expect(call).toBe(
+      "definitionsLoaded( adapter, definitionsVersion, registry !== undefined && completeness.complete "
     );
   });
 });

@@ -104,9 +104,7 @@ export async function runBootTimeApplyIfDev(opts?: {
     const { loadingDefinitions } = await import(
       "../route-handler/schema-version"
     );
-    await loadingDefinitions(() => reloadDynamicTables(label), {
-      loaded: done => done,
-    });
+    await loadingDefinitions(() => reloadDynamicTables(label));
 
     // Step 2: Apply code-first schema changes
     const { reloadNextlyConfig } = await import("./reload-config");

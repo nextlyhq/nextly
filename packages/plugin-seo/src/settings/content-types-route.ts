@@ -266,10 +266,12 @@ async function switchedOff(
 }
 
 /**
- * The route that lists `collections`, the types the plugin adds SEO to, and
+ * The route that lists the collections the plugin adds SEO to, and
  * after them the site's other types, marked as having none.
  */
-export function contentTypesRoute(collections: readonly string[]): PluginRoute {
+export function contentTypesRoute(types: {
+  readonly collections: readonly string[];
+}): PluginRoute {
   return siteWide({
     method: "GET",
     path: CONTENT_TYPES_ROUTE_PATH,
@@ -282,6 +284,9 @@ export function contentTypesRoute(collections: readonly string[]): PluginRoute {
           .filter(type => type.kind === "collection")
           .map(type => type.slug)
       );
+      // Read on each request: where SEO is on every type, the start says
+      // which types have it.
+      const collections = types.collections;
       const items: ListedContentType[] = [];
       for (const slug of collections) {
         items.push(await contentTypeOf(ctx, slug, withoutAddress));
