@@ -504,16 +504,24 @@ describe("SQLite check and foreign-key changes rebuild the table", () => {
     ).toHaveLength(1);
   });
 
-  it("PostgreSQL and MySQL render the operations one by one, as generateSQL does", async () => {
+  it("PostgreSQL renders the operations one by one, as generateSQL does", async () => {
     const ops = diffSnapshots(
       { tables: [orders(["open"])] },
       { tables: [orders(["open", "paid"])] }
     );
-    for (const dialect of ["postgresql", "mysql"] as const) {
-      expect(generateStatements(ops, dialect, [])).toEqual(
-        ops.map(op => generateSQL(op, dialect))
-      );
-    }
+    expect(generateStatements(ops, "postgresql", [])).toEqual(
+      ops.map(op => generateSQL(op, "postgresql"))
+    );
+  });
+
+  it("MySQL replaces the changed check in one statement (mysql-check-replacement.ts)", async () => {
+    const ops = diffSnapshots(
+      { tables: [orders(["open"])] },
+      { tables: [orders(["open", "paid"])] }
+    );
+    const statements = generateStatements(ops, "mysql", []);
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toMatch(/DROP CHECK .*, ADD CONSTRAINT .* CHECK/);
   });
 });
 
