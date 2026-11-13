@@ -70,12 +70,14 @@ function holdsAny(
   }
   if (dialect === "mysql") {
     // `JSON_CONTAINS` with the id as a JSON string, once per id: MySQL evaluates a `JSON_TABLE`
-    // argument before it has the outer row, so the list cannot be read row by row as below. A NULL
-    // list reads as no, as one holding none of the ids does, so `not_in` keeps an entry with none.
+    // argument before it has the outer row, so the list cannot be read row by row as below. Asked
+    // of a list only, as the other dialects read anything else as an empty one: `JSON_CONTAINS`
+    // would match a lone JSON string to its own id. A NULL list reads as no, as one holding none
+    // of the ids does, so `not_in` keeps an entry with none.
     return sql`(${sql.join(
       ids.map(
         id =>
-          sql`coalesce(json_contains(${column}, json_quote(${String(id)})), 0) = 1`
+          sql`coalesce(case when json_type(${column}) = 'ARRAY' then json_contains(${column}, json_quote(${String(id)})) end, 0) = 1`
       ),
       sql` or `
     )})`;

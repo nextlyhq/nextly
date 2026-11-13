@@ -254,6 +254,52 @@ export function buildLocalizedWhereExists(
 }
 
 /**
+ * The companion-table filter for a translated field keeping a list of ids (`holdsReferenceList`),
+ * judged by membership in each language's row, as the main table's list is.
+ *
+ * `in` and `equals` keep an entry whose row in the language holds one of the ids; `not_in` and
+ * `not_equals` keep one with no such row, so an entry with no translation in the language holds
+ * none, as a NULL list on the main table does. `exists` reads presence as for any translated field
+ * (`fallback`), and the text operators are refused by the membership rule.
+ */
+function localizedReferenceListExists(
+  name: string,
+  fallback: LocalizedExistsBuilder | undefined
+): LocalizedExistsBuilder {
+  return (ctx, column, op, value, dialect) => {
+    if (op === "IS NULL" || op === "IS NOT NULL") {
+      return fallback?.(ctx, column, op, value, dialect);
+    }
+    // An empty `not_in` excludes nothing; any other `not_in` takes a list, refused as on main.
+    if (op === "NOT IN" && (!Array.isArray(value) || value.length === 0)) {
+      return referenceListCondition({
+        dialect,
+        column: sql`1`,
+        name,
+        op,
+        value,
+      });
+    }
+    const negated = op === "!=" || op === "NOT IN";
+    const holds = referenceListCondition({
+      dialect,
+      column: sql`${sql.identifier(ctx.companionTableName)}.${sql.identifier(column)}`,
+      name,
+      op: op === "!=" ? "=" : op === "NOT IN" ? "IN" : op,
+      value,
+    });
+    const exists = buildCompanionExists({
+      companionTableName: ctx.companionTableName,
+      mainIdColumn: ctx.mainIdColumn,
+      locale: ctx.locale,
+      valueCondition: holds,
+      statusValues: ctx.statusValues,
+    });
+    return negated ? sql`not ${exists}` : exists;
+  };
+}
+
+/**
  * Refuse a filter key this builder cannot turn into a predicate.
  *
  * Thrown rather than skipped: a skipped member leaves its siblings to decide
@@ -526,8 +572,12 @@ export function buildDrizzleCondition(
         localizedCtx.inEveryFallbackLanguage && localizedCtx.localeChain?.length
           ? localizedCtx.localeChain
           : [localizedCtx.locale];
+      // A translated list of ids matches by membership, in each language's row.
+      const existsIn = referenceLists?.has(columnParts[0])
+        ? localizedReferenceListExists(column, localizedExists)
+        : localizedExists;
       const perLanguage = languages.map(locale =>
-        localizedExists?.(
+        existsIn?.(
           { ...localizedCtx, locale },
           localizedWhereField.column,
           op,
