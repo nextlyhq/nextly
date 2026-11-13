@@ -18,7 +18,7 @@ import { NextlyError } from "../../../errors";
 
 import { querySqlRows } from "./classifier/count-helpers";
 import type { NextlySchemaSnapshot, Operation } from "./diff/types";
-import { liveTableName, renamesOf } from "./live-uniques";
+import { renamesOf } from "./live-uniques";
 import { liveNames, rowsHold, subjectOf } from "./several-references-refusal";
 import type { DesiredSchema } from "./types";
 
@@ -62,7 +62,8 @@ export async function refuseKeysRowsWouldBreak(args: {
     ) {
       continue;
     }
-    const target = liveTableName(referencesTable, renames);
+    // The target's table and column as they stand before this apply, which may rename either.
+    const target = liveNames(renames, referencesTable, referencesColumns[0]);
     // A target this apply creates holds no rows yet, so every value the column holds breaks it.
     // Any other target is read as it stands, a core table such as `users` among them.
     const targetIsLive = !created.has(lower(referencesTable));
@@ -73,8 +74,8 @@ export async function refuseKeysRowsWouldBreak(args: {
         ? sql`SELECT COUNT(*) AS n FROM ${sql.identifier(source.table)} AS r
               WHERE r.${sql.identifier(source.column)} IS NOT NULL
                 AND NOT EXISTS (
-                  SELECT 1 FROM ${sql.identifier(target)} AS t
-                  WHERE t.${sql.identifier(referencesColumns[0])} = r.${sql.identifier(source.column)}
+                  SELECT 1 FROM ${sql.identifier(target.table)} AS t
+                  WHERE t.${sql.identifier(target.column)} = r.${sql.identifier(source.column)}
                 )`
         : sql`SELECT COUNT(*) AS n FROM ${sql.identifier(source.table)} AS r
               WHERE r.${sql.identifier(source.column)} IS NOT NULL`

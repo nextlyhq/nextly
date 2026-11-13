@@ -90,4 +90,36 @@ describe("refuseKeysRowsWouldBreak", () => {
     ).rejects.toThrow();
     expect(asked[0]).not.toContain('"users"');
   });
+
+  it("reads a target column this apply renames under the name it has now", async () => {
+    const { db, asked } = counting(0);
+    const operations: Operation[] = [
+      {
+        type: "rename_column",
+        tableName: "dc_codes",
+        fromColumn: "code",
+        toColumn: "external_code",
+        fromType: "text",
+        toType: "text",
+      },
+      {
+        type: "add_foreign_key",
+        tableName: "dc_notes",
+        foreignKey: {
+          ...key,
+          referencesTable: "dc_codes",
+          referencesColumns: ["external_code"],
+        },
+      },
+    ];
+    await refuseKeysRowsWouldBreak({
+      db,
+      dialect: "sqlite",
+      desired,
+      live,
+      operations,
+    });
+    expect(asked[0]).toContain('"code"');
+    expect(asked[0]).not.toContain('"external_code"');
+  });
 });
