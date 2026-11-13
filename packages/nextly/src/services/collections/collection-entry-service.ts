@@ -78,6 +78,7 @@ import type {
   RevalidationIntent,
 } from "../../revalidation/types";
 import type { ValidationIssue } from "../../shared/lib/entry-validation";
+import { applyFieldWriteAccess } from "../../shared/lib/field-level-registry";
 import type { HiddenFieldPaths } from "../../shared/lib/filterable-fields";
 import type { PaginatedResponse } from "../../types/pagination";
 import { BaseService } from "../base-service";
@@ -1066,13 +1067,28 @@ export class CollectionEntryService extends BaseService {
     if (written === undefined || locales === "all") {
       return publishValueRefusal(state, locales);
     }
+    // Only what the save may write counts: a value its field rules refuse is not written, so it
+    // cannot stand in for one the language lacks.
+    const writable = { ...written };
+    if (params.overrideAccess !== true) {
+      await applyFieldWriteAccess({
+        kind: "collection",
+        slug: params.collectionName,
+        data: writable,
+        operation: "update",
+        user: params.user,
+        authenticatedScope: params.authenticatedScope,
+        overrideAccess: false,
+        id: params.entryId,
+      });
+    }
     const languages = new Map(state.languages);
     for (const locale of locales) {
       const stored = languages.get(locale);
       const own = Object.fromEntries(
         state.fields
-          .filter(field => field.translatable && field.name in written)
-          .map(field => [field.name, written[field.name]])
+          .filter(field => field.translatable && field.name in writable)
+          .map(field => [field.name, writable[field.name]])
       );
       languages.set(locale, {
         live: stored?.live ?? false,

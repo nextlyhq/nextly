@@ -875,6 +875,44 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     expect((await states(id, "dc_pages")).es ?? "none").not.toBe("published");
   });
 
+  // A save that publishes is judged on what it may write: a value its field rule refuses is not
+  // counted, so it cannot stand in for the value the language lacks.
+  it("judges a publishing save on the values its field rules let it write", async () => {
+    await boot(
+      posts({
+        requireEveryLanguage: true,
+        access: { read: () => true, update: () => true, publish: () => true },
+        fields: [
+          text({
+            name: "title",
+            required: true,
+            access: { update: () => false },
+          }),
+          text({ name: "tagline", localized: false }),
+        ],
+      })
+    );
+    const id = await entry({ es: { tagline: "Shared" } });
+    const before = await states(id);
+    const editor = await userWhoMay(t!, "editor", "update", ["posts"]);
+    await grantTo(t!, editor, "publish", ["posts"]);
+    await grantTo(t!, editor, "read", ["posts"]);
+
+    const refusal = await refusalOf(
+      t!.nextly.update({
+        collection: "posts",
+        id,
+        locale: "es",
+        overrideAccess: false,
+        user: { id: editor, email: "editor@example.test", roles: [] },
+        data: { title: "Hola", status: "published", _overwrite: true },
+      })
+    );
+
+    expect(refusal).toMatch(/REQUIRED_IN_LANGUAGE/);
+    expect(await states(id)).toEqual(before);
+  });
+
   /** A gate holding back the parts `held` names: a language code, or "shared". */
   function holdBack(held: readonly string[]): void {
     container.registerSingleton<PublishGate>("publishGate", () => ({
