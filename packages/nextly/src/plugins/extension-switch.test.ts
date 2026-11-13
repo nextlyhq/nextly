@@ -138,4 +138,29 @@ describe("extensionFieldsOf", () => {
       )
     ).toEqual({ "@acme/notes": ["notes"] });
   });
+
+  it("keeps a name whose any declaration holds a required field", () => {
+    expect(
+      extensionFieldsOf(
+        [
+          {
+            ...plugin("@acme/notes"),
+            contributes: {
+              extend: [
+                {
+                  target: ["posts"],
+                  fields: [{ name: "notes", type: "text" }],
+                },
+                {
+                  target: ["orders"],
+                  fields: [{ name: "notes", type: "text", required: true }],
+                },
+              ],
+            },
+          },
+        ],
+        "switchable"
+      )
+    ).toEqual({});
+  });
 });

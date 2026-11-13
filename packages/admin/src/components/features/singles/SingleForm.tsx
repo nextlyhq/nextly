@@ -1752,7 +1752,7 @@ export function SingleForm({
       // A save alone: during a recovery, work that reaches the form after its
       // one read is still unsaved, so leaving still asks.
       disabled={isSubmitting}
-      fields={schema.fields}
+      fields={allFields}
       // Same rule as the entry editor: a refused switch takes its seed with it.
       onCancel={onSeedHandled}
     >
@@ -1783,7 +1783,7 @@ export function SingleForm({
           // shows: a field covering the bar reports what the bar would have.
           documentStatus={editedStatus}
           // The fields, so a field inside a repeater's row has an address.
-          fields={schema.fields}
+          fields={allFields}
           // So a field recording its own state stays quiet where this does.
           keepsRecoveryPoints={keepsRecoveryPoints}
         >
@@ -1848,7 +1848,7 @@ export function SingleForm({
                           recovery={recovery}
                           viewingVersion={viewingVersion}
                           recovering={recovering}
-                          fields={schema.fields}
+                          fields={allFields}
                           // A document view has no header, so the banner goes
                           // in among its own: an author working in the view
                           // still sees the document is in a scheduled release.

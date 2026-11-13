@@ -130,13 +130,22 @@ export function extensionFieldsOf(
 ): Record<string, string[]> {
   const fields: Record<string, string[]> = {};
   for (const plugin of plugins) {
-    const names = (plugin.contributes?.extend ?? []).flatMap(clause =>
+    const declared = (plugin.contributes?.extend ?? []).flatMap(clause =>
       clause.fields.flatMap(field => {
         const { name } = field as { name?: unknown };
-        const kept = which === "all" || !holdsRequired(field);
-        return typeof name === "string" && kept ? [name] : [];
+        return typeof name === "string" ? [{ name, field }] : [];
       })
     );
+    // A name kept wherever any of its declarations holds a required field:
+    // which target a declaration reached is not asked here.
+    const kept = new Set(
+      which === "all"
+        ? []
+        : declared.filter(({ field }) => holdsRequired(field)).map(d => d.name)
+    );
+    const names = declared
+      .map(({ name }) => name)
+      .filter(name => !kept.has(name));
     if (names.length > 0) fields[plugin.name] = [...new Set(names)];
   }
   return fields;
