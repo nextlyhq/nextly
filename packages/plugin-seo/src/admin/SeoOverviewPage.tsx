@@ -5,7 +5,7 @@
  * connections.
  *
  * Drawn only from the admin's own parts (`PageFrame`, `PageHeader`,
- * `Breadcrumbs`, `Card`, `Checklist`, `Stat`, `Grid`, `Button`), so
+ * `Breadcrumbs`, `Card`, `Checklist`, `Stat`, `Button`), so
  * it looks like the rest of the admin. Each card reads its own route and
  * says for itself when that read fails, so one that cannot be read never
  * takes the rest of the page with it.
@@ -23,7 +23,6 @@ import {
   CardTitle,
   Checklist,
   ChecklistItem,
-  Grid,
   navigateTo,
   PageFrame,
   PageHeader,
@@ -668,12 +667,17 @@ export function SeoOverviewPage(): JSX.Element {
             visibility={visibility}
           />
         )}
-        <Grid cols={4} gap={4} responsive>
-          <HealthCard checked={problems} />
-          <PagesCard />
-          <NotFoundCard />
-          <ConnectionsCard />
-        </Grid>
+        {/* Four across where the column has room for them, two by two on
+            a tablet or a narrow laptop, one under another on a phone; sized
+            by the column, not the window, as the admin's own grids are. */}
+        <div className="@container">
+          <div className="grid grid-cols-1 gap-4 @xl:grid-cols-2 @4xl:grid-cols-4">
+            <HealthCard checked={problems} />
+            <PagesCard />
+            <NotFoundCard />
+            <ConnectionsCard />
+          </div>
+        </div>
       </div>
     </PageFrame>
   );

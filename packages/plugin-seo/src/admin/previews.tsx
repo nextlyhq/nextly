@@ -43,7 +43,8 @@ function PreviewFrame({
       )}
     >
       {label === undefined ? null : (
-        <div className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+        // 12px, the smallest text the admin draws.
+        <div className="mb-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           {label}
         </div>
       )}
