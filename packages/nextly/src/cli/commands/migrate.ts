@@ -33,7 +33,10 @@ import { readFile } from "node:fs/promises";
 import { basename, resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  DatabaseCapabilities,
+  TransactionContext,
+} from "@nextlyhq/adapter-drizzle/types";
 import type { Command } from "commander";
 
 import { container } from "../../di/container";
@@ -62,7 +65,11 @@ import {
   SchemaEventsRepository,
   type SchemaEventRow,
 } from "../../domains/schema/events/schema-events-repository";
-import type { ExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
+import {
+  refuseConstructsTheServerCannotHold,
+  type ExtensionSchema,
+  type ServerConstructCapabilities,
+} from "../../domains/schema/extension/build-extension-schema";
 import { compileExtensionSchema } from "../../domains/schema/extension/publish";
 import {
   appliedChecksums,
@@ -506,6 +513,20 @@ export async function runMigrate(
       },
     });
 
+    const serverConstructs = (
+      adapter as unknown as DrizzleAdapter
+    ).getCapabilities();
+    const extensionSchema = await compileExtensionSchema({
+      dialect,
+      plugins: configResult.config.plugins ?? [],
+      config: configResult.config,
+      // The connected server's limits: a declared check it will not enforce
+      // or an expression index it cannot build is refused at the compile,
+      // before any migration applies it.
+      server: serverConstructs,
+      logger: { warn: m => logger.warn(m) },
+    });
+
     if (options.dryRun) {
       await previewMigrate({
         adapter,
@@ -516,6 +537,7 @@ export async function runMigrate(
         plugins: configResult.config.plugins ?? [],
         step: options.step,
         logger,
+        serverConstructs,
       });
       logger.success("Dry run complete (no changes made).");
       return;
@@ -554,16 +576,6 @@ export async function runMigrate(
     // extraneous table) and BEFORE the event is recorded; idempotent. A thrown
     // error here maps to a non-zero CLI exit (the core itself never exits).
     try {
-      const extensionSchema = await compileExtensionSchema({
-        dialect,
-        plugins: configResult.config.plugins ?? [],
-        config: configResult.config,
-        // The connected server's limits: a declared check it will not enforce
-        // or an expression index it cannot build is refused at the compile,
-        // before any migration applies it.
-        server: (adapter as unknown as DrizzleAdapter).getCapabilities(),
-        logger: { warn: m => logger.warn(m) },
-      });
       const { applied, pluginModulesApplied, metadata } = await migrateCore({
         extensionSchema,
         dialect,
@@ -1148,6 +1160,11 @@ export async function previewMigrate(args: {
   logger: CommandContext["logger"];
   /** As `MigrateCoreDeps.readEventTriggersFn`. */
   readEventTriggers?: () => Promise<readonly string[]>;
+  /** Connected server capabilities, judged identically to execution. */
+  serverConstructs?:
+    | DatabaseCapabilities
+    | ServerConstructCapabilities
+    | Record<string, unknown>;
 }): Promise<void> {
   const { adapter, db, dialect, logger } = args;
   const hasLedger = await (
@@ -1164,6 +1181,7 @@ export async function previewMigrate(args: {
     rows,
     declaredPlugins,
     limit: args.step,
+    serverConstructs: args.serverConstructs,
   });
   const pendingModules = modules.filter(module => !module.recorded);
 
@@ -1186,6 +1204,19 @@ export async function previewMigrate(args: {
           appStep,
           "up"
         ).run;
+
+  if (args.serverConstructs !== undefined) {
+    const metaDir = resolve(args.migrationsDir, "meta");
+    for (const file of pendingFiles) {
+      const targetFile = await loadTargetSnapshot(metaDir, file.name);
+      if (targetFile?.snapshot) {
+        refuseConstructsTheServerCannotHold(
+          targetFile.snapshot.tables,
+          args.serverConstructs
+        );
+      }
+    }
+  }
 
   logger.newline();
   logger.keyValue(
@@ -3975,6 +4006,13 @@ export async function runFileMigrations(args: {
       }
       if (!plan.runs.has(m)) break;
       if (m === plan.continuesAt) logger.info(plan.notice);
+
+      if (target) {
+        refuseConstructsTheServerCannotHold(
+          target.tables,
+          (adapter as unknown as DrizzleAdapter).getCapabilities()
+        );
+      }
 
       // Both apply routes run the same whole-file judgement, so a foreign drop
       // — or a statement the runner's transaction cannot hold — is refused

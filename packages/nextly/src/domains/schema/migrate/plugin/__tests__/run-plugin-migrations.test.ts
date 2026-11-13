@@ -2208,6 +2208,98 @@ describe("a limit on how many modules one run records", () => {
       "NEXTLY_MIGRATION_PARTIALLY_APPLIED"
     );
   });
+
+  it("refuses during preview when a pending module declares an unsupported check on the connected server", async () => {
+    const withCheck: TableSpec = {
+      name: "fx__scores",
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false },
+        { name: "score", type: "int", nullable: false },
+      ],
+      indexes: [],
+      checks: [{ name: "ck_fx__scores_score", sql: "score >= 0" }],
+    };
+    await expect(
+      previewPluginMigrations(
+        [
+          {
+            pluginName: "a",
+            pluginVersion: "1.0.0",
+            migrations: [
+              module({
+                name: "001",
+                schemaVersion: 1,
+                before: [],
+                target: [withCheck],
+              }),
+            ],
+          },
+        ],
+        {
+          dialect: "mysql",
+          rows: [],
+          serverConstructs: {
+            enforcesCheckConstraints: false,
+            functionalIndexes: true,
+            serverVersion: "8.0.14",
+          },
+        }
+      )
+    ).rejects.toThrow(NextlyError);
+  });
+
+  it("refuses during preview when a chain declares a key to a table created only by a later module", async () => {
+    const keyingChild: TableSpec = {
+      name: "fx__child",
+      columns: [
+        { name: "id", type: "varchar(32)", nullable: false },
+        { name: "parent_id", type: "varchar(32)", nullable: false },
+      ],
+      indexes: [],
+      foreignKeys: [
+        {
+          name: "fk_child_parent",
+          columns: ["parent_id"],
+          referencesTable: "fx__parents",
+          referencesColumns: ["id"],
+          onDelete: "restrict",
+          onUpdate: "restrict",
+        },
+      ],
+    };
+    const parentTable: TableSpec = {
+      name: "fx__parents",
+      columns: [{ name: "id", type: "varchar(32)", nullable: false }],
+      indexes: [],
+    };
+    const mod1 = module({
+      name: "001",
+      schemaVersion: 1,
+      before: [],
+      target: [keyingChild],
+    });
+    const mod2 = module({
+      name: "002",
+      schemaVersion: 2,
+      before: [keyingChild],
+      target: [keyingChild, parentTable],
+    });
+    await expect(
+      previewPluginMigrations(
+        [
+          {
+            pluginName: "a",
+            pluginVersion: "1.0.0",
+            migrations: [mod1, mod2],
+          },
+        ],
+        {
+          dialect: "postgresql",
+          rows: [],
+        }
+      )
+    ).rejects.toThrow(NextlyError);
+  });
 });
 
 describe("ownership of a plugin whose modules are all recorded", () => {

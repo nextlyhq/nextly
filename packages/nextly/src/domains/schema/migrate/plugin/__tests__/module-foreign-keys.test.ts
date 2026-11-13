@@ -71,9 +71,12 @@ const module = (name: string, tables: TableSpec[]): PluginMigration => {
 };
 
 /** The refusal message, or "" when the chain resolves. */
-const messageOf = (modules: PluginMigration[]): string => {
+const messageOf = (
+  modules: PluginMigration[],
+  options?: Parameters<typeof assertModuleForeignKeysResolve>[2]
+): string => {
   try {
-    assertModuleForeignKeysResolve("fx", modules);
+    assertModuleForeignKeysResolve("fx", modules, options);
     return "";
   } catch (error) {
     if (!(error instanceof NextlyError)) throw error;
@@ -183,5 +186,59 @@ describe("assertModuleForeignKeysResolve", () => {
     ]);
     expect(message).toContain("003_dangling");
     expect(message).toContain("fx__parents");
+  });
+
+  it("refuses an external target absent from availableTables under run-wide stream validation", () => {
+    const message = messageOf(
+      [module("001_init", [keying("fx__child", "app_posts")])],
+      { availableTables: new Set(["users"]) }
+    );
+    expect(message).toContain("001_init");
+    expect(message).toContain("app_posts");
+    expect(message).toContain("not created by any earlier migration stream");
+  });
+
+  it("accepts an external target present in availableTables under run-wide stream validation", () => {
+    expect(
+      messageOf([module("001_init", [keying("fx__child", "users")])], {
+        availableTables: new Set(["users"]),
+      })
+    ).toBe("");
+  });
+
+  it("validates foreign keys placed on contributed tables", () => {
+    const content = {
+      name: "001_contrib",
+      schemaVersion: 1,
+      dialects: {
+        postgresql: { up: [], down: [] },
+        mysql: { up: [], down: [] },
+        sqlite: { up: [], down: [] },
+      },
+      snapshot: {
+        postgresql: { tables: [] },
+        mysql: { tables: [] },
+        sqlite: { tables: [] },
+      },
+      before: {
+        postgresql: { tables: [] },
+        mysql: { tables: [] },
+        sqlite: { tables: [] },
+      },
+      contributed: {
+        postgresql: { tables: [keying("users", "fx__future")] },
+        mysql: { tables: [keying("users", "fx__future")] },
+        sqlite: { tables: [keying("users", "fx__future")] },
+      },
+    };
+    const mod1: PluginMigration = {
+      ...content,
+      checksum: migrationChecksum(content),
+    };
+    const mod2 = module("002_future", [plain("fx__future")]);
+    const message = messageOf([mod1, mod2]);
+    expect(message).toContain("001_contrib");
+    expect(message).toContain("fx__future");
+    expect(message).toContain("002_future");
   });
 });

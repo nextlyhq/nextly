@@ -29,6 +29,7 @@
  * @module domains/schema/migrate/plugin/run-plugin-migrations
  * @since 1.0.0
  */
+import { CORE_TABLE_NAMES } from "../../../../schemas/core-schema";
 import type { SupportedDialect } from "../../../../database/schema-registry";
 import { pluginCollectionSources } from "./plugin-collection-sources";
 import { describeError } from "../../../../errors/describe-error";
@@ -301,11 +302,19 @@ export async function runPluginMigrations(
   // executes; a target no module of the owner names is another owner's or
   // one the database already held, judged for reach at the declaration
   // compile rather than by arrival.
+  const availableTables = new Set<string>(CORE_TABLE_NAMES);
   for (const set of sets) {
-    assertModuleForeignKeysResolve(
-      set.pluginName,
-      orderedMigrations(set.migrations)
-    );
+    const ordered = orderedMigrations(set.migrations);
+    assertModuleForeignKeysResolve(set.pluginName, ordered, {
+      availableTables,
+      dialect: deps.dialect,
+    });
+    const last = ordered[ordered.length - 1];
+    if (last) {
+      for (const table of last.snapshot[deps.dialect]?.tables ?? []) {
+        availableTables.add(table.name);
+      }
+    }
   }
   // And for what the server itself can hold: a module generated for every
   // dialect had no one server to be judged against, so pending modules are
@@ -365,7 +374,12 @@ export function pendingPluginModules(
  */
 function refusePendingConstructsTheServerCannotHold(
   sets: readonly PluginMigrationSet[],
-  deps: RunPluginMigrationsDeps
+  deps: {
+    dialect: SupportedDialect;
+    appliedShas: { has(key: string): boolean };
+    limit?: number;
+    serverConstructs?: ServerConstructCapabilities | Record<string, unknown>;
+  }
 ): void {
   const server = deps.serverConstructs;
   if (server === undefined) return;
@@ -500,6 +514,8 @@ export async function previewPluginMigrations(
     limit?: number;
     /** As a run is handed it (`RunPluginMigrationsDeps.declaredPlugins`). */
     declaredPlugins?: ReadonlySet<string>;
+    /** Server construct capabilities, judged identically to execution. */
+    serverConstructs?: ServerConstructCapabilities | Record<string, unknown>;
   }
 ): Promise<PluginModulePreview[]> {
   const appliedShas = appliedPluginShas(args.rows);
@@ -509,6 +525,28 @@ export async function previewPluginMigrations(
     appliedShas,
     declaredPlugins: args.declaredPlugins,
   });
+  const availableTables = new Set<string>(CORE_TABLE_NAMES);
+  for (const set of sets) {
+    const ordered = orderedMigrations(set.migrations);
+    assertModuleForeignKeysResolve(set.pluginName, ordered, {
+      availableTables,
+      dialect: args.dialect,
+    });
+    const last = ordered[ordered.length - 1];
+    if (last) {
+      for (const table of last.snapshot[args.dialect]?.tables ?? []) {
+        availableTables.add(table.name);
+      }
+    }
+  }
+  if (args.serverConstructs !== undefined) {
+    refusePendingConstructsTheServerCannotHold(sets, {
+      dialect: args.dialect,
+      appliedShas,
+      limit: args.limit,
+      serverConstructs: args.serverConstructs,
+    });
+  }
   const context: PreviewContext = {
     dialect: args.dialect,
     appliedShas,
@@ -964,7 +1002,7 @@ function dataModuleFailure(
 function isPending(
   set: PluginMigrationSet,
   migration: PluginMigration,
-  deps: Pick<RunPluginMigrationsDeps, "appliedShas">
+  deps: { appliedShas: { has(key: string): boolean } }
 ): boolean {
   return !deps.appliedShas.has(
     qualifiedFilename(set.pluginName, migration.name)

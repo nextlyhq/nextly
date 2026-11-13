@@ -533,14 +533,29 @@ export function assertModulesInNameOrder(
  * dependency's, a table the database already held — which the declaration
  * compile judges for reach, and which no ordering question reaches here.
  */
+export interface AssertModuleForeignKeysResolveOptions {
+  /** Dialects to check; defaults to every supported dialect. */
+  dialect?: (typeof DIALECTS)[number];
+  /** Tables already created by earlier streams in the run (core tables, earlier plugins). */
+  availableTables?: ReadonlySet<string>;
+}
+
 export function assertModuleForeignKeysResolve(
   pluginName: string,
-  migrations: readonly PluginMigration[]
+  migrations: readonly PluginMigration[],
+  options?: AssertModuleForeignKeysResolveOptions
 ): void {
   // Per dialect: a schema hook may add a table on one dialect only, so a
   // key's target may travel on the dialect it fails on.
-  for (const dialect of DIALECTS) {
-    resolveChainPerDialect(pluginName, migrations, dialect);
+  const dialects =
+    options?.dialect !== undefined ? [options.dialect] : DIALECTS;
+  for (const dialect of dialects) {
+    resolveChainPerDialect(
+      pluginName,
+      migrations,
+      dialect,
+      options?.availableTables
+    );
   }
 }
 
@@ -550,26 +565,31 @@ export function assertModuleForeignKeysResolve(
  *
  * A target no module of this chain ever names in `snapshot` or `before` is
  * external (core, a dependency's, or adopted) and is judged for reach at the
- * declaration compile. Any target owned by this chain must exist in `after`:
- * if `previous` held it and `after` lacks it, this module drops the target
- * while retaining a key on it; if a later module creates it, the key arrived
- * early; otherwise an earlier module dropped it and no module restores it.
+ * declaration compile. When `availableTables` is provided, external targets are
+ * validated against the run-wide stream order: on a fresh install, plugin
+ * migrations run before the app's, so a module keying to an app table or a
+ * table no earlier stream creates is refused before any SQL executes. Any
+ * target owned by this chain must exist in `after`: if `previous` held it and
+ * `after` lacks it, this module drops the target while retaining a key on it;
+ * if a later module creates it, the key arrived early; otherwise an earlier
+ * module dropped it and no module restores it.
  */
 function resolveChainPerDialect(
   pluginName: string,
   migrations: readonly PluginMigration[],
-  dialect: (typeof DIALECTS)[number]
+  dialect: (typeof DIALECTS)[number],
+  availableTables?: ReadonlySet<string>
 ): void {
   const everOwned = new Set<string>(
     migrations.flatMap(migration => [
-      ...migration.snapshot[dialect].tables.map(table => table.name),
-      ...migration.before[dialect].tables.map(table => table.name),
+      ...(migration.snapshot[dialect]?.tables.map(table => table.name) ?? []),
+      ...(migration.before[dialect]?.tables.map(table => table.name) ?? []),
     ])
   );
   let previous = new Set<string>();
   for (const [at, migration] of migrations.entries()) {
     const after = new Set(
-      migration.snapshot[dialect].tables.map(table => table.name)
+      migration.snapshot[dialect]?.tables.map(table => table.name) ?? []
     );
     refuseKeysMissingTargetAfter({
       pluginName,
@@ -579,6 +599,7 @@ function resolveChainPerDialect(
       previous,
       after,
       everOwned,
+      availableTables,
     });
     previous = after;
   }
@@ -586,7 +607,8 @@ function resolveChainPerDialect(
 
 /**
  * Refuse this module's keys whose target is missing from its `after` snapshot
- * whenever the target is owned by this plugin's migration chain.
+ * whenever the target is owned by this plugin's migration chain, or when an
+ * external target is absent from `availableTables`.
  */
 function refuseKeysMissingTargetAfter(args: {
   pluginName: string;
@@ -596,14 +618,42 @@ function refuseKeysMissingTargetAfter(args: {
   previous: ReadonlySet<string>;
   after: ReadonlySet<string>;
   everOwned: ReadonlySet<string>;
+  availableTables?: ReadonlySet<string>;
 }): void {
-  const { pluginName, migrations, dialect, at, previous, after, everOwned } =
-    args;
+  const {
+    pluginName,
+    migrations,
+    dialect,
+    at,
+    previous,
+    after,
+    everOwned,
+    availableTables,
+  } = args;
   const migration = migrations[at];
-  for (const table of migration.snapshot[dialect].tables) {
+  const tables = [
+    ...(migration.snapshot[dialect]?.tables ?? []),
+    ...(migration.contributed?.[dialect]?.tables ?? []),
+  ];
+  for (const table of tables) {
     for (const key of table.foreignKeys ?? []) {
       const target = key.referencesTable;
-      if (after.has(target) || !everOwned.has(target)) continue;
+      if (after.has(target)) continue;
+      if (!everOwned.has(target)) {
+        if (availableTables !== undefined && !availableTables.has(target)) {
+          const path = `${migration.name}.snapshot.${dialect}.${table.name}.foreignKeys.${key.name}`;
+          throw NextlyError.validation({
+            errors: [
+              {
+                path,
+                code: "INVALID",
+                message: `Module "${migration.name}" declares foreign key "${key.name}" on "${table.name}" referencing "${target}", which is not created by any earlier migration stream. Plugin migrations run before the app's, so a key may only target a core table, a table an earlier plugin creates, or a table this module creates.`,
+              },
+            ],
+          });
+        }
+        continue;
+      }
       const path = `${migration.name}.snapshot.${dialect}.${table.name}.foreignKeys.${key.name}`;
       if (previous.has(target)) {
         throw NextlyError.validation({
@@ -622,7 +672,7 @@ function refuseKeysMissingTargetAfter(args: {
       const later = migrations
         .slice(at + 1)
         .find(laterMigration =>
-          laterMigration.snapshot[dialect].tables.some(
+          (laterMigration.snapshot[dialect]?.tables ?? []).some(
             laterTable => laterTable.name === target
           )
         );
