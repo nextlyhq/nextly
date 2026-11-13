@@ -1973,6 +1973,9 @@ export class PushSchemaPipeline {
           // created, resolves to the spelling this release's DDL writes.
           typeColumn:
             typeColumns.get(c.tableName) ?? STORAGE_FORMAT.columns.type,
+          // Read by the builder the desired snapshot above names for it, so a code-first field
+          // group's text columns are what the diff planned rather than the Builder's TEXT.
+          builtBy: builtByFor("fieldGroup", c.builderOwned),
         }
       );
       out[c.tableName] = componentTable;
