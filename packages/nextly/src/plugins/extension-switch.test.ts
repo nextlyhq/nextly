@@ -112,6 +112,12 @@ describe("extensionFieldsOf", () => {
                     { name: "notes", type: "text" },
                     // Required: a page that drew it nowhere could not be saved.
                     { name: "code", type: "text", required: true },
+                    // Required too, spelled the way validation spells it.
+                    {
+                      name: "sku",
+                      type: "text",
+                      validation: { required: true },
+                    } as never,
                   ],
                 },
               ],

@@ -16,6 +16,11 @@
  * @module plugins/extension-switch
  * @experimental
  */
+import {
+  isRequired,
+  type ValidatableField,
+} from "../shared/lib/entry-validation";
+
 import { typesExtendedBy, type ExtendedType } from "./extended-types";
 import type { PluginDefinition } from "./plugin-context";
 import { buildPluginServicesNamespace } from "./services/plugin-services-registry";
@@ -115,11 +120,9 @@ export function extensionFieldsOf(
   for (const plugin of plugins) {
     const names = (plugin.contributes?.extend ?? []).flatMap(clause =>
       clause.fields.flatMap(field => {
-        const { name, required } = field as {
-          name?: unknown;
-          required?: unknown;
-        };
-        const kept = which === "all" || required !== true;
+        const { name } = field as { name?: unknown };
+        // Required in either spelling, as the entry validator reads it.
+        const kept = which === "all" || !isRequired(field);
         return typeof name === "string" && kept ? [name] : [];
       })
     );
