@@ -1126,22 +1126,72 @@ export class DynamicCollectionSchemaService {
   }
 
   /**
-   * `field` with the default it states as `default`, read from `defaultValue` (as code and the
-   * Schema Builder spell it) where `default` is absent. A structured default is taken as it is,
-   * written as JSON (`formatDefaultValue`). A function default is not: it is the application's to
-   * work out per document, and no SQL literal can hold it. Nor is a password field's: a stored
-   * password is only ever a hash, and the application refuses a password default, so the row is
-   * filled with the type's own empty value instead.
+   * The SQL value a Single's existing row is filled with when a required field is added: the
+   * default the field states (`default`, or `defaultValue` as code and the Schema Builder spell
+   * it), where that value can be written as a literal of the column's own form; otherwise the
+   * type's empty, as before a default was read here (`requiredColumnBackfill`).
+   *
+   * Only built-in types whose value needs no check beyond its form are taken:
+   * - text kinds as text, which MySQL gets as a hex literal (`quoteExpressionSqlDefault`), since
+   *   there a backslash escapes the quote after it and a doubled quote alone could end the
+   *   literal early;
+   * - a number that is finite, a checkbox's boolean, a JSON value, and a date as the moment it
+   *   names, in the form the dialect stores (`storedDateValue`), never a JavaScript date string.
+   * A relationship's or upload's id may name no row, and the statements adding the column would
+   * already be applied when the foreign key refuses it; a contributed type's value is that type's
+   * to validate; a password is only ever stored as a hash; a function default is the
+   * application's to work out per document. None of these are taken.
    */
-  private withStatedDefault(field: FieldDefinition): FieldDefinition {
-    if (field.type === "password") return { ...field, default: undefined };
-    if (field.default !== undefined) return field;
-    const stated = (field as { defaultValue?: unknown }).defaultValue;
-    return stated === undefined ||
-      stated === null ||
-      typeof stated === "function"
-      ? field
-      : { ...field, default: stated };
+  private singleRowFill(field: FieldDefinition): string | null {
+    const typeEmpty = this.requiredColumnBackfill({
+      ...field,
+      default: undefined,
+    });
+    const stated =
+      field.default !== undefined
+        ? field.default
+        : (field as { defaultValue?: unknown }).defaultValue;
+    if (stated === undefined || stated === null) return typeEmpty;
+    const holdsList = (field as { hasMany?: unknown }).hasMany === true;
+    switch (field.type) {
+      case "text":
+      case "textarea":
+      case "email":
+      case "code":
+      case "select":
+      case "radio":
+        return typeof stated === "string" && !holdsList
+          ? quoteExpressionSqlDefault(stated, this.dialect)
+          : typeEmpty;
+      case "number":
+        return typeof stated === "number" && Number.isFinite(stated)
+          ? String(stated)
+          : typeEmpty;
+      case "checkbox":
+        return typeof stated === "boolean"
+          ? this.formatDefaultValue(stated, "checkbox")
+          : typeEmpty;
+      case "json":
+        return typeof stated === "function"
+          ? typeEmpty
+          : this.formatDefaultValue(stated, "json");
+      case "date": {
+        const at =
+          stated instanceof Date
+            ? stated
+            : typeof stated === "string"
+              ? new Date(stated)
+              : null;
+        if (at === null || Number.isNaN(at.getTime())) return typeEmpty;
+        const stored = storedDateValue(at, this.dialect);
+        // An ISO moment holds no quote, so it quotes plainly on every dialect.
+        return typeof stored === "number"
+          ? String(stored)
+          : quotedSqlString(stored);
+      }
+      default:
+        return typeEmpty;
+    }
   }
 
   private requiredColumnBackfill(field: FieldDefinition): string | null {
@@ -1837,11 +1887,11 @@ ${allColumnDefs.join(",\n")}
         // (`fillThenDropDefault`); a field's own default is never kept on its column.
         let fillThenDrop: string | null = null;
         if (field.required || (columnDefaults && field.default !== undefined)) {
-          // A Single's existing row takes the default the field states, however it is spelled
-          // (`withStatedDefault`); a collection's reads `default` alone, as it always has.
-          const backfill = this.requiredColumnBackfill(
-            columnDefaults ? field : this.withStatedDefault(field)
-          );
+          // A Single's existing row takes the default the field states where it can be written
+          // safely (`singleRowFill`); a collection's reads `default` alone, as it always has.
+          const backfill = columnDefaults
+            ? this.requiredColumnBackfill(field)
+            : this.singleRowFill(field);
           if (backfill !== null && !columnDefaults && field.required) {
             fillThenDrop = backfill;
           } else if (backfill !== null) {
