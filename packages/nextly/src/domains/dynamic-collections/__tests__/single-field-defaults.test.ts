@@ -180,7 +180,88 @@ describe.each(DIALECTS)(
         })
       );
 
-      expect(sql).toContain("'Editor''s pick'");
+      // MySQL takes the text as a hex literal, whose bytes carry no quote and no escape.
+      expect(sql).toContain(
+        dialect === "mysql"
+          ? `X'${Buffer.from("Editor's pick", "utf8").toString("hex")}'`
+          : "'Editor''s pick'"
+      );
+    });
+
+    it("keeps a backslash before an apostrophe inside the value", () => {
+      const stated = "x\\'; DROP TABLE single_hero; --";
+      const sql = added(
+        field({
+          name: "motto",
+          type: "text",
+          required: true,
+          defaultValue: stated,
+        })
+      );
+
+      // Under MySQL's default mode a backslash escapes the quote after it, so a doubled quote
+      // alone would end the literal there and run the rest as SQL.
+      if (dialect === "mysql") {
+        expect(sql).toContain(
+          `X'${Buffer.from(stated, "utf8").toString("hex")}'`
+        );
+        expect(sql).not.toContain("DROP TABLE");
+        return;
+      }
+      expect(sql).toContain(`'${stated.replace(/'/g, "''")}'`);
+    });
+
+    it("writes a stated date in the form the dialect stores it", () => {
+      const at = new Date("2026-01-02T03:04:05.000Z");
+      const sql = added(
+        field({
+          name: "launch",
+          type: "date",
+          required: true,
+          defaultValue: at,
+        })
+      );
+
+      const expected = {
+        sqlite: String(Math.floor(at.getTime() / 1000)),
+        mysql: "'2026-01-02 03:04:05.000'",
+        postgresql: "'2026-01-02T03:04:05.000Z'",
+      }[dialect];
+      expect(sql).toContain(expected);
+      expect(sql).not.toContain("GMT");
+    });
+
+    it("never fills the row with a relationship's stated id, which may name no row", () => {
+      const add = () =>
+        added(
+          field({
+            name: "featured",
+            type: "relationship",
+            relationTo: "posts",
+            required: true,
+            defaultValue: "row-that-is-not-there",
+          })
+        );
+
+      expect(add).toThrow(/already has entries/);
+    });
+
+    it("fills the row for a contributed type with its type's own value, not the stated one", () => {
+      let sql = "";
+      try {
+        sql = added(
+          field({
+            name: "score",
+            type: "acme-rating",
+            required: true,
+            defaultValue: "stated-by-the-field",
+          })
+        );
+      } catch {
+        // Refusing the change also writes nothing the type has not checked.
+      }
+
+      expect(sql).not.toContain("stated-by-the-field");
     });
   }
 );
