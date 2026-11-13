@@ -23,8 +23,8 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { leavesExistingRowsEmpty } from "../extension/extension-columns";
+import { assertModuleForeignKeysResolve } from "../migrate/plugin/module-foreign-keys";
 import {
-  assertModuleForeignKeysResolve,
   assertModuleKeysFit,
   migrationChecksum,
   orderedMigrations,

@@ -12,11 +12,8 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../../errors/nextly-error";
 import type { TableSpec } from "../../../pipeline/diff/types";
-import {
-  assertModuleForeignKeysResolve,
-  migrationChecksum,
-  type PluginMigration,
-} from "../plugin-migration";
+import { assertModuleForeignKeysResolve } from "../module-foreign-keys";
+import { migrationChecksum, type PluginMigration } from "../plugin-migration";
 
 /** A table with one key over `ref` at `target`'s id. */
 const keying = (name: string, target: string): TableSpec => ({
@@ -66,6 +63,69 @@ const module = (name: string, tables: TableSpec[]): PluginMigration => {
       mysql: { tables: [] },
       sqlite: { tables: [] },
     },
+  };
+  return { ...content, checksum: migrationChecksum(content) };
+};
+
+/**
+ * The dependency's `dep__products`, carrying its owner's key and the key
+ * `fk_dep__products_fx` this plugin contributes to `fx__items`.
+ */
+const productsWithContributedKey: TableSpec = {
+  ...keying("dep__products", "dep__shops"),
+  columns: [
+    { name: "id", type: "varchar(32)", nullable: false },
+    { name: "ref", type: "varchar(32)", nullable: false },
+    { name: "fx_item_id", type: "varchar(32)", nullable: true },
+  ],
+  foreignKeys: [
+    ...(keying("dep__products", "dep__shops").foreignKeys ?? []),
+    {
+      name: "fk_dep__products_fx",
+      columns: ["fx_item_id"],
+      referencesTable: "fx__items",
+      referencesColumns: ["id"],
+      onDelete: "restrict",
+      onUpdate: "restrict",
+    },
+  ],
+};
+
+/**
+ * A module adding `contributedTable` to a dependency's table and owning no
+ * table of its own; `ownKeys` is the contribution record, or undefined for a
+ * module generated before contributions were recorded.
+ */
+const contributing = (
+  name: string,
+  contributedTable: TableSpec,
+  ownKeys: string[] | undefined
+): PluginMigration => {
+  const each = <T>(value: T) => ({
+    postgresql: value,
+    mysql: value,
+    sqlite: value,
+  });
+  const content = {
+    name,
+    schemaVersion: 1,
+    dialects: each({ up: [] as string[], down: [] as string[] }),
+    snapshot: each({ tables: [] as TableSpec[] }),
+    before: each({ tables: [] as TableSpec[] }),
+    contributed: each({ tables: [contributedTable] }),
+    contributedBefore: each({ tables: [] as TableSpec[] }),
+    ...(ownKeys === undefined
+      ? {}
+      : {
+          contributions: each({
+            [contributedTable.name]: {
+              columns: ["fx_item_id"],
+              indexes: [],
+              foreignKeys: ownKeys,
+              checks: [],
+            },
+          }),
+        }),
   };
   return { ...content, checksum: migrationChecksum(content) };
 };
@@ -183,5 +243,36 @@ describe("assertModuleForeignKeysResolve", () => {
     ]);
     expect(message).toContain("003_dangling");
     expect(message).toContain("fx__parents");
+  });
+
+  it("refuses a key the plugin contributes to another owner's table before its own later module creates the target", () => {
+    const message = messageOf([
+      contributing("001_contribute", productsWithContributedKey, [
+        "fk_dep__products_fx",
+      ]),
+      module("002_items", [plain("fx__items")]),
+    ]);
+    expect(message).toContain("001_contribute");
+    expect(message).toContain("fk_dep__products_fx");
+    expect(message).toContain("002_items");
+  });
+
+  it("reads a contributed key as the plugin's from a module generated before contributions were recorded", () => {
+    const message = messageOf([
+      contributing("001_contribute", productsWithContributedKey, undefined),
+      module("002_items", [plain("fx__items")]),
+    ]);
+    expect(message).toContain("fk_dep__products_fx");
+  });
+
+  it("leaves the owner's keys on a contributed table to their owner", () => {
+    // Both targets arrive only in 002, so either key would be refused if this
+    // chain walked it; the record names neither as the plugin's.
+    expect(
+      messageOf([
+        contributing("001_contribute", productsWithContributedKey, []),
+        module("002_items", [plain("fx__items"), plain("dep__shops")]),
+      ])
+    ).toBe("");
   });
 });

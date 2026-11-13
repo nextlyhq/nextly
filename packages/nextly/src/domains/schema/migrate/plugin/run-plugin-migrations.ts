@@ -53,7 +53,6 @@ import type { NextlySchemaSnapshot } from "../../pipeline/diff/types";
 
 import {
   assertAppliedUnchanged,
-  assertModuleForeignKeysResolve,
   assertModuleIntact,
   moduleSql,
   orderedMigrations,
@@ -79,6 +78,7 @@ import { upRendersItsSides } from "../../migrate-create/generate-plugin";
 
 import { moduleEffects } from "./module-effects";
 import { assertPluginHistories } from "./plugin-history";
+import { assertModuleForeignKeysResolve } from "./module-foreign-keys";
 import { recordedContributions } from "./recorded-contributions";
 
 /** One plugin's migrations, in the order the resolver placed the plugin. */
