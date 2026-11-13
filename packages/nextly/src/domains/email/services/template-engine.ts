@@ -193,7 +193,7 @@ const ENTITY_DECODE_MAP: Record<string, string> = {
 };
 
 const ENTITY_DECODE_RE =
-  /&(?:amp|lt|gt|quot|apos|#39|nbsp|copy|reg|mdash|ndash|hellip|euro|pound|yen);|&#(?:x[0-9a-fA-F]+|\d+);/g;
+  /&(?:amp|lt|gt|quot|apos|#39|nbsp|copy|reg|mdash|ndash|hellip|euro|pound|yen);|&#(?:[xX][0-9a-fA-F]+|\d+);/g;
 
 function decodeEntities(input: string): string {
   return input.replace(ENTITY_DECODE_RE, match => {

@@ -166,8 +166,10 @@ describe("htmlToText", () => {
       "Tom & Jerry © 2026"
     );
     expect(
-      htmlToText("<p>&euro; 50 &apos;off&apos; &#8364;100 &#x20AC;200</p>")
-    ).toBe("€ 50 'off' €100 €200");
+      htmlToText(
+        "<p>&euro; 50 &apos;off&apos; &#8364;100 &#x20AC;200 &#X20AC;300</p>"
+      )
+    ).toBe("€ 50 'off' €100 €200 €300");
   });
 
   it("collapses excess whitespace and blank lines", () => {
