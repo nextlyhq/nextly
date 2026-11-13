@@ -62,8 +62,11 @@ export function kitRouteConstraintStatements(
         before.push(op);
         break;
       case "drop_foreign_key":
-        // A key ahead of a conversion is the pre-resolution pass's to drop, before the conversion.
-        if (op.beforeConversion !== true) before.push(op);
+        // A key a replacement on the same columns supersedes goes after that replacement is added,
+        // so its columns are never left unkeyed (MySQL commits each statement as it runs). A key
+        // ahead of a conversion is the pre-resolution pass's to drop, before the conversion.
+        if (op.afterReplacement === true) after.push(op);
+        else if (op.beforeConversion !== true) before.push(op);
         break;
       case "add_check":
       case "add_foreign_key":

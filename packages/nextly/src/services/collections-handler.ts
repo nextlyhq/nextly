@@ -500,6 +500,18 @@ export class CollectionsHandler {
     return this.entryService.releaseHeldDraftLocales(params);
   }
 
+  /**
+   * Rewrite one field of an entry on its live copy and on every pending draft
+   * that holds it, without publishing. See the mutation service.
+   *
+   * @experimental
+   */
+  async rewriteField(
+    call: Parameters<CollectionEntryService["rewriteField"]>[0]
+  ): ReturnType<CollectionEntryService["rewriteField"]> {
+    return this.entryService.rewriteField(call);
+  }
+
   private resolveUserParam<
     T extends {
       userId?: string;

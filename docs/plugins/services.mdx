@@ -5,7 +5,7 @@ description: Read and write data from a plugin through the managed, secure-by-de
 
 `ctx.services` is the **managed** data path for plugins. Prefer it over the unmanaged
 `ctx.db` surface: it enforces validation, hooks, events, and RBAC, and it stays
-portable across database dialects. It is `@public` and semver-protected (D56).
+portable across database dialects. It is `@public` and semver-protected.
 
 ```ts
 init(ctx) {
@@ -17,7 +17,7 @@ init(ctx) {
 }
 ```
 
-## Secure by default (D35)
+## Secure by default
 
 Every access method takes a trailing `ServiceOpts` (`{ as, user }`) that decides whose
 permissions apply:
@@ -137,7 +137,7 @@ its methods.
 background work) and `plugins` (services other plugins contribute). The
 service types are `@experimental` and exported from `@nextlyhq/plugin-sdk`.
 
-## Querying (D56)
+## Querying
 
 `listEntries` takes a `QueryOptions`:
 
@@ -296,6 +296,67 @@ update that sends neither throws `VERSION_REQUIRED` (428) and writes nothing.
 What `_rev` covers and which writes are judged are the same for every caller; see the REST API's
 [Versions and conflicts](/docs/api-reference/rest-api#versions-and-conflicts). `ctx.services`
 reads no Single's content, so a plugin has no `_rev` to send for a Single.
+
+## Rewriting one field on the live copy and its drafts
+
+<Callout type="warn">
+  `rewriteField` is `@experimental`. It takes a top-level field of a collection
+  entry; Singles are not rewritten yet.
+</Callout>
+
+Some jobs change one value on many entries on nobody's behalf: moving pages off a layout before it
+is deleted, or turning the copies of a deleted component into plain blocks. An ordinary update can't
+do that safely on a published entry with a pending draft. Naming no status saves only the draft, and
+naming one publishes the author's unfinished draft.
+
+`rewriteField` changes the field on the entry's live copy and on every pending draft that holds it,
+in one transaction, without publishing anything. Each draft stays a draft, and the entry's status
+doesn't change.
+
+```ts
+const page = await ctx.services.collections.findEntryById("pages", id, {
+  as: "system",
+});
+
+const { version, copies } = await ctx.services.collections.rewriteField({
+  collection: "pages",
+  id,
+  field: "layout",
+  expectedVersion: page._rev,
+  set: { value: null },
+  reason: `Layout "${layout.title}" was deleted`,
+});
+// copies: [{ form: "live", locale: null }, { form: "draft", locale: null }]
+```
+
+- **Only from the version you read.** `expectedVersion` is the `_rev` you read the entry at. If
+  anyone has saved the entry since, the rewrite throws `STALE_VERSION` (409) and changes nothing.
+  There is no overwrite: read again and decide again.
+- **A value, or a function of each copy's own.** `set: { value }` gives every copy the same value.
+  `set: { from(current, copy) }` is called once per copy with that copy's stored value (a JSON
+  field parsed, a relationship as the id it stores) and returns its new value, so the live page and
+  an author's draft are each transformed from what they hold. Return `null` to clear the field.
+- **Languages.** A shared field is rewritten in every language's draft. A translated field is
+  rewritten in one language, `locale` (the default language when omitted), on its live copy and that
+  language's draft.
+- **History.** The entry's history gets one `field-rewritten` event naming the field, each copy
+  changed and your `reason`. A rewrite made as the system names your plugin. One made with
+  `as: "user"` names the person, with your plugin beside them. It is never recorded as an
+  overwrite. An editor holding an older version is refused on their next save and sees the conflict.
+- **No save hooks.** A rewrite runs none of the collection's or fields' `before*`/`after*` hooks and
+  no in-transaction handler: they are written for a whole document passing through a save. If a
+  hook derives another field from this one, rewrite that field too. The live change still records
+  the `entry.updated` event (webhooks), announces the update to `ctx.events` subscribers once it
+  commits, and revalidates the entry's pages.
+- **What it refuses.** The id, status, slug and timestamps; a field whose values must be unique (a
+  draft's value is never checked for that); a field stored in tables of its own (a field group, a
+  many-to-many relationship); a password; a virtual field; and a value the field's own checks refuse,
+  on any copy. Made with `as: "user"`, it needs the person's permission to update the entry and,
+  where the collection has a publish lifecycle, to publish it, plus every field rule of their own
+  update.
+
+A bulk job rewrites entries one at a time, each in its own transaction, and retries an entry that
+moved under it from a fresh read.
 
 ## Collection transactions
 
@@ -575,7 +636,7 @@ await ctx.services.collections.withTransaction(async tx => {
 validation, hooks, RBAC, and events. Reach for it only for things the services
 layer doesn't cover yet (aggregations beyond `count`), or for the tables your
 plugin declared itself. If you find yourself needing it often, that's a signal
-worth raising — the goal (D56) is that most plugins never touch it.
+worth raising — the goal is that most plugins never touch it.
 
 It comes in two layers:
 
