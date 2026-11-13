@@ -34,7 +34,7 @@ import {
 } from "@admin/components/features/schema-builder";
 import { checkAddressAgain } from "@admin/components/features/schema-builder/new-entity/useAddressCheck";
 import { toast } from "@admin/components/ui";
-import { ROUTES } from "@admin/constants/routes";
+import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useCollection,
   useCreateCollection,
@@ -53,6 +53,7 @@ import {
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { collectionCreatePayload } from "@admin/lib/builder/create-request";
 import { settingsAreDirty } from "@admin/lib/builder/settings-dirty";
+import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
 import { collectionEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import {
   removeUnsavedEntity,
@@ -477,6 +478,13 @@ export default function CollectionBuilderEditPage({
       configPath={collection?.configPath}
       unsavedCount={unsavedCount}
       pending={pendingChanges}
+      pageBuilderHref={
+        // Once saved, an entity laid out from blocks opens in the Page Builder
+        // from a new entry (a Single, from its document).
+        !unsaved && hasPageBuilderField(pending.saved)
+          ? buildRoute(ROUTES.COLLECTION_ENTRY_CREATE, { slug: entitySlug })
+          : undefined
+      }
       onDiscard={
         unsaved
           ? () => removeUnsavedEntity("collection", entitySlug)

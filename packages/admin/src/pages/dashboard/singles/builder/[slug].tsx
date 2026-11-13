@@ -28,7 +28,7 @@ import {
 } from "@admin/components/features/schema-builder";
 import { checkAddressAgain } from "@admin/components/features/schema-builder/new-entity/useAddressCheck";
 import { toast } from "@admin/components/ui";
-import { ROUTES } from "@admin/constants/routes";
+import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
   useCreateSingle,
   useSingleSchema,
@@ -47,6 +47,7 @@ import {
 import { createPreview } from "@admin/lib/builder/create-preview";
 import { singleCreatePayload } from "@admin/lib/builder/create-request";
 import { settingsAreDirty } from "@admin/lib/builder/settings-dirty";
+import { hasPageBuilderField } from "@admin/lib/builder/starting-field";
 import { singleEntityFromSettings } from "@admin/lib/builder/settings-to-manifest";
 import {
   removeUnsavedEntity,
@@ -422,6 +423,13 @@ export default function SingleBuilderEditPage({
       configPath={single?.configPath}
       unsavedCount={unsavedCount}
       pending={pendingChanges}
+      pageBuilderHref={
+        // Once saved, an entity laid out from blocks opens in the Page Builder
+        // from a new entry (a Single, from its document).
+        !unsaved && hasPageBuilderField(pending.saved)
+          ? buildRoute(ROUTES.SINGLE_EDIT, { slug: entitySlug })
+          : undefined
+      }
       onDiscard={
         unsaved ? () => removeUnsavedEntity("single", entitySlug) : undefined
       }

@@ -89,6 +89,8 @@ type Props = {
    * before the navigation: an unsaved entity is let go with its changes.
    */
   onDiscard?: () => void;
+  /** Where the Page Builder opens for this entity, when it offers to. */
+  pageBuilderHref?: string;
   /** Page-owned dialogs — the schema-change confirmations, and any of the
    *  page's own. Mounted inside the frame so they share its stacking context. */
   children?: ReactNode;
@@ -113,6 +115,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
     isSaving,
     savingLabel,
     onDiscard,
+    pageBuilderHref,
     children,
   } = props;
   // While changes are pending, every way out asks first: an in-app link, the
@@ -139,6 +142,7 @@ export function BuilderPageLayout(props: Props): JSX.Element {
           onAddField={() => onActiveChange({ kind: "picker", position: {} })}
           onOpenSettings={() => onActiveChange({ kind: "settings" })}
           onSave={onSave}
+          pageBuilderHref={pageBuilderHref}
         />
         <BuilderWorkspace {...props} />
 

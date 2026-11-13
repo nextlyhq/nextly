@@ -185,4 +185,37 @@ describe("the Single editor on a Single not saved yet", () => {
     expect(unsavedEntity("single", "home-page")).toBeUndefined();
     expect(navigate).toHaveBeenCalledWith("/admin/builder/singles");
   });
+
+  it("offers to open the Page Builder once a Single of designed pages is saved", async () => {
+    removeUnsavedEntity("single", "home-page");
+    addUnsavedEntity({
+      kind: "single",
+      address: "home-page",
+      settings: { singularName: "Home page", slug: "home-page", icon: "Home" },
+      fields: [{ name: "blocks", type: "blocks" }],
+    });
+    mockCreate.mockImplementation(async () => {
+      saved = {
+        id: "sgl_1",
+        slug: "home-page",
+        label: "Home page",
+        tableName: "single_home_page",
+        fields: [{ name: "blocks", label: "Blocks", type: "blocks" }],
+        createdAt: "2026-11-13T00:00:00.000Z",
+        updatedAt: "2026-11-13T00:00:00.000Z",
+      } as ApiSingle;
+      return { message: "Single created", data: saved };
+    });
+    const user = renderEditor();
+    await screen.findByText("2 unsaved changes");
+    // Nothing to open while the Single is not saved.
+    expect(
+      screen.queryByRole("link", { name: "Open the Page Builder" })
+    ).toBeNull();
+    await saveAndConfirm(user);
+
+    expect(
+      await screen.findByRole("link", { name: "Open the Page Builder" })
+    ).toHaveAttribute("href", "/admin/singles/home-page");
+  });
 });
