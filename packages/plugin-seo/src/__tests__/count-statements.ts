@@ -43,6 +43,18 @@ let holding:
   | undefined;
 
 /**
+ * Whether `value` is a driver's own command object, which a call answers with
+ * as given: mysql2's `Query` and pg's submittables are event emitters.
+ */
+function isCommand(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { once?: unknown }).once === "function"
+  );
+}
+
+/**
  * Wraps `proto[name]` so each call records the statement `sqlOf` names, and
  * an armed hold keeps back the statement it matches. Only an asynchronous
  * driver's call can be held (`deferrable`): a synchronous one returns its
@@ -65,14 +77,26 @@ function wrap(
     if (deferrable && hold !== undefined && hold.match.test(sql)) {
       holding = undefined;
       hold.reached(sql);
-      const send = () => original.apply(this, args);
-      // A callback call's caller reads nothing it returns; a promise call's
-      // caller awaits the statement, which now waits for the release.
+      // What the driver answers a held call that is not awaited is dropped,
+      // never handed to a promise: mysql2 answers with its command object,
+      // whose `then` throws, so a promise resolved with it would reject.
+      const send = (): void => {
+        original.apply(this, args);
+      };
+      // A callback call's caller reads nothing it returns.
       if (typeof args[args.length - 1] === "function") {
         void hold.released.then(send);
         return undefined;
       }
-      return hold.released.then(send);
+      // A command object handed in (mysql2's pool passes its own) is what the
+      // call answers, and its caller listens on it at once.
+      if (isCommand(args[0])) {
+        void hold.released.then(send);
+        return args[0];
+      }
+      // A promise call's caller awaits the statement, which now waits for
+      // the release.
+      return hold.released.then(() => original.apply(this, args));
     }
     return original.apply(this, args);
   };

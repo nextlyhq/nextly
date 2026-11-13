@@ -509,55 +509,36 @@ export class SingleMetadataService {
   private async resetOrphanStorage(input: CreateSingleInput): Promise<void> {
     const adapter = this.adapter;
     if (!adapter) return;
-    if (!(await adapter.tableExists(input.tableName))) return;
-
-    const { readReferencingTables, tableHasRows } = await import(
-      "../../schema/pipeline/live-table-facts"
+    // The one rule every kind's create follows (`clearLeftoverStorage`): every table of the family
+    // probed first, a family holding rows refused naming each table and its row count, an empty one
+    // dropped. A Single's family also holds its field-group data, which `dropSingleStorage` takes
+    // with its main and translations tables.
+    const { clearLeftoverStorage } = await import(
+      "../../schema/services/leftover-storage"
     );
-    const db = adapter.getDrizzle();
-    const dialect = adapter.getCapabilities().dialect;
-
-    // The wreckage is a FAMILY plus its junctions, not one table. A relationship field's junction
-    // tables carry a foreign key to the main table, so a main table cannot simply be dropped while
-    // they stand: MySQL refuses the drop outright, and PostgreSQL's CASCADE strips the junction's
-    // constraint and leaves the junction itself to be adopted by the re-render — the same silent
-    // adoption this method exists to prevent. They are read from the live catalog because the
-    // abandoned attempt's field list is gone with its registry row. The `_locales` companion also
-    // references the main table and is excluded here: `dropSingleStorage` below owns its teardown.
-    const companion = `${input.tableName}_locales`;
-    const referencing = (
-      await readReferencingTables(db, dialect, input.tableName)
-    ).filter(name => name !== companion);
-
-    // Every table about to be dropped is probed BEFORE anything is dropped, so a refusal leaves
-    // the whole group exactly as it stood.
-    for (const name of [input.tableName, ...referencing]) {
-      if (await tableHasRows(db, dialect, name)) {
-        throw NextlyError.conflict({
-          reason: "state",
-          message: `Table "${name}" already exists and holds rows, but no Single describes it. Drop or rename that table, then retry the create.`,
-          logContext: {
-            reason: "single-create-table-occupied",
-            slug: input.slug,
-            tableName: input.tableName,
-            occupiedTable: name,
-          },
-        });
-      }
-    }
-
-    this.logger.info(
-      `[Singles] Dropping empty unregistered table "${input.tableName}" before creating "${input.slug}"`
+    const { junctionTablesOf } = await import(
+      "../../schema/services/field-column-descriptor"
     );
-    // Referencing tables first: they hold the foreign keys, and a parent cannot be dropped while a
-    // reference to it stands on MySQL.
-    for (const name of referencing) {
-      await adapter.dropTable(name, {
-        ifExists: true,
-        cascade: dialect === "postgresql",
-      });
-    }
-    await this.dropSingleStorage(input.slug, input.tableName, adapter);
+    const { countEntityComponentRows } = await import(
+      "../../field-groups/services/teardown-entity-field-group-data"
+    );
+    await clearLeftoverStorage({
+      adapter,
+      kind: "single",
+      slug: input.slug,
+      tableName: input.tableName,
+      // A Single's many-to-many fields keep their links in junction tables of its own, by the names
+      // this request's fields give them.
+      makesJunctionTables: true,
+      plannedJunctions: junctionTablesOf(input.tableName, input.fields ?? []),
+      // Its field-group rows live in the shared field-group tables, naming its table as their
+      // parent, and `dropSingleStorage` deletes them: they count as the leftover's content.
+      ownedElsewhere: () =>
+        countEntityComponentRows({ adapter, parentTable: input.tableName }),
+      logger: this.logger,
+      dropFamily: () =>
+        this.dropSingleStorage(input.slug, input.tableName, adapter),
+    });
   }
 
   /**
@@ -2364,10 +2345,40 @@ export class SingleMetadataService {
       return "failed";
     }
 
-    // Observed, not assumed. "Applied" has to mean the table is there.
-    if (!(await adapter.tableExists(input.tableName))) {
+    // Observed, not assumed. "Applied" has to mean the table is there, holding every requested
+    // column as the type asked for: the desired table a push compares the live one with, built as
+    // the creating SQL renders a Single's columns (`columnsTheCreateLeftOut`).
+    const { buildDesiredTableFromFields } = await import(
+      "../../schema/pipeline/diff/build-from-fields"
+    );
+    const { columnsTheCreateLeftOut, describeColumnsLeftOut } = await import(
+      "../../schema/services/created-table-shape"
+    );
+    const dialect = adapter.getCapabilities().dialect;
+    // A failing read is recorded rather than raised, as a failing statement is: the row still
+    // describes what was attempted, which is what makes the state repairable.
+    let leftOut: Awaited<ReturnType<typeof columnsTheCreateLeftOut>>;
+    try {
+      leftOut = await columnsTheCreateLeftOut(
+        adapter.getDrizzle(),
+        dialect,
+        buildDesiredTableFromFields(input.tableName, fields, dialect, {
+          builtBy: "collection",
+          hasStatus,
+          localized: isLocalized,
+        })
+      );
+    } catch (error) {
       this.logger.error(
-        `[Singles] Table "${input.tableName}" was not created after migration`
+        `[Singles] Could not read the columns of "${input.tableName}" after migration: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return "failed";
+    }
+    if (leftOut.length > 0) {
+      this.logger.error(
+        `[Singles] Table "${input.tableName}" was not created as requested: ${describeColumnsLeftOut(leftOut)}`
       );
       return "failed";
     }
