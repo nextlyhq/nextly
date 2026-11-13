@@ -154,8 +154,9 @@ describe("handleDuplicateField", () => {
     const builder = makeBuilder([
       field("body"),
       field("Body_2"),
-      field("fooBar"),
-      field("foo_bar_2"),
+      field("foo_bar"),
+      // Sent by the save as foo_bar_2: the column a copy named foo_bar_2 would take.
+      field("foo-bar_2"),
     ]);
     const { result } = renderHook(() => useBuilderFieldActions(builder.api));
 
@@ -163,15 +164,15 @@ describe("handleDuplicateField", () => {
     // body_2 is taken as Body_2, in other letter case.
     expect(builder.fields[1].name).toBe("body_3");
 
-    result.current.handleDuplicateField("field_fooBar");
-    // fooBar_2 would be the column foo_bar_2, which is taken.
+    result.current.handleDuplicateField("field_foo_bar");
+    // foo_bar_2 is the name foo-bar_2 is sent as, so it is taken.
     expect(names(builder.fields)).toEqual([
       "body",
       "body_3",
       "Body_2",
-      "fooBar",
-      "fooBar_3",
-      "foo_bar_2",
+      "foo_bar",
+      "foo_bar_3",
+      "foo-bar_2",
     ]);
   });
 
@@ -225,6 +226,45 @@ describe("getValidatedFields", () => {
 
     expect(result.current.getValidatedFields()).toBeNull();
     expect(toastError).toHaveBeenCalledWith("All fields must have a name");
+  });
+
+  it("refuses a saved field taken to another storage level by naming the layout group it moved into", () => {
+    // Saved at the top level, moved into a nameless group (its level kept),
+    // and that group then given a name: the field now stands inside it.
+    const saved = [
+      field("body"),
+      field("", { id: "field_layout", type: "group", fields: [] }),
+    ];
+    const builder = makeBuilder([
+      field("box", {
+        id: "field_layout",
+        type: "group",
+        fields: [field("body")],
+      }),
+    ]);
+    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+
+    expect(result.current.getValidatedFields(saved)).toBeNull();
+    expect(toastError).toHaveBeenCalledWith(
+      "body would move into or out of a group or repeating rows, which is not available yet: a save would not keep the values. Undo that change first."
+    );
+  });
+
+  it("lets a saved field stay inside a nameless group, on its level", () => {
+    const saved = [
+      field("body"),
+      field("", { id: "field_layout", type: "group", fields: [] }),
+    ];
+    const builder = makeBuilder([
+      field("", {
+        id: "field_layout",
+        type: "group",
+        fields: [field("body")],
+      }),
+    ]);
+    const { result } = renderHook(() => useBuilderFieldActions(builder.api));
+
+    expect(result.current.getValidatedFields(saved)).not.toBeNull();
   });
 });
 

@@ -317,7 +317,9 @@ export default function CollectionBuilderEditPage({
     missingSlugMessage: "Collection slug is missing",
     label: displayLabel(settings, entitySlug),
     confirmation,
-    getValidatedFields,
+    // Judged against the fields as last saved, so a draft that changes a
+    // saved field's storage level is refused before it can lose values.
+    getValidatedFields: () => getValidatedFields(pending.saved),
     preview: fields => schemaApi.preview(entitySlug, fields, localized),
     apply: (fields, version, resolutions, renames) =>
       schemaApi.apply(

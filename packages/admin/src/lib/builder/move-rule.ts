@@ -149,6 +149,21 @@ export function savedContainerIdsFrom(
   };
 }
 
+/**
+ * The storage level a field stands on, and the named fields on it: what a new field placed beside
+ * it is named against. A layout container's fields stand on the level holding it, as a move judges
+ * them (`namingLevel`, `namedFieldsIn`). Null when no field has the id.
+ */
+export function namingSiblingsOf(
+  fields: readonly BuilderField[],
+  fieldId: string
+): { level: BuilderField | null; siblings: BuilderField[] } | null {
+  const chain = chainTo(fields, fieldId);
+  if (!chain) return null;
+  const level = namingLevel(chain.slice(0, -1));
+  return { level, siblings: namedFieldsIn(siblingsIn(fields, level)) };
+}
+
 /** The fields one container holds: the top level for none. */
 function siblingsIn(
   fields: readonly BuilderField[],
@@ -158,7 +173,7 @@ function siblingsIn(
 }
 
 /** A field's name as the save sends it (`convertToFieldDefinition`), which is what a clash is judged on. */
-function sentName(field: BuilderField): string {
+export function sentName(field: BuilderField): string {
   return convertToFieldDefinition(field).name ?? "";
 }
 
@@ -166,7 +181,7 @@ function sentName(field: BuilderField): string {
  * Whether a field is a layout container: it has no name, so it holds no value of its own, and the
  * fields inside it are stored on the level that holds it (the server's sibling rule).
  */
-function isLayoutContainer(field: BuilderField): boolean {
+export function isLayoutContainer(field: BuilderField): boolean {
   return sentName(field) === "" && Array.isArray(field.fields);
 }
 
@@ -772,4 +787,35 @@ export function moveDestinations(
   };
   walk(fields, []);
   return places;
+}
+
+/**
+ * The saved fields a draft has taken to another storage level, which a save would not yet keep the
+ * values of (`CONTAINER_CHANGES_KEEP_VALUES`). Every way there counts, not only a move the rule
+ * judged: a layout group given a name after a field moved into it, or a group's name taken away,
+ * changes its fields' level as surely as a move does. Judged on the fields as they stand against
+ * where each was last saved, by the same level rule a move uses; a field never saved is not one.
+ */
+export function savedFieldsOffTheirLevel(
+  saved: readonly BuilderField[],
+  current: readonly BuilderField[]
+): BuilderField[] {
+  if (CONTAINER_CHANGES_KEEP_VALUES) return [];
+  const off: BuilderField[] = [];
+  const walk = (
+    list: readonly BuilderField[],
+    chain: readonly BuilderField[]
+  ) => {
+    for (const field of list) {
+      const savedChain = chainTo(saved, field.id);
+      if (savedChain) {
+        const was = namingLevel(savedChain.slice(0, -1));
+        const now = namingLevel(chain);
+        if ((was?.id ?? null) !== (now?.id ?? null)) off.push(field);
+      }
+      if (field.fields) walk(field.fields, [...chain, field]);
+    }
+  };
+  walk(current, []);
+  return off;
 }

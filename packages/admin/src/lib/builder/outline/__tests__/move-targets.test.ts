@@ -7,11 +7,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  nestedFixtureBlockCatalogs,
   nestedFixtureFieldGroups,
   nestedFixtureFields,
 } from "@admin/components/features/schema-builder/__fixtures__/nested-fixture";
 
-import { dropTarget, stepTarget, type OutlineRows } from "../move-targets";
+import {
+  dropTarget,
+  fieldGroupFieldHolding,
+  stepTarget,
+  type OutlineRows,
+} from "../move-targets";
 import {
   buildOutline,
   flattenOutline,
@@ -143,5 +149,33 @@ describe("a drop", () => {
         : node
     );
     expect(dropTarget(deleted, "f-title", "f-summary-a", 0)).toBeNull();
+  });
+});
+
+describe("fieldGroupFieldHolding", () => {
+  const byId = () =>
+    new Map(
+      flattenOutline(
+        buildOutline(nestedFixtureFields(), {
+          entityReadOnly: false,
+          fieldGroups: nestedFixtureFieldGroups(),
+          blockCatalogs: nestedFixtureBlockCatalogs(),
+        })
+      ).map(node => [node.id, node])
+    );
+
+  it("names the field using the group for a field group's own row", () => {
+    const rows = byId();
+    const groupRow = [...rows.values()].find(
+      node => node.readOnly?.kind === "field-group"
+    );
+    expect(fieldGroupFieldHolding(rows, groupRow!.id)?.id).toBe("f-seo");
+  });
+
+  it("names nothing for a registered block's row, which no field group holds", () => {
+    const rows = byId();
+    const blockRow = [...rows.values()].find(node => node.meta === "block");
+    expect(blockRow).toBeDefined();
+    expect(fieldGroupFieldHolding(rows, blockRow!.id)).toBeUndefined();
   });
 });

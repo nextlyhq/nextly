@@ -10,6 +10,7 @@ import type { BuilderField } from "@admin/components/features/schema-builder/typ
 
 import { placeAmongSiblings } from "./builder-rows";
 import { findFieldById, findParentContainerId } from "./field-transformers";
+import { isLayoutContainer } from "./move-rule";
 
 /** A field's name as a sentence calls it. */
 export function spokenFieldName(
@@ -68,8 +69,8 @@ function idsIn(
 }
 
 /**
- * The names each container's pending deletes still hold, by the container's
- * id, `""` for the top level: every field saved there that is no longer in
+ * The names each storage level's pending deletes still hold, by the id of the
+ * container naming that level, `""` for the top level: every field saved there that is no longer in
  * the Builder. Until the delete is saved its column is still there, so a
  * field arriving under a name that clashes with it would be refused by the
  * save.
@@ -85,7 +86,11 @@ export function heldNamesOf(
       if (!present.has(field.id) && field.name) {
         held.set(containerId, [...(held.get(containerId) ?? []), field.name]);
       }
-      if (field.fields) walk(field.fields, field.id);
+      // A layout container's fields are stored on the level holding it, so
+      // their names stay held there, as a move judges them.
+      if (field.fields) {
+        walk(field.fields, isLayoutContainer(field) ? containerId : field.id);
+      }
     }
   };
   walk(saved, "");

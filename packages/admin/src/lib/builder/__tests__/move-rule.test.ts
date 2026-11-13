@@ -15,6 +15,7 @@ import {
   judgeMove,
   moveDestinations,
   savedContainerIdsFrom,
+  savedFieldsOffTheirLevel,
   type MoveContext,
   type MoveVerdict,
 } from "../move-rule";
@@ -942,5 +943,54 @@ describe("a layout group's carried names among themselves", () => {
     expect(answer.reason).toBe("name-clash");
     expect(answer.message).toContain("body");
     expect(answer.message).toContain("Body");
+  });
+});
+
+describe("savedFieldsOffTheirLevel", () => {
+  const saved = [
+    plain("f-body", "body"),
+    plain("f-layout", "", { type: "group", fields: [] }),
+    plain("f-g", "group", { type: "group", fields: [plain("f-in", "inner")] }),
+  ];
+
+  it("finds a saved field a renamed layout group took to another level", () => {
+    const current = [
+      plain("f-layout", "box", {
+        type: "group",
+        fields: [plain("f-body", "body")],
+      }),
+      plain("f-g", "group", {
+        type: "group",
+        fields: [plain("f-in", "inner")],
+      }),
+    ];
+    expect(savedFieldsOffTheirLevel(saved, current).map(f => f.id)).toEqual([
+      "f-body",
+    ]);
+  });
+
+  it("finds the fields of a group whose name was taken away", () => {
+    const current = [
+      plain("f-body", "body"),
+      plain("f-layout", "", { type: "group", fields: [] }),
+      plain("f-g", "", { type: "group", fields: [plain("f-in", "inner")] }),
+    ];
+    expect(savedFieldsOffTheirLevel(saved, current).map(f => f.id)).toEqual([
+      "f-in",
+    ]);
+  });
+
+  it("finds nothing for a move within a level, or a field never saved", () => {
+    const current = [
+      plain("f-layout", "", {
+        type: "group",
+        fields: [plain("f-body", "body"), plain("f-new", "fresh")],
+      }),
+      plain("f-g", "group", {
+        type: "group",
+        fields: [plain("f-in", "inner"), plain("f-new2", "fresh2")],
+      }),
+    ];
+    expect(savedFieldsOffTheirLevel(saved, current)).toEqual([]);
   });
 });

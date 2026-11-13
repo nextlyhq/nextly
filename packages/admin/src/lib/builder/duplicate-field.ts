@@ -16,7 +16,7 @@ import { copyWithNewIds } from "./copy-field";
 import { freeDuplicateName } from "./duplicate-field-name";
 import { findFieldById, findParentContainerId } from "./field-transformers";
 import { insertField, positionAfter } from "./insert-field";
-import type { MoveContext } from "./move-rule";
+import { namingSiblingsOf, sentName, type MoveContext } from "./move-rule";
 
 /** What naming a copy needs beyond the fields: the move rule's view of names. */
 export type DuplicateNaming = Pick<
@@ -24,22 +24,30 @@ export type DuplicateNaming = Pick<
   "heldNames" | "topLevelReservesNames"
 >;
 
-/** Whether a copy may not be called `name` beside `siblings`. */
+/**
+ * Whether a copy may not be called `name`: judged as the save will judge it, on the name the save
+ * sends, against the named fields on the copy's storage level (a layout group's fields share the
+ * level holding it), the names that level's pending deletes still hold, and the top level's
+ * reserved names.
+ */
 function nameTaken(
+  copy: BuilderField,
   name: string,
-  siblings: readonly BuilderField[],
-  containerId: string | null,
+  level: { id: string | null; siblings: readonly BuilderField[] },
   naming: DuplicateNaming | undefined
 ): boolean {
-  const held = naming?.heldNames?.get(containerId ?? "") ?? [];
+  const sent = sentName({ ...copy, name });
+  const held = naming?.heldNames?.get(level.id ?? "") ?? [];
   const reserved =
-    containerId === null &&
+    level.id === null &&
     naming?.topLevelReservesNames === true &&
-    isReservedFieldName(name);
+    isReservedFieldName(sent);
   return (
     reserved ||
-    siblings.some(sibling => siblingNameClash(name, sibling.name) !== null) ||
-    held.some(other => siblingNameClash(name, other) !== null)
+    level.siblings.some(
+      sibling => siblingNameClash(sent, sentName(sibling)) !== null
+    ) ||
+    held.some(other => siblingNameClash(sent, other) !== null)
   );
 }
 
@@ -60,10 +68,16 @@ export function duplicatedFields(
   const siblings = containerId
     ? (findFieldById([...fields], containerId)?.fields ?? [])
     : fields;
+  const onLevel = namingSiblingsOf(fields, fieldId);
+  const level = {
+    id: onLevel?.level?.id ?? null,
+    siblings: onLevel?.siblings ?? siblings,
+  };
+  const fresh = copyWithNewIds(source);
   const copy: BuilderField = {
-    ...copyWithNewIds(source),
+    ...fresh,
     name: freeDuplicateName(source.name, name =>
-      nameTaken(name, siblings, containerId, naming)
+      nameTaken(fresh, name, level, naming)
     ),
   };
   // Read from its own container's list: an id is not unique in the whole tree.
