@@ -732,9 +732,10 @@ function edgesInto(
   own: ReadonlySet<string>
 ): { table: string; key: string }[] {
   const ownFolded = new Set([...own].map(folded));
+  const none: NonNullable<ExtensionSchemaRecord["relations"]> = new Map();
   const edges = [
-    ...(schema.relations ?? new Map()),
-    ...(schema.adoptedRelations ?? new Map()),
+    ...(schema.relations ?? none),
+    ...(schema.adoptedRelations ?? none),
   ];
   return edges
     .filter(([table]) => !ownFolded.has(folded(table)))
