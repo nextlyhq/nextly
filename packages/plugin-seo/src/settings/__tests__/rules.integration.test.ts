@@ -19,7 +19,7 @@ import {
 import { defineCollection, text } from "nextly";
 import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import { seoPlugin } from "../../plugin";
 import {
@@ -51,9 +51,18 @@ afterEach(async () => {
   current = undefined;
 });
 
+/**
+ * How many times, across every dialect this file ran on, the log said a
+ * setting waits for a migration: once per field for the whole process.
+ */
+let unmigratedWarnings = 0;
+
 afterAll(() => {
   if (madeHere.uploads) rmSync(UPLOADS, { recursive: true, force: true });
   if (madeHere.ignore) rmSync(IGNORE, { force: true });
+  if (getConfiguredTestDialects().length > 0) {
+    expect(unmigratedWarnings).toBe(1);
+  }
 });
 
 describe.each(getConfiguredTestDialects())(
@@ -113,6 +122,36 @@ describe.each(getConfiguredTestDialects())(
         otherNames: [],
         profiles: [],
       });
+    });
+
+    it("reads the other settings while the database waits to be migrated for one, and says so once", async () => {
+      const { t, ctx } = await boot();
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, siteName: "Acme", llmsTxt: true },
+      });
+      // As a site that upgraded and has not run its migration: the settings
+      // table has no column for a setting the release added. Raw SQL, and
+      // only in a test: no API removes a column a Single declares.
+      await t.adapter.executeQuery(
+        "ALTER TABLE single_seo_settings DROP COLUMN llms_txt"
+      );
+      const warn = vi.spyOn(ctx.logger, "warn");
+
+      for (let read = 0; read < 3; read += 1) {
+        const rules = await readSeoRules(ctx);
+        expect(rules.siteName).toBe("Acme");
+        // Unset, its default, rather than the value the column held.
+        expect(rules).not.toHaveProperty("llmsTxt");
+      }
+      const said = warn.mock.calls.filter(([message]) =>
+        String(message).includes('"llmsTxt"')
+      );
+      unmigratedWarnings += said.length;
+      expect(said.length).toBeLessThanOrEqual(1);
+      expect(
+        said.every(([message]) => String(message).includes("nextly migrate"))
+      ).toBe(true);
     });
 
     it("answers what was saved, with the share image and logo read from the media library", async () => {
