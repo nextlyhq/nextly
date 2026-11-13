@@ -101,7 +101,9 @@ A scope reaches:
   Schema Builder, including ones made after the plugin was installed (they get the
   field on the next start);
 - never a plugin's own collections or Singles (yours included), Nextly's system
-  types such as `users` and `media`, or field groups;
+  types such as `users` and `media`, or field groups, apart from a plugin's
+  collection marked `siteContent: true` (`@experimental`), one that holds the
+  site's own content, such as Page Builder's `pages`;
 - never a type listed in `except`.
 
 A type that already has a field of the same name is left as it is and named in a
@@ -138,6 +140,33 @@ else it would drop, and asks first; `--accept-data-loss` (or naming each
 
 `typesReachedBy(scope, types)` gives the same answer to anything else that needs to
 know which types a scope covers.
+
+### Which types got your field (`@experimental`)
+
+A scope decides at start which types it reaches: the Schema Builder's are read then, and
+a type that kept a field of its own by that name is left alone. `typesExtendedBy(plugin,
+field)` answers what the start actually did, from what it recorded, with no database read:
+
+```ts
+import { typesExtendedBy } from "@nextlyhq/plugin-sdk";
+
+// [{ kind: "collection", slug: "posts" }, { kind: "single", slug: "homepage" }, …]
+const types = typesExtendedBy("@acme/nextly-plugin-seo", "seo");
+```
+
+A type made in the Schema Builder since the start is listed once the site starts again,
+when it gets the field. An admin tab or panel section that edits the field takes
+`extendedWith: ["seo"]`, so the admin offers it on exactly those types (see the
+[API reference](/docs/plugins/api-reference)).
+
+A plugin whose collection holds the site's own pages marks it so scopes reach it:
+
+```ts
+defineCollection({ slug: "pages", siteContent: true, fields: [/* … */] });
+```
+
+The plugin's other collections, such as form submissions or internal records, stay out of
+every scope.
 
 ## Change entities you don't own
 
