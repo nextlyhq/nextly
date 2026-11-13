@@ -8,7 +8,7 @@
       "login": {
         "requests": 2,
         "rounds": 2,
-        "statements": 4,
+        "statements": 7,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/auth/ui": 1
@@ -19,7 +19,7 @@
       "signin": {
         "requests": 8,
         "rounds": 6,
-        "statements": 106,
+        "statements": 109,
         "kinds": {
           "GET /admin/api/auth/csrf": 1,
           "POST /admin/api/auth/login": 1,
@@ -36,7 +36,7 @@
       "dashboard": {
         "requests": 6,
         "rounds": 4,
-        "statements": 93,
+        "statements": 98,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -51,7 +51,7 @@
       "list": {
         "requests": 7,
         "rounds": 4,
-        "statements": 18,
+        "statements": 23,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -67,7 +67,7 @@
       "edit": {
         "requests": 16,
         "rounds": 6,
-        "statements": 42,
+        "statements": 48,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -97,7 +97,7 @@
       "login": {
         "requests": 2,
         "rounds": 2,
-        "statements": 4,
+        "statements": 7,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/auth/ui": 1
@@ -108,7 +108,7 @@
       "signin": {
         "requests": 8,
         "rounds": 6,
-        "statements": 104,
+        "statements": 106,
         "kinds": {
           "GET /admin/api/auth/csrf": 1,
           "POST /admin/api/auth/login": 1,
@@ -125,7 +125,7 @@
       "dashboard": {
         "requests": 6,
         "rounds": 3,
-        "statements": 90,
+        "statements": 94,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -140,7 +140,7 @@
       "list": {
         "requests": 7,
         "rounds": 4,
-        "statements": 18,
+        "statements": 21,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -156,7 +156,7 @@
       "edit": {
         "requests": 16,
         "rounds": 6,
-        "statements": 44,
+        "statements": 47,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -186,7 +186,7 @@
       "login": {
         "requests": 2,
         "rounds": 2,
-        "statements": 4,
+        "statements": 7,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/auth/ui": 1
@@ -214,7 +214,7 @@
       "dashboard": {
         "requests": 6,
         "rounds": 3,
-        "statements": 93,
+        "statements": 96,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -229,7 +229,7 @@
       "list": {
         "requests": 7,
         "rounds": 4,
-        "statements": 18,
+        "statements": 21,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -245,7 +245,7 @@
       "edit": {
         "requests": 16,
         "rounds": 6,
-        "statements": 42,
+        "statements": 47,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,

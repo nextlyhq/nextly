@@ -29,7 +29,20 @@ reads the page, so a later start is a slower screen even when no count moves.
 `timings` also carries the most statements any of the five loads sent
 (`mostStatements`). The pins hold the fewest, which a burst in one load does
 not move, so the most is what shows one: requests arriving together each
-reading what one read would have answered.
+reading what one read would have answered. `eachStatements` lists every
+load's count, in order.
+
+Each counted load starts once every read the server makes on a timer rather
+than per request has its interval run out: the stored schema version and the
+general settings row (each read at most once per two seconds), each cache
+tag's expiry and the session's standing (at most once per five), and a
+collection's registry row. The wait is read from those constants' own sources
+(`TIMED_READS` in `measure.mjs`), so every load pays each of those reads once,
+whatever the machine. Without it a load paid them only when the loads before
+it had run slowly enough, and the same commit counted two statements more on a
+slower machine. Reads kept for thirty seconds or more are not waited out: one
+lands in one of the five loads at most, and the fewest leaves it out, as it
+leaves out the first load's cold reads.
 
 On PostgreSQL it also starts the server with every round trip held 100 ms, and
 with 45 more collections, and pins how many statements each adds to the start

@@ -107,3 +107,23 @@ describe("checkRobotsRules before the address record is ready", () => {
     expect(listPaths).not.toHaveBeenCalled();
   });
 });
+
+describe("checkRobotsRules on a site serving its own robots.txt", () => {
+  it("finds nothing to confirm, since the plugin's rules are not what crawlers read", async () => {
+    const listPaths = vi.fn(async () => ["/blog/a"]);
+    expect(
+      await checkRobotsRules(
+        {} as never,
+        { text: "User-agent: *\nDisallow: /blog" },
+        {
+          readRules: () => Promise.resolve({ patterns: {} }),
+          listPaths,
+          servesBoth: true,
+          recordReady: () => true,
+          siteServesOwnRobots: () => Promise.resolve(true),
+        }
+      )
+    ).toEqual({ lines: [], pagesKey: blockedPagesKey([]) });
+    expect(listPaths).not.toHaveBeenCalled();
+  });
+});
