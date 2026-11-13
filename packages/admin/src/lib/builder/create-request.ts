@@ -10,6 +10,7 @@ import type {
   CreateCollectionPayload,
   FieldDefinition,
 } from "@admin/types/collection";
+import type { UpdateSinglePayload } from "@admin/types/entities";
 
 export function collectionCreatePayload(
   address: string,
@@ -43,6 +44,40 @@ export function collectionCreatePayload(
     // The server adds the system columns (id, title, slug, timestamps, status
     // when on); these are the fields the person added, the starting field
     // among them.
+    fields,
+  };
+}
+
+export function singleCreatePayload(
+  address: string,
+  settings: BuilderSettingsValues,
+  fields: FieldDefinition[]
+): UpdateSinglePayload {
+  return {
+    slug: address,
+    label: settings.singularName.trim(),
+    description: settings.description,
+    // Code-first config can still set admin.group / admin.order; the Builder
+    // does not surface them at create.
+    admin: { icon: settings.icon },
+    // Status passes through; the server adds its column on first enable.
+    ...(settings.status === true ? { status: true } : {}),
+    // The Internationalization flag at create; the companion table is
+    // provisioned once a translatable field is added.
+    ...(settings.i18n === true ? { localized: true } : {}),
+    // Version history opt-in at create; the server resolves the boolean.
+    ...(settings.versions === true ? { versions: true } : {}),
+    // Retention, only when set (else the server default 50); false =
+    // unlimited, a number = keep that many.
+    ...(settings.versionsMaxPerDoc !== undefined
+      ? { versionsMaxPerDoc: settings.versionsMaxPerDoc }
+      : {}),
+    // Cache revalidation and webhook recording are on by default, so only an
+    // explicit opt-out is forwarded; omitting the key keeps the server default.
+    ...(settings.revalidate === false ? { revalidate: false } : {}),
+    ...(settings.webhooks === false ? { webhooks: false } : {}),
+    // The server adds the system columns; these are the fields the person
+    // added, the starting field among them.
     fields,
   };
 }
