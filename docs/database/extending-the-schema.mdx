@@ -389,7 +389,7 @@ Payload below, whose `afterSchemaInit` keeps them on your machine only.
 | `.where()` partial index | not supported: refused on every dialect, because MySQL has none |
 | `relations()` | `relations` on `defineTable` + `ref()` auto-edges |
 | `pgEnum` | `col.enum([...])` — stored as text (`varchar(255)` on MySQL), values enforced by a CHECK on every dialect |
-| `schemaName` | not yet — `db.postgres.schema` accepts only `"public"` |
+| `schemaName` | `db.postgres.schema` (see [The PostgreSQL schema](#the-postgresql-schema)) |
 | `generate:db-schema` | not needed — types come from the declaration |
 
 Two differences worth knowing:
@@ -404,25 +404,38 @@ type them from the declaration, so `ctx.db` is checked without a codegen step.
 
 ## The PostgreSQL schema
 
-On PostgreSQL every managed table, index and constraint lives in `public`.
-`db.postgres.schema` is reserved for choosing another schema, but only
-`"public"` is supported today:
+On PostgreSQL an installation keeps every managed table, index and constraint
+in one schema: `public` unless `db.postgres.schema` names another. Core tables,
+collections, Singles, components, plugin tables and the migration history all
+live there, so several installations can share one database, each in a schema
+of its own.
 
 ```ts
 import { defineConfig } from "nextly";
 
 export default defineConfig({
-  // The only accepted value for now; leaving it out means the same thing.
-  db: { postgres: { schema: "public" } },
+  db: { postgres: { schema: "cms" } },
 });
 ```
 
-Any other value is refused when the server boots and by every `nextly`
-command, with an error naming the value. The schema push cannot yet create
-tables outside `public`, so an installation pointed at another schema would
-start with none of its core tables. Remove the option, or set it to
-`"public"`. A database adapter you construct yourself must not set a schema of
-its own either; one that disagrees with the config is refused at boot.
+The schema is created when the first start or `nextly migrate` connects, if
+the database user may create schemas; otherwise create it first and grant that
+user `USAGE` and `CREATE` on it. Every connection uses it as its
+`search_path`, so code that queries Nextly's tables directly reaches them
+without a schema prefix.
+
+Choose the schema before the first start and keep it. A start whose configured
+schema holds no installation, while another schema of the same database does,
+is refused with
+[`POSTGRES_SCHEMA_MOVED`](/docs/cli/errors/postgres-schema-moved), naming both:
+starting would otherwise create a second, empty installation and serve it
+instead of the existing one. To start a second, separate installation in a new
+schema on purpose, set `NEXTLY_POSTGRES_SCHEMA_NEW_INSTALL=1` for its first
+start or first `nextly migrate`.
+
+A database adapter you construct yourself must use the same schema, or none
+when the config names none; one that disagrees with the config is refused at
+boot.
 
 MySQL and SQLite have no equivalent (MySQL's schema IS its database, SQLite is
 one file). They ignore the setting and warn, so a config shared across

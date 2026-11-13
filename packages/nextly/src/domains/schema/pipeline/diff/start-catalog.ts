@@ -45,7 +45,8 @@ function rowsOf<Row>(raw: unknown): Row[] {
  * Every relation of the database, in one query of the catalog's table listing:
  *
  * - PostgreSQL: `information_schema.tables` outside the system schemas. Listed when a base
- *   table of `public`, as `listTables()` lists them; reachable when it is the relation an
+ *   table of the current schema (the installation's, through `search_path`), as `listTables()`
+ *   lists them; reachable when it is the relation an
  *   unqualified name resolves to, as `tableExists()` resolves it.
  * - MySQL: the current database's tables and views, every one reachable, the base tables listed.
  * - SQLite: `sqlite_master`'s tables and views. Only a table is reachable, as `tableExists()`
@@ -57,7 +58,8 @@ async function readRelations(
 ): Promise<StartCatalogRelation[]> {
   if (dialect === "postgresql") {
     const raw = await (db as { execute(q: unknown): Promise<unknown> }).execute(
-      sql`SELECT table_name AS name, table_schema AS schema, table_type AS kind,
+      sql`SELECT table_name AS name, table_type AS kind,
+                 table_schema = current_schema() AS listed,
                  (format('%I.%I', table_schema, table_name)::regclass
                     = to_regclass(quote_ident(table_name))) AS reachable
           FROM information_schema.tables
@@ -65,15 +67,15 @@ async function readRelations(
     );
     return rowsOf<{
       name: string;
-      schema: string;
       kind: string;
+      listed: boolean;
       reachable: boolean;
     }>(raw).map(row => {
       const baseTable = row.kind === "BASE TABLE";
       return {
         name: row.name,
         baseTable,
-        listed: baseTable && row.schema === "public",
+        listed: baseTable && row.listed === true,
         reachable: row.reachable === true,
       };
     });

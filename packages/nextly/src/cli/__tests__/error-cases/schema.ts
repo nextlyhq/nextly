@@ -5,10 +5,11 @@
  */
 import {
   assertAdapterPostgresSchema,
-  assertSupportedPostgresSchema,
+  refuseMovedInstallation,
   validatePostgresSchema,
 } from "../../../domains/schema/services/postgres-schema";
 import { NextlyError } from "../../../errors/nextly-error";
+import { CliError } from "../../errors";
 import { parseUiSchema } from "../../../schemas/_zod/ui-schema";
 
 import { PROJECT, type ErrorCases } from "./types";
@@ -24,8 +25,16 @@ function thrownBy(fn: () => unknown): unknown {
 }
 
 export const SCHEMA_CASES = {
+  // Retired: nothing raises it now, so the case is the error as its last release printed it, which
+  // the code's docs page keeps as its example.
   POSTGRES_SCHEMA_UNSUPPORTED: () =>
-    thrownBy(() => assertSupportedPostgresSchema("tenant_a")),
+    new CliError("POSTGRES_SCHEMA_UNSUPPORTED", {
+      what: 'db.postgres.schema is "tenant_a", but a PostgreSQL schema other than "public" is not supported yet.',
+      why: 'Nextly can only create and migrate its tables in "public".',
+      next: 'Remove db.postgres.schema (and any schema option on the database adapter), or set it to "public".',
+    }),
+  POSTGRES_SCHEMA_MOVED: () =>
+    thrownBy(() => refuseMovedInstallation("tenant_a", ["public"], false)),
   POSTGRES_SCHEMA_MISMATCH: () =>
     thrownBy(() => assertAdapterPostgresSchema("public", "tenant_a")),
   POSTGRES_SCHEMA_INVALID: () =>

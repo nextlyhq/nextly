@@ -50,7 +50,6 @@ import {
   dropsPluginMigratedTable,
   pluginMigratedTableSet,
 } from "../ownership/drop-guard";
-import { activePostgresSchema } from "../services/postgres-schema";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 
 import { withoutKeysOnKeylessRenames } from "./builder-foreign-keys";
@@ -109,6 +108,7 @@ import {
   operationsToJudge,
   planCompanionMoves,
 } from "./moved-to-companion";
+import { pushInActiveSchema } from "./pg-active-schema-push";
 import {
   assertLiveCounts,
   assertPreCleanupAccepted,
@@ -2013,15 +2013,19 @@ export class PushSchemaPipeline {
           // introspection to the desired tables prevents the kit's differ
           // from pairing out-of-scope live tables as phantom renames —
           // which on v1 throws its resolver's HintsHandler internal error.
+          // The CONFIGURED schema, not a hard-coded "public". The adapter
+          // puts every table in it through `search_path`, so a kit still
+          // introspecting `public` compared an empty namespace against a full
+          // desired set and proposed creating everything, forever; and the
+          // desired tables are placed in it for the push, or the kit reads
+          // them as `public`'s and proposes moving every one.
           pushSchema: (schema, db, tablesFilter) =>
-            kit.pushSchema(schema, db, {
-              // The CONFIGURED schema, not a hard-coded "public". The adapter
-              // puts every table in it through `search_path`, so a kit still
-              // introspecting `public` compared an empty namespace against a
-              // full desired set and proposed creating everything, forever.
-              schemas: [activePostgresSchema()],
-              tables: tablesFilter,
-            }),
+            pushInActiveSchema(schema, active =>
+              kit.pushSchema(schema, db, {
+                schemas: [active],
+                tables: tablesFilter,
+              })
+            ),
         };
       }
       case "mysql": {

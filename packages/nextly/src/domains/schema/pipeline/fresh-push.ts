@@ -46,7 +46,7 @@ import { isMissingColumnError } from "../../../database/missing-column";
 import { NextlyError } from "../../../errors/nextly-error";
 import { consoleLogger } from "../../../shared/types";
 import { pluginMigratedTableSet } from "../ownership/drop-guard";
-import { activePostgresSchema } from "../services/postgres-schema";
+import { pushInActiveSchema } from "./pg-active-schema-push";
 
 import { currentMysqlDatabaseName } from "./database-url";
 import {
@@ -283,13 +283,16 @@ async function pushForDialect(
       // before emission, so the scoping must happen at introspection time.
       // fresh-push is create-only reconcile — orphans are none of its
       // business.
-      return kit.pushSchema(schema, db, {
-        // The configured schema, for the same reason the pipeline's Phase D
-        // uses it: the adapter writes through `search_path`, so introspecting
-        // `public` would compare against a namespace nothing is in.
-        schemas: [activePostgresSchema()],
-        tables: drizzleTableNames(schema),
-      });
+      // The configured schema, for the same reason the pipeline's Phase D
+      // uses it: the adapter writes through `search_path`, so introspecting
+      // `public` would compare against a namespace nothing is in, and the
+      // desired tables must be read as that schema's too.
+      return pushInActiveSchema(schema, active =>
+        kit.pushSchema(schema, db, {
+          schemas: [active],
+          tables: drizzleTableNames(schema),
+        })
+      );
     }
     case "mysql": {
       const kit = await getMySQLDrizzleKit();
