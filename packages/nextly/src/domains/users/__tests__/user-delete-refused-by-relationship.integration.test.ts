@@ -139,7 +139,12 @@ describeEachDialect("deleting a user a relationship points at", dialect => {
     await current.nextly.users.delete({ id: grace });
 
     expect(await userIds()).not.toContain(grace);
-    const [row] = await rows(`SELECT ${q("editor")} FROM ${q("dc_notes")}`);
-    expect(row?.editor ?? null).toBeNull();
+    // The note is kept, with its editor emptied: a cascade would have deleted it instead.
+    const notes = await rows(
+      `SELECT ${q("title")}, ${q("editor")} FROM ${q("dc_notes")}`
+    );
+    expect(notes).toHaveLength(1);
+    expect(notes[0]?.title).toBe("One");
+    expect(notes[0]?.editor).toBeNull();
   });
 });
