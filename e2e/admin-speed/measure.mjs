@@ -91,6 +91,16 @@ const FIRST_BYTE_LIMIT_MS = 10_000;
 const FIRST_BYTE_OVER_SERVER_MS = 1000;
 const EXTRA_COLLECTIONS = 45;
 const QUIET_MS = 1500;
+/**
+ * How long after the last admin request a counted load begins at the
+ * earliest. The server reads the stored schema version at most once every
+ * 2 s (`SCHEMA_VERSION_READ_INTERVAL_MS`) and the RBAC epoch at most once a
+ * second (`EPOCH_TTL_MS`), so a load begun inside either interval reuses the
+ * previous load's read, and whether it does turned on how fast that load
+ * ended: the sign-in screen counted 5 or 6 from run to run. At 2.5 s, above
+ * both intervals, every load reads both afresh, as a visit arriving cold does.
+ */
+const SETTLE_MS = 2500;
 /** How long an open request is waited for once nothing else happens. */
 const OPEN_WAIT_MS = 10_000;
 /** How many times each screen is loaded; see `steady`. */
@@ -334,6 +344,12 @@ function roundsOf(requests) {
   return Math.max(0, ...depth.values());
 }
 
+/**
+ * When an admin request last started or answered, in any watched tab: a
+ * counted load waits until `SETTLE_MS` after it.
+ */
+let lastAdminRequestAt = 0;
+
 /** Watches one page's admin requests until none has started for `QUIET_MS`. */
 function watch(page) {
   const requests = [];
@@ -356,12 +372,14 @@ function watch(page) {
     request.__speed = entry;
     requests.push(entry);
     lastStart = entry.start;
+    lastAdminRequestAt = entry.start;
   });
   let lastEnd = Date.now();
   const end = request => {
     if (!request.__speed) return;
     request.__speed.end = Date.now();
     lastEnd = request.__speed.end;
+    lastAdminRequestAt = Math.max(lastAdminRequestAt, lastEnd);
   };
   page.on("requestfinished", end);
   page.on("requestfailed", end);
@@ -413,6 +431,9 @@ async function sample(context, log, load, before) {
     await watcher.quiet();
     watcher.requests.length = 0;
   }
+  // Begun once the server's short read intervals have passed since the last
+  // admin request, this tab's own above included (`SETTLE_MS`).
+  await sleep(Math.max(0, lastAdminRequestAt + SETTLE_MS - Date.now()));
   const from = Date.now();
   const kept = await load(page);
   const to = await watcher.quiet();
@@ -587,6 +608,9 @@ async function measureDialect(dialect, dir) {
 
     // The signed-in browser whose fresh tabs open the remaining screens.
     const first = await context.newPage();
+    // Watched only so its requests count as the last ones a load settles
+    // after (`SETTLE_MS`); nothing it sends is counted.
+    watch(first);
     await openForm(first);
     await signIn(first);
     await first.close();
