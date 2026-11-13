@@ -431,7 +431,7 @@ describe.each(getConfiguredTestDialects())(
           entity: posts([text("title")]),
           change: "create",
         });
-      const addSubtitle = (logger = quiet) =>
+      const addSubtitle = (logger: CollectionSaveDeps["logger"] = quiet) =>
         writeCollectionSave(deps({ logger }), {
           slug: "posts",
           previous: posts([text("title")]),
@@ -444,7 +444,12 @@ describe.each(getConfiguredTestDialects())(
         await holdTheTable();
         const notices: string[] = [];
         await expect(
-          addSubtitle({ ...quiet, warn: line => notices.push(line) })
+          addSubtitle({
+            ...quiet,
+            warn: (line: string) => {
+              notices.push(line);
+            },
+          })
         ).rejects.toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
         // A notice for each try after the first, in the save's log.
         expect(notices.length).toBeGreaterThan(0);

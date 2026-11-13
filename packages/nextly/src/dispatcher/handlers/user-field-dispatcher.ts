@@ -43,8 +43,20 @@ async function syncUserExtSchema(
 ): Promise<void> {
   if (!userExtSchemaService) return;
   await userExtSchemaService.reloadMergedFields();
-  const drizzleDb = getAdapterFromDI()?.getDrizzle();
-  await userExtSchemaService.ensureUserExtSchema(drizzleDb);
+  const adapter = getAdapterFromDI();
+  // A user field's column waits for a table another session is using in short tries, as
+  // `nextly migrate` waits, each try after the first noted in the log.
+  await userExtSchemaService.ensureUserExtSchema(
+    adapter?.getDrizzle(),
+    adapter === undefined
+      ? {}
+      : {
+          busyTable: {
+            adapter,
+            notify: line => (getLoggerFromDI() ?? consoleLogger).warn(line),
+          },
+        }
+  );
 }
 
 /**

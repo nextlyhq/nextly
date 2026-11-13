@@ -1760,11 +1760,27 @@ async function settleAttempts(
 }
 
 /** Whether the error says some of a file's statements stayed applied. */
-function partlyApplied(error: unknown): boolean {
+export function partlyApplied(error: unknown): boolean {
   if (!NextlyError.is(error)) return false;
-  if (error.code === "NEXTLY_MIGRATION_PARTIALLY_APPLIED") return true;
+  if (keptPart(error)) return true;
   const cause = (error as { cause?: unknown }).cause;
-  return (
-    NextlyError.is(cause) && cause.code === "NEXTLY_MIGRATION_PARTIALLY_APPLIED"
-  );
+  return NextlyError.is(cause) && keptPart(cause);
+}
+
+/**
+ * Whether `error` says statements of the file stayed: a part-way failure, or a busy table's tries
+ * that stopped after statements had committed (on MySQL, or outside a transaction), which the
+ * stop's outcome says, whatever the schema shows: a committed row change leaves none.
+ */
+function keptPart(error: NextlyError): boolean {
+  if (error.code === "NEXTLY_MIGRATION_PARTIALLY_APPLIED") return true;
+  if (error.code !== "NEXTLY_TABLE_BUSY") return false;
+  const outcome = (
+    error.logContext as
+      | { stop?: { outcome?: { kind?: unknown; restUndone?: unknown } } }
+      | undefined
+  )?.stop?.outcome;
+  // Read failing closed: an outcome that does not say nothing was kept keeps the files.
+  if (outcome?.kind === "nothing-changed") return false;
+  return !(outcome?.kind === "no-retry" && outcome.restUndone === true);
 }

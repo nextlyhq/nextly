@@ -1182,7 +1182,11 @@ export class FieldGroupMetadataService {
       const { applyMigrationStatements } = await import(
         "../../schema/services/apply-migration-statements"
       );
-      await applyMigrationStatements(adapter, migrationSQL);
+      // Waits for a table another session is using in short tries, as `nextly migrate` waits.
+      await applyMigrationStatements(adapter, migrationSQL, {
+        adapter,
+        notify: line => this.logger.warn(line),
+      });
 
       // Observed, not assumed. "Applied" has to mean the table is there.
       if (!(await adapter.tableExists(input.tableName))) {

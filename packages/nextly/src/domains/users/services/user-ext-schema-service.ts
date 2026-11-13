@@ -100,6 +100,10 @@ import { runRaw } from "../../schema/pipeline/pre-resolution/executor";
 import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
 import { columnIndexSql } from "../../schema/pipeline/sql-templates/create-index";
 import {
+  applyMigrationStatements,
+  type BusyTableWait,
+} from "../../schema/services/apply-migration-statements";
+import {
   columnTypeIsIndexable,
   uniquenessCanBeAnIndex,
 } from "../../schema/services/index-name";
@@ -435,9 +439,17 @@ export class UserExtSchemaService {
    */
   async ensureUserExtSchema(
     db: unknown,
-    options: { strict?: boolean } = {}
+    options: {
+      strict?: boolean;
+      /**
+       * Where given (a Schema Builder save of a user field), each statement waits for a table
+       * another session is using in short tries, as `nextly migrate` waits.
+       */
+      busyTable?: BusyTableWait;
+    } = {}
   ): Promise<void> {
     const strict = options.strict === true;
+    const busyTable = options.busyTable;
     if (strict && this.columnCollisions.length > 0) {
       throw NextlyError.validation({
         errors: this.columnCollisions.map(c => ({
@@ -475,7 +487,7 @@ export class UserExtSchemaService {
     //    dialect's call: SQLite's Drizzle database has no .execute(), so
     //    calling it threw and was taken for "already exists".
     for (const stmt of statements.filter(isCreateTable)) {
-      await this.runDdl(db, stmt, strict);
+      await this.runDdl(db, stmt, strict, busyTable);
     }
 
     // 2. ALTER TABLE ADD COLUMN for each field (handles case where
@@ -495,12 +507,12 @@ export class UserExtSchemaService {
         alterSQL = `ALTER TABLE ${this.q}${TABLE_NAME}${this.q} ADD COLUMN ${this.q}${columnName}${this.q} ${columnType}`;
       }
 
-      await this.runDdl(db, alterSQL, strict);
+      await this.runDdl(db, alterSQL, strict, busyTable);
     }
 
     // 3. The indexes and constraints, now that every column exists.
     for (const stmt of statements.filter(s => !isCreateTable(s))) {
-      await this.runDdl(db, stmt, strict);
+      await this.runDdl(db, stmt, strict, busyTable);
     }
   }
 
@@ -525,10 +537,15 @@ export class UserExtSchemaService {
   private async runDdl(
     db: unknown,
     statement: string,
-    strict: boolean
+    strict: boolean,
+    busyTable?: BusyTableWait
   ): Promise<void> {
     try {
-      await runRaw(db, statement, this.dialect);
+      // With a wait for a busy table, through the runner a Builder save's statements run through,
+      // which passes over what the schema already satisfies as the catch below does.
+      await (busyTable === undefined
+        ? runRaw(db, statement, this.dialect)
+        : applyMigrationStatements(busyTable.adapter, statement, busyTable));
     } catch (error) {
       if (!strict || isIdempotencyError(error)) return;
       if (this.isOwnForeignKeyRerun(error, statement)) return;

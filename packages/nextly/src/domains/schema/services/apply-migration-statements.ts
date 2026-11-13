@@ -60,8 +60,23 @@ export interface MigrationStatementRunner {
  */
 export async function applyMigrationStatements(
   adapter: MigrationStatementRunner,
-  migrationSQL: string
+  migrationSQL: string,
+  busyTable?: BusyTableWait
 ): Promise<void> {
+  if (busyTable !== undefined) {
+    // Each statement commits as it runs, as below, waiting for a busy table in short tries; one
+    // the schema already satisfies is passed over as below, never a rename.
+    const statements = splitStatements([migrationSQL]);
+    if (statements.length === 0) return;
+    await runInTries(
+      busyTable,
+      statements,
+      { source: "the Schema Builder change", transaction: false },
+      (error, statement) =>
+        !isRenameStatement(statement) && isIdempotencyError(error)
+    );
+    return;
+  }
   for (const statement of splitStatements([migrationSQL])) {
     try {
       await adapter.executeQuery(statement);
@@ -123,6 +138,13 @@ export async function applyMigrationWhole(args: {
    * The statements and the rebuild then run as one unit through `executeTransaction`.
    */
   sqliteNullability?: SqliteNullability;
+  /**
+   * Where given, the migration waits for a table another session is using as `nextly migrate`
+   * waits, in short tries (`runInTries`), and the statements run through the runner a migration
+   * file runs through: on SQLite with foreign keys off for the change and its dangling references
+   * checked before it commits. Without it, the statements run once, as before.
+   */
+  busyTable?: BusyTableWait;
 }): Promise<void> {
   // The one splitting rule: a separator is a line of its own, so its text inside a quoted value
   // stays part of the statement.
@@ -134,10 +156,23 @@ export async function applyMigrationWhole(args: {
   if (statements.length === 0 && rebuild === undefined) return;
   const progress = { ran: 0 };
   try {
-    await (rebuild === undefined
-      ? runStatements(args, statements, progress)
-      : runRebuilding(rebuild, statements, progress));
+    if (args.busyTable !== undefined) {
+      await runWholeInTries(
+        args,
+        args.busyTable,
+        statements,
+        rebuild,
+        progress
+      );
+    } else {
+      await (rebuild === undefined
+        ? runStatements(args, statements, progress)
+        : runRebuilding(rebuild, statements, progress));
+    }
   } catch (error: unknown) {
+    // Tries that ran out say so themselves: the table, what holds it, and that nothing changed.
+    if (NextlyError.is(error) && error.code === "NEXTLY_TABLE_BUSY")
+      throw error;
     // A refusal of the rebuild's own (a table it can't reproduce, a reference left dangling) says
     // why, as it is.
     if (rebuild !== undefined && error instanceof NextlyError) throw error;
@@ -148,6 +183,111 @@ export async function applyMigrationWhole(args: {
       args.dialect !== "mysql",
       args.entity
     );
+  }
+}
+
+/** How a Builder save's statements wait for a busy table: the adapter they run on, and where each try's notice goes. */
+export interface BusyTableWait {
+  adapter: DrizzleAdapter;
+  notify: (line: string) => void;
+}
+
+/**
+ * Runs `statements` as one unit in tries for a busy table (`runUnitInTries`), within the bounds the
+ * environment sets (`NEXTLY_LOCK_TIMEOUT`, `NEXTLY_LOCK_TIMEOUT_TOTAL`); a bound out of range
+ * refuses the change before anything runs. `after` runs once every statement has, inside the
+ * unit's transaction where it has one.
+ */
+async function runInTries(
+  wait: BusyTableWait,
+  statements: readonly string[],
+  unit: { source: string; transaction: boolean },
+  passOver?: (error: unknown, statement: string) => boolean,
+  after: (db: unknown) => Promise<void> = async () => {},
+  appliedBefore: () => readonly string[] = () => []
+): Promise<void> {
+  // Loaded here, as the rebuild is: a save that changes no table loads neither.
+  const [{ busyTableBounds }, { runUnitInTries }] = await Promise.all([
+    import("../busy-table/bounds"),
+    import("../busy-table/run-unit"),
+  ]);
+  await runUnitInTries(wait.adapter, statements, unit, after, {
+    bounds: busyTableBounds({ env: process.env }),
+    notify: wait.notify,
+    appliedBefore,
+    ...(passOver === undefined ? {} : { passOver }),
+  });
+}
+
+/**
+ * `applyMigrationWhole` in tries for a busy table. On PostgreSQL and SQLite the statements, and a
+ * SQLite rebuild after them, are one unit in one transaction. On MySQL, which commits each schema
+ * statement as it runs, each statement is a unit of its own, so the refusal can still say how many
+ * were applied; a statement the table already satisfies is passed over where `tolerateApplied`
+ * asks it.
+ */
+async function runWholeInTries(
+  args: {
+    dialect: SupportedDialect | undefined;
+    entity: string;
+    tolerateApplied?: boolean;
+  },
+  wait: BusyTableWait,
+  statements: readonly string[],
+  rebuild: SqliteNullability | undefined,
+  progress: { ran: number }
+): Promise<void> {
+  const source = `the ${args.entity}'s schema change`;
+  if (args.dialect !== "mysql") {
+    const after =
+      rebuild === undefined
+        ? undefined
+        : async (db: unknown) => {
+            const { rebuildSqliteNullability } = await import(
+              "./sqlite-nullability-rebuild"
+            );
+            // Inside the unit's transaction, on its one SQLite connection.
+            await rebuildSqliteNullability(
+              {
+                db,
+                execute: async statement => {
+                  await wait.adapter.executeQuery(statement);
+                },
+                restoreSession: () => Promise.resolve(),
+                session: () => Promise.resolve(undefined),
+              },
+              rebuild.tableName,
+              rebuild.required
+            );
+          };
+    await runInTries(
+      wait,
+      statements,
+      { source, transaction: true },
+      undefined,
+      after
+    );
+    progress.ran = statements.length;
+    return;
+  }
+  const tolerate =
+    args.tolerateApplied === true
+      ? (error: unknown, statement: string) =>
+          !isRenameStatement(statement) && alreadyApplied(error)
+      : undefined;
+  for (const [index, statement] of statements.entries()) {
+    await runInTries(
+      wait,
+      [statement],
+      {
+        source: `${source}, statement ${String(index + 1)}`,
+        transaction: true,
+      },
+      tolerate,
+      undefined,
+      () => (index === 0 ? [] : [`${source}, statements 1 to ${String(index)}`])
+    );
+    progress.ran += 1;
   }
 }
 
