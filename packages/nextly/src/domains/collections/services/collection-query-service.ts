@@ -179,6 +179,7 @@ import {
 import { storesPerLanguage } from "../../i18n/per-language-storage";
 import {
   ALL_LOCALES_KEY,
+  judgeEachLanguage,
   narrowToRowFields,
   publishedInLanguageCondition,
 } from "../../i18n/read-in-language";
@@ -3086,6 +3087,31 @@ export class CollectionQueryService extends BaseService {
         applyFieldReadAccess(target, sourceRedactions)
       );
       await fieldGroupPass?.(row, rowFieldGroupCaller);
+    }
+
+    // Every language's values beside a row go through the same field rules,
+    // asked in that language, as the row itself did: a rule answering by
+    // value or by language withholds each language's value as it would the
+    // row's.
+    if (!skipFieldRules) {
+      for (const row of finalData) {
+        await judgeEachLanguage(row, (inLanguage, locale) =>
+          withRuleLanguage({ locale, locales: [locale] }, async () => {
+            await applyFieldReadAccess({
+              kind: "collection",
+              slug: collectionName,
+              entry: inLanguage,
+              user: params.fieldAccessUser ?? params.user,
+              overrideAccess: false,
+              grants: fieldGroupCaller.grants,
+            });
+            await fieldGroupPass?.(inLanguage, {
+              ...fieldGroupCaller,
+              redactions: new WeakMap(),
+            });
+          })
+        );
+      }
     }
 
     // Authoritative related-row sanitization over the assembled response, after

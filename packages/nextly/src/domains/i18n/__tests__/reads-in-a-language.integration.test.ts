@@ -46,6 +46,11 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "slug", unique: true }),
           // Translated, and withheld from every reader by its read rule.
           text({ name: "note", access: { read: () => false } }),
+          // Translated, and withheld from a read in Spanish only.
+          text({
+            name: "regional",
+            access: { read: ({ locale }) => locale !== "es" },
+          }),
         ],
       }),
     ],
@@ -363,6 +368,7 @@ describe.each(getConfiguredTestDialects())(
         body: "en",
         slug: "es",
         note: null,
+        regional: null,
       });
 
       // Not asked for, a read carries no sources.
@@ -508,6 +514,36 @@ describe.each(getConfiguredTestDialects())(
         expect(every.title).toMatchObject({ en: "Harbour", es: "Puerto" });
         expect(every).not.toHaveProperty("note");
       }
+    }, 90_000);
+
+    // Each language's value is judged as the row read in that language is,
+    // so a rule withholding a field in Spanish withholds its Spanish value
+    // beside a read in English.
+    it("withholds a language's value its read rule refuses in that language", async () => {
+      const t = await boot(dialect);
+      const id = await publishedInEnglish(t, {
+        title: "Harbour",
+        slug: "a",
+        regional: "Coastal",
+      });
+      await publishIn(t, id, "es", {
+        title: "Puerto",
+        slug: "a-es",
+        regional: "Costero",
+      });
+      const read = await restGet(
+        ["collections", DOCS, "entries", id],
+        "?locale=en&translations=all"
+      );
+      expect(read.status, JSON.stringify(read.json)).toBe(200);
+      expect(read.json.regional).toBe("Coastal");
+      const every = read.json._allLocales as Record<
+        string,
+        Record<string, unknown>
+      >;
+      // Present, so its missing language is the rule's doing.
+      expect(every.title).toMatchObject({ en: "Harbour", es: "Puerto" });
+      expect(every.regional).toEqual({ en: "Coastal" });
     }, 90_000);
 
     // Under the alias a read of every language searches in the default

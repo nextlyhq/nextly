@@ -147,6 +147,41 @@ function stripEachLanguage(
 }
 
 /**
+ * Every language's values beside a row (`_allLocales`), each judged as the
+ * row read in that language is. `judge` is handed a copy of the row with its
+ * translated fields in that language, and what it leaves of them is what that
+ * language's values become: a rule that answers by value or by language
+ * withholds a language's value as it would withhold the row's own.
+ */
+export async function judgeEachLanguage(
+  row: Record<string, unknown>,
+  judge: (inLanguage: Record<string, unknown>, locale: string) => Promise<void>
+): Promise<void> {
+  const every = row[ALL_LOCALES_KEY];
+  if (!isValues(every)) return;
+  const codes = new Set<string>();
+  for (const value of Object.values(every)) {
+    if (isValues(value)) for (const code of Object.keys(value)) codes.add(code);
+  }
+  const judged: Record<string, Record<string, unknown>> = Object.fromEntries(
+    Object.keys(every).map(name => [name, {}])
+  );
+  for (const code of codes) {
+    const inLanguage: Record<string, unknown> = { ...row };
+    delete inLanguage[ALL_LOCALES_KEY];
+    delete inLanguage[SOURCE_LOCALES_KEY];
+    for (const [name, value] of Object.entries(every)) {
+      inLanguage[name] = isValues(value) ? value[code] : undefined;
+    }
+    await judge(inLanguage, code);
+    for (const name of Object.keys(every)) {
+      if (name in inLanguage) judged[name][code] = inLanguage[name];
+    }
+  }
+  row[ALL_LOCALES_KEY] = judged;
+}
+
+/**
  * Leave a row's side keys saying only what the row says. `_allLocales` and
  * `_sources` speak of the row's own translatable fields in other languages,
  * so a field the row's read withheld (a field read rule, a hidden-field
