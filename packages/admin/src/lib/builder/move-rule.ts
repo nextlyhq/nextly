@@ -82,7 +82,8 @@ export type MoveRefusalReason =
   | "unique-into-container"
   | "excluded-type"
   | "name-clash"
-  | "reserved-name";
+  | "reserved-name"
+  | "ambiguous-place";
 
 /** A move's answer: the fields after it, or why it is refused. */
 export type MoveVerdict =
@@ -229,6 +230,11 @@ function fieldGroupRefusal(
   );
 }
 
+/** A field and every field inside it, at any depth. */
+function withEverythingInside(field: BuilderField): BuilderField[] {
+  return [field, ...(field.fields ?? []).flatMap(withEverythingInside)];
+}
+
 /** The repeating rows on a chain of containers, by id. */
 function repeatersOn(chain: readonly BuilderField[]): BuilderField[] {
   return chain.filter(each => each.type === "repeater");
@@ -242,9 +248,16 @@ function crossingRefusal(
   ctx: MoveContext
 ): MoveVerdict | null {
   const intoIds = new Set(into.map(each => each.id));
-  // Only rows the field is saved in hold values of its own (`savedContainerIdsOf`).
-  const savedIn = ctx.savedContainerIdsOf
-    ? new Set(ctx.savedContainerIdsOf(field.id) ?? [])
+  // Only rows a field is saved in hold values of its own (`savedContainerIdsOf`). Every field the
+  // move carries counts, not only the one moved: an unsaved group may hold a field saved in the
+  // rows it would leave.
+  const savedContainerIdsOf = ctx.savedContainerIdsOf;
+  const savedIn = savedContainerIdsOf
+    ? new Set(
+        withEverythingInside(field).flatMap(
+          each => savedContainerIdsOf(each.id) ?? []
+        )
+      )
     : null;
   const leaving = repeatersOn(from).filter(
     repeater =>
@@ -258,7 +271,11 @@ function crossingRefusal(
     );
   }
   const fromIds = new Set(from.map(each => each.id));
-  const entersContainer = into.some(each => !fromIds.has(each.id));
+  // A layout container keeps its fields on the level holding it, so entering one puts the value
+  // in no JSON value of its own.
+  const entersContainer = into.some(
+    each => !fromIds.has(each.id) && !isLayoutContainer(each)
+  );
   if (
     entersContainer &&
     builderColumnIsUnique(convertToFieldDefinition(field))
@@ -289,7 +306,8 @@ function siblingClashRefusal(
   siblings: readonly BuilderField[]
 ): MoveVerdict | null {
   for (const other of siblings) {
-    if (other.id === field.id) continue;
+    // That one object: a copy sharing its id is another field, whose name counts.
+    if (other === field) continue;
     const kind = siblingNameClash(sentName(field), sentName(other));
     if (kind) {
       return refuse(
@@ -364,9 +382,15 @@ function arrivalRefusal(
     ? namingLevel(chainTo(fields, container.id) ?? [container])
     : null;
   if ((from?.id ?? null) === (into?.id ?? null)) return null;
+  const siblings = namedFieldsIn(siblingsIn(fields, into));
+  // A layout container carries its fields' names onto the level it arrives on, not its own.
+  const carried = isLayoutContainer(field) ? namedFieldsIn([field]) : [field];
   return (
     lockedInsideRefusal(field, chain, ctx) ??
-    nameRefusal(field, into, namedFieldsIn(siblingsIn(fields, into)), ctx)
+    carried.reduce<MoveVerdict | null>(
+      (refusal, each) => refusal ?? nameRefusal(each, into, siblings, ctx),
+      null
+    )
   );
 }
 
@@ -430,6 +454,7 @@ export function judgeMove(
   }
   const container = into ? into[into.length - 1] : null;
   const refusal =
+    ambiguousPlaceRefusal(fields, container) ??
     sourceRefusal(chain, ctx) ??
     containerRefusal(field, into, ctx) ??
     crossingRefusal(field, from, into ?? [], ctx) ??
@@ -454,6 +479,34 @@ export function judgeMove(
       .filter(repeater => !from.some(each => each.id === repeater.id))
       .map(called),
   };
+}
+
+/**
+ * Why the field may not go into `container`, if another container shares its id: the move places
+ * the field by its container's id, and a copy of a duplicated container keeps the ids inside it,
+ * so the move could not tell the two apart.
+ */
+function ambiguousPlaceRefusal(
+  fields: readonly BuilderField[],
+  container: BuilderField | null
+): MoveVerdict | null {
+  return container && containersWithId(fields, container.id) > 1
+    ? refuse(
+        "ambiguous-place",
+        `${called(container)} shares its id with a copy of it, so a move there could not tell the two apart. Add a new field there instead.`
+      )
+    : null;
+}
+
+/** How many containers in `fields`, at any depth, have this id. */
+function containersWithId(fields: readonly BuilderField[], id: string): number {
+  return fields.reduce(
+    (count, each) =>
+      count +
+      (each.id === id && Array.isArray(each.fields) ? 1 : 0) +
+      containersWithId(each.fields ?? [], id),
+    0
+  );
 }
 
 /**
