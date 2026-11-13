@@ -100,9 +100,11 @@ What the key does when an entry it points at is deleted:
   through. The referring entries' hooks, versions and webhooks do not run for
   that change.
 
-A relationship whose column holds a key can't be pointed at another collection,
-or changed to hold several entries: the save is refused, naming the field, and
-the key stays. Add a new relationship field instead, then remove the old one.
+A relationship whose column holds a key can't be pointed at another collection:
+the save is refused, naming the field, and the key stays. Add a new
+relationship field instead, then remove the old one. Switching it to hold
+several entries works as for any relationship: each value becomes a one-item
+list, and the key goes with the conversion.
 
 ### Container fields and nesting
 

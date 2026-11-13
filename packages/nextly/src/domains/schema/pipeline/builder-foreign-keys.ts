@@ -168,15 +168,16 @@ function fieldTitle(field: FieldDefinition): string {
 }
 
 /**
- * Refuses a save that would leave a relationship's key checking the wrong thing.
+ * Refuses a save that would leave a relationship's key checking the wrong collection.
  *
  * A relationship whose live column holds a foreign key has every value checked against its
  * target's table. Pointing it at another collection would keep that key checking the old target,
- * so every value of the new one would be refused; making it hold several entries turns its column
- * into a JSON list no key can check. Either is refused here, naming the field, before any statement
- * is planned, and the key stays as it is: a key is never dropped without being asked for by name.
- * Judged against the fields the registry records before this save, so only what the save changes
- * is judged, and a relationship whose column holds no key changes freely, as it always has.
+ * so every value of the new one would be refused. That is refused here, naming the field, before
+ * any statement is planned, and the key stays as it is. Making it hold several entries is not:
+ * that switch converts each value into a one-item list and takes the key with the conversion
+ * (`keysDroppedBeforeConversions`), since no key can check a list. Judged against the fields the
+ * registry records before this save, so only what the save changes is judged, and a relationship
+ * whose column holds no key changes freely, as it always has.
  */
 function refuseKeyedRelationshipChanges(
   fields: readonly FieldDefinition[],
@@ -204,15 +205,6 @@ function refuseKeyedRelationshipChanges(
       continue;
     }
     const target = relationshipTargetSlug(before) ?? "its collection";
-    if (relationshipStoresJson(field) && !relationshipStoresJson(before)) {
-      throw keyedRelationshipRefusal(
-        field,
-        "KEYED_RELATIONSHIP_CANNOT_HOLD_MANY",
-        `"${fieldTitle(field)}" can't be changed to hold several entries: the database checks ` +
-          `its one value against "${target}", and a list can't be checked that way. Add a new ` +
-          `relationship field that holds several entries instead, then remove this one.`
-      );
-    }
     const next = relationshipTargetSlug(field);
     if (
       !relationshipStoresJson(field) &&

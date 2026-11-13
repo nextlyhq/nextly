@@ -323,12 +323,10 @@ describe("withBuilderForeignKeys refuses to leave a key checking the wrong thing
     );
   });
 
-  it("refuses making a keyed relationship hold several entries", () => {
+  it("lets a keyed relationship switch to holding several entries, which converts it", () => {
+    // The switch keeps each value as a one-item list, and the key goes with the conversion.
     expect(refusalOf([TITLE, adminAuthor("authors", { hasMany: true })])).toBe(
-      "KEYED_RELATIONSHIP_CANNOT_HOLD_MANY"
-    );
-    expect(refusalOf([TITLE, adminAuthor(["authors", "editors"])])).toBe(
-      "KEYED_RELATIONSHIP_CANNOT_HOLD_MANY"
+      null
     );
   });
 
