@@ -93,8 +93,25 @@ describe("passwordDigester with an app's hasher", () => {
     // turn away unweighed.
     expect(verify).toHaveBeenCalledWith(
       "wrong",
-      expect.stringMatching(/^own\$decoy-/)
+      expect.stringMatching(/^own\$/)
     );
     expect(verify).not.toHaveBeenCalledWith("wrong", coreEra);
+  });
+
+  it("makes its decoy from a password the hasher accepts", async () => {
+    // A hasher that refuses anything over 8 bytes, as its reach says.
+    const hash = vi.fn((password: string) =>
+      Buffer.byteLength(password) > 8
+        ? Promise.reject(new Error("too long"))
+        : Promise.resolve(`own$${password}`)
+    );
+    const verify = vi.fn(() => Promise.resolve(false));
+    const digester = passwordDigester({ hash, verify, reach: 8 });
+    await digester.decoy("anything");
+    // The decoy hashed, and the comparison ran against it, not an empty value.
+    expect(verify).toHaveBeenCalledWith(
+      "anything",
+      expect.stringMatching(/^own\$.{1,8}$/)
+    );
   });
 });

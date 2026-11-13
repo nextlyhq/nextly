@@ -76,12 +76,27 @@ const decoys = new WeakMap<PasswordHasher, Promise<string>>();
 function decoyOf(hasher: PasswordHasher): Promise<string> {
   let made = decoys.get(hasher);
   if (!made) {
-    made = hasher.hash(`decoy-${crypto.randomUUID()}`);
+    made = hasher.hash(decoyPassword(hasher));
     // A failed one is not kept, so the next refusal asks again.
     made.catch(() => decoys.delete(hasher));
     decoys.set(hasher, made);
   }
   return made;
+}
+
+/**
+ * A password nobody knows that the hasher accepts: within its reach and
+ * passing its own `validate`, longest first. A hasher that refused the decoy
+ * would leave nothing to compare a missing account against, and that refusal
+ * would then answer faster than a wrong password.
+ */
+function decoyPassword(hasher: PasswordHasher): string {
+  const random = crypto.randomUUID().replaceAll("-", "");
+  for (const length of [24, 16, 12, 8, 4]) {
+    const candidate = `Dc0!${random}`.slice(0, length);
+    if (checkDigesterReach(candidate, hasher) === null) return candidate;
+  }
+  return random.slice(0, 4);
 }
 
 /** The hasher's answer; one that throws, on a value not its own, is no. */

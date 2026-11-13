@@ -245,6 +245,29 @@ describe.each(getConfiguredTestDialects())(
       expect(await signIns(t, "founder@example.com", FIRST)).toEqual(NONE);
     });
 
+    it("takes, on create and on an administrator's set, a password longer than bcrypt reads where the hasher reads it whole", async () => {
+      // 80 bytes: past bcrypt's 72, and whole for the unbounded app hasher.
+      const t = await boot(dialect);
+      const id = await seed(t, "founder@example.com");
+      const long = `Str0ng-P@ss-${"x".repeat(68)}`;
+      await new ServiceContainer(t.adapter).users.createLocalUser({
+        email: "long@example.com",
+        name: "Long",
+        password: long,
+        isActive: true,
+        emailVerification: "admin-vouched",
+      });
+      expect((await row(t, "long@example.com")).passwordHash).toBe(
+        digest(long)
+      );
+      await new ServiceContainer(t.adapter).users.updateUser(id, {
+        password: long,
+      });
+      expect((await row(t, "founder@example.com")).passwordHash).toBe(
+        digest(long)
+      );
+    });
+
     it("refuses, on create and on an administrator's set, a password longer than the hasher reads", async () => {
       // A hasher that reads 16 bytes: a longer password would be stored as its
       // first 16, which a different password sharing them would also match.

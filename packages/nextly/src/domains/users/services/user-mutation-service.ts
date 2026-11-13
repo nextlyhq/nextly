@@ -28,6 +28,7 @@ import {
   CreateLocalUserSchema,
   UpdateUserSchema,
 } from "@nextly/schemas/_zod/user";
+import { createPasswordSchema } from "@nextly/schemas/_zod/validation";
 import {
   buildCreateUserSchema,
   buildUpdateUserSchema,
@@ -40,7 +41,6 @@ import type {
 
 // PR 4 of unified-error-system migration: ServiceError result-shapes →
 // NextlyError throws. Methods now return data directly or throw.
-import { validatePasswordStrength } from "../../../auth/password";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import {
@@ -531,24 +531,21 @@ function isExternalIdentityShape(account: {
 }
 
 /**
- * Refuse a password the app's hasher cannot take whole, before it is hashed:
- * its declared `reach`, or its own `validate`. The input schema judges a
- * password by core bcrypt's reach, and a hasher reading less would store one a
- * different password with the same beginning also matches. Without a hasher
- * there is nothing to add: the schema's check is bcrypt's.
+ * `schema` with its password judged by the app's hasher: its `reach`, or its
+ * own `validate`, in place of core bcrypt's 72 bytes. The input schemas are
+ * where every account write judges a password, so the hasher's contract is
+ * applied there, before anything is hashed, and the same password is taken or
+ * refused on create and update as on a change or a reset. Without a hasher the
+ * schema is core's, unchanged.
  */
-function assertPasswordFitsHasher(password: string, path: string): void {
+function withAppPasswordRule<
+  S extends typeof CreateLocalUserSchema | typeof UpdateUserSchema,
+>(schema: S): S {
   const { hasher } = appPasswordDigester();
-  if (!hasher) return;
-  const strength = validatePasswordStrength(password, { hasher });
-  if (strength.ok) return;
-  throw NextlyError.validation({
-    errors: strength.errors.map(message => ({
-      path,
-      code: "WEAK_PASSWORD",
-      message,
-    })),
-  });
+  if (!hasher) return schema;
+  return schema.extend({
+    password: createPasswordSchema({ hasher }).optional(),
+  }) as S;
 }
 
 /** Whether a stored value is a password the app's sign-in takes. */
@@ -788,7 +785,7 @@ export class UserMutationService extends BaseService {
    */
   private getCreateSchema(): typeof CreateLocalUserSchema {
     this.ensureSchemasUpToDate();
-    return this.createSchema;
+    return withAppPasswordRule(this.createSchema);
   }
 
   /**
@@ -796,7 +793,7 @@ export class UserMutationService extends BaseService {
    */
   private getUpdateSchema(): typeof UpdateUserSchema {
     this.ensureSchemasUpToDate();
-    return this.updateSchema;
+    return withAppPasswordRule(this.updateSchema);
   }
 
   /**
@@ -1314,7 +1311,6 @@ export class UserMutationService extends BaseService {
       // write that takes a hash, and which refuses anything else.
       let passwordHash: string | null = null;
       if (userData.password && userData.password.length > 0) {
-        assertPasswordFitsHasher(userData.password, "password");
         passwordHash = await appPasswordDigester().hash(userData.password);
       }
 
@@ -2001,7 +1997,6 @@ export class UserMutationService extends BaseService {
         // a space at either end can be the password's symbol, and hashing the
         // trimmed form would store a password nobody typed.
         if (rawPassword.trim().length > 0) {
-          assertPasswordFitsHasher(rawPassword, "password");
           Object.assign(
             updateData,
             passwordColumns(await appPasswordDigester().hash(rawPassword))
