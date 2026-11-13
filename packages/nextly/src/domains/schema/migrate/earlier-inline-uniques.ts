@@ -156,13 +156,21 @@ async function postgresUniqueConstraints(
 }
 
 /**
- * The indexes of a MySQL table, each with its columns in order and whether it is unique over
- * whole values: a prefix or an expression keys only part of what it covers.
+ * The indexes of a MySQL table, each with its columns in order, whether it is unique over whole
+ * values, and whether its leading part is a whole column: a prefix or an expression keys only part
+ * of what it covers.
  */
 async function mysqlIndexes(
   db: unknown,
   table: string
-): Promise<{ name: string; columns: string[]; uniqueWhole: boolean }[]> {
+): Promise<
+  {
+    name: string;
+    columns: string[];
+    uniqueWhole: boolean;
+    leadingWhole: boolean;
+  }[]
+> {
   const rows = await querySqlRows<{
     name: string;
     column: string | null;
@@ -179,13 +187,20 @@ async function mysqlIndexes(
   );
   const byName = new Map<
     string,
-    { name: string; columns: string[]; uniqueWhole: boolean }
+    {
+      name: string;
+      columns: string[];
+      uniqueWhole: boolean;
+      leadingWhole: boolean;
+    }
   >();
   for (const row of rows) {
     const index = byName.get(row.name) ?? {
       name: row.name,
       columns: [],
       uniqueWhole: Number(row.nonUnique) === 0,
+      // Rows come in key order, so the first one read is the leading part.
+      leadingWhole: row.column !== null && row.subPart === null,
     };
     if (row.column === null || row.subPart !== null) index.uniqueWhole = false;
     if (row.column !== null) index.columns.push(row.column.toLowerCase());
@@ -223,7 +238,7 @@ async function postgresInlineUniques(
 
 /**
  * The inline UNIQUEs of one MySQL table the step drops: each kept where no other index begins
- * with its column, since MySQL refuses to drop the last index a foreign key can use.
+ * with its whole column, since MySQL refuses to drop the last index a foreign key can use.
  */
 async function mysqlInlineUniques(
   db: unknown,
@@ -239,8 +254,13 @@ async function mysqlInlineUniques(
       index.uniqueWhole &&
       index.columns.length === 1 &&
       index.name.toLowerCase() === column;
+    // Only an index whose leading part is the whole column serves the foreign key: MySQL cannot
+    // use a prefix of it.
     const served = indexes.some(
-      other => other.name !== index.name && other.columns[0] === column
+      other =>
+        other.name !== index.name &&
+        other.leadingWhole &&
+        other.columns[0] === column
     );
     if (!inline || !served) return [];
     const statement = dropConstraintSql(

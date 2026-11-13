@@ -2657,9 +2657,6 @@ export async function migrateCore(
       // Each one-to-one an earlier release left without its uniqueness gets it
       // (`makeOneToOnesUniqueAfterFiles`).
       await makeOneToOnesUniqueAfterFiles(deps);
-      // And each inline UNIQUE an earlier release gave a one-to-one no field makes unique any more
-      // goes (`letGoOfEarlierInlineUniquesAfterFiles`).
-      await letGoOfEarlierInlineUniquesAfterFiles(deps);
 
       // What the caller must hold true before the registry records the files' metadata.
       await deps.beforeMetadata?.();
@@ -2681,6 +2678,11 @@ export async function migrateCore(
       // is taken at the point the run ends at, and a migration still pending
       // without the metadata could not apply after it.
       await firstRun.recordMetadata();
+
+      // Each inline UNIQUE an earlier release gave a one-to-one no field makes unique any more goes
+      // (`letGoOfEarlierInlineUniquesAfterFiles`). After Phase 3: a Builder row its own database left
+      // `pending` is judged once this run has recorded it applied, not left to the next run.
+      await letGoOfEarlierInlineUniquesAfterFiles(deps);
 
       // After the files and after Phase 3: a file written before these
       // columns creates tables without them, and an entity whose registry
