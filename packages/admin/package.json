@@ -37,7 +37,8 @@
     "./style.css": "./dist/styles/globals.css"
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/bundle-modules.json"
   ],
   "scripts": {
     "build": "tsdown && node scripts/build-css.mjs && node scripts/stamp-dist.mjs",
