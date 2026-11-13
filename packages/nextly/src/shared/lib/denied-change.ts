@@ -175,8 +175,17 @@ export async function resolvePromotedDocument(
   const denied = collectDenied(input, [
     [input.before, permittedBefore],
     [input.live, permittedLive],
-    [input.pending, permittedPending],
   ]);
+  // A path the pending change on its own is denied is judged again on the document the publish
+  // produces, the pending value at that path: a rule reads the other fields, and the ones this
+  // publish writes are those of the produced document, not the draft's.
+  for (const path of await deniedOnlyInPending(
+    input,
+    permittedPending,
+    denied
+  )) {
+    denied.add(path);
+  }
   const refusals = [...denied].flatMap(path =>
     refusedLeaves(input, path, credited)
   );
@@ -316,20 +325,24 @@ export function keepPendingWhereDenied(input: {
   });
 }
 
-/** Set a dotted path of named fields in place, creating no container: one absent is left alone. */
+/**
+ * Set a dotted path of named fields in place, creating no container: one absent is left alone.
+ * Whether the value was set.
+ */
 function setRecordPath(
   root: Record<string, unknown>,
   path: string,
   value: unknown
-): void {
+): boolean {
   const steps = path.split(".");
   let current: Record<string, unknown> = root;
   for (const step of steps.slice(0, -1)) {
     const next = current[step];
-    if (!isRecord(next)) return;
+    if (!isRecord(next)) return false;
     current = next;
   }
   assign(current, steps[steps.length - 1], value);
+  return true;
 }
 
 /**
@@ -517,6 +530,50 @@ function isRefusal(
   if (pathExists(credited, leaf)) return false;
   const promoted = input.pending ?? input.before;
   return !sameStoredValue(valueAt(promoted, leaf), valueAt(input.live, leaf));
+}
+
+/**
+ * The paths the pending change on its own is denied that the document the publish produces denies
+ * too, once it holds the pending value there.
+ *
+ * The pending change is judged on its own for the value it adds inside a group the caller's
+ * payload replaced, which the produced document holds at the live value instead (see
+ * `PromotionAccessInput.pending`). Judged there alone, a rule reading a sibling the publish itself
+ * changes reads the draft's value of it, not the one the publish writes, and refuses a publish the
+ * produced document allows. So each such path is judged on the produced document with the pending
+ * value put at it, which keeps the protected-child case refused (the rule still denies the value)
+ * and lets the sibling case through. A path inside a list is left denied: a row's path is its
+ * position, and the produced document's rows need not sit where the pending change's do.
+ */
+async function deniedOnlyInPending(
+  input: PromotionAccessInput,
+  permittedPending: Record<string, unknown> | undefined,
+  alreadyDenied: ReadonlySet<string>
+): Promise<string[]> {
+  if (!input.pending || !permittedPending) return [];
+  const out: string[] = [];
+  for (const path of deniedPaths(input.pending, permittedPending, "")) {
+    if (alreadyDenied.has(path)) continue;
+    if (path.includes("[") || (await deniedInProduced(input, path))) {
+      out.push(path);
+    }
+  }
+  return out;
+}
+
+/** Whether the produced document, holding the pending value at `path`, denies it there. */
+async function deniedInProduced(
+  input: PromotionAccessInput,
+  path: string
+): Promise<boolean> {
+  const produced = detachData(input.before);
+  if (
+    !setRecordPath(produced, path, detachData(valueAt(input.pending, path)))
+  ) {
+    return true;
+  }
+  await input.applyRules(produced);
+  return !pathExists(produced, path);
 }
 
 /** Refuse the promotion, naming every field at fault, in a stable order. */

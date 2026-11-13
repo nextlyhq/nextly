@@ -777,3 +777,82 @@ describe("keepPendingWhereDenied", () => {
     });
   });
 });
+
+// A rule reads the document's other fields. A pending value is judged on the document the
+// publish produces, so a sibling the publish itself changes is read as the publish writes it.
+describe("resolvePromotedDocument judges a pending value by the document it produces", () => {
+  // `guarded` may be written only where `kind` is "public".
+  const kindRule = (document: Record<string, unknown>): Promise<void> => {
+    if (document.kind !== "public") delete document.guarded;
+    return Promise.resolve();
+  };
+  const live = { kind: "public", guarded: "old" };
+
+  it("allows a pending value the produced document allows, though the draft alone denies it", async () => {
+    const pending = { kind: "private", guarded: "new" };
+    const callerSupplied = { kind: "public" };
+    const out = await resolvePromotedDocument({
+      slug: "posts",
+      applyRules: kindRule,
+      before: { ...pending, ...callerSupplied },
+      live,
+      pending,
+      callerSupplied,
+    });
+    expect(out).toEqual({ kind: "public", guarded: "new" });
+  });
+
+  it("refuses a pending value the produced document denies, though the draft alone allows it", async () => {
+    const pending = { kind: "public", guarded: "new" };
+    const callerSupplied = { kind: "private" };
+    let refused: unknown;
+    try {
+      await resolvePromotedDocument({
+        slug: "posts",
+        applyRules: kindRule,
+        before: { ...pending, ...callerSupplied },
+        live,
+        pending,
+        callerSupplied,
+      });
+    } catch (error) {
+      refused = error;
+    }
+    expect(NextlyError.isValidation(refused)).toBe(true);
+    expect(
+      (
+        refused as { publicData?: { errors?: { path: string }[] } }
+      ).publicData?.errors?.map(e => e.path)
+    ).toEqual(["guarded"]);
+  });
+
+  it("still refuses a protected value the caller's group replaced, which the rule denies wherever it is", async () => {
+    // The rule denies `ops.runbook` to this caller whatever its siblings say.
+    const denyRunbook = (document: Record<string, unknown>): Promise<void> => {
+      const ops = document.ops as Record<string, unknown> | undefined;
+      if (ops) delete ops.runbook;
+      return Promise.resolve();
+    };
+    const pending = { ops: { note: "n", runbook: "author" } };
+    const callerSupplied = { ops: { note: "caller" } };
+    let refused: unknown;
+    try {
+      await resolvePromotedDocument({
+        slug: "posts",
+        applyRules: denyRunbook,
+        // The caller's group replaced the pending one; the gate kept the live runbook there.
+        before: { ops: { note: "caller", runbook: "live" } },
+        live: { ops: { note: "n", runbook: "live" } },
+        pending,
+        callerSupplied,
+      });
+    } catch (error) {
+      refused = error;
+    }
+    expect(
+      (
+        refused as { publicData?: { errors?: { path: string }[] } }
+      ).publicData?.errors?.map(e => e.path)
+    ).toEqual(["ops.runbook"]);
+  });
+});
