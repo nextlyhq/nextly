@@ -487,6 +487,8 @@ interface VersionIndex {
   bySlug: Map<string, Set<string>>;
   /** The origins languages are served on, each a language's own domain. */
   origins: Set<string>;
+  /** The paths of pages of a type that isn't translated, served on every origin. */
+  byUnlocalizedPath: Map<string, Set<string>>;
 }
 
 /**
@@ -508,6 +510,7 @@ function indexOf(
     byPath: new Map(),
     bySlug: new Map(),
     origins: new Set(),
+    byUnlocalizedPath: new Map(),
   };
   for (const version of versions) {
     index.byKey.set(version.key, version);
@@ -532,6 +535,9 @@ function indexAddress(
 ): void {
   const served = servedAddress(version);
   if (served === undefined) return;
+  if (version.locale === undefined) {
+    add(index.byUnlocalizedPath, served.path, place);
+  }
   if (served.origin !== undefined) {
     index.origins.add(served.origin);
     add(index.byAddress, `${served.origin}${served.path}`, place);
@@ -589,8 +595,13 @@ export function matcher(
     if (atAddress !== undefined) return onePlace(index, atAddress);
     // An address on a language's own domain names that language alone: one
     // no page holds there matches nothing, rather than another language.
+    // A page of a type that isn't translated is the same on every one.
     if (match.origin !== undefined && index.origins.has(match.origin)) {
-      return undefined;
+      const shared =
+        match.path === undefined
+          ? undefined
+          : index.byUnlocalizedPath.get(match.path);
+      return shared === undefined ? undefined : onePlace(index, shared);
     }
     const atPath =
       match.path === undefined ? undefined : index.byPath.get(match.path);

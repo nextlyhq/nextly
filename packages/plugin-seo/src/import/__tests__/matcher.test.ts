@@ -68,6 +68,26 @@ describe("matching a file's addresses on a site with language domains", () => {
     expect(find(at("https://example.de/about"))).toBeUndefined();
   });
 
+  it("finds a page of a type that isn't translated on a language's domain", () => {
+    const contact: ReadVersion = {
+      ...about("en", "https://example.com/contact"),
+      type: "forms",
+      id: "contact",
+      label: "Contact",
+      path: "/contact",
+      key: "forms|contact||published",
+      served: "/contact",
+    };
+    delete contact.locale;
+    const withShared = matcher(
+      [about("en", "https://example.com/about"), contact],
+      "en"
+    );
+    expect(keys(withShared(at("https://example.com/contact")))).toEqual([
+      "forms|contact||published",
+    ]);
+  });
+
   it("reads an address on another site by its path, in the default language", () => {
     expect(keys(find(at("https://old.example/about")))).toEqual([
       "pages|about|en|published",
