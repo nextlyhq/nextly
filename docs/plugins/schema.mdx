@@ -675,8 +675,16 @@ over more than one release:
 2. **Move at start, and keep the old place's shape.** Copy the rows in your
    plugin's `onReady`, once, under a note that says the move is done, in one
    transaction with the copy. In the same transaction, keep something that
-   changes whenever the old release writes the old place: its row count and
-   the time of its newest row are usually enough. A move made in a SQL module
+   changes whenever the old release writes the old place, whether it adds,
+   updates or deletes a row. A row count and the newest update time are a
+   shortcut that is only safe where every write sets that time from one clock
+   and nothing is changed in the same second as the look: an old instance can
+   update a row without moving the count, a slower clock can stamp a later
+   write as older, and a delete and an insert can leave the count where it
+   was. For other data, keep a durable record of what you took in (the ids of
+   the rows, or a note on each row once it is moved) and compare against that,
+   rather than trusting a count and a time. Take the time at which you read the
+   old place, not the time you finished. A move made in a SQL module
    cannot know the old place's name on a site that renamed your collection
    (`rename`), and runs before any plugin code, so the move belongs in code.
 3. **Take in what the old release wrote afterwards.** At each start, compare
