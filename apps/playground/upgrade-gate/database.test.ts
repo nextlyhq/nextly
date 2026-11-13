@@ -91,3 +91,61 @@ describe("the SQLite catalog", () => {
     }
   });
 });
+
+describe("the SQLite catalog's indexes", () => {
+  /** The operations between two databases built by `before` and `after`. */
+  async function operations(before: string, after: string) {
+    const scratch = mkdtempSync(join(tmpdir(), "upgrade-gate-index-"));
+    try {
+      const read = async (name: string, ddl: string) => {
+        const file = join(scratch, `${name}.sqlite`);
+        const db = new Sqlite(file);
+        db.exec(ddl);
+        db.close();
+        return readCatalog("sqlite", `file:${file}`);
+      };
+      return operationsBetween(
+        await read("before", before),
+        await read("after", after)
+      );
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }
+  const table = `CREATE TABLE "t" ("email" text);`;
+
+  it("reads an index rebuilt with another collation as a change", async () => {
+    expect(
+      await operations(
+        `${table} CREATE UNIQUE INDEX "t_email" ON "t" ("email");`,
+        `${table} CREATE UNIQUE INDEX "t_email" ON "t" ("email" COLLATE NOCASE);`
+      )
+    ).toEqual([
+      "change index t.t_email: unique (email) -> unique (email collate NOCASE)",
+    ]);
+  });
+
+  it("reads an index rebuilt over another expression as a change", async () => {
+    expect(
+      await operations(
+        `${table} CREATE INDEX "t_email" ON "t" (lower("email"));`,
+        `${table} CREATE INDEX "t_email" ON "t" (upper("email"));`
+      )
+    ).toEqual(['change index t.t_email: (lower("email")) -> (upper("email"))']);
+  });
+
+  it("reads an index whose direction changed as a change, and the same index written another way as none", async () => {
+    expect(
+      await operations(
+        `${table} CREATE INDEX "t_email" ON "t" ("email");`,
+        `${table} CREATE INDEX "t_email" ON "t" ("email" DESC);`
+      )
+    ).toEqual(["change index t.t_email: (email) -> (email desc)"]);
+    expect(
+      await operations(
+        `${table} CREATE INDEX "t_email" ON "t" ("email");`,
+        `${table} CREATE INDEX IF NOT EXISTS \`t_email\` ON \`t\` (\`email\` ASC);`
+      )
+    ).toEqual([]);
+  });
+});

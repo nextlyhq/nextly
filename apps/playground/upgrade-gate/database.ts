@@ -196,8 +196,10 @@ async function dumpMysql(url: string): Promise<string> {
       )) as unknown as [Record<string, string>[]];
       lines.push(`${created["Create Table"]};`);
       // Generated columns are computed again on insert, so they are left out.
+      // A column whose default is an expression (`DEFAULT_GENERATED`) is not
+      // one: it holds what was written, and is kept.
       const [columns] = await connection.query(
-        "SELECT column_name AS name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND extra NOT LIKE '%GENERATED%' ORDER BY ordinal_position",
+        "SELECT column_name AS name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND extra NOT LIKE '%VIRTUAL GENERATED%' AND extra NOT LIKE '%STORED GENERATED%' ORDER BY ordinal_position",
         [name]
       );
       const names = (columns as { name: string }[]).map(c => c.name);
@@ -453,6 +455,75 @@ function sqliteColumns(db: SqliteDb, table: string): Record<string, string> {
  * KEY constraint made is numbered by position, so it is named by what it
  * covers, as a constraint.
  */
+/**
+ * The key list of a CREATE INDEX statement, one entry per key: the text
+ * between the parentheses after the table, split at its top-level commas.
+ */
+function indexKeyTexts(sql: string): string[] {
+  const on = /\bON\s+(?:"[^"]*"|`[^`]*`|\[[^\]]*\]|\S+?)\s*\(/i.exec(sql);
+  if (on === null) return [];
+  const open = on.index + on[0].length - 1;
+  const inner = sql.slice(open + 1, pastParenthesised(sql, open) - 1);
+  const keys: string[] = [];
+  let depth = 0;
+  let from = 0;
+  let at = 0;
+  while (at < inner.length) {
+    const char = inner[at];
+    if (QUOTES.has(char)) {
+      at = pastQuoted(inner, at);
+      continue;
+    }
+    if (char === "(") depth += 1;
+    if (char === ")") depth -= 1;
+    if (char === "," && depth === 0) {
+      keys.push(inner.slice(from, at));
+      from = at + 1;
+    }
+    at += 1;
+  }
+  keys.push(inner.slice(from));
+  return keys.map(key => key.replace(/\s+/g, " ").trim());
+}
+
+/**
+ * One index's keys as they decide what it holds: each column, or the
+ * expression the statement writes for it, with its collation where it is not
+ * the default and its direction where it is descending.
+ */
+function sqliteIndexKeys(db: SqliteDb, index: string, sql: string | null) {
+  const keys = (
+    db.prepare(`PRAGMA index_xinfo("${index}")`).all() as {
+      cid: number;
+      name: string | null;
+      desc: number;
+      coll: string;
+      key: number;
+    }[]
+  ).filter(key => key.key === 1);
+  const texts = sql === null ? [] : indexKeyTexts(sql);
+  return keys
+    .map((key, position) => {
+      // An expression has no column name, so its own text names it, without
+      // the COLLATE or direction its entry may carry, which are read below.
+      const expression = texts[position]
+        ?.replace(/\s+COLLATE\s+\S+/i, "")
+        .replace(/\s+(ASC|DESC)$/i, "");
+      return words(
+        key.name ?? expression ?? "(expression)",
+        key.coll !== "BINARY" && `collate ${key.coll}`,
+        key.desc > 0 && "desc"
+      );
+    })
+    .join(", ");
+}
+
+/**
+ * A SQLite table's indexes into `shape`. One made by CREATE INDEX keeps the
+ * name Nextly chose, with the WHERE of a partial one. One a UNIQUE or PRIMARY
+ * KEY constraint made is numbered by position, so it is named by what it
+ * covers, as a constraint.
+ */
 function sqliteIndexes(db: SqliteDb, table: string, shape: TableShape): void {
   const indexes = db.prepare(`PRAGMA index_list("${table}")`).all() as {
     name: string;
@@ -461,25 +532,19 @@ function sqliteIndexes(db: SqliteDb, table: string, shape: TableShape): void {
     partial: number;
   }[];
   for (const index of indexes) {
-    const keyColumns = (
-      db.prepare(`PRAGMA index_info("${index.name}")`).all() as {
-        name: string | null;
-      }[]
-    )
-      .map(column => column.name ?? "(expression)")
-      .join(", ");
-    if (index.origin !== "c") {
-      const kind = index.origin === "pk" ? "primary key" : "unique";
-      shape.constraints[`${kind} (${keyColumns})`] = kind;
-      continue;
-    }
     const { sql } = db
       .prepare("SELECT sql FROM sqlite_master WHERE name = ?")
-      .get(index.name) as { sql: string };
-    const where = /\bWHERE\b([\s\S]*)$/i.exec(sql)?.[1].trim();
+      .get(index.name) as { sql: string | null };
+    const keys = sqliteIndexKeys(db, index.name, sql);
+    if (index.origin !== "c") {
+      const kind = index.origin === "pk" ? "primary key" : "unique";
+      shape.constraints[`${kind} (${keys})`] = kind;
+      continue;
+    }
+    const where = /\bWHERE\b([\s\S]*)$/i.exec(sql ?? "")?.[1].trim();
     shape.indexes[index.name] = words(
       index.unique > 0 && "unique",
-      `(${keyColumns})`,
+      `(${keys})`,
       where !== undefined && `where ${where}`
     );
   }
