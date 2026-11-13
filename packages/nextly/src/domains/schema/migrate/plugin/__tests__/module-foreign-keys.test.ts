@@ -82,6 +82,70 @@ const messageOf = (
   }
 };
 
+/**
+ * The dependency's `dep__products`, carrying its owner's key and the key
+ * `fk_dep__products_fx` this plugin contributes to `fx__items`.
+ */
+const productsWithContributedKey: TableSpec = {
+  ...keying("dep__products", "dep__shops"),
+  columns: [
+    { name: "id", type: "varchar(32)", nullable: false },
+    { name: "ref", type: "varchar(32)", nullable: false },
+    { name: "fx_item_id", type: "varchar(32)", nullable: true },
+  ],
+  foreignKeys: [
+    ...(keying("dep__products", "dep__shops").foreignKeys ?? []),
+    {
+      name: "fk_dep__products_fx",
+      columns: ["fx_item_id"],
+      referencesTable: "fx__items",
+      referencesColumns: ["id"],
+      onDelete: "restrict",
+      onUpdate: "restrict",
+    },
+  ],
+};
+
+/**
+ * A module adding `contributedTable` to a dependency's table and owning no
+ * table of its own; `ownKeys` is the contribution record, or undefined for a
+ * module generated before contributions were recorded.
+ */
+const contributing = (
+  name: string,
+  contributedTable: TableSpec,
+  ownKeys: string[] | undefined
+): PluginMigration => {
+  const each = <T>(value: T) => ({
+    postgresql: value,
+    mysql: value,
+    sqlite: value,
+  });
+  const content = {
+    name,
+    schemaVersion: 1,
+    dialects: each({ up: [] as string[], down: [] as string[] }),
+    snapshot: each({ tables: [] as TableSpec[] }),
+    before: each({ tables: [] as TableSpec[] }),
+    contributed: each({ tables: [contributedTable] }),
+    contributedBefore: each({ tables: [] as TableSpec[] }),
+    ...(ownKeys === undefined
+      ? {}
+      : {
+          contributions: each({
+            [contributedTable.name]: {
+              columns: ["fx_item_id"],
+              indexes: [],
+              foreignKeys: ownKeys,
+              checks: [],
+            },
+          }),
+        }),
+  };
+  return { ...content, checksum: migrationChecksum(content) };
+};
+
+
 describe("assertModuleForeignKeysResolve", () => {
   it("refuses a first module's key to a table only its second creates, naming both modules and the key", () => {
     const message = messageOf([
@@ -239,67 +303,34 @@ describe("assertModuleForeignKeysResolve", () => {
     expect(message).toContain("002_future");
   });
 
-  describe("a key the plugin contributed to a dependency's table", () => {
-    /** A module that also contributes `foreign` to another owner, recording `keys` as its own. */
-    const contributing = (
-      name: string,
-      tables: TableSpec[],
-      foreign: TableSpec,
-      keys: string[]
-    ): PluginMigration => {
-      const sides = (list: TableSpec[]) => ({
-        postgresql: { tables: list },
-        mysql: { tables: list },
-        sqlite: { tables: list },
-      });
-      const elements = {
-        [foreign.name]: {
-          columns: ["ref"],
-          indexes: [],
-          foreignKeys: keys,
-          checks: [],
-        },
-      };
-      const content = {
-        name,
-        schemaVersion: 1,
-        dialects: {
-          postgresql: { up: [], down: [] },
-          mysql: { up: [], down: [] },
-          sqlite: { up: [], down: [] },
-        },
-        snapshot: sides(tables),
-        before: sides([]),
-        contributed: sides([foreign]),
-        contributedBefore: sides([]),
-        contributions: {
-          postgresql: elements,
-          mysql: elements,
-          sqlite: elements,
-        },
-      };
-      return { ...content, checksum: migrationChecksum(content) };
-    };
+  it("refuses a key the plugin contributes to another owner's table before its own later module creates the target", () => {
+    const message = messageOf([
+      contributing("001_contribute", productsWithContributedKey, [
+        "fk_dep__products_fx",
+      ]),
+      module("002_items", [plain("fx__items")]),
+    ]);
+    expect(message).toContain("001_contribute");
+    expect(message).toContain("fk_dep__products_fx");
+    expect(message).toContain("002_items");
+  });
 
-    it("is judged against the chain like a key on its own table", () => {
-      // 001 keys the dependency's table at fx__parents, which only 002 creates.
-      const message = messageOf([
-        contributing("001_init", [], keying("dep__items", "fx__parents"), [
-          "fk_dep__items_ref",
-        ]),
-        module("002_parents", [plain("fx__parents")]),
-      ]);
-      expect(message).toContain("001_init");
-      expect(message).toContain("fk_dep__items_ref");
-      expect(message).toContain("002_parents");
-    });
+  it("reads a contributed key as the plugin's from a module generated before contributions were recorded", () => {
+    const message = messageOf([
+      contributing("001_contribute", productsWithContributedKey, undefined),
+      module("002_items", [plain("fx__items")]),
+    ]);
+    expect(message).toContain("fk_dep__products_fx");
+  });
 
-    it("leaves a key on the copy that the plugin never contributed to the owner", () => {
-      const message = messageOf([
-        contributing("001_init", [], keying("dep__items", "fx__parents"), []),
-        module("002_parents", [plain("fx__parents")]),
-      ]);
-      expect(message).toBe("");
-    });
+  it("leaves the owner's keys on a contributed table to their owner", () => {
+    // Both targets arrive only in 002, so either key would be refused if this
+    // chain walked it; the record names neither as the plugin's.
+    expect(
+      messageOf([
+        contributing("001_contribute", productsWithContributedKey, []),
+        module("002_items", [plain("fx__items"), plain("dep__shops")]),
+      ])
+    ).toBe("");
   });
 });
