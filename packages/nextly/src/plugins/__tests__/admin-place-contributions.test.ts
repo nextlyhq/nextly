@@ -208,6 +208,29 @@ describe("contributedAdminContributions", () => {
     ]);
   });
 
+  it("accepts extendedWith naming fields the plugin's extend adds", () => {
+    const { contributions } = contributedAdminContributions([
+      plugin("@acme/support", [{ ...EDIT_TAB, extendedWith: ["sla"] }], {
+        contributes: {
+          extend: [
+            {
+              target: { every: ["collection"] },
+              fields: [{ name: "sla", type: "text" }],
+            },
+          ],
+          admin: {
+            contributions: [
+              { ...EDIT_TAB, extendedWith: ["sla"] },
+            ] as AdminContribution[],
+          },
+        },
+      }),
+    ]);
+    expect(contributions).toMatchObject([
+      { id: "acme-support.sla-tab", extendedWith: ["sla"] },
+    ]);
+  });
+
   it.each<[string, unknown]>([
     ["a declaration that is not an object", "acme-support.sla"],
     ["fields on a kind that is not a tab", { ...SECTION, fields: ["sla"] }],
@@ -254,6 +277,22 @@ describe("contributedAdminContributions", () => {
     [
       "a misspelled key",
       { ...SECTION, collection: ["tickets"], collections: undefined },
+    ],
+    [
+      "extendedWith on a place about no content type",
+      {
+        id: "acme-support.t",
+        kind: "block",
+        place: "dashboard",
+        component: "x#Y",
+        extendedWith: ["sla"],
+      },
+    ],
+    ["extendedWith that is not a list", { ...SECTION, extendedWith: "sla" }],
+    ["an empty extendedWith", { ...SECTION, extendedWith: [] }],
+    [
+      "extendedWith naming a field the plugin's extend does not add",
+      { ...SECTION, extendedWith: ["sla"] },
     ],
     ["no place", { ...SECTION, place: undefined }],
     ["no label", { ...SECTION, label: " " }],

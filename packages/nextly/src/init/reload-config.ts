@@ -152,6 +152,10 @@ import {
   singleHookNamespace,
 } from "../hooks/register-single-hooks";
 import type { HookOwner } from "../hooks/types";
+import {
+  currentConfiguredExtensions,
+  publishConfiguredExtensions,
+} from "../plugins/extended-types";
 import { getInitializedPlugins } from "../plugins/initialized-plugins";
 import type { PluginDefinition } from "../plugins/plugin-context";
 import { publishPluginDependencies } from "../plugins/plugin-dependencies";
@@ -1808,6 +1812,9 @@ async function applyReloadHolding(
     // next apply would plan dropping a column the running site still keeps.
     const previousWithheld = currentWithheldScopeFields();
     reloadUndo.push(() => publishWithheldScopeFields(previousWithheld));
+    // Likewise which configured types each plugin's fields were added to.
+    const previousExtended = currentConfiguredExtensions();
+    reloadUndo.push(() => publishConfiguredExtensions(previousExtended));
     clearConfigCache();
     const result = await loadConfig();
     // Watch exactly what this read: the config and every file it imported. Set

@@ -210,6 +210,10 @@ import {
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { warnUndescribedPlugins } from "../plugins/describe-check";
+import {
+  builderExtensionsOf,
+  publishBuilderExtensions,
+} from "../plugins/extended-types";
 import { reportUserMenuItemProblems } from "../plugins/header-item";
 import { setInitializedPlugins } from "../plugins/initialized-plugins";
 import {
@@ -2147,6 +2151,9 @@ async function reconcileBuilderTargets<T>(
     handleUnresolvedExtends(unresolved, transformedConfig, logger);
   }
   for (const warning of leftAloneWarnings(leftAlone)) logger.warn?.(warning);
+  // Which Builder types each plugin's fields were added to, for
+  // `typesExtendedBy` and the admin contributions offered only there.
+  publishBuilderExtensions(builderExtensionsOf(entities));
 
   // A field extended onto a Builder-owned entity is not in the transformed
   // config — it was deferred until the Builder set could be read — so the

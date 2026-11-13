@@ -6,6 +6,11 @@ import type { NextlyServiceConfig } from "../../di/register";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import type { SingleConfig } from "../../singles/config/types";
 import type { ContentTypeScope } from "../content-type-scope";
+import {
+  builderExtensionsOf,
+  publishBuilderExtensions,
+  typesExtendedBy,
+} from "../extended-types";
 import type { PluginContributions } from "../contributions";
 import type { PluginDefinition } from "../plugin-context";
 
@@ -119,6 +124,46 @@ describe("extend with a scope — types in the configuration", () => {
       "headline",
       "seo",
     ]);
+  });
+
+  it("reaches a plugin's collection marked as site content", () => {
+    const builder = plugin("@t/builder", {
+      collections: [
+        {
+          ...collWith("landing", "title"),
+          siteContent: true,
+        } as CollectionConfig,
+        collWith("layouts", "regions"),
+      ],
+    });
+    const { config } = applyPluginSchemaContributionsDeferred(siteConfig(), [
+      builder,
+      seoPlugin(),
+    ]);
+    expect(fieldNames(find(config.collections, "landing"))).toEqual([
+      "title",
+      "seo",
+    ]);
+    // Its other collections, not marked, stay as they are.
+    expect(fieldNames(find(config.collections, "layouts"))).toEqual([
+      "regions",
+    ]);
+  });
+
+  it("leaves out a plugin's site-content collection the scope excepts", () => {
+    const builder = plugin("@t/builder", {
+      collections: [
+        {
+          ...collWith("landing", "title"),
+          siteContent: true,
+        } as CollectionConfig,
+      ],
+    });
+    const { config } = applyPluginSchemaContributionsDeferred(siteConfig(), [
+      builder,
+      seoPlugin({ every: ["collection", "single"], except: ["landing"] }),
+    ]);
+    expect(fieldNames(find(config.collections, "landing"))).toEqual(["title"]);
   });
 
   it("leaves out each type the scope excepts", () => {
@@ -501,5 +546,72 @@ describe("extend with a scope — an except naming a type the scope never reache
       )
     ).toContain("seo");
     publishWithheldScopeFields(new Map());
+  });
+});
+
+describe("extend — which types each plugin's field was added to", () => {
+  it("lists the configured types a scope added the field to, not one it left alone", () => {
+    const config = siteConfig();
+    config.collections = [
+      ...(config.collections ?? []),
+      collWith("legacy", "title", "seo"),
+    ];
+    publishBuilderExtensions(new Map());
+    applyPluginSchemaContributionsDeferred(config, [formsPlugin, seoPlugin()]);
+    expect(typesExtendedBy("@t/seo", "seo")).toEqual([
+      { kind: "collection", slug: "posts" },
+      { kind: "collection", slug: "pages" },
+      { kind: "single", slug: "homepage" },
+    ]);
+    // Asked by another plugin's name, or of another field, it lists none.
+    expect(typesExtendedBy("@t/forms", "seo")).toEqual([]);
+    expect(typesExtendedBy("@t/seo", "title")).toEqual([]);
+  });
+
+  it("lists the types a slug target names", () => {
+    publishBuilderExtensions(new Map());
+    applyPluginSchemaContributionsDeferred(siteConfig(), [
+      plugin("@t/notes", {
+        extend: [{ target: ["posts", "homepage"], fields: [field("note")] }],
+      }),
+    ]);
+    expect(typesExtendedBy("@t/notes", "note")).toEqual([
+      { kind: "collection", slug: "posts" },
+      { kind: "single", slug: "homepage" },
+    ]);
+  });
+
+  it("forgets a type the next fold no longer adds the field to", () => {
+    publishBuilderExtensions(new Map());
+    applyPluginSchemaContributionsDeferred(siteConfig(), [seoPlugin()]);
+    applyPluginSchemaContributionsDeferred(siteConfig(), [
+      seoPlugin({ every: ["collection", "single"], except: ["posts"] }),
+    ]);
+    // The type still reached stays listed, so the absence is posts' own.
+    expect(typesExtendedBy("@t/seo", "seo")).toEqual([
+      { kind: "collection", slug: "pages" },
+      { kind: "single", slug: "homepage" },
+    ]);
+  });
+
+  it("adds the Builder types the Builder pass gave the field, after the configured ones", () => {
+    const { deferredExtends } = applyPluginSchemaContributionsDeferred(
+      siteConfig(),
+      [seoPlugin()]
+    );
+    const { entities } = reconcileBuilderContributions(deferredExtends, {
+      collections: [
+        { slug: "products", fields: [field("name")], source: "ui" },
+        { slug: "faq", fields: [field("seo")], source: "ui" },
+      ],
+      singles: [],
+      components: [],
+    });
+    publishBuilderExtensions(builderExtensionsOf(entities));
+    const types = typesExtendedBy("@t/seo", "seo");
+    expect(types).toContainEqual({ kind: "collection", slug: "products" });
+    // A Builder type with a field of its own by that name was left alone.
+    expect(types).not.toContainEqual({ kind: "collection", slug: "faq" });
+    expect(types.at(-1)).toEqual({ kind: "collection", slug: "products" });
   });
 });
