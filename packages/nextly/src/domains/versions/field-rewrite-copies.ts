@@ -22,13 +22,17 @@ import type {
   NamedField,
 } from "../../shared/lib/password-fields";
 import { assignRepeaterRowIds } from "../../shared/lib/repeater-row-ids";
+import { NextlyError } from "../../errors";
+import { pathsKeptFromCaller } from "../../shared/lib/denied-change";
 import type { WriteEventInput } from "../content-events/write-event";
+import { keepDeniedAtStoredOnUpdate } from "../field-groups/field-group-write-access";
 
 import { storeDraftSave } from "./draft-save";
 import {
   draftSlotsHolding,
   draftSlotsOf,
   copyLabel,
+  copyWords,
   rewrittenValue,
   type DraftSlot,
   type FieldRewriteCopy,
@@ -123,6 +127,68 @@ export async function decideRewriteCopies(args: {
     drafts.push({ slot, value });
   }
   return { liveCopy, liveValue, liveChanges, drafts, held };
+}
+
+/**
+ * Refuse a copy's new value that the field rules keep from the person a
+ * rewrite is made for, judged as an update of that copy is: against the value
+ * it replaces, not the new value alone. A group or repeater is written whole,
+ * so a replacement that leaves out a child the person may not change would
+ * otherwise delete it. The rules put each such value back from the copy, and
+ * a rewrite never writes something other than what it was asked to: any value
+ * kept from the person, or changed by a rule, refuses it with `FORBIDDEN`,
+ * naming each protected field and the copy. Nothing is written.
+ */
+export async function refuseRewriteKeptByFieldRules(args: {
+  field: string;
+  /** The copy's new value, as the write stores it. */
+  written: unknown;
+  /** The value it replaces, in the same form. */
+  current: unknown;
+  copy: FieldRewriteCopy;
+  /** The update's field rules, as the write path applies them to a save. */
+  rules: Omit<
+    Parameters<typeof keepDeniedAtStoredOnUpdate>[0],
+    "data" | "stored"
+  >;
+  logContext: Record<string, unknown>;
+}): Promise<void> {
+  const { field, written, copy } = args;
+  const sent: Record<string, unknown> = { [field]: structuredClone(written) };
+  const probe: Record<string, unknown> = { [field]: structuredClone(written) };
+  const kept = await keepDeniedAtStoredOnUpdate({
+    ...args.rules,
+    data: probe,
+    stored: { [field]: structuredClone(args.current) },
+  });
+  if (Object.hasOwn(probe, field) && sameSharedValue(probe[field], written)) {
+    return;
+  }
+  // The values kept from the person, each by its path; the field itself
+  // where a rule refuses or changes it whole.
+  const named = Object.hasOwn(probe, field)
+    ? pathsKeptFromCaller(
+        { paths: kept.storedPaths, values: kept.storedValues },
+        sent
+      )
+    : [];
+  const paths = named.length > 0 ? named : [field];
+  throw NextlyError.forbidden({
+    publicData: {
+      errors: paths.map(path => ({
+        path,
+        code: "FORBIDDEN",
+        message: `You do not have permission to change this field (the ${copyWords(copy)}).`,
+        ...(copy.locale === null ? {} : { locale: copy.locale }),
+      })),
+    },
+    logContext: {
+      ...args.logContext,
+      reason: "field-rewrite-field-rule",
+      field,
+      paths,
+    },
+  });
 }
 
 /** Every copy a decided rewrite changes, the live copy first. */

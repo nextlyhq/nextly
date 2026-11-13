@@ -224,6 +224,7 @@ import {
   draftsBehindLive,
   fieldRewriteEvent,
   moveRewrittenDraftBases,
+  refuseRewriteKeptByFieldRules,
   rewrittenCopies,
   saveRewrittenDraft,
   type RewriteCopiesDecided,
@@ -252,7 +253,6 @@ import {
   outOfDateSharedFields,
   recordSharedBase,
   releaseSharedBase,
-  sameSharedValue,
   sharedValuesConflict,
   snapshotRecord,
   takeLiveSharedValuesInto,
@@ -6471,51 +6471,42 @@ export class SingleMutationService extends BaseService {
     const written = singleRewritePayload(fields, field, value);
     if (call.overrideAccess !== true) {
       // Judged on a copy as an update of it is, against the value it
-      // replaces: a rule that keeps a value from the person, even one a
-      // replaced group or repeater leaves out, puts the stored value back,
-      // and any value put back refuses the rewrite.
-      const probe: Record<string, unknown> = {
-        [field]: structuredClone(written),
-      };
-      await keepDeniedAtStoredOnUpdate({
-        data: probe,
-        stored: { [field]: structuredClone(judged.current) },
-        fields: storedAtTopLevel(fields),
-        source: this.fieldGroupDataService,
-        access: {
-          ...fieldGroupWriteAccessOf(
-            {
-              user: call.user,
-              overrideAccess: false,
-              authenticatedScope: call.authenticatedScope,
-            },
-            this.fieldRuleVisitor
-          ),
-          grants: args.grants,
-        },
-        executor: tx.getDrizzle(),
-        ownRules: document =>
-          applyFieldWriteAccess({
-            kind: "single",
-            slug,
-            data: document,
-            operation: "update",
-            user: call.user,
-            authenticatedScope: call.authenticatedScope,
-            overrideAccess: false,
-            id: entryId,
+      // replaces, in the form the write stores both.
+      await refuseRewriteKeptByFieldRules({
+        field,
+        written,
+        current: singleRewritePayload(fields, field, judged.current),
+        copy,
+        rules: {
+          fields: storedAtTopLevel(fields),
+          source: this.fieldGroupDataService,
+          access: {
+            ...fieldGroupWriteAccessOf(
+              {
+                user: call.user,
+                overrideAccess: false,
+                authenticatedScope: call.authenticatedScope,
+              },
+              this.fieldRuleVisitor
+            ),
             grants: args.grants,
-          }),
-      });
-      if (!(field in probe) || !sameSharedValue(probe[field], written)) {
-        throw NextlyError.forbidden({
-          logContext: {
-            reason: "field-rewrite-field-rule",
-            single: slug,
-            field,
           },
-        });
-      }
+          executor: tx.getDrizzle(),
+          ownRules: document =>
+            applyFieldWriteAccess({
+              kind: "single",
+              slug,
+              data: document,
+              operation: "update",
+              user: call.user,
+              authenticatedScope: call.authenticatedScope,
+              overrideAccess: false,
+              id: entryId,
+              grants: args.grants,
+            }),
+        },
+        logContext: { single: slug },
+      });
     }
     const defaultLocale = this.localization?.defaultLocale ?? null;
     const issues = await validateEntryData(
