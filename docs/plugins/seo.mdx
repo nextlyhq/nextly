@@ -515,6 +515,41 @@ address, so IndexNow needs one saved.
 The plugin may reach only `api.indexnow.org`, `oauth2.googleapis.com`, `www.googleapis.com`
 and `searchconsole.googleapis.com`, each request given ten seconds and following no redirect.
 
+### Codes that prove you own the site
+
+Bing, Pinterest, Yandex, Baidu and other services ask a site to place a short code in its
+home page's head before they show its data. **SEO > Settings > Connections** has a box for
+Google, Bing, Pinterest, Yandex and Baidu, and any other service as a name and a code:
+
+| Service   | Meta tag name              |
+| --------- | -------------------------- |
+| Google    | `google-site-verification` |
+| Bing      | `msvalidate.01`            |
+| Pinterest | `p:domain_verify`          |
+| Yandex    | `yandex-verification`      |
+| Baidu     | `baidu-site-verification`  |
+
+Paste the code, or the whole `<meta>` tag the service shows, and only the code is kept. A DNS
+record such as `google-site-verification=…` gives up the code after its `=`. Another service's
+tag pasted in the wrong box can be moved to its own with one click. Anything that is not a
+code or one `<meta>` tag (a script, other HTML, a file name, a tag cut off) is refused with the
+reason, and so is a name Nextly writes itself, such as `description`, `robots` or an `og:` or
+`twitter:` tag. Codes are letters, digits and `_ - . : = + /`, so none can carry markup, and
+a value edited past the screen that breaks those rules is not placed on any page, with one
+warning in the log.
+
+Each saved code is placed on the home page (`/`) at every production address, as
+`<meta name="…" content="…">`, and on no other page. Google is covered by the Search
+Console connection without a code; its box is for when Google asks for an HTML tag. After a
+save, each box says whether the live home page carries its code yet, read by the same fetch
+as [Inspect](#inspect-what-search-engines-receive), as Google: then press **Verify** on the
+service's site. A page served from a cache shows the code after the next deploy or cache
+refresh.
+
+The codes are a new field of the settings Single. A site that applies its schema with
+migrations runs `nextly migrate:create` and then `nextly migrate` after upgrading; until it
+does, the boxes read as empty and no tag is placed.
+
 ## llms.txt and plain-text copies
 
 Two optional outputs for AI tools, both off until someone switches them on in **SEO >

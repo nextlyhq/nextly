@@ -128,5 +128,18 @@ export function metadataFromAnswer(answer: PageMetadataAnswer): Metadata {
         : { index: answer.robots.index, follow: answer.robots.follow },
     openGraph: openGraphOf(answer),
     twitter: twitterOf(answer),
+    verification: verificationOf(answer),
   });
+}
+
+/**
+ * The answer's verification tags, each placed by its own name, or undefined
+ * for none: Next.js writes `other` as `<meta name content>`, escaping both.
+ */
+function verificationOf(
+  answer: PageMetadataAnswer
+): Metadata["verification"] | undefined {
+  const tags = answer.verification;
+  if (tags === undefined || Object.keys(tags).length === 0) return undefined;
+  return { other: { ...tags } };
 }

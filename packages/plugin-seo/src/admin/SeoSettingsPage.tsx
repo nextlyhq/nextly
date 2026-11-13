@@ -60,6 +60,7 @@ import { useLeaveWarning } from "./leave-warning";
 import { AdminLink, SeoTrail } from "./section";
 import {
   changesOf,
+  verificationDraftOf,
   draftOf,
   rebasedDraft,
   structuredDataOf,
@@ -469,9 +470,12 @@ function SettingsPanel({
   switchedOff,
   typesFailed,
   serverAddresses,
+  stored,
 }: {
   tab: TabId;
   tabProps: TabProps;
+  /** The settings as stored, which what was saved is read from. */
+  stored: StoredSettings;
   types: readonly SeoContentType[];
   switchedOff: readonly SwitchedOffType[];
   typesFailed: boolean;
@@ -487,7 +491,13 @@ function SettingsPanel({
     case "crawlers":
       return <CrawlersTab {...tabProps} serverAddresses={serverAddresses} />;
     case "connections":
-      return <ConnectionsTab {...tabProps} />;
+      return (
+        <ConnectionsTab
+          {...tabProps}
+          saved={verificationDraftOf(stored.verificationCodes)}
+          serverAddresses={serverAddresses}
+        />
+      );
     case "types":
       return typesFailed ? (
         <Alert variant="destructive">
@@ -658,6 +668,7 @@ function SettingsScreen({
         switchedOff={switchedOff}
         typesFailed={typesFailed}
         serverAddresses={serverAddresses}
+        stored={stored}
       />
       <SaveBar
         changed={changes !== null}

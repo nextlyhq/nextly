@@ -323,3 +323,27 @@ export function readHead(html: string): ReceivedHead {
     },
   };
 }
+
+/** One `<meta>` tag named by `name`, as a page carries it. */
+export interface NamedMetaTag {
+  /** Its name, in lower case, as crawlers match names. */
+  name: string;
+  content: string;
+}
+
+/**
+ * Every `<meta name content>` tag of `html`, in order, read as crawlers read
+ * them: outside scripts, styles and comments. What the check of the
+ * verification codes looks for its tags in.
+ */
+export function namedMetaTags(html: string): NamedMetaTag[] {
+  const tags: NamedMetaTag[] = [];
+  for (const tag of tagsNamed(html.replace(NOT_THE_HEAD, ""), "meta")) {
+    const attributes = attributesOf(tag);
+    const name = attributes.get("name")?.trim().toLowerCase();
+    const content = attributes.get("content");
+    if (name === undefined || name === "" || content === undefined) continue;
+    tags.push({ name, content: content.trim() });
+  }
+  return tags;
+}

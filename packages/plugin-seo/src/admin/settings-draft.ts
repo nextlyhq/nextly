@@ -25,6 +25,10 @@ import {
   type Separator,
 } from "../settings/patterns";
 import {
+  VERIFICATION_SERVICES,
+  type VerificationServiceKey,
+} from "../settings/verification";
+import {
   DETAIL_GUESSES,
   STRUCTURED_DATA_TYPES,
   type StructuredDataDetail,
@@ -41,6 +45,21 @@ export interface ProfileDraft {
   network: string;
   url: string;
 }
+
+/** One other service's tag, as the form holds it while a person types. */
+export interface OtherTagDraft {
+  name: string;
+  code: string;
+}
+
+/**
+ * The verification codes as the form holds them: each box's text as typed,
+ * and the other services' tags. A box holds only a code once what was pasted
+ * is read (`settings/verification`); until then the save is held up.
+ */
+export type VerificationDraft = Record<VerificationServiceKey, string> & {
+  others: OtherTagDraft[];
+};
 
 /** Every value the screen edits, as the form holds it. */
 export interface SettingsDraft {
@@ -69,6 +88,8 @@ export interface SettingsDraft {
   llmsTxt: boolean;
   /** Whether each listed page has a plain-text copy. */
   plainTextCopies: boolean;
+  /** The codes other services verify the site with. */
+  verificationCodes: VerificationDraft;
 }
 
 /** The stored Single as the admin reads it. */
@@ -110,6 +131,48 @@ function patternsOf(value: unknown): SettingsDraft["patterns"] {
     };
   }
   return patterns;
+}
+
+/**
+ * The stored verification codes as the form holds them: each service's
+ * code, and each other service's tag, with anything that is not text left
+ * out. Nothing stored, as before the field existed, is every box empty.
+ */
+export function verificationDraftOf(value: unknown): VerificationDraft {
+  const stored = isRecord(value) ? value : {};
+  const codes = Object.fromEntries(
+    VERIFICATION_SERVICES.map(service => [
+      service.key,
+      text(stored[service.key]),
+    ])
+  ) as Record<VerificationServiceKey, string>;
+  const others = Array.isArray(stored.others)
+    ? stored.others.filter(isRecord).map(tag => ({
+        name: text(tag.name),
+        code: text(tag.code),
+      }))
+    : [];
+  return { ...codes, others };
+}
+
+/**
+ * The verification codes as they are stored: each code trimmed, an empty box
+ * left out, an empty other-service row dropped, and null where nothing is
+ * left, so clearing every box clears the value.
+ */
+function storedVerification(
+  draft: VerificationDraft
+): Record<string, unknown> | null {
+  const stored: Record<string, unknown> = {};
+  for (const service of VERIFICATION_SERVICES) {
+    const code = draft[service.key].trim();
+    if (code !== "") stored[service.key] = code;
+  }
+  const others = draft.others
+    .map(tag => ({ name: tag.name.trim(), code: tag.code.trim() }))
+    .filter(tag => tag.name !== "" || tag.code !== "");
+  if (others.length > 0) stored.others = others;
+  return Object.keys(stored).length === 0 ? null : stored;
 }
 
 /** What the plugin's own options answer while the settings hold nothing. */
@@ -172,6 +235,7 @@ export function draftOf(
     indexNow: stored.indexNow === true,
     llmsTxt: stored.llmsTxt === true,
     plainTextCopies: stored.plainTextCopies === true,
+    verificationCodes: verificationDraftOf(stored.verificationCodes),
   };
 }
 
@@ -378,6 +442,7 @@ function storedForm(
   return {
     ...draft,
     structuredData: savedRules(draft.structuredData, defaults),
+    verificationCodes: storedVerification(draft.verificationCodes),
     productionAddresses: draft.productionAddresses
       .map(address => address.trim())
       .filter(address => address !== ""),

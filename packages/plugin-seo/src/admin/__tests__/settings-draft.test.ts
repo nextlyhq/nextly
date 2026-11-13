@@ -83,6 +83,14 @@ describe("the form's values, from the stored settings", () => {
       indexNow: false,
       llmsTxt: false,
       plainTextCopies: true,
+      verificationCodes: {
+        google: "",
+        bing: "",
+        pinterest: "",
+        yandex: "",
+        baidu: "",
+        others: [],
+      },
     });
   });
 
@@ -107,6 +115,14 @@ describe("the form's values, from the stored settings", () => {
       indexNow: false,
       llmsTxt: false,
       plainTextCopies: false,
+      verificationCodes: {
+        google: "",
+        bing: "",
+        pinterest: "",
+        yandex: "",
+        baidu: "",
+        others: [],
+      },
     });
   });
 });
