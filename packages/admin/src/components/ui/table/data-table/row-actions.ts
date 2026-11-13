@@ -29,6 +29,14 @@ export const ROW_ACTIONS_COLUMN =
 export const SELECTION_COLUMN = "w-10";
 
 /**
+ * A list's table: the content column's width at the least, and as wide as
+ * its columns' content where that is wider (the table then scrolls across).
+ * No column is squeezed below its content, so no head wraps onto a second
+ * line, and the outline's head, drawn the same way, is as tall as the table's.
+ */
+export const LIST_TABLE = "w-full min-w-max";
+
+/**
  * A table laid out by its columns' widths alone, never by what its rows hold:
  * its columns stand where they will stand before the rows arrive, and do not
  * move when they land. As wide as its columns at the least, and wider where

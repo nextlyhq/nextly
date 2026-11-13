@@ -32,7 +32,14 @@ import {
 import { listCardHeightPx } from "nextly/card-geometry";
 import { GRID_COLUMNS, listEntries } from "nextly/config";
 import { CORE_DEFAULT_LAYOUT } from "nextly/core-widget-data";
-import type { CSSProperties, JSX, ReactNode } from "react";
+import {
+  type CSSProperties,
+  type JSX,
+  type ReactNode,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 import {
   BAR_CONTROLS_GAP,
@@ -60,11 +67,20 @@ import { Breadcrumbs } from "@admin/components/shared/breadcrumbs";
 import {
   PAGER_BUTTON_SIZE,
   PAGER_CONTROLS,
+  PAGER_COUNT,
   PAGER_FRAME,
+  PAGER_NAV,
+  PAGER_SIZE,
+  PAGER_SIZE_BOX,
+  PAGER_SIZE_LABEL,
+  PAGER_SIZE_WORDS,
+  PAGER_SUMMARY,
+  pageCountText,
 } from "@admin/components/shared/pagination/pager-layout";
 import {
   FIXED_LAYOUT_TABLE,
   fixedColumnLayout,
+  LIST_TABLE,
   ROW_ACTIONS_COLUMN,
   ROW_ACTIONS_TRIGGER,
   SELECTION_COLUMN,
@@ -78,7 +94,7 @@ import { MEDIA_GRID_CLASSES } from "@admin/constants/media";
 import { cn } from "@admin/lib/utils";
 
 import { LOADING_FRAME_TIMES, useDelayedReveal } from "./delayed-reveal";
-import { FIRST_GUESS_ROWS, outlineRowsFor } from "./list-rows";
+import { FIRST_GUESS_ROWS, outlineRowsFor, recallListPager } from "./list-rows";
 import { useReportScreenWait } from "./screen-wait";
 
 /**
@@ -244,25 +260,73 @@ function CellLine({
 }
 
 /**
- * The pager under a table, as its frame and the shapes of its controls: the
- * pager's own classes (`pagination/pager-layout`), so it stands as tall as the
- * pager that replaces it at every width. What it will say (the rows shown, the
- * page count) is not known, so bars hold its words.
+ * Words the outline cannot say yet but whose width it must keep: laid out
+ * unseen, with a bar drawn over them, so whatever wraps around them wraps
+ * where it will around the words themselves.
  */
-function PagerOutline(): JSX.Element {
+function OutlineWords({
+  words,
+  className,
+}: {
+  words: string;
+  className?: string;
+}): JSX.Element {
   return (
-    <div className={PAGER_FRAME}>
+    <span className={cn("relative", className)}>
+      <span className="invisible">{words}</span>
+      <OutlineBar
+        soft
+        className="absolute inset-x-0 top-1/2 h-3 -translate-y-1/2"
+      />
+    </span>
+  );
+}
+
+/**
+ * The pager under a table, piece by piece as the pager draws a list of one
+ * page: its frame, the summary, the page-size selector with its words, the
+ * five page buttons and the page count, each by the pager's own classes
+ * (`pagination/pager-layout`). So the controls wrap onto a second line on
+ * the same content column the pager's do, and the outline stands as tall as
+ * the pager that replaces it at every width.
+ */
+function PagerOutline({ list }: { list?: string }): JSX.Element {
+  const frame = useRef<HTMLDivElement>(null);
+  // Where the list's pager has stood this wide before, as tall as it stood:
+  // a list of several pages has more buttons than one page's, and they wrap
+  // onto more lines. Read from the outline's own width before it is painted.
+  const [kept, setKept] = useState<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    const width = frame.current?.getBoundingClientRect().width ?? 0;
+    if (list === undefined || width === 0) return;
+    setKept(recallListPager(list, width));
+  }, [list]);
+  return (
+    <div
+      ref={frame}
+      data-frame-part="list-pager"
+      className={cn(PAGER_FRAME, kept !== undefined && "overflow-hidden")}
+      style={kept === undefined ? undefined : { height: kept }}
+    >
       {/* The summary's line, after the controls where the two stack. */}
-      <span className="order-2 flex items-center @2xl/content:order-1">
+      <span className={cn(PAGER_SUMMARY, "flex items-center")}>
         {"\u200b"}
         <OutlineBar soft className="h-3 w-36" />
       </span>
       <div className={PAGER_CONTROLS}>
-        <div className="flex gap-1">
-          {Array.from({ length: 3 }, (_, index) => (
+        <div className={PAGER_SIZE}>
+          <OutlineWords words={PAGER_SIZE_WORDS} className={PAGER_SIZE_LABEL} />
+          <ControlOutline className={PAGER_SIZE_BOX} />
+        </div>
+        <div className={PAGER_NAV}>
+          {Array.from({ length: 5 }, (_, index) => (
             <ControlOutline key={index} className={PAGER_BUTTON_SIZE} />
           ))}
         </div>
+        <OutlineWords
+          words={pageCountText(0, 1, false)}
+          className={PAGER_COUNT}
+        />
       </div>
     </div>
   );
@@ -284,7 +348,10 @@ export function TableOutline({
   rows = FIRST_GUESS_ROWS,
   selection = false,
   columnWidths,
+  list,
 }: {
+  /** The list the table belongs to, by the name it keeps its layout under. */
+  list?: string;
   /** The column heads, when the columns are known. */
   headers?: readonly ReactNode[];
   /** Whether the table's rows end in their actions, as every list's do. */
@@ -307,7 +374,7 @@ export function TableOutline({
       {/* The head and the rows, named as the table names its own, so a test
           can hold the two to one box. */}
       <div data-frame-part="list-rows">
-        <Table className={cn(fixed && FIXED_LAYOUT_TABLE)}>
+        <Table className={cn(LIST_TABLE, fixed && FIXED_LAYOUT_TABLE)}>
           <TableHeader>
             <TableRow>
               {selection ? <TableHead className={SELECTION_COLUMN} /> : null}
@@ -369,7 +436,7 @@ export function TableOutline({
           </TableBody>
         </Table>
       </div>
-      <PagerOutline />
+      <PagerOutline list={list} />
     </div>
   );
 }
@@ -381,7 +448,8 @@ export function TableOutline({
  */
 export function ListToolbarOutline(): JSX.Element {
   return (
-    <div className={LIST_TOOLBAR_ROW}>
+    // Named like the toolbar it stands for, so its presence is observable.
+    <div data-slot="list-toolbar-outline" className={LIST_TOOLBAR_ROW}>
       <div className={LIST_TOOLBAR_SEARCH}>
         <ControlOutline className="w-full" />
       </div>
@@ -433,6 +501,7 @@ export function ListOutline({
             <TableOutline
               headers={headers}
               rows={outlineRowsFor(list)}
+              list={list}
               selection={selection}
               columnWidths={columnWidths}
             />

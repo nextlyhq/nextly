@@ -685,6 +685,66 @@ describe("the counts' first read", () => {
   });
 });
 
+describe("the list's outline while its reads answer", () => {
+  const unanswered = {
+    counts: {
+      upcoming: undefined,
+      attention: undefined,
+      drafts: undefined,
+      done: undefined,
+    },
+    isPending: true,
+    isError: false,
+  };
+  const pendingPage = {
+    ...page([]),
+    data: undefined,
+    isPending: true,
+  };
+  const toolbarOutlines = () =>
+    document.querySelectorAll('[data-slot="list-toolbar-outline"]').length;
+
+  it("keeps the toolbar's outline it drew when the counts answer before the page", () => {
+    mocks.tabCounts.mockReturnValue(unanswered);
+    mocks.listPage.mockReturnValue(pendingPage);
+    const { rerender } = render(<ReleaseList />);
+    expect(toolbarOutlines()).toBe(1);
+    // The counts say no release exists while the page is still on its way:
+    // the outline the reader sees stays as it was until the list replaces
+    // it whole.
+    mocks.tabCounts.mockReturnValue(counts({}));
+    rerender(<ReleaseList />);
+    expect(toolbarOutlines()).toBe(1);
+  });
+
+  it("never draws a toolbar for a failed count and then takes it away", () => {
+    const toolbars = () =>
+      document.querySelectorAll('[data-slot="list-toolbar"]').length;
+    mocks.tabCounts.mockReturnValue(unanswered);
+    mocks.listPage.mockReturnValue(pendingPage);
+    const { rerender } = render(<ReleaseList />);
+    // The counts fail before the page answers, and the page then answers
+    // empty: the failure stands in the list's place, with no toolbar.
+    mocks.tabCounts.mockReturnValue({
+      ...unanswered,
+      isPending: false,
+      isError: true,
+    });
+    rerender(<ReleaseList />);
+    mocks.listPage.mockReturnValue(page([]));
+    rerender(<ReleaseList />);
+    expect(
+      screen.getByText(/The number of releases in each tab is unknown/)
+    ).toBeTruthy();
+    expect(toolbars()).toBe(0);
+    // The retry answers that no release exists: still no toolbar.
+    mocks.tabCounts.mockReturnValue(counts({}));
+    rerender(<ReleaseList />);
+    expect(toolbars()).toBe(0);
+    expect(toolbarOutlines()).toBe(0);
+  });
+});
+
 describe("the single-document filter", () => {
   it("hides single-document releases from the list and from the counts", async () => {
     const user = userEvent.setup();
