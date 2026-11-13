@@ -708,7 +708,9 @@ export function uniqueIndexCheckpoint(
     const refused: UniqueColumnRepeats[] = [];
     for (const target of atStatement.filter(t => t.at === index)) {
       const found = await judgeUniqueTarget(db, dialect, target);
-      if (found !== undefined) refused.push(found);
+      // The values here are what the statements before it left, which need not be a
+      // relationship's ids any more: only how many repeat is told, in the refusal and the log.
+      if (found !== undefined) refused.push({ ...found, showValues: false });
     }
     if (refused.length === 0) return;
     const ran = unit.transaction
@@ -756,6 +758,13 @@ function dropsTableOrIndex(
   index: string
 ): boolean {
   if (tablesDroppedBy(statement, dialect)?.includes(table)) return true;
+  // A table drop whose target is not read (a qualified name, several tables) may be this table's.
+  if (
+    /^\s*DROP\s+TABLE\b/i.test(statement) &&
+    tablesDroppedBy(statement, dialect) === undefined
+  ) {
+    return true;
+  }
   if (indexesDroppedBy(statement, dialect)?.includes(index)) return true;
   if (/^\s*ALTER\s+INDEX\b/i.test(statement)) {
     const renamed = indexesRenamedBy(statement, dialect);

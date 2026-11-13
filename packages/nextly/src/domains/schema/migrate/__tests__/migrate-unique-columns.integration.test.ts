@@ -860,7 +860,7 @@ describe.each(LOCK_DIALECTS)(
       const error = await refusal();
 
       expect(error.publicMessage).toContain(
-        `field 'person' cannot become unique while 1 value repeats: "ada" (2 entries)`
+        `field 'person' cannot become unique while 1 value repeats, the most repeated one in 2 entries.`
       );
       expect(await personIsUnique()).toBe(false);
       // The check runs before the index's statement, inside the file's transaction, so the
@@ -1289,7 +1289,7 @@ describe.each(LOCK_DIALECTS)(
 
       expect(error.publicMessage).toContain(`${FILE} at statement 1`);
       expect(error.publicMessage).toContain(
-        `field 'person' cannot become unique while 1 value repeats: "ada" (2 entries)`
+        `field 'person' cannot become unique while 1 value repeats, the most repeated one in 2 entries.`
       );
       expect(await personIsUnique()).toBe(false);
     }, 120_000);
