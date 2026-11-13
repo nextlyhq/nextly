@@ -107,33 +107,11 @@ export function withBuilderForeignKeys(
     refuseKeyedRelationshipChanges(fields, recordedFields, live);
   }
 
-  // Kept: every key the live table holds whose columns the table keeps. A key
-  // over a column this push drops goes with the column, and so does one over a
-  // relationship now holding a list: its column becomes JSON, which no key to
-  // one row can hold, so the key is dropped (ahead of the conversion).
-  const listColumns = new Set(
-    fields
-      .filter(field => relationshipStoresJson(field))
-      .map(field => lower(toSnakeCase(field.name)))
-  );
-  const kept = (live?.foreignKeys ?? [])
-    .filter(
-      fk =>
-        fk.columns.every(column => columns.has(lower(column))) &&
-        !fk.columns.some(column => listColumns.has(lower(column)))
-    )
-    .map(fk =>
-      recordedFields === undefined
-        ? fk
-        : withActionsTheSaveChanged(
-            fk,
-            spec.name,
-            fields,
-            recordedFields,
-            builder,
-            targetTables
-          )
-    );
+  const kept = keptKeys(spec, fields, live, {
+    builder,
+    recordedFields,
+    targetTables,
+  });
   const keyed = new Set(kept.flatMap(fk => fk.columns.map(lower)));
 
   // Created: the key of each relationship whose column this push adds.
@@ -171,6 +149,51 @@ export function withBuilderForeignKeys(
   }
 
   return { ...spec, foreignKeys: [...kept, ...created] };
+}
+
+/**
+ * The keys the live table holds that the desired table keeps: every one whose columns the table
+ * keeps. A key over a column this push drops goes with the column, and so does one over a
+ * relationship now holding a list: its column becomes JSON, which no key to one row can hold, so
+ * the key is dropped (ahead of the conversion). A kept key takes the actions the save gives its
+ * relationship (`withActionsTheSaveChanged`).
+ */
+function keptKeys(
+  spec: TableSpec,
+  fields: readonly FieldDefinition[],
+  live: TableSpec | undefined,
+  context: {
+    builder: DynamicCollectionSchemaService;
+    recordedFields: readonly FieldDefinition[] | undefined;
+    targetTables: CollectionTables | undefined;
+  }
+): ForeignKeySpec[] {
+  const lower = (name: string) => name.toLowerCase();
+  const columns = new Set(spec.columns.map(column => lower(column.name)));
+  const listColumns = new Set(
+    fields
+      .filter(field => relationshipStoresJson(field))
+      .map(field => lower(toSnakeCase(field.name)))
+  );
+  const { builder, recordedFields, targetTables } = context;
+  return (live?.foreignKeys ?? [])
+    .filter(
+      fk =>
+        fk.columns.every(column => columns.has(lower(column))) &&
+        !fk.columns.some(column => listColumns.has(lower(column)))
+    )
+    .map(fk =>
+      recordedFields === undefined
+        ? fk
+        : withActionsTheSaveChanged(
+            fk,
+            spec.name,
+            fields,
+            recordedFields,
+            builder,
+            targetTables
+          )
+    );
 }
 
 /**
