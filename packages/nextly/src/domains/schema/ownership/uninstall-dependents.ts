@@ -714,35 +714,47 @@ async function relationsPointingIn(
   if (own.size === 0) return;
   const schema = await input.sources.extensionSchema();
   if (schema === null) return;
+  for (const { table, key } of edgesInto(schema, own)) {
+    const owner = relationOwner(schema, table, key);
+    if (owner !== undefined && isThePlugin(owner, input.pluginName)) continue;
+    found.add({
+      kind: "relation",
+      name: key,
+      table,
+      owner: owner === undefined ? "its schema" : describeOwner(owner),
+    });
+  }
+}
+
+/** Each relation edge on a table outside `own` that leads into one in it. */
+function edgesInto(
+  schema: ExtensionSchemaRecord,
+  own: ReadonlySet<string>
+): { table: string; key: string }[] {
   const ownFolded = new Set([...own].map(folded));
-  const declared = new Map(
-    (schema.tables ?? []).map(table => [table.name, table])
-  );
   const edges = [
     ...(schema.relations ?? new Map()),
     ...(schema.adoptedRelations ?? new Map()),
   ];
-  for (const [table, list] of edges) {
-    if (ownFolded.has(folded(table))) continue;
-    for (const edge of list) {
-      if (!ownFolded.has(folded(edge.targetTable))) continue;
-      const contributor = declared
-        .get(table)
-        ?.relations?.find(
-          relation => relation.name === edge.key
-        )?.contributedBy;
-      const owner = contributor ?? schema.owners.get(table);
-      if (owner !== undefined && isThePlugin(owner, input.pluginName)) {
-        continue;
-      }
-      found.add({
-        kind: "relation",
-        name: edge.key,
-        table,
-        owner: owner === undefined ? "its schema" : describeOwner(owner),
-      });
-    }
-  }
+  return edges
+    .filter(([table]) => !ownFolded.has(folded(table)))
+    .flatMap(([table, list]) =>
+      list
+        .filter(edge => ownFolded.has(folded(edge.targetTable)))
+        .map(edge => ({ table, key: edge.key }))
+    );
+}
+
+/** Who added a relation: its contributor, or else the table's owner. */
+function relationOwner(
+  schema: ExtensionSchemaRecord,
+  table: string,
+  key: string
+): ElementOnTable["owner"] | undefined {
+  const contributor = schema.tables
+    ?.find(declared => declared.name === table)
+    ?.relations?.find(relation => relation.name === key)?.contributedBy;
+  return contributor ?? schema.owners.get(table);
 }
 
 /**
