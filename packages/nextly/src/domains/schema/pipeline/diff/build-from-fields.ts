@@ -621,6 +621,13 @@ export function buildDesiredTableFromComponentFields(
 ): TableSpec {
   const typeColumn = options.typeColumn ?? STORAGE_FORMAT.columns.type;
   const columns: ColumnSpec[] = [];
+  // The fields that own a column on the row. A group with no name only lays fields out, and the
+  // field-group creator gives it and what it holds no column (`columnFields`, which reads named
+  // fields alone), so it is described with none. Read whole, its missing name stopped the column
+  // descriptor, and with it every Builder save once such a field group was in the definition file.
+  const namedFields = fields.filter(
+    field => typeof field.name === "string" && field.name.length > 0
+  );
 
   // i18n: when the component is localized, its translatable fields live in the
   // companion `comp_<slug>_locales` table (migration-owned) and MUST be omitted
@@ -754,7 +761,7 @@ export function buildDesiredTableFromComponentFields(
   }
 
   // User-defined fields.
-  for (const field of fields) {
+  for (const field of namedFields) {
     if (localizedNames.has(field.name)) continue; // lives in the companion table
     const desc = getComponentRowColumnDescriptor(
       field as unknown as Parameters<typeof getColumnDescriptor>[0],
@@ -838,7 +845,7 @@ export function buildDesiredTableFromComponentFields(
     // created_at indexes here left the rest out of the snapshot, so a SQLite
     // rebuild dropped them and nothing put them back — including the unique
     // ones, which is a constraint silently disappearing, not just an index.
-    ...collectionIndexSpecs(tableName, fields, {
+    ...collectionIndexSpecs(tableName, namedFields, {
       // A relation holding a list of references takes no plain index even when it asks for one,
       // as the creator writes none (`componentRelationshipHoldsReferenceList` says why). A single
       // polymorphic reference is one object and keeps an index it asks for.

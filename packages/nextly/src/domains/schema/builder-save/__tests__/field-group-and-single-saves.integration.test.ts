@@ -276,6 +276,56 @@ describe.each(getConfiguredTestDialects())(
       expect(latestSnapshotTables(t)).toContain("single_notice");
     });
 
+    it("outside development writes a field group's and a Single's create, records them pending, and builds no table", async () => {
+      const t = await boot({ development: false });
+
+      const fieldGroup = (await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "meta",
+          label: "Meta",
+          fields: [{ name: "note", type: "text" }],
+        }
+      )) as Response;
+      const single = (await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          fields: [{ name: "heading", type: "text" }],
+        }
+      )) as Response;
+
+      // Each create's migration is written, for the deploy's `nextly migrate` to run...
+      const written = migrationFiles(t);
+      expect(written.some(f => /_meta_create\.sql$/.test(f))).toBe(true);
+      expect(written.some(f => /_notice_create\.sql$/.test(f))).toBe(true);
+      // ...and nothing of it has run: no table, no file recorded applied, and each entity's row
+      // says so, as does the answer the Builder shows.
+      expect(await t.adapter.tableExists("comp_meta")).toBe(false);
+      expect(await t.adapter.tableExists("single_notice")).toBe(false);
+      expect(await appliedFiles(t)).toEqual([]);
+      expect(
+        (
+          await t
+            .getService("fieldGroupRegistryService")
+            .getComponentBySlug("meta")
+        )?.migrationStatus
+      ).toBe("pending");
+      expect(
+        (await t.getService("singleRegistryService").getSingleBySlug("notice"))
+          ?.migrationStatus
+      ).toBe("pending");
+      expect(((await fieldGroup.json()) as { message: string }).message).toBe(
+        'Component "meta" created. Run migrations to apply the table.'
+      );
+      expect(((await single.json()) as { message: string }).message).toBe(
+        'Single "notice" created. Run migrations to apply the table.'
+      );
+    });
+
     it("lets a collection's save follow a field group's, with both tables on record", async () => {
       const t = await boot();
       await dispatchComponents(
