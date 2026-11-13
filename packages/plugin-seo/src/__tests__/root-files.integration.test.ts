@@ -763,5 +763,50 @@ describe.each(getConfiguredTestDialects())(
       expect(robots.body).toContain("Sitemap: http://localhost/sitemap.xml");
       expect(robots.cacheControl).toBe("no-store");
     });
+
+    it("serves the site's own rules after the plugin's lines, and says the file is the plugin's", async () => {
+      const { t } = await boot(dialect, { aiCrawlers: "search" });
+      const before = await rootFile("robots.txt");
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: {
+          _overwrite: true,
+          robotsRules: {
+            text: "User-agent: *\nDisallow: /search\nContent-Signal: search=yes, ai-train=no",
+          },
+        },
+      });
+      const response = await createDynamicHandlers().GET(
+        new Request("http://localhost/admin/api/robots.txt"),
+        { params: Promise.resolve({ params: ["robots.txt"] }) }
+      );
+      const body = await response.text();
+      expect(response.headers.get("x-nextly-robots")).toBe("plugin-seo");
+      expect(body.startsWith(before.body)).toBe(true);
+      expect(body.slice(before.body.length)).toBe(
+        "\n# Your own rules, from the SEO settings\nUser-agent: *\nDisallow: /search\nContent-Signal: search=yes, ai-train=no\n"
+      );
+    });
+
+    it("refuses to save an own rule that keeps every crawler from the whole site", async () => {
+      const { t } = await boot(dialect);
+      await expect(
+        t.nextly.updateSingle({
+          slug: SEO_SETTINGS_SLUG,
+          data: {
+            _overwrite: true,
+            robotsRules: { text: "User-agent: *\nDisallow: /" },
+          },
+        })
+      ).rejects.toThrow();
+      expect((await rootFile("robots.txt")).body).not.toContain(
+        "Your own rules"
+      );
+    });
+
+    // Turned on once the shared settings reader reads a missing column as unset.
+    it.todo(
+      "keeps answering robots.txt, the sitemap and each head until the own rules' column is migrated"
+    );
   }
 );

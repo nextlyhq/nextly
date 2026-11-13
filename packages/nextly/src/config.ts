@@ -222,6 +222,12 @@ export {
   adminStartupScreensJson,
 } from "./plugins/startup-reads";
 export { MAX_STARTUP_PATHS } from "./route-handler/startup-path";
+// The ids a place contribution's startup reads may name, and their filling:
+// the boot check and the admin page that starts the reads fill a path alike.
+export {
+  fillPlaceStartupPath,
+  PLACE_STARTUP_IDS,
+} from "./plugins/place-startup-reads";
 // The admin places, for the same reason: the catalogue the server checks a
 // plugin's contributions against is the one the admin renders them from.
 export {

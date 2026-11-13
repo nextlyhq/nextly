@@ -114,6 +114,8 @@ describe("seoPlugin", () => {
       ["POST", "/share-image", undefined, undefined],
       // The settings screen's reads, for a signed-in reader of the settings.
       ["GET", "/settings/content-types", undefined, undefined],
+      // Which sitemap pages own robots.txt rules being typed would block.
+      ["POST", "/settings/robots-rules-check", undefined, undefined],
       ["GET", "/settings/document", undefined, undefined],
       // The redirects screen's routes, for those the redirects' permissions allow.
       ["GET", "/redirects", undefined, undefined],
@@ -223,6 +225,7 @@ describe("seoPlugin", () => {
       "/llms.txt",
       "/share-image",
       "/settings/content-types",
+      "/settings/robots-rules-check",
       "/settings/document",
       "/redirects",
       "/redirects",
@@ -269,6 +272,7 @@ describe("seoPlugin", () => {
       "/llms.txt",
       "/share-image",
       "/settings/content-types",
+      "/settings/robots-rules-check",
       "/settings/document",
       "/redirects",
       "/redirects",

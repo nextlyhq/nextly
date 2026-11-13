@@ -301,6 +301,59 @@ session, the menu and the settings, before its own code has loaded. Your page's
 - The app refuses to start if a page names more than four, or a path that isn't a
   route path starting with `/`.
 
+### The data a place's part reads first
+
+> **Experimental.** `startupReads` on a place contribution may change before it is
+> marked stable.
+
+A part you add to an editor's places (whatever kind the place takes: a block, a tab, a
+side panel section) can name the reads of your plugin's own routes it makes as it opens, with the same
+`startupReads` a page takes. The places whose page starts them are `collection.edit`,
+`single.edit` and `entry.form` (the form inside both); the app refuses to start if a
+part names `startupReads` anywhere else, where nothing would start them. Its paths may
+name the place's ids in braces, which the page fills in from its address:
+
+```ts
+{
+  id: "acme-designs.design",
+  kind: "sidebarSection",
+  place: "collection.edit",
+  label: "Design",
+  component: "@acme/designs/admin#Design",
+  before: "status",
+  startupReads: [{ path: "/designs?collection={collection}&entry={entryId}" }],
+}
+```
+
+The page starts these reads as it first renders, beside its own reads, rather than once
+your component has mounted, so their answers arrive a round sooner. Your component's
+`usePluginRoute` read of the same path takes the started read instead of asking again.
+An editor (`collection.edit`, `single.edit`) waits for them before it is drawn, for
+250 ms at most after its document, so your part is drawn in its place with the editor
+rather than pushing the parts below it down when it lands. (It also waits for its claim
+on the document, for up to a second, since that decides whether the fields may be
+written.)
+
+- The ids a path may name are the place's context ids other than `userId`:
+  `{collection}` and `{entryId}` at `collection.edit`, `{single}` at `single.edit`, and
+  `{kind}`, `{slug}` and `{entryId}` at `entry.form`. On a Single's page the form's
+  `{entryId}` is not known until the Single has loaded, so a read naming it is not
+  started there.
+- Each id is filled in URI-component encoded. Build the path your component asks for
+  the same way, with `encodeURIComponent`, and with its parameters in the same order,
+  or the started read and your component's read are two different reads.
+- A read naming an id the page does not have (a new entry has no `entryId`) is not
+  started, and your component reads as it always would. A part with `visibleWhen` is
+  started anyway, since its entry has not arrived yet: keep such reads cheap.
+- Name only quick reads, at most four. A read that can be slow belongs outside
+  `startupReads`: the editor would wait its 250 ms for it.
+- The app refuses to start if a part names more than four reads, a path that isn't a
+  route path starting with `/`, an id its place doesn't give, or `startupReads` at a
+  place other than these three.
+- A part that can't declare its reads, and draws nothing until they answer, can sit
+  last in its place instead (`after: "details"` in the side panel), where it moves
+  nothing when it lands.
+
 ### Where your own item goes
 
 > **Experimental.** The `place` option may change before it is marked stable.
