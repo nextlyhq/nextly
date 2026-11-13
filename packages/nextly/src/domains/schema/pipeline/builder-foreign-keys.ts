@@ -242,41 +242,58 @@ function refuseKeyedRelationshipChanges(
   recordedFields: readonly FieldDefinition[],
   live: TableSpec | undefined
 ): void {
-  const lower = (name: string) => name.toLowerCase();
   const keyedColumns = new Set(
     (live?.foreignKeys ?? []).flatMap(fk =>
-      fk.columns.length === 1 ? [lower(fk.columns[0])] : []
+      fk.columns.length === 1 ? [fk.columns[0].toLowerCase()] : []
     )
   );
   if (keyedColumns.size === 0) return;
   const recordedByName = new Map(recordedFields.map(f => [f.name, f]));
   for (const field of fields) {
     const before = recordedByName.get(field.name);
-    if (
-      before === undefined ||
-      field.type !== "relationship" ||
-      before.type !== "relationship" ||
-      !fieldProducesColumn(field) ||
-      !fieldProducesColumn(before) ||
-      !keyedColumns.has(lower(toSnakeCase(field.name)))
-    ) {
+    if (before === undefined) continue;
+    if (!isKeyedRelationshipPair(field, before, keyedColumns)) continue;
+    if (relationshipStoresJson(field)) continue;
+    if (relationshipTargetSlug(field) === relationshipTargetSlug(before)) {
       continue;
     }
-    const target = relationshipTargetSlug(before) ?? "its collection";
-    const next = relationshipTargetSlug(field);
-    if (
-      !relationshipStoresJson(field) &&
-      next !== relationshipTargetSlug(before)
-    ) {
-      throw keyedRelationshipRefusal(
-        field,
-        "KEYED_RELATIONSHIP_CANNOT_CHANGE_TARGET",
-        `"${fieldTitle(field)}" can't be pointed at ${next === null ? "another collection" : `"${next}"`}: ` +
-          `the database checks every value it holds against "${target}". Add a new ` +
-          `relationship field for ${next === null ? "the new target" : `"${next}"`} instead, then remove this one.`
-      );
-    }
+    throw targetChangeRefusal(field, before);
   }
+}
+
+/**
+ * Whether `field` and its recorded definition `before` are both relationships with a column of
+ * their own, and that column holds a key in the live table.
+ */
+function isKeyedRelationshipPair(
+  field: FieldDefinition,
+  before: FieldDefinition,
+  keyedColumns: ReadonlySet<string>
+): boolean {
+  return (
+    field.type === "relationship" &&
+    before.type === "relationship" &&
+    fieldProducesColumn(field) &&
+    fieldProducesColumn(before) &&
+    keyedColumns.has(toSnakeCase(field.name).toLowerCase())
+  );
+}
+
+/** The refusal of pointing a keyed relationship at another collection, naming both. */
+function targetChangeRefusal(
+  field: FieldDefinition,
+  before: FieldDefinition
+): NextlyError {
+  const target = relationshipTargetSlug(before) ?? "its collection";
+  const next = relationshipTargetSlug(field);
+  const named = next === null ? "another collection" : `"${next}"`;
+  return keyedRelationshipRefusal(
+    field,
+    "KEYED_RELATIONSHIP_CANNOT_CHANGE_TARGET",
+    `"${fieldTitle(field)}" can't be pointed at ${named}: the database checks every value it ` +
+      `holds against "${target}". Add a new relationship field for ${named} instead, then ` +
+      `remove this one.`
+  );
 }
 
 function keyedRelationshipRefusal(
