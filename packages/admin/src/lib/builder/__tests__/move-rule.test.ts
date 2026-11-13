@@ -368,7 +368,7 @@ describe("fields that cannot change place", () => {
 });
 
 describe("a field among copies that share its id", () => {
-  it("moves that one field, leaving the other where it is", () => {
+  it("refuses moving one of them, since a move by id could not tell which is meant", () => {
     const fields = [
       plain("f-g1", "first", { type: "group", fields: [plain("f-same", "x")] }),
       plain("f-g2", "second", {
@@ -376,24 +376,31 @@ describe("a field among copies that share its id", () => {
         fields: [plain("f-same", "x")],
       }),
     ];
-    const after = moved(judgeMove(fields, "f-same", {}, ctx));
-    expect(namesIn(after, "f-g1")).toEqual([]);
-    expect(namesIn(after, "f-g2")).toEqual(["x"]);
-    expect(namesIn(after)).toEqual(["first", "second", "x"]);
+    expect(refusal(judgeMove(fields, "f-same", {}, ctx))).toEqual({
+      reason: "ambiguous-place",
+      message:
+        "x shares its id with another field, so a move could not tell the two apart.",
+    });
   });
 
-  it("judges the moved field's name against a copy where it arrives, though they share an id", () => {
+  it("judges a carried field's name against a field sharing its id where it arrives", () => {
+    // The name check skips only the moved object itself: a field that shares
+    // an id with one the layout group carries is another field, whose name counts.
     const fields = [
-      plain("f-g1", "first", { type: "group", fields: [plain("f-same", "x")] }),
-      plain("f-g2", "second", {
+      plain("f-outer", "outer", {
         type: "group",
-        fields: [plain("f-same", "x")],
+        fields: [
+          plain("f-layout", "", {
+            type: "group",
+            fields: [plain("f-same", "x")],
+          }),
+        ],
       }),
+      plain("f-same", "x"),
     ];
-    expect(
-      refusal(judgeMove(fields, "f-same", { parentFieldId: "f-g2" }, ctx))
-        .reason
-    ).toBe("name-clash");
+    expect(refusal(judgeMove(fields, "f-layout", {}, ctx)).reason).toBe(
+      "name-clash"
+    );
   });
 
   it("refuses a place whose id another container shares, which a move could not tell apart", () => {
@@ -917,24 +924,7 @@ describe("savedContainerIdsFrom", () => {
   });
 });
 
-describe("a move it cannot pin down", () => {
-  it("refuses moving a field whose id another field shares, rather than moving the first one", () => {
-    // Two copies whose fields share ids: a move by id cannot tell which is meant.
-    const fields = [
-      plain("f-g1", "first", {
-        type: "group",
-        fields: [plain("f-same", "note")],
-      }),
-      plain("f-g2", "second", {
-        type: "group",
-        fields: [plain("f-same", "note")],
-      }),
-    ];
-    expect(refusal(judgeMove(fields, "f-same", {}, ctx)).reason).toBe(
-      "ambiguous-place"
-    );
-  });
-
+describe("a layout group's carried names among themselves", () => {
   it("refuses taking a layout group whose fields already clash to another level, naming both", () => {
     // The clash is held where they stand; arriving together elsewhere would make it anew.
     const fields = [
