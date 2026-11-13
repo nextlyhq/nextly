@@ -435,7 +435,7 @@ export async function writeRegistryRows<T>(
  * as after any registry write.
  */
 export async function countRegistryWriteOn(
-  tx: TransactionContext,
+  tx: Pick<TransactionContext, "getDrizzle">,
   dialect: SupportedDialect
 ): Promise<void> {
   const outer = registryWrite.getStore();
