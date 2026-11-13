@@ -112,9 +112,27 @@ export function pageKey(page: { type: string; id: string }): string {
   return `${page.type}|${page.id}`;
 }
 
-/** The site's default language, where it has languages configured. */
-function defaultLocaleOf(ctx: PluginContext): string | undefined {
-  return ctx.config.localization?.defaultLocale;
+/** The site's languages as they are now, its default first. */
+interface SiteLanguages {
+  codes: readonly string[];
+  /** The default one. */
+  first: string;
+}
+
+/**
+ * A language's name: as the site's configuration labels it, else in the
+ * language itself ("Deutsch"), else its code.
+ */
+function languageName(ctx: PluginContext, code: string): string {
+  const labelled = ctx.config.localization?.locales.find(
+    locale => locale.code === code
+  )?.label;
+  if (labelled !== undefined && labelled !== code) return labelled;
+  try {
+    return new Intl.DisplayNames([code], { type: "language" }).of(code) ?? code;
+  } catch {
+    return code;
+  }
 }
 
 /** Whether the type `key` keeps its values per language. */
@@ -138,16 +156,13 @@ async function translated(ctx: PluginContext, key: string): Promise<boolean> {
  * default first, where the type is translated; else none named, which is
  * the default.
  */
-async function languagesOf(
+function languagesOf(
   ctx: PluginContext,
-  key: string
-): Promise<{ code?: string; label?: string }[]> {
-  const locales = ctx.config.localization?.locales ?? [];
-  if (locales.length < 2 || !(await translated(ctx, key))) return [{}];
-  const first = defaultLocaleOf(ctx);
-  return [...locales]
-    .sort((a, b) => Number(b.code === first) - Number(a.code === first))
-    .map(locale => ({ code: locale.code, label: locale.label }));
+  site: SiteLanguages,
+  translatedType: boolean
+): { code?: string; label?: string }[] {
+  if (site.codes.length < 2 || !translatedType) return [{}];
+  return site.codes.map(code => ({ code, label: languageName(ctx, code) }));
 }
 
 /** The language options of a read: served with fallbacks, or as stored. */
@@ -296,6 +311,10 @@ interface LanguageRead {
   rules: SiteRules;
   key: string;
   locale: { code?: string; label?: string };
+  /** The site's default language. */
+  first: string;
+  /** Whether the type keeps its values per language, however many it has. */
+  translated: boolean;
   keeps: boolean;
   inTransaction: boolean;
 }
@@ -345,11 +364,8 @@ function versionOf(
 }
 
 /** Whether `locale` is read with nothing to fill in from another language. */
-function readsAsStored(
-  ctx: PluginContext,
-  locale: string | undefined
-): boolean {
-  return locale === undefined || locale === defaultLocaleOf(ctx);
+function readsAsStored(read: LanguageRead): boolean {
+  return read.locale.code === undefined || read.locale.code === read.first;
 }
 
 /** A working draft waiting beside a page: as served, its own, and as stored. */
@@ -374,7 +390,7 @@ async function waitingDraft(
   );
   if (shown === undefined) return undefined;
   const asStored = language(locale.code, false);
-  const own = readsAsStored(read.ctx, locale.code)
+  const own = readsAsStored(read)
     ? shown
     : ((await draftOf(api, key, id, actor.single, asStored)) ?? shown);
   return {
@@ -480,8 +496,10 @@ function beside(
   // type's draft keeps a group only from a save on the transaction, so its
   // draft in the default language is written there.
   if (read.inTransaction) {
-    const translated = read.locale.code !== undefined;
-    return [version, translated ? held : { ...held, inTransaction: false }];
+    return [
+      version,
+      read.translated ? held : { ...held, inTransaction: false },
+    ];
   }
   // A collection's draft in another language does not keep a group a save
   // outside the transaction sends; a Single's draft does.
@@ -504,7 +522,7 @@ async function versionsInLanguage(read: LanguageRead): Promise<ReadVersion[]> {
     actor.single,
     language(locale.code, true)
   );
-  const own = readsAsStored(read.ctx, locale.code)
+  const own = readsAsStored(read)
     ? shown
     : await documentsOf(api, key, actor.single, asStored);
   const drafts = await draftsOf(read, shown);
@@ -547,12 +565,18 @@ export async function everyVersion(
   rulesIn: (locale: string | undefined) => Promise<SiteRules>
 ): Promise<ReadVersion[]> {
   const api = (await getCachedNextly()) as unknown as VersionReads;
-  const fallback = defaultLocaleOf(ctx);
+  // The languages as they are now, a list set in Settings included.
+  const codes = await ctx.publicAddresses.languages();
+  const site: SiteLanguages = {
+    codes,
+    first: codes[0] ?? (await ctx.publicAddresses.defaultLanguage()),
+  };
   const versions: ReadVersion[] = [];
   for (const key of types) {
     const keeps = await keepsDrafts(ctx, key);
+    const isTranslated = await translated(ctx, key);
     const collection = pageTypeOf(key).kind === "collection";
-    for (const locale of await languagesOf(ctx, key)) {
+    for (const locale of languagesOf(ctx, site, isTranslated)) {
       versions.push(
         ...(await versionsInLanguage({
           ctx,
@@ -561,12 +585,14 @@ export async function everyVersion(
           rules: await rulesIn(locale.code),
           key,
           locale,
+          first: site.first,
+          translated: isTranslated,
           keeps,
           // A collection's default language is written on the transaction;
           // another language, and a Single, only as a step of its own.
           inTransaction:
             collection &&
-            (locale.code === undefined || locale.code === fallback),
+            (locale.code === undefined || locale.code === site.first),
         }))
       );
     }

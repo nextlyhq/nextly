@@ -485,6 +485,8 @@ interface VersionIndex {
   byAddress: Map<string, Set<string>>;
   byPath: Map<string, Set<string>>;
   bySlug: Map<string, Set<string>>;
+  /** The origins languages are served on, each a language's own domain. */
+  origins: Set<string>;
 }
 
 /**
@@ -505,6 +507,7 @@ function indexOf(
     byAddress: new Map(),
     byPath: new Map(),
     bySlug: new Map(),
+    origins: new Set(),
   };
   for (const version of versions) {
     index.byKey.set(version.key, version);
@@ -530,6 +533,7 @@ function indexAddress(
   const served = servedAddress(version);
   if (served === undefined) return;
   if (served.origin !== undefined) {
+    index.origins.add(served.origin);
     add(index.byAddress, `${served.origin}${served.path}`, place);
   }
   if (served.origin === undefined || inDefault) {
@@ -569,7 +573,7 @@ function pageVersions(
  * from, or every form of the page in the language its address is served in,
  * or, by slug, in the default language.
  */
-function matcher(
+export function matcher(
   versions: readonly ReadVersion[],
   defaultLocale: string | undefined
 ): (record: ImportedRecord) => Found {
@@ -583,6 +587,11 @@ function matcher(
         ? undefined
         : index.byAddress.get(`${match.origin}${match.path}`);
     if (atAddress !== undefined) return onePlace(index, atAddress);
+    // An address on a language's own domain names that language alone: one
+    // no page holds there matches nothing, rather than another language.
+    if (match.origin !== undefined && index.origins.has(match.origin)) {
+      return undefined;
+    }
     const atPath =
       match.path === undefined ? undefined : index.byPath.get(match.path);
     if (atPath !== undefined) return onePlace(index, atPath);
@@ -1564,6 +1573,16 @@ export async function planImport(
   const parsed = parsedSource(source, mapping, versions, defaultLanguage);
   const own = source.kind === "group" && source.field === SEO_GROUP;
   const templates = templatesOf(rules);
+  // A template is filled in with the matched version's own language's rules.
+  const templatesBy = new Map<string | undefined, TemplateValues>();
+  for (const language of new Set(versions.map(each => each.locale))) {
+    templatesBy.set(
+      language,
+      language === undefined
+        ? templates
+        : templatesOf(await setup.readRules(ctx, language))
+    );
+  }
   const origins = productionAddressesOf(rules.productionAddresses);
   // Images are looked for only by someone who may read the media library,
   // so the import says nothing about files they may not see.
@@ -1582,14 +1601,14 @@ export async function planImport(
   };
   const matched = matchRecords(
     parsed.records,
-    matcher(versions, ctx.config.localization?.defaultLocale),
+    matcher(versions, await ctx.publicAddresses.defaultLanguage()),
     (record, version) =>
       own
         ? tidyOwn(version, tally)
         : decide(
             record,
             version,
-            templates,
+            templatesBy.get(version.locale) ?? templates,
             images,
             tally,
             origins,
@@ -1735,8 +1754,10 @@ async function writeAll(
         typeof saved._rev === "string" ? saved._rev : undefined
       );
       if (page.write === "held") {
-        // A held save's draft can't be read on the transaction.
-        refuseShownDropped(saved, page);
+        // A held save's draft can't be read on the transaction, so its
+        // answer is judged: a value it doesn't show can't be checked, and
+        // is refused rather than reported as imported.
+        refuseDroppedValues(saved, page.writes, page.id);
       } else {
         await refuseIfNotStored(
           ctx,
@@ -1869,20 +1890,6 @@ export function refusalAfterUndo(error: unknown, restored: boolean): unknown {
   });
 }
 
-/**
- * Refuse a held save on the transaction whose answer shows a value sent as
- * something else. The answer is the person's read of the draft, which leaves
- * out a value they may not read, so only what it shows is judged.
- */
-function refuseShownDropped(saved: unknown, page: PlannedPage): void {
-  const seo =
-    isRecord(saved) && isRecord(saved[SEO_GROUP]) ? saved[SEO_GROUP] : {};
-  const shown = Object.fromEntries(
-    Object.entries(page.writes).filter(([name]) => name in seo)
-  );
-  refuseDroppedValues(saved, shown, page.id);
-}
-
 /** A version written as a step of its own, which a later refusal puts back. */
 type Written = PlannedPage[];
 
@@ -1897,6 +1904,9 @@ async function writeStep(
   revs: Revs,
   written: Written
 ): Promise<void> {
+  // Noted before it is made: a save can be stored and still be refused as
+  // its answer is drawn, and putting back undoes only what is there.
+  written.push(page);
   let rev: string | undefined;
   try {
     rev = await writeVersion(
@@ -1910,7 +1920,6 @@ async function writeStep(
     throw refusalAbout(error, page.label);
   }
   revs.set(revKey(page), rev);
-  written.push(page);
   refuseDroppedValues(await storedVersion(page), page.writes, page.id);
 }
 

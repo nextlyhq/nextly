@@ -1507,7 +1507,8 @@ it keeps working drafts can't be read from the plugin; change its SEO in its own
    version (**English · published**, **English · draft**, **Deutsch · published**), each value
    with its own result. **Import** applies exactly that, in one step: every version and redirect,
    or, if anything fails part-way, nothing, and the screen says **Nothing was imported** with
-   **Try again**. Once it is applied, the screen says how many values were imported on how many
+   **Try again**. Putting back what was written before the failure is done as well as it can be:
+   where a page can't be put back, the screen says **Part of the import may be in place** instead. Once it is applied, the screen says how many values were imported on how many
    pages, and offers the report, one row per version, to download.
 
 Pages in a file are matched by their address, in the language that address is served in, or by
@@ -1530,7 +1531,9 @@ One import covers every version of a page a value applies to:
 A value is only ever written into an empty place, in every version. Every version of a
 collection's page in the default language is written in the import's one step. A Single's page, a
 page in another language and the draft of a type that isn't translated are each written first,
-checked as stored, and put back as it was when anything after it fails. Where a published
+checked as stored, and put back as it was when anything after it fails: each place that still
+holds the imported value goes back to what it held, and a value someone saved since is kept.
+Where a published
 Single has a draft waiting, writing it would publish the draft with it, so its row says **With
 the draft**: the draft gets the value and takes it live when it is published. A page in another
 language with a draft waiting is left as it is, since neither its draft nor what is published can
