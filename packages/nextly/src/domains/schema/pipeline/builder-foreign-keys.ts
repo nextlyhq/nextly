@@ -303,23 +303,10 @@ function keyedRelationshipMoves(
     if (relationshipTargetSlug(field) === relationshipTargetSlug(before)) {
       continue;
     }
-    const moved = builder.relationshipForeignKey(
-      table,
-      field,
-      true,
-      targetTables
+    moves.set(
+      column,
+      movedKey(table, field, liveKey, { fields, live, builder, targetTables })
     );
-    if (moved === null) throw targetWithoutTableRefusal(field);
-    moves.set(column, {
-      ...moved,
-      name: movedForeignKeyName(
-        table,
-        column,
-        liveKey.name,
-        moved.referencesTable,
-        otherKeyNames(table, column, fields, live, builder, targetTables)
-      ),
-    });
   }
   return moves;
 }
@@ -340,6 +327,42 @@ function isKeyedRelationshipPair(
     fieldProducesColumn(before) &&
     keyedColumns.has(toSnakeCase(field.name).toLowerCase())
   );
+}
+
+/**
+ * The key `field` moves to from `liveKey`: described as the Builder describes one, judged, under the
+ * name that lets it be added before the old one is dropped. A target with no table is refused.
+ */
+function movedKey(
+  table: string,
+  field: FieldDefinition,
+  liveKey: ForeignKeySpec,
+  context: {
+    fields: readonly FieldDefinition[];
+    live: TableSpec | undefined;
+    builder: DynamicCollectionSchemaService;
+    targetTables: CollectionTables | undefined;
+  }
+): ForeignKeySpec {
+  const { fields, live, builder, targetTables } = context;
+  const moved = builder.relationshipForeignKey(
+    table,
+    field,
+    true,
+    targetTables
+  );
+  if (moved === null) throw targetWithoutTableRefusal(field);
+  const column = toSnakeCase(field.name).toLowerCase();
+  return {
+    ...moved,
+    name: movedForeignKeyName(
+      table,
+      column,
+      liveKey.name,
+      moved.referencesTable,
+      otherKeyNames(table, column, fields, live, builder, targetTables)
+    ),
+  };
 }
 
 /**

@@ -152,4 +152,28 @@ describe("refuseKeysRowsWouldBreak", () => {
     ).rejects.toThrow();
     expect(asked[0]).not.toContain('"external_code"');
   });
+
+  it("leaves a key whose column this apply retypes to the database, asking nothing", async () => {
+    const { db, asked } = counting(5);
+    const operations: Operation[] = [
+      {
+        type: "change_column_type",
+        tableName: "dc_notes",
+        columnName: "owner",
+        fromType: "integer",
+        toType: "text",
+      } as Operation,
+      { type: "add_foreign_key", tableName: "dc_notes", foreignKey: key },
+    ];
+    await expect(
+      refuseKeysRowsWouldBreak({
+        db,
+        dialect: "sqlite",
+        desired,
+        live,
+        operations,
+      })
+    ).resolves.toBeUndefined();
+    expect(asked).toEqual([]);
+  });
 });
