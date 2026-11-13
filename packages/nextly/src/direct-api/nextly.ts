@@ -318,25 +318,33 @@ export class Nextly implements NextlyContext {
       ...config,
     };
 
-    this.users = createUsersNamespace(this);
-    this.media = createMediaNamespace(this);
+    this.users = withLanguagesPinned(createUsersNamespace(this));
+    this.media = withLanguagesPinned(createMediaNamespace(this));
     // One language list per call, as the collection and Single methods have through
     // `runAsCaller`: a submission writes an entry, and a field group's change seeds its rows.
+    // Every namespace runs each call that way, with the stored schema version checked first, as a
+    // request does, so no namespace is a door around either.
     this.forms = withLanguagesPinned(createFormsNamespace(this));
     this.fieldGroups = withLanguagesPinned(createFieldGroupsNamespace(this));
-    this.email = createEmailNamespace(this);
-    this.emailProviders = createEmailProvidersNamespace(this);
-    this.emailTemplates = createEmailTemplatesNamespace(this);
-    this.userFields = createUserFieldsNamespace(this);
-    this.roles = createRolesNamespace(this);
-    this.permissions = createPermissionsNamespace(this);
-    this.access = createAccessNamespace(this);
-    this.apiKeys = createApiKeysNamespace(this);
-    this.jobs = createJobsNamespace();
-    this.releases = createReleasesNamespace(this);
-    this.notices = createNoticesNamespace();
-    this.versions = createVersionsNamespace(this);
-    this.contentEvents = createContentEventsNamespace(this);
+    this.email = withLanguagesPinned(createEmailNamespace(this));
+    this.emailProviders = withLanguagesPinned(
+      createEmailProvidersNamespace(this)
+    );
+    this.emailTemplates = withLanguagesPinned(
+      createEmailTemplatesNamespace(this)
+    );
+    this.userFields = withLanguagesPinned(createUserFieldsNamespace(this));
+    this.roles = withLanguagesPinned(createRolesNamespace(this));
+    this.permissions = withLanguagesPinned(createPermissionsNamespace(this));
+    this.access = withLanguagesPinned(createAccessNamespace(this));
+    this.apiKeys = withLanguagesPinned(createApiKeysNamespace(this));
+    this.jobs = withLanguagesPinned(createJobsNamespace());
+    this.releases = withLanguagesPinned(createReleasesNamespace(this));
+    this.notices = withLanguagesPinned(createNoticesNamespace());
+    this.versions = withLanguagesPinned(createVersionsNamespace(this));
+    this.contentEvents = withLanguagesPinned(
+      createContentEventsNamespace(this)
+    );
     this.principals = createNextlyPrincipals();
 
     // The instance its callers reach: only the collection and Single

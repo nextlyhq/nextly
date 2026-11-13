@@ -120,14 +120,40 @@ const keptKeyOf = (caller: string, language: RuleLanguageOf): string =>
 export const JUDGED_OTHERWISE = "judged-otherwise";
 
 /**
+ * Set while the memo open is one the Direct API's principal boundary opened for a call made on its
+ * own: that call is still a top-level call, where one inside a request is not.
+ */
+const openedAtBoundary = new AsyncLocalStorage<true>();
+
+/**
+ * Whether a request is under way: its memo is open. A Direct API call made inside one belongs to
+ * it, and keeps what the request chose at its start. The memo the Direct API's principal boundary
+ * opens for a call made on its own does not count.
+ */
+export function insideAccessMemo(): boolean {
+  return (
+    lookups.getStore() !== undefined &&
+    openedAtBoundary.getStore() === undefined
+  );
+}
+
+/**
  * Runs `operation` with a memo for the request. A memo already open is kept,
  * so a route reached inside another request's handling shares its lookups.
  */
-export function runWithAccessMemo<T>(operation: () => T): T {
+export function runWithAccessMemo<T>(
+  operation: () => T,
+  options: {
+    /** The memo is the Direct API principal boundary's, for a call made on its own. */
+    boundary?: boolean;
+  } = {}
+): T {
   if (lookups.getStore()) return operation();
-  return lookups.run(new Map(), () =>
-    ruleOutcomes.run(new Map(), () => routeVerdicts.run(new Map(), operation))
-  );
+  const open = () =>
+    lookups.run(new Map(), () =>
+      ruleOutcomes.run(new Map(), () => routeVerdicts.run(new Map(), operation))
+    );
+  return options.boundary === true ? openedAtBoundary.run(true, open) : open();
 }
 
 /**

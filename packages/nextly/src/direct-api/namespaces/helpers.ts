@@ -9,7 +9,12 @@
  * @packageDocumentation
  */
 
-import { runWithAccessMemo } from "../../auth/access/request-memo";
+import { AsyncLocalStorage } from "node:async_hooks";
+
+import {
+  insideAccessMemo,
+  runWithAccessMemo,
+} from "../../auth/access/request-memo";
 import { readsAsVisitor } from "../../auth/access/resolve-actor";
 import {
   scopeHoldsSuperAdmin,
@@ -42,6 +47,7 @@ import { withCurrentLanguages } from "../../domains/i18n/configured-locales";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
 import { assertRunnableAsPrincipal } from "../../plugins/principals/run-as";
+import { servedSchemaVersion } from "../../route-handler/schema-version";
 import type { TrustBound } from "../../services/collections/trust-grant";
 import type { RequestContext } from "../../shared/types/index";
 import type {
@@ -108,9 +114,30 @@ export async function runAsCaller<
   // reads only through the reader it is handed, whose reads leave the frame.
   const refused = refusedInsideNamedQuery("a collection or Single operation");
   if (refused !== undefined) throw refused;
-  return withCurrentLanguages(() =>
-    runWithAccessMemo(() => runAsCallerInMemo(defaultConfig, args, operation))
+  return withServedSchema(() =>
+    withCurrentLanguages(() =>
+      runWithAccessMemo(() => runAsCallerInMemo(defaultConfig, args, operation))
+    )
   );
+}
+
+/**
+ * The Direct API call this one runs inside, once it has checked the stored schema version: a call
+ * made inside it (from a hook, say) keeps the definitions it started with.
+ */
+const servedForCall = new AsyncLocalStorage<true>();
+
+/**
+ * Brings this process's definitions up to the stored schema version before a Direct API call, as
+ * a request's start does (`servedSchemaVersion`), so a change made on another server copy is
+ * served by a process no request reaches. A call made inside a request (`insideAccessMemo`) or
+ * inside another call that checked already keeps the definitions that one started with: they are
+ * never reloaded under it.
+ */
+async function withServedSchema<T>(operation: () => Promise<T>): Promise<T> {
+  if (insideAccessMemo() || servedForCall.getStore()) return operation();
+  await servedSchemaVersion();
+  return servedForCall.run(true, operation);
 }
 
 /**
@@ -123,16 +150,28 @@ export function withLanguagesPinned<N extends object>(namespace: N): N {
   return Object.fromEntries(
     members.map(([name, member]) => [
       name,
-      typeof member === "function"
-        ? (...args: unknown[]) =>
-            // Every method of these namespaces returns a promise; wrapped, a value one returned
-            // directly still reaches the caller as a resolved promise.
-            withCurrentLanguages(() =>
-              Promise.resolve(member.apply(namespace, args))
-            )
-        : member,
+      // A namespace inside a namespace (`media.folders`) is pinned the same way.
+      isPlainNamespace(member)
+        ? withLanguagesPinned(member)
+        : typeof member === "function"
+          ? (...args: unknown[]) =>
+              // Every method of these namespaces returns a promise; wrapped, a value one returned
+              // directly still reaches the caller as a resolved promise.
+              withServedSchema(() =>
+                withCurrentLanguages(() =>
+                  Promise.resolve(member.apply(namespace, args))
+                )
+              )
+          : member,
     ])
   ) as N;
+}
+
+/** Whether `value` is a plain object of methods, as a namespace inside a namespace is. */
+function isPlainNamespace(value: unknown): value is object {
+  if (typeof value !== "object" || value === null) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function runAsCallerInMemo<A extends DirectAPIConfig & RunAsPrincipal, R>(
