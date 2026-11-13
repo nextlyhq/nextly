@@ -556,11 +556,10 @@ export abstract class BaseRegistryService<
       dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
       mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
     };
-    const deleted = await this.adapter.transaction(async tx => {
-      const removed = await deleteEntityRegistryRow(tx, kind, slug, tables);
-      await this.countWriteOn(tx);
-      return removed;
-    });
+    // The registry write is counted by the delete itself.
+    const deleted = await this.adapter.transaction(tx =>
+      deleteEntityRegistryRow(tx, kind, slug, tables, this.dialect)
+    );
     // Once the transaction has committed, so no read in between keeps the
     // row it is deleting.
     clearRegistryRowCache();

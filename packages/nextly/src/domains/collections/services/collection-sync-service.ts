@@ -1002,7 +1002,13 @@ export class CollectionSyncService extends BaseService {
               mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
             };
             const { expire } = await this.adapter.transaction(tx =>
-              deleteEntityRegistryRow(tx, "collection", slug, tables)
+              deleteEntityRegistryRow(
+                tx,
+                "collection",
+                slug,
+                tables,
+                this.adapter.getCapabilities().dialect
+              )
             );
             // Its cached reads describe a collection that is gone from the
             // registry: expired once that is durable, before the table drop,
