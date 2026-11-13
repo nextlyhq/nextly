@@ -69,6 +69,7 @@ import { env } from "../../../lib/env";
 import { sqliteTimestamp } from "../../../schemas/_internal/sqlite-timestamp";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
+import type { ColumnOverride } from "../../schema/extension/draft";
 import type { ExtensionColumn } from "../../schema/extension/types";
 import { columnIndexSql } from "../../schema/pipeline/sql-templates/create-index";
 import {
@@ -97,6 +98,8 @@ import {
   buildUserDrizzleColumn,
   contributedColumnsFor,
   contributedSqliteChecks,
+  overriddenColumnsFor,
+  withColumnOverride,
 } from "../../schema/services/runtime-schema-generator";
 
 import { componentFieldHasColumn } from "./field-group-utils";
@@ -498,27 +501,33 @@ export class FieldGroupSchemaService {
     // handed for a field group, so without them the push creates the table
     // without the column the desired spec asks for.
     const contributed = contributedColumnsFor(tableName, this.dialect);
+    // The app's overrides of its field columns' storage, read the same way:
+    // built with the field's own storage, the push would change them back.
+    const overrides = overriddenColumnsFor(tableName, this.dialect);
     switch (this.dialect) {
       case "postgresql":
         return this.generatePostgresSchema(
           tableName,
           mainFields,
           typeColumn,
-          contributed
+          contributed,
+          overrides
         );
       case "mysql":
         return this.generateMySQLSchema(
           tableName,
           mainFields,
           typeColumn,
-          contributed
+          contributed,
+          overrides
         );
       case "sqlite":
         return this.generateSQLiteSchema(
           tableName,
           mainFields,
           typeColumn,
-          contributed
+          contributed,
+          overrides
         );
       default:
         throw new Error(`Unsupported dialect: ${String(this.dialect)}`);
@@ -529,7 +538,8 @@ export class FieldGroupSchemaService {
     tableName: string,
     fields: FieldConfig[],
     typeColumn: string,
-    contributed: readonly ExtensionColumn[]
+    contributed: readonly ExtensionColumn[],
+    overrides: readonly ColumnOverride[] = []
   ): unknown {
     // Required by Drizzle: pgTable() expects a `Record<string, PgColumnBuilderBase>`
     // but the column builders returned by helpers (pgText, pgInteger, ...) have
@@ -556,7 +566,7 @@ export class FieldGroupSchemaService {
       updated_at: pgTimestamp("updated_at").defaultNow().notNull(),
     };
 
-    this.addFieldColumns(columns, fields, contributed);
+    this.addFieldColumns(columns, fields, contributed, overrides);
 
     // Required by Drizzle: pgTable() is generic over the column shape, and
     // our columns map is dynamic (Record<string, unknown>). The index
@@ -578,7 +588,8 @@ export class FieldGroupSchemaService {
     tableName: string,
     fields: FieldConfig[],
     typeColumn: string,
-    contributed: readonly ExtensionColumn[]
+    contributed: readonly ExtensionColumn[],
+    overrides: readonly ColumnOverride[] = []
   ): unknown {
     const columns: Record<string, unknown> = {
       id: mysqlVarchar("id", { length: 36 }).primaryKey(),
@@ -606,7 +617,7 @@ export class FieldGroupSchemaService {
         .notNull(),
     };
 
-    this.addFieldColumns(columns, fields, contributed);
+    this.addFieldColumns(columns, fields, contributed, overrides);
 
     return mysqlTable(
       tableName,
@@ -624,7 +635,8 @@ export class FieldGroupSchemaService {
     tableName: string,
     fields: FieldConfig[],
     typeColumn: string,
-    contributed: readonly ExtensionColumn[]
+    contributed: readonly ExtensionColumn[],
+    overrides: readonly ColumnOverride[] = []
   ): unknown {
     const columns: Record<string, unknown> = {
       // NOT NULL, with the key declared on the table below rather than on the
@@ -650,7 +662,7 @@ export class FieldGroupSchemaService {
       ),
     };
 
-    this.addFieldColumns(columns, fields, contributed);
+    this.addFieldColumns(columns, fields, contributed, overrides);
 
     return sqliteTable(
       tableName,
@@ -888,10 +900,11 @@ export class FieldGroupSchemaService {
   private addFieldColumns(
     columns: Record<string, unknown>,
     fields: FieldConfig[],
-    contributed: readonly ExtensionColumn[]
+    contributed: readonly ExtensionColumn[],
+    overrides: readonly ColumnOverride[] = []
   ): void {
     for (const field of this.columnFields(fields)) {
-      const column = this.drizzleColumnFor(field);
+      const column = this.drizzleColumnFor(field, overrides);
       if (column) {
         columns[field.name] = column;
       }
@@ -903,8 +916,13 @@ export class FieldGroupSchemaService {
    * A field's runtime Drizzle column: built from the descriptor where it names the column, and by
    * this dialect's own mapper otherwise, so the runtime table and the CREATE read one answer.
    */
-  private drizzleColumnFor(field: DataFieldConfig): unknown {
+  private drizzleColumnFor(
+    field: DataFieldConfig,
+    overrides: readonly ColumnOverride[] = []
+  ): unknown {
     const mappable = this.asMappableField(field);
+    const overridden = this.overriddenColumn(mappable, overrides);
+    if (overridden) return buildUserDrizzleColumn(overridden, this.dialect);
     const canonical = this.canonicalColumn(mappable);
     if (canonical) return buildUserDrizzleColumn(canonical, this.dialect);
     switch (this.dialect) {
@@ -915,6 +933,28 @@ export class FieldGroupSchemaService {
       case "sqlite":
         return this.mapFieldToSQLiteColumn(mappable);
     }
+  }
+
+  /**
+   * The field's column with the storage the app's override gives it, from the descriptor every
+   * entity's runtime column reads, or null when no override names it.
+   */
+  private overriddenColumn(
+    field: DataFieldConfig,
+    overrides: readonly ColumnOverride[]
+  ): ColumnDescriptor | null {
+    if (overrides.length === 0 || !field.name) return null;
+    // Any data field: the descriptor maps every type, where the guards in
+    // `canonicalColumn` narrow to the two this service hands it otherwise.
+    const descriptor = getComponentRowColumnDescriptor(
+      field as unknown as Parameters<typeof getComponentRowColumnDescriptor>[0],
+      this.dialect,
+      this.builtBy
+    );
+    if (!descriptor || !overrides.some(o => o.column === descriptor.name)) {
+      return null;
+    }
+    return withColumnOverride(descriptor, overrides, this.dialect);
   }
 
   private getColumnType(field: DataFieldConfig): string | null {
