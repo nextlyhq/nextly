@@ -385,6 +385,16 @@ export function fixHref(problem: Problem): string | undefined {
   }
 }
 
+/**
+ * A page the list's checks read, by its type's key, its id and, where it is
+ * not the site's default, its language, as a problem names its page.
+ */
+export interface CheckedPage {
+  type: string;
+  id: string;
+  locale?: string;
+}
+
 /** What the list's routes answer. */
 export interface ProblemListBody {
   problems: Problem[];
@@ -402,9 +412,9 @@ export interface ProblemListBody {
   /** The last full check is over a day old, or there has been none. */
   due: boolean;
   /**
-   * The page types the list covers for the reader, by key (a collection's
-   * slug, or `single:<slug>`): a page of another type was not checked for
-   * them, so its absence from the list says nothing about it.
+   * Each page the checks read that the reader may read, each language of a
+   * page on its own: a page not named here was not checked for them, so no
+   * problem listed for it says nothing about it either.
    */
-  types?: string[];
+  checked?: CheckedPage[];
 }

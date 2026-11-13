@@ -16,11 +16,10 @@ import {
   KIND_SEVERITY,
   SEO_TAB_ID,
   SEVERITY_ORDER,
+  type CheckedPage,
   type Problem,
   type ProblemSeverity,
 } from "../problems/contract";
-import { REDIRECTS_PAGE } from "../redirects/contract";
-import { SEO_ADMIN_SLUG } from "../settings/contract";
 
 /**
  * How a page stands, as its Status says: the most serious problem the
@@ -68,21 +67,22 @@ export function entryTypeKey(entry: NonNullable<SiteAddress["entry"]>): string {
 
 /**
  * The problem list as Pages reads it: its problems about each page, by the
- * page's key, and the page types it covers for the reader, where it says.
+ * page's key, and the pages it checked for the reader, where it says.
  */
 export interface ProblemsByPage {
   pages: ReadonlyMap<string, readonly Problem[]>;
-  /** The types whose pages the list checked for this reader. */
-  types?: ReadonlySet<string>;
+  /** The keys of the pages the list checked for this reader. */
+  checked?: ReadonlySet<string>;
 }
 
 /**
- * The problem list's problems grouped by the page each is about: read once
- * for the whole list. A problem about the whole site names no page.
+ * The problem list's problems grouped by the page each is about, and the
+ * pages it checked for the reader: read once for the whole list. A problem
+ * about the whole site names no page.
  */
 export function problemsByPage(
   problems: readonly Problem[],
-  types?: readonly string[]
+  checked?: readonly CheckedPage[]
 ): ProblemsByPage {
   const pages = new Map<string, Problem[]>();
   for (const problem of problems) {
@@ -91,7 +91,19 @@ export function problemsByPage(
     const key = pageKey(type, id, locale);
     pages.set(key, [...(pages.get(key) ?? []), problem]);
   }
-  return types === undefined ? { pages } : { pages, types: new Set(types) };
+  return checked === undefined
+    ? { pages }
+    : {
+        pages,
+        checked: new Set(
+          checked.map(page => pageKey(page.type, page.id, page.locale))
+        ),
+      };
+}
+
+/** The key the problem list names an entry's page by. */
+function entryKey(entry: NonNullable<SiteAddress["entry"]>): string {
+  return pageKey(entryTypeKey(entry), entry.id, entry.locale);
 }
 
 /** The problems the list holds about `item`; none for a page built in code. */
@@ -101,9 +113,7 @@ export function problemsOf(
 ): readonly Problem[] {
   const { entry } = item;
   if (entry === undefined) return [];
-  return (
-    byPage.pages.get(pageKey(entryTypeKey(entry), entry.id, entry.locale)) ?? []
-  );
+  return byPage.pages.get(entryKey(entry)) ?? [];
 }
 
 /**
@@ -116,13 +126,14 @@ export function statusOf(
   byPage: ProblemsByPage | undefined
 ): PageStatus {
   if (byPage === undefined) return "unknown";
-  // A page of a type the list doesn't cover for this reader was never
-  // checked for them: no problem listed is no evidence of none.
+  // A page the list didn't check for this reader, such as one their read
+  // rule leaves out or one published since, has no problem listed and no
+  // evidence of none.
   const { entry } = item;
   if (
     entry !== undefined &&
-    byPage.types !== undefined &&
-    !byPage.types.has(entryTypeKey(entry))
+    byPage.checked !== undefined &&
+    !byPage.checked.has(entryKey(entry))
   ) {
     return "unknown";
   }
@@ -261,11 +272,6 @@ export function entryHref(
   if (entry.locale !== undefined) query.set("locale", entry.locale);
   const search = query.toString();
   return search === "" ? page : `${page}?${search}`;
-}
-
-/** Where a new redirect from `path` is added, its From filled in. */
-export function newRedirectHref(path: string): string {
-  return `/admin/plugins/${SEO_ADMIN_SLUG}/${REDIRECTS_PAGE.path}?${new URLSearchParams({ from: path }).toString()}`;
 }
 
 /** The note a person copies for a developer whose route is not connected. */

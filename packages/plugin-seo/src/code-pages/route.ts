@@ -1,7 +1,8 @@
 /**
  * Pages' routes: every public address the site
  * knows of, and the save of a page with no entry's SEO, both site-wide SEO
- * for whoever holds `manage-seo`.
+ * for whoever holds `manage-seo`. The list names an entry only to someone
+ * who may read it, as the collection's own list would.
  *
  * @module code-pages/route
  */
@@ -14,10 +15,13 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
+import { readSingle, singleAccessOf } from "../bulk/singles";
+import type { Candidate } from "../outputs/listing";
 import { MANAGE_SEO_PERMISSION, siteWide } from "../permissions";
+import { callerReads, type ReadsAs } from "../problems/reader";
 import type { ReadRules } from "../resolver/provider";
 
-import { siteAddresses } from "./addresses";
+import { siteAddresses, type ReadableEntries } from "./addresses";
 import { heldByDocuments } from "./answers";
 import {
   ADDRESSES_ROUTE_PATH,
@@ -50,6 +54,61 @@ function originFor(req: Request, config: CodePageRoutesConfig): string {
   return config.origin() ?? new URL(req.url).origin;
 }
 
+/**
+ * Which of `ids`, entries of the collection `slug`, `reads` admits: none
+ * where the collection refuses the read outright.
+ */
+async function admitted(
+  reads: ReadsAs,
+  slug: string,
+  ids: readonly string[]
+): Promise<string[]> {
+  try {
+    return await reads.readable(slug, ids);
+  } catch (error) {
+    if (NextlyError.isCode(error, "FORBIDDEN")) return [];
+    throw error;
+  }
+}
+
+/**
+ * The entries the route's caller may read in each language, asked only of
+ * the reads themselves, made as them in that language, as the collection's
+ * own list or the Single's own read answers them: a rule that admits only
+ * some entries, or only some languages, decides as it does there.
+ */
+async function readableBy(ctx: PluginRouteContext): Promise<ReadableEntries> {
+  if (ctx.caller === null) throw NextlyError.authRequired();
+  const single = await singleAccessOf(ctx);
+  return async (batch, language) => {
+    const reads = callerReads(ctx, language);
+    const ids = new Map<string, string[]>();
+    for (const { type, holder } of batch) {
+      if (type.kind === "collection") {
+        ids.set(type.slug, [...(ids.get(type.slug) ?? []), holder.id]);
+      }
+    }
+    const allowed = new Set<string>();
+    for (const [slug, asked] of ids) {
+      for (const id of await admitted(reads, slug, asked)) {
+        allowed.add(`${slug}\u0000${id}`);
+      }
+    }
+    const kept: Candidate[] = [];
+    for (const candidate of batch) {
+      const { type, holder } = candidate;
+      if (
+        type.kind === "collection"
+          ? allowed.has(`${type.slug}\u0000${holder.id}`)
+          : (await readSingle(type.slug, single, language)) !== undefined
+      ) {
+        kept.push(candidate);
+      }
+    }
+    return kept;
+  };
+}
+
 /** The route that lists every public address the site knows of. */
 function addressesRoute(config: CodePageRoutesConfig): PluginRoute {
   // Site-wide SEO, which the plugin keeps itself: `manage-seo` alone.
@@ -62,6 +121,7 @@ function addressesRoute(config: CodePageRoutesConfig): PluginRoute {
         origin: originFor(req, config),
         routes: config.routes(),
         readRules: config.readRules,
+        readable: await readableBy(ctx),
       });
       return respondList(items, {
         total: items.length,
