@@ -395,8 +395,8 @@ describe.each(getConfiguredTestDialects())(
       const created = await t.nextly.create({
         collection: TARGETS,
         data: { title: "Target" },
-      } as never);
-      const target = (created as { item: { id: string } }).item.id;
+      });
+      const target = String(created.item.id);
       await save(t, SITE, { layout: "wide", status: "published" });
       await save(t, SITE, { title: "Unfinished" });
       await t.nextly.rewriteField({
