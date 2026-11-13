@@ -26,6 +26,7 @@ import type { ExtensionSchema } from "./build-extension-schema";
 import { toColumnSpec, toIndexSpec } from "./compile";
 import type { ColumnOverride } from "./draft";
 import { withContributedEnumChecks } from "./enum-check";
+import type { ExtensionIndex } from "./types";
 
 /**
  * The part of a compiled extension schema that holds contributions, and the
@@ -69,7 +70,6 @@ export function withEntityContributions(
   dialect: SupportedDialect
 ): TableSpec {
   const contributedColumns = source?.entityColumns.get(spec.name) ?? [];
-  const contributedIndexes = source?.entityIndexes.get(spec.name) ?? [];
 
   const columns = withColumnOverrides(
     spec.columns,
@@ -81,17 +81,11 @@ export function withEntityContributions(
     columns.push(toColumnSpec(column, dialect));
   }
 
-  const present = new Set(columns.map(column => column.name));
-  const indexes: IndexSpec[] = [...(spec.indexes ?? [])];
-  const keys = new Set(indexes.map(index => indexKey(index)));
-  for (const index of contributedIndexes) {
-    if (index.columns.length === 0) continue;
-    if (!index.columns.every(column => present.has(column))) continue;
-    const built = toIndexSpec(spec.name, index);
-    if (keys.has(indexKey(built))) continue;
-    keys.add(indexKey(built));
-    indexes.push(built);
-  }
+  const indexes = withContributedIndexes(
+    spec,
+    new Set(columns.map(column => column.name)),
+    source?.entityIndexes.get(spec.name) ?? []
+  );
 
   return withContributedEnumChecks(
     {
@@ -103,6 +97,28 @@ export function withEntityContributions(
     previous,
     dialect
   );
+}
+
+/**
+ * `spec`'s indexes and the ones contributed to it, each over columns the
+ * table has (`present`), and each shape once.
+ */
+function withContributedIndexes(
+  spec: TableSpec,
+  present: ReadonlySet<string>,
+  contributed: readonly ExtensionIndex[]
+): IndexSpec[] {
+  const indexes: IndexSpec[] = [...(spec.indexes ?? [])];
+  const keys = new Set(indexes.map(index => indexKey(index)));
+  for (const index of contributed) {
+    if (index.columns.length === 0) continue;
+    if (!index.columns.every(column => present.has(column))) continue;
+    const built = toIndexSpec(spec.name, index);
+    if (keys.has(indexKey(built))) continue;
+    keys.add(indexKey(built));
+    indexes.push(built);
+  }
+  return indexes;
 }
 
 /**
