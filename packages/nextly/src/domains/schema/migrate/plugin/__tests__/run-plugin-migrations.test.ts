@@ -2532,6 +2532,52 @@ describe("a limit on how many modules one run records", () => {
       )
     ).rejects.toThrow(NextlyError);
   });
+
+  it("accepts a plugin run alone whose key targets an installed dependency's table", async () => {
+    // `plugins install` runs only the installed plugin's set: the dependency's
+    // table is no module of this run's, but it is already in the database.
+    const keyingReviews: TableSpec = {
+      name: "b__reviews",
+      columns: [
+        { name: "id", type: "varchar(32)", nullable: false },
+        { name: "product_id", type: "varchar(32)", nullable: false },
+      ],
+      indexes: [],
+      foreignKeys: [
+        {
+          name: "fk_reviews_product",
+          columns: ["product_id"],
+          referencesTable: "a__products",
+          referencesColumns: ["id"],
+          onDelete: "restrict",
+          onUpdate: "restrict",
+        },
+      ],
+    };
+    await expect(
+      previewPluginMigrations(
+        [
+          {
+            pluginName: "b",
+            pluginVersion: "1.0.0",
+            migrations: [
+              module({
+                name: "001",
+                schemaVersion: 1,
+                before: [],
+                target: [keyingReviews],
+              }),
+            ],
+          },
+        ],
+        {
+          dialect: "postgresql",
+          rows: [],
+          existingTables: async () => new Set(["a__products"]),
+        }
+      )
+    ).resolves.toBeDefined();
+  });
 });
 
 describe("ownership of a plugin whose modules are all recorded", () => {
