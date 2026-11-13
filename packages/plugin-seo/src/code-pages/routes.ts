@@ -163,12 +163,21 @@ const PAGE_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js", ".mdx", ".md"];
 /**
  * The page's file as the app has it, such as `src/app/pricing/page.tsx`,
  * where its source is there to look at; else `app` and its path.
+ *
+ * Only whether the file exists is asked, to name it, and a deployed app may
+ * well not ship its sources. So the path is marked for Turbopack to ignore:
+ * built into a Next.js app, a path joined from the working directory and a
+ * route's name otherwise reads as any file of the project, and the build
+ * traces the whole project, its sources and `public` folder, into the server
+ * output, which slows a deploy or takes it over a host's size limit.
  */
 function sourceFileOf(appDir: string, appPath: string): string {
   for (const root of ["app", "src/app"]) {
     for (const extension of PAGE_EXTENSIONS) {
       const file = `${root}${appPath}${extension}`;
-      if (existsSync(join(appDir, file))) return file;
+      // Both calls marked: Turbopack judges the join and the read apart.
+      const path = join(/*turbopackIgnore: true*/ appDir, file);
+      if (existsSync(/*turbopackIgnore: true*/ path)) return file;
     }
   }
   return `app${appPath}`;
