@@ -165,7 +165,7 @@ function firstNoRetryBetween(
   triggers: ReadonlySet<string>
 ): ReturnType<typeof firstNoRetry> {
   if (end <= start) return undefined;
-  const renames: number[] = [];
+  const replayedBefore: number[] = [];
   for (const [index, statement] of statements.slice(0, start).entries()) {
     const renamed = renamedTables(statement, dialect);
     if (
@@ -173,12 +173,12 @@ function firstNoRetryBetween(
       renamed.length > 0 ||
       isConnectionSetting(statement, dialect)
     ) {
-      renames.push(index);
+      replayedBefore.push(index);
     }
   }
   const found = firstNoRetry(
     [
-      ...renames.map(index => statements[index] ?? ""),
+      ...replayedBefore.map(index => statements[index] ?? ""),
       ...statements.slice(start, end),
     ],
     dialect,
@@ -187,7 +187,9 @@ function firstNoRetryBetween(
   if (found === undefined) return undefined;
   const at = found.statementNumber - 1;
   const index =
-    at < renames.length ? (renames[at] ?? 0) : start + at - renames.length;
+    at < replayedBefore.length
+      ? (replayedBefore[at] ?? 0)
+      : start + at - replayedBefore.length;
   return { statementNumber: index + 1, judgement: found.judgement };
 }
 

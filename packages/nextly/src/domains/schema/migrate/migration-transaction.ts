@@ -15,6 +15,8 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { assertNoOpenTransaction } from "../../../shared/lib/open-transaction";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import {
+  causeChain,
+  endedWaiting,
   ownSessionId,
   ownSessionIdText,
   sessionIdOfRows,
@@ -367,6 +369,30 @@ async function boundSqliteWait(
       );
 }
 
+/** MySQL's ER_LOCK_DEADLOCK: the transaction was rolled back whole, the deadlock's victim. */
+const MYSQL_DEADLOCK = { code: "ER_LOCK_DEADLOCK", errno: 1213 };
+
+/**
+ * Whether a try passes over `statement`'s failure: the caller's `passOver` accepts it, and it is
+ * not one that ended the try or the transaction. A lock wait ended or cancelled is the try's to
+ * judge, never a statement already applied, and a MySQL deadlock rolled back the whole
+ * transaction, so the unit cannot go on in it.
+ */
+function passesOver(
+  bound: StatementTryBound | undefined,
+  error: unknown,
+  statement: string,
+  dialect: SupportedDialect
+): boolean {
+  if (bound?.passOver === undefined) return false;
+  if (endedWaiting(error, dialect, true)) return false;
+  const deadlock = causeChain(error).some(
+    ({ code, errno }) =>
+      code === MYSQL_DEADLOCK.code || errno === MYSQL_DEADLOCK.errno
+  );
+  return !deadlock && bound.passOver(error, statement);
+}
+
 /**
  * Whether `statement` sets something on its connection (`SET`): sent again before a try that
  * resumes past it, since the try may run on another connection than the one it was set on.
@@ -486,7 +512,7 @@ async function runUnitStatements(
             // Only MySQL's transaction goes on after a refused statement (see `passOver`).
             if (
               dialect !== "mysql" ||
-              bound?.passOver?.(error, statement) !== true
+              !passesOver(bound, error, statement, dialect)
             ) {
               throw error;
             }
@@ -532,7 +558,7 @@ async function runUnitStatements(
       try {
         await execute(sent(statement));
       } catch (error) {
-        if (bound?.passOver?.(error, statement) === true) continue;
+        if (passesOver(bound, error, statement, dialect)) continue;
         throw partialFailure(unit, index, statements.length, error);
       }
     }

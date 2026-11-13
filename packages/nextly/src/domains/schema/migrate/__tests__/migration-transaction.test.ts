@@ -289,6 +289,38 @@ describe("a statement a try passes over", () => {
     expect(rows.map(row => row.id)).toEqual(["p4", "p5"]);
   });
 
+  it("never passes over a wait for a busy table, whatever the caller accepts", async () => {
+    const real = adapter.executeQuery.bind(adapter);
+    const spy = vi
+      .spyOn(adapter, "executeQuery")
+      .mockImplementation((statement: string, ...rest: unknown[]) => {
+        if (statement.includes("missing_table")) {
+          return Promise.reject(
+            Object.assign(new Error("database is locked"), {
+              code: "SQLITE_BUSY",
+            })
+          );
+        }
+        return (real as (...args: unknown[]) => Promise<unknown>)(
+          statement,
+          ...rest
+        ) as ReturnType<typeof adapter.executeQuery>;
+      });
+    try {
+      await expect(
+        runMigrationStatements(
+          adapter,
+          ALREADY,
+          { source: "0001_x.sql", transaction: false },
+          undefined,
+          { tryMs: 1_000, passOver: () => true }
+        )
+      ).rejects.toMatchObject({ code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it("is never consulted in a SQLite transaction, whose refused statement aborts it", async () => {
     const passOver = vi.fn(() => true);
     await expect(

@@ -195,7 +195,7 @@ function nextStep(stop: BusyTableStop): string {
     return (
       `Run it again once the holder ends or the holding session is ended: \`${stop.change}\` ` +
       "was undone whole and applies from its start. Check what the statement named above keeps " +
-      "(for `setval`, the sequence's position) before it runs again. If `nextly migrate` refuses " +
+      "(for `setval`, the sequence's position) before it runs again. If the command refuses " +
       "the file for an unresolved attempt, clear it first with " +
       `\`nextly migrate:resolve --failed-cleanup ${stop.change}\`.`
     );

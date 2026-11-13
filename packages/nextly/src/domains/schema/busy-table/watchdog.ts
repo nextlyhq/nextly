@@ -130,8 +130,9 @@ export function prepareTryWatchdog(
   let lastSeenWaitingAt: number | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let wake: (() => void) | undefined;
-  // A cancel under way (the holder's read, then the cancel), awaited by `idle`.
-  let cancelling: Promise<void> = Promise.resolve();
+  // The poll under way, which may go on to cancel, awaited by `idle`: set before its first ask,
+  // so a poll that has seen the session waiting cannot decide to cancel after `idle` resolved.
+  let polling: Promise<void> = Promise.resolve();
 
   /** Whether the session is waiting for a lock now. */
   async function waitingNow(target: number): Promise<boolean> {
@@ -171,8 +172,7 @@ export function prepareTryWatchdog(
     if (lastSeenWaitingAt !== undefined) waitedMs += now - lastSeenWaitingAt;
     lastSeenWaitingAt = now;
     if (waitedMs < tryMs || stopped) return;
-    cancelling = cancel(target).catch(() => undefined);
-    await cancelling;
+    await cancel(target);
   }
 
   async function run(): Promise<void> {
@@ -182,7 +182,8 @@ export function prepareTryWatchdog(
     while (!stopped && !fired) {
       // A failed ask (a dropped connection, a busy pool) says nothing about the session; the next
       // poll asks again.
-      await poll(target).catch(() => undefined);
+      polling = poll(target).catch(() => undefined);
+      await polling;
       if (stopped || fired) return;
       await new Promise<void>(resolve => {
         wake = resolve;
@@ -198,7 +199,7 @@ export function prepareTryWatchdog(
       sessionNumber(session);
       given(session);
     },
-    idle: () => cancelling,
+    idle: () => polling,
     async stop() {
       stopped = true;
       given(undefined);
