@@ -427,6 +427,26 @@ export async function writeRegistryRows<T>(
 }
 
 /**
+ * Count a write of registry rows made on `tx`, a transaction its caller
+ * opened and commits: inside an open registry write ({@link writeRegistryRows})
+ * it counts towards that write's version, stored once at its end; otherwise
+ * the version is stored on `tx` now, so its count commits or rolls back with
+ * the rows. The caller clears the cached registry rows once `tx` has ended,
+ * as after any registry write.
+ */
+export async function countRegistryWriteOn(
+  tx: TransactionContext,
+  dialect: SupportedDialect
+): Promise<void> {
+  const outer = registryWrite.getStore();
+  if (outer?.live === true) {
+    outer.wrote = true;
+    return;
+  }
+  await storeSchemaVersion(tx.getDrizzle(), dialect, { wrote: true });
+}
+
+/**
  * {@link writeRegistryRows} for a caller whose adapter is optional (a Builder
  * metadata service built without one generates statements and never runs
  * them): with no adapter there is no transaction to write the version in,

@@ -29,6 +29,7 @@ import {
   type RedirectTargetDocument,
   type RedirectUrlPattern,
 } from "../utils/redirect-target";
+import { pageFromReferer } from "../utils/sent-from";
 
 import { botCheckReady, botTokensOf, judgeBotCheck } from "./bot-check";
 import { heldRefusal, SETTINGS_CHANGED } from "./form-closing-hold";
@@ -56,6 +57,12 @@ export interface SubmitFormOptions {
     ipAddress?: string;
     /** Submitter's user agent string */
     userAgent?: string;
+    /**
+     * The page it was sent from, such as the request's `Referer`. Kept as
+     * its origin and path only, and only when it is a web page
+     * (`pageFromReferer`).
+     */
+    page?: string;
   };
 
   /**
@@ -587,6 +594,7 @@ export async function submitForm(
       spamReason: isContentSpam ? (spamResult.reason ?? null) : null,
       ipAddress: metadata?.ipAddress || null,
       userAgent: metadata?.userAgent || null,
+      page: pageFromReferer(metadata?.page) ?? null,
       submittedAt: new Date(),
     };
 
@@ -605,8 +613,13 @@ export async function submitForm(
         asPluginSubmission(submissionData, {
           keepAsEvidence: isContentSpam,
           // Its settings too: the seam makes the row's one-response key from
-          // them.
-          form: { id: form.id, fields: form.fields, settings: form.settings },
+          // them. Its slug names it in a warning the seam may log.
+          form: {
+            id: form.id,
+            slug: form.slug,
+            fields: form.fields,
+            settings: form.settings,
+          },
           // The bot-check tokens the visitor's form sent, read before the
           // row keeps only the form's fields: the seam verifies them.
           botTokens: botTokensOf(data),

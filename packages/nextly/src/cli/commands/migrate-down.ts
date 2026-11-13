@@ -673,9 +673,11 @@ export async function rollBackOne(
   >,
   /**
    * Run in the DOWN's transaction after its statements and before its
-   * rollback is recorded: the bookkeeping a rollback to the registry record's
-   * point undoes, given only for the last target, the one that reaches that
-   * point (`RollbackBookkeeping.restore`). In a transaction it commits with
+   * rollback is recorded: the registry rows of the entities whose field types
+   * this DOWN changes back (`RollbackBookkeeping.perFile`), and, for the last
+   * target, the one that reaches the point, the bookkeeping a rollback to the
+   * registry record's point undoes (`RollbackBookkeeping.restore`). In a
+   * transaction it commits with
    * the DOWN, or neither does. On MySQL, whose schema statements commit as
    * they run, a failure here leaves the migration recorded applied with its
    * rollback recorded failed and possibly partial, as any DOWN stopped
@@ -1061,9 +1063,17 @@ export async function migrateDownCore(
       }
       for (const [at, p] of current.entries()) {
         // The last target is the one that reaches the point the rollback
-        // leaves, so the bookkeeping there commits with its DOWN.
+        // leaves, so the bookkeeping there commits with its DOWN. A DOWN that
+        // changes a field's type back writes its entity's row with it first.
         const last = at === current.length - 1;
-        await rollBackOne(p, held, last ? bookkeeping?.restore : undefined);
+        await rollBackOne(
+          p,
+          held,
+          inTurn(
+            withTransaction(bookkeeping?.perFile?.get(p.filename), p),
+            last ? withTransaction(bookkeeping?.restore, p) : undefined
+          )
+        );
         rolledBack.push(p.filename);
         deps.logger.success(`Rolled back ${p.filename}`);
       }
@@ -1072,6 +1082,27 @@ export async function migrateDownCore(
   );
 
   return { rolledBack };
+}
+
+/** `step`, told whether `p`'s DOWN runs in a transaction its writes must join. */
+function withTransaction(
+  step: ((inFileTransaction: boolean) => Promise<void>) | undefined,
+  p: Pick<PlannedDown, "transaction">
+): (() => Promise<void>) | undefined {
+  return step === undefined ? undefined : () => step(p.transaction);
+}
+
+/** Each of `steps` given, one after the other; undefined where none is. */
+function inTurn(
+  ...steps: ReadonlyArray<(() => Promise<void>) | undefined>
+): (() => Promise<void>) | undefined {
+  const given = steps.filter(
+    (step): step is () => Promise<void> => step !== undefined
+  );
+  if (given.length === 0) return undefined;
+  return async () => {
+    for (const step of given) await step();
+  };
 }
 
 /**

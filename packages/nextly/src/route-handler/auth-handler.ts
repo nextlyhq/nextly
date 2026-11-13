@@ -5,6 +5,8 @@
  * Extracted from routeHandler.ts for better separation of concerns.
  */
 
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
+
 import { buildAuthRouterDeps } from "../auth/handlers/deps-bridge";
 import { routeAuthRequest } from "../auth/handlers/router";
 import { setSessionStandingBoot } from "../auth/session/session-standing";
@@ -576,11 +578,14 @@ async function registerFromThisRequest(
   // Seed built-in email templates (password-reset, welcome, etc.)
   // This mirrors init.ts runPostInitTasks() so external apps using
   // createDynamicHandlers() get templates auto-seeded on first request.
-  try {
-    const emailTemplateService = getService("emailTemplateService");
-    await emailTemplateService.ensureBuiltInTemplates();
-  } catch {
-    // Silently skip — email_templates table may not exist yet
+  // Not in `next build`, which writes nothing: the first start after it seeds.
+  if (!isNextBuildPhase()) {
+    try {
+      const emailTemplateService = getService("emailTemplateService");
+      await emailTemplateService.ensureBuiltInTemplates();
+    } catch {
+      // Silently skip — email_templates table may not exist yet
+    }
   }
 
   // The same seeding the instrumentation boot performs, so an app that cold

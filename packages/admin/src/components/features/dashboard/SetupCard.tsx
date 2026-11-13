@@ -33,7 +33,6 @@ import {
   drawnSetup,
   isSkippableKind,
   setupAllSet,
-  stepFinished,
   talliedSetup,
   type SetupAnswer,
   type SetupCardData,
@@ -44,7 +43,11 @@ import type { DeclaredComponentProps } from "nextly/widget-result";
 import type React from "react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
-import { Check } from "@admin/components/icons";
+import {
+  Checklist,
+  ChecklistItem,
+  ChecklistMark,
+} from "@admin/components/shared/checklist";
 import { Link } from "@admin/components/ui/link";
 import { useSingles } from "@admin/hooks/queries/useSingles";
 import { WIDGET_QUERIES_KEY } from "@admin/hooks/queries/widget-queries-key";
@@ -85,13 +88,6 @@ function useSingleLabels(): ReadonlyMap<string, string> {
     [data?.items]
   );
 }
-
-/** What a screen reader hears for each status, which the mark and styling only show. */
-const STATUS_TEXT: Record<SetupStep["status"], string> = {
-  done: "done",
-  skipped: "skipped",
-  open: "still to do",
-};
 
 /**
  * The steps this card draws (`drawnSetup`, the host's own function for "You're all set"): the
@@ -230,45 +226,6 @@ function retirementSignature(
 /** "N of M done", from a counted answer. */
 function progressText(done: number, total: number): string {
   return `${done} of ${total} done`;
-}
-
-/** The bar is the picture; the header's "N of M done" is the answer, read once. */
-function ProgressBar({ done, total }: { done: number; total: number }) {
-  return (
-    <div
-      className="mt-0.5 mb-1.5 h-1 w-full overflow-hidden rounded-full bg-secondary"
-      aria-hidden="true"
-      data-setup-progress=""
-    >
-      <div
-        className="h-full rounded-full bg-success-solid transition-[width] duration-300 motion-reduce:transition-none"
-        style={{
-          width: `${total === 0 ? 0 : Math.round((done / total) * 100)}%`,
-        }}
-      />
-    </div>
-  );
-}
-
-/**
- * A step's mark, in its own shape: a tick on the success colour once it is done, a dashed circle
- * once it is skipped, and an empty circle while it is open.
- */
-function StepMark({ status }: { status: SetupStep["status"] }) {
-  return (
-    <span
-      aria-hidden="true"
-      data-setup-mark={status}
-      className={cn(
-        "flex size-5 shrink-0 items-center justify-center rounded-full border-[1.5px] border-control-border",
-        status === "done" &&
-          "border-success-solid bg-success-solid text-success-foreground",
-        status === "skipped" && "border-dashed"
-      )}
-    >
-      {status === "done" && <Check className="size-3" strokeWidth={3} />}
-    </span>
-  );
 }
 
 /** Whether the Singles' list is open, and what opens it, as the Singles' line needs. */
@@ -448,66 +405,29 @@ function StepLine({
   const presentation = stepPresentation(step);
   const { label } = presentation;
   const hint = hintOf(step, presentation, sample);
-  const finished = stepFinished(step);
-  const own = (
-    <OwnAction
-      step={step}
-      presentation={presentation}
-      singles={singles}
-      sample={sample}
-    />
-  );
-  const skip = <SkipToggle step={step} label={label} write={write} />;
   return (
-    <li
+    <ChecklistItem
       data-setup-step={step.kind}
-      data-status={step.status}
-      className="flex flex-wrap items-start gap-x-3 gap-y-2 border-t border-border py-2.5 first:border-t-0"
+      status={step.status}
+      label={label}
+      hint={hint.words}
+      hintFailed={hint.failed}
+      actions={
+        <>
+          <OwnAction
+            step={step}
+            presentation={presentation}
+            singles={singles}
+            sample={sample}
+          />
+          <SkipToggle step={step} label={label} write={write} />
+        </>
+      }
     >
-      <StepMark status={step.status} />
-      <div className="min-w-36 flex-1">
-        <p
-          className={cn(
-            "text-[13.5px] leading-5 break-words",
-            finished ? "text-muted-foreground" : "font-medium text-foreground"
-          )}
-        >
-          {label}
-          <span className="sr-only"> — {STATUS_TEXT[step.status]}</span>
-        </p>
-        <p
-          className={cn(
-            "text-[12.5px] leading-[18px] text-muted-foreground",
-            hint.failed && "text-danger-text"
-          )}
-          data-setup-hint=""
-        >
-          {hint.words}
-        </p>
-        {step.kind === "singles" && step.status === "open" && singles.open && (
-          <SinglesList step={step} id={singles.listId} />
-        )}
-      </div>
-      <StepButtons>
-        {own}
-        {skip}
-      </StepButtons>
-    </li>
-  );
-}
-
-/**
- * A line's buttons, on the right beside its name or, where they no longer fit there, wrapped under
- * it. Hidden while empty: a line whose step has nothing to press takes no room for buttons.
- */
-function StepButtons({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-1.5 empty:hidden"
-      data-setup-actions=""
-    >
-      {children}
-    </div>
+      {step.kind === "singles" && step.status === "open" && singles.open && (
+        <SinglesList step={step} id={singles.listId} />
+      )}
+    </ChecklistItem>
   );
 }
 
@@ -521,7 +441,7 @@ function AllSet({ write }: { write: SetupStateWrite }) {
       className="flex flex-wrap items-center gap-x-3.5 gap-y-2"
       data-testid="setup-all-set"
     >
-      <StepMark status="done" />
+      <ChecklistMark status="done" />
       <div className="min-w-36 flex-1">
         <p className="text-sm font-medium text-foreground">
           You&apos;re all set
@@ -627,7 +547,7 @@ function listedSteps(counted: CountedSetup): CountedSetup {
  * The checklist: the bar, one line per step, and sample content's load or outcome under them
  * while one is on show.
  */
-function Checklist({
+function SetupChecklist({
   listed,
   write,
   singles,
@@ -641,18 +561,11 @@ function Checklist({
   samplePanel: React.ReactNode;
 }) {
   return (
-    // Its one column is the card's width whatever a line holds (`minmax(0, 1fr)`): a grid's own
-    // column would grow to the widest line's unbroken words and run past the card's edge.
     <div
       className="grid min-w-0 grid-cols-[minmax(0,1fr)]"
       data-testid="setup-card"
     >
-      <ProgressBar done={listed.done} total={listed.total} />
-      <SaveFailure message={write.failed} />
-      <ol
-        aria-label="Setup steps"
-        className="grid min-w-0 grid-cols-[minmax(0,1fr)]"
-      >
+      <Checklist label="Setup steps" done={listed.done} total={listed.total}>
         {listed.steps.map(step => (
           <StepLine
             key={step.kind}
@@ -662,7 +575,8 @@ function Checklist({
             sample={sample}
           />
         ))}
-      </ol>
+      </Checklist>
+      <SaveFailure message={write.failed} />
       {samplePanel}
     </div>
   );
@@ -717,7 +631,7 @@ export const SetupCard: React.FC<DeclaredComponentProps> = ({
   }
   if (listed === undefined || progress === undefined) return null;
   return (
-    <Checklist
+    <SetupChecklist
       listed={listed}
       write={write}
       singles={{

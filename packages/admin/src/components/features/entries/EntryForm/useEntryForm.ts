@@ -24,6 +24,8 @@ import {
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 
+import type { EditorRestore } from "@admin/components/features/versions/editor-restore";
+import { useFormRestore } from "@admin/components/features/versions/useEditorRestoreSurface";
 import { useCreateEntry } from "@admin/hooks/queries/useCreateEntry";
 import { useDeleteEntry } from "@admin/hooks/queries/useDeleteEntry";
 import { useDiscardWorkingDraft } from "@admin/hooks/queries/useDiscardWorkingDraft";
@@ -333,6 +335,11 @@ export function mapIntentToPayload(
 export interface UseEntryFormReturn {
   /** React Hook Form instance */
   form: UseFormReturn<Record<string, unknown>>;
+  /**
+   * The values a restore puts into the form, which the history fills and the
+   * save names the sources of.
+   */
+  formRestore: EditorRestore;
   /** What the form starts from for the entry on screen. */
   defaultValues: Record<string, unknown>;
   /** Handle form submission. The optional `intent` arg names the user's
@@ -962,6 +969,7 @@ export function useEntryForm({
     defaultValues,
     mode: "onSubmit",
   });
+  const formRestore = useFormRestore(form);
 
   // Reset the form to the entry when the entry changes. defaultValues is
   // useMemo'd on (fields, entry), and the query cache's structural sharing
@@ -1150,6 +1158,8 @@ export function useEntryForm({
           // And the editor can move to another entry or language.
           stillShown: () => scopeNow.current === startedIn,
           // This entry's recovery points, addressed as its recorder does.
+          // The values a restore put in, whose sources the save names.
+          restore: formRestore,
           recordingsFor: documentRecordingKey(
             autosaveScopeFor("collection", collection.name, entry?.id)
           ),
@@ -1217,6 +1227,7 @@ export function useEntryForm({
     },
     [
       form,
+      formRestore,
       mode,
 
       entry?.id,
@@ -1374,6 +1385,7 @@ export function useEntryForm({
 
   return {
     form,
+    formRestore,
     defaultValues,
     handleSubmit,
     writeStatus,

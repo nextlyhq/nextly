@@ -37,6 +37,7 @@ const registered = {
   "@nextlyhq/plugin-page-builder/admin#ComponentListTools": _p5.ComponentListTools,
   "@nextlyhq/plugin-page-builder/admin#DeleteComponentReplacement": _p5.DeleteComponentReplacement,
   "@nextlyhq/plugin-page-builder/admin#EntryDesignSection": _p5.EntryDesignSection,
+  "@nextlyhq/plugin-page-builder/admin#PageBuilderOverview": _p5.PageBuilderOverview,
   "@nextlyhq/plugin-page-builder/admin#PageBuilderView": _p5.PageBuilderView,
   "@nextlyhq/plugin-page-builder/admin#RemoveLayoutToolbarSlot": _p5.RemoveLayoutToolbarSlot,
   "@nextlyhq/plugin-page-builder/admin#TemplateDeleteAction": _p5.TemplateDeleteAction,

@@ -10,6 +10,16 @@ const store = vi.hoisted(() => ({
   calls: [] as string[],
   versionsRead: 0,
   failRemove: false,
+  /** The read of the languages a page holds, where a test holds it. */
+  heldRead: undefined as Promise<unknown[]> | undefined,
+}));
+
+// The address record, read for the languages a page holds.
+vi.mock("../../address-record/store", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../address-record/store")>()),
+  recordReady: async () => undefined,
+  addressesOf: async () => (await store.heldRead) ?? [],
+  holdersByKey: async () => new Map(),
 }));
 
 vi.mock("../store", async importOriginal => ({
@@ -65,21 +75,17 @@ const CHECKS = {
 
 describe("a page's checks and its deletion", () => {
   it("clean up after the page's check still reading it has finished", async () => {
-    let finishRead: (value: { data: unknown[] }) => void = () => undefined;
+    let finishRead: (rows: unknown[]) => void = () => undefined;
+    // The check's read of the languages the page holds, held until the test
+    // lets it go.
+    store.heldRead = new Promise<unknown[]>(resolve => {
+      finishRead = resolve;
+    });
     const ctx = {
       logger: { error: vi.fn() },
       self: { collections: {} },
       publicAddresses: { defaultLanguage: async () => "en" },
-      services: {
-        ownCollections: {
-          // The check's read of the languages the page holds, held until the
-          // test lets it go.
-          listEntries: () =>
-            new Promise<{ data: unknown[] }>(resolve => {
-              finishRead = resolve;
-            }),
-        },
-      },
+      services: { ownCollections: { listEntries: async () => ({ data: [] }) } },
     } as unknown as PluginContext;
 
     recheckSaved(ctx, CHECKS, "posts", "7");
@@ -89,7 +95,8 @@ describe("a page's checks and its deletion", () => {
     // The cleanup has not run while the check is still reading.
     expect(store.calls).toEqual(["readVersions"]);
 
-    finishRead({ data: [] });
+    finishRead([]);
+    store.heldRead = undefined;
     await vi.waitFor(() =>
       expect(store.calls).toEqual([
         "readVersions",

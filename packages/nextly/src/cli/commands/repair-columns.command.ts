@@ -27,6 +27,12 @@ export function registerRepairColumnsCommand(
       "Convert each column whose stored values all convert exactly, and record each repair",
       false
     )
+    // The one data-loss consent, read by the same parser as every command's. A repair takes only
+    // the form naming its columns: the form without a list, or a table alone, never clears one.
+    .option(
+      "--accept-data-loss [targets]",
+      "With --apply, convert each lossy column named as table.column (--accept-data-loss=dc_posts.meta), clearing the values its report names; the form without a list, or a table alone, covers none. Same as NEXTLY_ACCEPT_DATA_LOSS."
+    )
     // One versioned document on standard output, for CI; nothing else is written there.
     .option(
       "--json",

@@ -10,6 +10,10 @@
 import type { PluginContext, PublicAddressType } from "@nextlyhq/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  keepRecord,
+  type DoubleRow,
+} from "../../address-record/__tests__/record-double";
 import type { SeoAnswer } from "../../resolver/order";
 import { listPages } from "../listing";
 
@@ -63,21 +67,13 @@ vi.mock("../../address-record/participant", async importOriginal => ({
     readTogether.push([...paths]);
     return work();
   },
-  addressHolders: async (ctx: PluginContext, path: string, locale: string) => {
-    const { data } = await ctx.services.ownCollections.listEntries("", {
-      where: {
-        and: [
-          { kind: { equals: "address" } },
-          { locale: { equals: locale } },
-          { path: { equals: path } },
-        ],
-      },
-    });
-    return (data as Row[]).map(row => ({
-      collection: row.holderCollection,
-      id: row.holderId,
-    }));
-  },
+}));
+
+// The record the pages above are read from.
+vi.mock("../../address-record/store", async importOriginal => ({
+  ...(await importOriginal()),
+  ...(await import("../../address-record/__tests__/record-double"))
+    .recordDouble,
 }));
 
 /** The language each page was resolved in, by id. */
@@ -106,23 +102,7 @@ const listed: SeoAnswer["robots"] = {
   from: "site",
 };
 
-interface Row {
-  kind: string;
-  locale: string;
-  path: string;
-  holderCollection: string;
-  holderId: string;
-}
-
-/** Whether `row` meets one condition of a record read. */
-function meets(row: Row, condition: Record<string, unknown>): boolean {
-  return Object.entries(condition).every(([field, test]) => {
-    const value = row[field as keyof Row];
-    const { equals, in: within } = test as { equals?: string; in?: string[] };
-    if (equals !== undefined) return value === equals;
-    return within?.includes(value) ?? true;
-  });
-}
+type Row = DoubleRow;
 
 /**
  * A plugin context over one collection of `documents` and a record of
@@ -134,7 +114,7 @@ function context(
   languages?: string[],
   registry?: string
 ) {
-  return {
+  const ctx = {
     self: { collections: {} },
     config:
       languages === undefined
@@ -161,22 +141,14 @@ function context(
           return { data: documents, pagination: { hasMore: false } };
         },
       },
-      ownCollections: {
-        listEntries: async (
-          _slug: string,
-          query: { where: { and: Record<string, unknown>[] } }
-        ) => ({
-          data: rows.filter(row =>
-            query.where.and.every(condition => meets(row, condition))
-          ),
-        }),
-      },
     },
   } as unknown as PluginContext;
+  keepRecord(ctx, rows);
+  return ctx;
 }
 
 const holds = (id: string, path: string, locale = "en"): Row => ({
-  kind: "address",
+  kind: "address" as const,
   locale,
   path,
   holderCollection: "pages",

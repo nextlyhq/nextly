@@ -6,7 +6,11 @@
  * and older follow the list it was opened from, and staff edit answers with
  * the version they read.
  */
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  focusManager,
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import {
   cleanup,
   render,
@@ -94,7 +98,15 @@ const DATA = {
 
 function wrap(node: React.ReactNode) {
   return render(
-    <QueryClientProvider client={new QueryClient()}>{node}</QueryClientProvider>
+    // No retries: a read that fails says so at once rather than after the
+    // client's back-off.
+    <QueryClientProvider
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
+    >
+      {node}
+    </QueryClientProvider>
   );
 }
 
@@ -206,6 +218,15 @@ interface ServerOptions {
   hold?: () => Promise<void>;
   /** The connection fails for every save. */
   offline?: boolean;
+  /** Reading the submission fails. */
+  failReads?: boolean;
+  /** The server trims text answers as it stores them. */
+  normalize?: boolean;
+  /** Fields a host added to submissions, and the submission's values for them. */
+  extension?: {
+    fields: Array<{ name: string; label: string; type: string }>;
+    values: Record<string, unknown>;
+  };
 }
 
 /** The list's answer to one of the page's place queries. */
@@ -231,6 +252,18 @@ function server(options: ServerOptions) {
   let rev = 7;
   const store = options.store ?? { data: DATA };
   const formsSlug = options.formsSlug ?? "forms";
+  // The submission as stored now, as a read or an update answers it.
+  const doc = () => ({
+    ...options.extension?.values,
+    id: "sub-2",
+    form: "form-1",
+    data: store.data,
+    notes: store.notes,
+    asked: ASKED,
+    status,
+    submittedAt: "2026-11-10T14:15:00.000Z",
+    _rev: `rev-${rev}`,
+  });
   const routes: Array<
     [match: string, reply: (url: string) => Promise<Response>]
   > = [
@@ -253,27 +286,19 @@ function server(options: ServerOptions) {
     ],
     [
       "/form-submissions/entries/sub-2",
-      () =>
-        answer(200, {
-          id: "sub-2",
-          form: "form-1",
-          data: store.data,
-          notes: store.notes,
-          asked: ASKED,
-          status,
-          submittedAt: "2026-11-10T14:15:00.000Z",
-          _rev: `rev-${rev}`,
-        }),
+      () => (options.failReads ? answer(500, {}) : answer(200, doc())),
     ],
     ["/form-submissions/entries?", url => listAnswer(url, options)],
     ["/media/", () => answer(404, {})],
+    [
+      "/submission-fields",
+      () => answer(200, { fields: options.extension?.fields ?? [] }),
+    ],
   ];
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-    if (init?.method === "PATCH" && options.offline) {
-      throw new TypeError("Failed to fetch");
-    }
     if (init?.method === "PATCH") {
       await options.hold?.();
+      if (options.offline) throw new TypeError("Failed to fetch");
       const sent = JSON.parse(String(init.body)) as {
         status?: string;
         notes?: string;
@@ -286,9 +311,18 @@ function server(options: ServerOptions) {
       }
       if (sent.status) status = sent.status;
       if (sent.notes !== undefined) store.notes = sent.notes;
-      if (sent.data) store.data = sent.data;
+      if (sent.data) {
+        store.data = options.normalize
+          ? Object.fromEntries(
+              Object.entries(sent.data).map(([name, value]) => [
+                name,
+                typeof value === "string" ? value.trim() : value,
+              ])
+            )
+          : sent.data;
+      }
       rev += 1;
-      return answer(200, { item: {} });
+      return answer(200, { item: doc() });
     }
     const route = routes.find(([match]) => url.includes(match));
     return route ? route[1](url) : answer(200, {});
@@ -301,6 +335,17 @@ const patches = (fetchMock: ReturnType<typeof server>) =>
   fetchMock.mock.calls
     .filter(([, init]) => init?.method === "PATCH")
     .map(([, init]) => JSON.parse(String(init?.body)));
+
+/** Delete the open submission through its More menu, confirming it. */
+async function deleteThroughMenu(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "More" }));
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Delete submission" })
+  );
+  await user.click(
+    await screen.findByRole("button", { name: "Delete submission" })
+  );
+}
 
 function page(
   props: Partial<React.ComponentProps<typeof SubmissionPage>> = {}
@@ -638,6 +683,139 @@ describe("a submission's page, writing", () => {
     expect(unsavedWork.get("forms.submission-answers")).toBe(false);
   });
 
+  it("keeps answers changed while the last answers were being saved", async () => {
+    let release = () => undefined as void;
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const store = { data: { ...DATA } as Record<string, unknown> };
+    const fetchMock = server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      fields: [{ name: "name", label: "Full name", type: "text" }],
+      store,
+      hold: () => held,
+    });
+    const user = page();
+    await user.click(
+      await screen.findByRole("button", { name: "Edit answers" })
+    );
+    const name = screen.getByRole("textbox", { name: "Full name" });
+    await user.clear(name);
+    await user.type(name, "Hina R.");
+    await user.click(screen.getByRole("button", { name: "Save answers" }));
+    // Still typing while that save is on its way.
+    await user.type(name, "x");
+    release();
+    await waitFor(() => expect(patches(fetchMock)).toHaveLength(1));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(screen.getByRole("textbox", { name: "Full name" })).toHaveValue(
+      "Hina R.x"
+    );
+    expect(unsavedWork.get("forms.submission-answers")).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Save answers" }));
+    await waitFor(() =>
+      expect(patches(fetchMock)[1]).toEqual({
+        data: { ...DATA, name: "Hina R.x" },
+        _rev: "rev-8",
+      })
+    );
+  });
+
+  it("goes on from the answers as stored after the server cleans them", async () => {
+    let release = () => undefined as void;
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const options: ServerOptions = {
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      fields: [
+        { name: "name", label: "Full name", type: "text" },
+        { name: "email", label: "Email", type: "email" },
+      ],
+      store: { data: { ...DATA } },
+      normalize: true,
+      hold: () => held,
+    };
+    const fetchMock = server(options);
+    const user = page();
+    await user.click(
+      await screen.findByRole("button", { name: "Edit answers" })
+    );
+    const name = screen.getByRole("textbox", { name: "Full name" });
+    await user.clear(name);
+    await user.type(name, " Ada ");
+    await user.click(screen.getByRole("button", { name: "Save answers" }));
+    // Still editing while it is saved, and stored trimmed.
+    await user.type(screen.getByRole("textbox", { name: "Email" }), "x");
+    release();
+    await waitFor(() => expect(patches(fetchMock)).toHaveLength(1));
+    options.hold = undefined;
+    await new Promise(resolve => setTimeout(resolve, 50));
+    await user.click(screen.getByRole("button", { name: "Save answers" }));
+    await waitFor(() => expect(patches(fetchMock)).toHaveLength(2));
+    expect(screen.queryByText(/Someone changed this submission/)).toBeNull();
+  });
+
+  it("hands a deleted submission with unsaved answers to the entry page", async () => {
+    server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      fields: [{ name: "name", label: "Full name", type: "text" }],
+      older: "sub-3",
+    });
+    const onDelete = vi.fn();
+    const user = page({ onDelete });
+    await user.click(
+      await screen.findByRole("button", { name: "Edit answers" })
+    );
+    await user.type(screen.getByRole("textbox", { name: "Full name" }), "!");
+    await deleteThroughMenu(user);
+    // The entry page stands its leave guard down and returns to the list.
+    await waitFor(() => expect(onDelete).toHaveBeenCalledTimes(1));
+    expect(navigateTo).not.toHaveBeenCalled();
+  });
+
+  it("moves on to the next submission when nothing is unsaved", async () => {
+    server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      older: "sub-3",
+    });
+    const onDelete = vi.fn();
+    const user = page({ onDelete });
+    await screen.findByRole("heading", { name: "Hina Rossi" });
+    await deleteThroughMenu(user);
+    await waitFor(() =>
+      expect(navigateTo).toHaveBeenCalledWith(
+        "/admin/collections/form-submissions/sub-3?status=all"
+      )
+    );
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it("stops calling a note saved once a newer note is stored", async () => {
+    const store = { data: DATA, notes: undefined as string | undefined };
+    server({ status: "read", permissions: { isSuperAdmin: true }, store });
+    const user = page();
+    const note = await screen.findByRole("textbox", { name: "Internal note" });
+    await waitFor(() => expect(note).toBeEnabled());
+    await user.type(note, "Call back");
+    await user.tab();
+    expect(await screen.findByText(/Saved\./)).toBeInTheDocument();
+    // Someone else rewrites it; the page reads theirs.
+    store.notes = "Their note";
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    await waitFor(() => expect(note).toHaveValue("Their note"));
+    // Typing the earlier text again is unsaved work, not "Saved".
+    await user.clear(note);
+    await user.type(note, "Call back");
+    expect(unsavedWork.get("forms.submission-note")).toBe(true);
+    expect(screen.queryByText(/Saved\./)).toBeNull();
+  });
+
   it("saves a note after one was cleared", async () => {
     const store = { data: DATA, notes: "Call back" as string | undefined };
     const fetchMock = server({
@@ -662,6 +840,204 @@ describe("a submission's page, writing", () => {
       ])
     );
     expect(screen.queryByText(/Someone changed this submission/)).toBeNull();
+  });
+
+  it("keeps the note a draft was made from when someone else changes it", async () => {
+    const store = { data: DATA, notes: "Call back" as string | undefined };
+    const fetchMock = server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      store,
+    });
+    const user = page();
+    const note = await screen.findByRole("textbox", { name: "Internal note" });
+    await waitFor(() => expect(note).toHaveValue("Call back"));
+    await user.type(note, " on Monday");
+    // Someone else rewrites the note, and the page reads it again.
+    store.notes = "Their note";
+    focusManager.setFocused(false);
+    focusManager.setFocused(true);
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(([url]) =>
+          String(url).endsWith("/entries/sub-2")
+        ).length
+      ).toBeGreaterThan(1)
+    );
+    await new Promise(resolve => setTimeout(resolve, 50));
+    // The draft is kept, and still replaces the note it was made from.
+    expect(note).toHaveValue("Call back on Monday");
+    await user.tab();
+    expect(
+      await screen.findByText(/Someone changed this submission/)
+    ).toBeInTheDocument();
+    expect(patches(fetchMock)).toEqual([]);
+    expect(store.notes).toBe("Their note");
+    // Taking their note, then adding to it, saves.
+    await user.clear(note);
+    await user.type(note, "Their note");
+    await user.type(note, " and mine");
+    await user.tab();
+    await waitFor(() =>
+      expect(patches(fetchMock)).toEqual([
+        { notes: "Their note and mine", _rev: "rev-7" },
+      ])
+    );
+  });
+
+  it("tells the leave guard while a note is not saved", async () => {
+    server({ status: "read", permissions: { isSuperAdmin: true } });
+    const user = page();
+    const note = await screen.findByRole("textbox", { name: "Internal note" });
+    await waitFor(() => expect(note).toBeEnabled());
+    expect(unsavedWork.get("forms.submission-note")).toBe(false);
+    await user.type(note, "Book a call");
+    expect(unsavedWork.get("forms.submission-note")).toBe(true);
+    await user.tab();
+    await waitFor(() =>
+      expect(unsavedWork.get("forms.submission-note")).toBe(false)
+    );
+  });
+
+  it("keeps the page and its drafts when reading it again fails", async () => {
+    const options: ServerOptions = {
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      fields: [{ name: "name", label: "Full name", type: "text" }],
+    };
+    server(options);
+    const user = page();
+    await user.click(
+      await screen.findByRole("button", { name: "Edit answers" })
+    );
+    await user.type(screen.getByRole("textbox", { name: "Full name" }), "!");
+    // The status saves; reading the submission again then fails.
+    options.failReads = true;
+    const details = screen.getByRole("complementary", {
+      name: "Submission details",
+    });
+    await user.click(within(details).getByRole("button", { name: "Archived" }));
+    expect(await screen.findByText(/could not be read again/)).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Full name" })).toHaveValue(
+      "Hina Rossi!"
+    );
+    expect(unsavedWork.get("forms.submission-answers")).toBe(true);
+  });
+
+  it("links the page it was sent from by its path", async () => {
+    server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      extension: {
+        fields: [],
+        values: { page: "https://acme.test/careers/backend" },
+      },
+    });
+    page();
+    const details = await screen.findByRole("complementary", {
+      name: "Submission details",
+    });
+    expect(
+      within(details).getByRole("link", { name: "/careers/backend" })
+    ).toHaveAttribute("href", "https://acme.test/careers/backend");
+  });
+
+  it("links no page that is not a web page", async () => {
+    server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      extension: { fields: [], values: { page: "javascript:alert(1)" } },
+    });
+    page();
+    const details = await screen.findByRole("complementary", {
+      name: "Submission details",
+    });
+    await within(details).findByText("Submitted");
+    expect(within(details).queryByText("Page")).toBeNull();
+  });
+
+  it("shows the fields a host added to submissions", async () => {
+    server({
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      extension: {
+        fields: [{ name: "priority", label: "Priority", type: "select" }],
+        values: { priority: "high" },
+      },
+    });
+    page();
+    const details = await screen.findByRole("complementary", {
+      name: "Submission details",
+    });
+    expect(await within(details).findByText("Priority")).toBeInTheDocument();
+    expect(within(details).getByText("high")).toBeInTheDocument();
+  });
+
+  it("retries a note once a run of failed saves is over", async () => {
+    let release = () => undefined as void;
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const options: ServerOptions = {
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      offline: true,
+      hold: () => held,
+    };
+    const fetchMock = server(options);
+    const user = page();
+    const note = await screen.findByRole("textbox", { name: "Internal note" });
+    await waitFor(() => expect(note).toBeEnabled());
+    // A's save is on its way when B is left; A then fails, dropping B.
+    await user.type(note, "A");
+    await user.tab();
+    await user.click(note);
+    await user.type(note, "B");
+    await user.tab();
+    release();
+    expect(await screen.findByText(/could not be sent/)).toBeInTheDocument();
+    // Back online: leaving the note sends what it holds, over the note as
+    // stored.
+    options.offline = false;
+    options.hold = undefined;
+    await user.click(note);
+    await user.tab();
+    await waitFor(() =>
+      expect(patches(fetchMock)).toEqual([
+        { notes: "A", _rev: "rev-7" },
+        { notes: "AB", _rev: "rev-7" },
+      ])
+    );
+  });
+
+  it("holds a saved note even when reading it again fails", async () => {
+    const store = { data: DATA, notes: "Old" as string | undefined };
+    const options: ServerOptions = {
+      status: "read",
+      permissions: { isSuperAdmin: true },
+      store,
+    };
+    const fetchMock = server(options);
+    const user = page();
+    const note = await screen.findByRole("textbox", { name: "Internal note" });
+    await waitFor(() => expect(note).toHaveValue("Old"));
+    await user.clear(note);
+    await user.type(note, "New");
+    // The save is stored; reading the submission again then fails.
+    options.failReads = true;
+    await user.tab();
+    expect(await screen.findByText(/could not be read again/)).toBeVisible();
+    // Typing the old note back is a change from what the server now holds.
+    await user.clear(note);
+    await user.type(note, "Old");
+    expect(unsavedWork.get("forms.submission-note")).toBe(true);
+    await user.tab();
+    await waitFor(() =>
+      expect(patches(fetchMock)).toEqual([
+        { notes: "New", _rev: "rev-7" },
+        { notes: "Old", _rev: "rev-8" },
+      ])
+    );
   });
 
   it("says when a change could not be sent", async () => {

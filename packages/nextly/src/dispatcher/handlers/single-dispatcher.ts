@@ -38,7 +38,6 @@ import {
 } from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
-import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import {
   appLanguageOrder,
@@ -59,7 +58,6 @@ import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prom
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
-import { writeRegistryRows } from "../../domains/schema/schema-version";
 import { recordedFieldsOf } from "../../domains/schema/services/collection-schema-apply";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
@@ -88,6 +86,7 @@ import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-s
 import { assertAddressAllowed } from "../../shared/address-rule";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import { consoleLogger } from "../../shared/types";
+import { writeAppliedFieldsRow } from "../helpers/applied-fields-row";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -122,6 +121,7 @@ import {
 } from "../helpers/service-envelope";
 import {
   parseRichTextFormat,
+  parseRichTextStyles,
   isTruthyParam,
   parseStatusParam,
   requireParam,
@@ -732,6 +732,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     execute: async (svc, p, _body, request) => {
       const slug = requireParam(p, "slug", "Single slug");
       const richTextFormat = parseRichTextFormat(p.richTextFormat);
+      // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+      const richTextStyles = parseRichTextStyles(p.richTextStyles);
       // Absent → undefined so the service applies its published-only default
       // (an untrusted read must not leak a draft Single); pass
       // `?status=all|draft|published` to widen. An invalid value is rejected
@@ -781,7 +783,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           result.data = transformRichTextFields(
             result.data,
             single.fields,
-            richTextFormat
+            richTextFormat,
+            richTextStyles
           ) as typeof result.data;
         }
       }
@@ -1512,24 +1515,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // version the database did not persist.
           let versionPersisted = true;
           try {
-            // The row and the stored schema version in one transaction, so the
-            // version's count moves with the save it records (`writeRegistryRows`).
-            await writeRegistryRows(adapter, tx =>
-              tx.update(
-                "dynamic_singles",
-                {
-                  fields: JSON.stringify(fields),
-                  schema_hash: calculateSchemaHash(fields as FieldConfig[]),
-                  migration_status: "applied",
-                  localized: isLocalized,
-                  schema_version: newSchemaVersion,
-                  updated_at: new Date(),
-                },
-                { and: [{ column: "slug", op: "=", value: slug }] }
-              )
-            );
-            // Written past the registry service, so the cached registry row is cleared here.
-            clearRegistryRowCache();
+            // The row and the stored schema version in one transaction, and the
+            // cached rows cleared after it (`writeAppliedFieldsRow`).
+            await writeAppliedFieldsRow(adapter, {
+              table: "dynamic_singles",
+              slug,
+              fields: fields as FieldConfig[],
+              localized: isLocalized,
+              schemaVersion: newSchemaVersion,
+            });
           } catch (err) {
             versionPersisted = false;
             const msg = err instanceof Error ? err.message : String(err);
