@@ -13,6 +13,7 @@ import {
   definePlugin,
   group,
   isSecret,
+  NextlyError,
   type FieldConfig,
   type PageMetadataResolver,
   type PluginContext,
@@ -51,6 +52,7 @@ import {
 import { PAGES_PAGE, PAGES_PAGE_HREF } from "./code-pages/contract";
 import { codePageRoutes } from "./code-pages/route";
 import { readCodeRoutes, type CodeRoute } from "./code-pages/routes";
+import { codeAddressOf } from "./code-pages/store";
 import {
   indexNowKeyProxyHandler,
   watchForIndexNow,
@@ -106,7 +108,10 @@ import { receivedRoutes } from "./received/route";
 import { redirectsCollection } from "./redirects/collection";
 import { REDIRECTS_PAGE, REDIRECTS_PAGE_HREF } from "./redirects/contract";
 import { heldRedirectKeys } from "./redirects/held-keys";
-import { redirectsProxyHandler } from "./redirects/proxy-handler";
+import {
+  redirectsProxyHandler,
+  type GoneAnswerOptions,
+} from "./redirects/proxy-handler";
 import { redirectRoutes } from "./redirects/routes";
 import { PAGE_BUILDER_PLUGIN } from "./resolver/design-level";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
@@ -319,6 +324,16 @@ export interface SeoPluginOptions {
    * for Pages and the sitemap.
    */
   nextBuildDir?: string;
+  /**
+   * @experimental The address of the site's own page to show for an address
+   * made Gone on SEO › Redirects, such as `"/gone"`. The Proxy reads that
+   * page and answers with it and status 410, so a visitor following an old
+   * link sees the site's design; search engines read the status alone.
+   * Without it, or where the page can't be read or doesn't answer 200, the
+   * answer is a short plain page, with status 410 all the same. Keep the
+   * page itself out of search: hide it on SEO › Pages.
+   */
+  gonePage?: string;
   /**
    * @experimental The Google sign-in Search Console is connected with, from
    * a Google Cloud OAuth client of the "Web application" kind. Without it,
@@ -537,6 +552,24 @@ function siteFileRoutes(
  * });
  * ```
  */
+/**
+ * How the Proxy answers an address made Gone: with the site's own page,
+ * named as an address from the site's root, where the site names one.
+ *
+ * @throws NextlyError when `page` is not an address from the site's root.
+ */
+function goneAnswerOf(page: string | undefined): GoneAnswerOptions {
+  if (page === undefined) return {};
+  const address = codeAddressOf(page);
+  if (address === undefined) {
+    throw NextlyError.invalidInput({
+      message: `seoPlugin: gonePage "${page}" is not an address from the site's root, such as "/gone".`,
+      logContext: { gonePage: page },
+    });
+  }
+  return { gonePage: address };
+}
+
 export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // Always nest the fields (default or custom) under a single `seo` group so
   // every project exposes SEO consistently at `entry.seo.*`.
@@ -544,6 +577,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     options.fields ??
     defaultSeoFields({ hardLengthLimits: options.hardLengthLimits === true });
   const pagePermissions = options.pagePermissions === true;
+  const goneAnswer = goneAnswerOf(options.gonePage);
   const seoGroup = group({
     name: "seo",
     label: "SEO",
@@ -734,7 +768,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // answered here too, each at its own address only.
     proxy: [
       stagingGuard(readRules),
-      redirectsProxyHandler(redirectKeys),
+      redirectsProxyHandler(redirectKeys, undefined, goneAnswer),
       plainCopyProxyHandler({
         readRules,
         ...siteOrigin,

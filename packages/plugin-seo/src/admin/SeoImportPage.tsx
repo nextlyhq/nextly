@@ -695,8 +695,8 @@ function FileTable({ run }: { run: DryRunBody }): JSX.Element {
 }
 
 /**
- * The values the import leaves out as never served, since each page's own
- * code sets them, with the choice to include them anyway.
+ * The values the import leaves out because each page's own code sets its
+ * own value now, with the choice to include them anyway.
  */
 function NeverServedNote({
   run,
@@ -794,7 +794,7 @@ function Counts({ run }: { run: DryRunBody }): JSX.Element {
     {
       label: "Skipped",
       value: counts.neverServed.values,
-      note: `on ${counted(counts.neverServed.pages, "page")}, never served`,
+      note: `on ${counted(counts.neverServed.pages, "page")} whose code sets its own`,
     },
   ];
   return (
@@ -995,7 +995,7 @@ function Imported({ run }: { run: DryRunBody }): JSX.Element {
       </h2>
       <p className="text-sm text-muted-foreground">
         {skipped.values > 0
-          ? `${counted(skipped.values, "value")} skipped (never served on ${skipped.labels.join(", ")}). `
+          ? `${counted(skipped.values, "value")} skipped (the code of ${skipped.labels.join(", ")} sets its own). `
           : ""}
         The old fields are untouched, so nothing is lost.
       </p>
@@ -1227,7 +1227,7 @@ function useDryRuns() {
 
 /**
  * Import's state and what it does: the source chosen, each group's
- * matching, the file read, whether never-served values are included, the
+ * matching, the file read, whether values a page's code overrides are included, the
  * latest dry run, and the import itself. The engine decides; this keeps
  * what it last said.
  */
@@ -1340,7 +1340,7 @@ function useImportFlow() {
 
 type ImportFlow = ReturnType<typeof useImportFlow>;
 
-/** The second step: where each field goes, and values never served. */
+/** The second step: where each field goes, and values a page's code overrides. */
 function MatchStep({ flow }: { flow: ImportFlow }): JSX.Element {
   let matching: ReactNode = null;
   if (flow.group?.own === true) {

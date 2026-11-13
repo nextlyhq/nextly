@@ -339,6 +339,36 @@ defineCollection({
 
 An address that breaks a rule stops the configuration from loading, naming what to fix. See [Public addresses](/docs/configuration/public-addresses).
 
+### `publicAddressField`
+
+| | |
+|---|---|
+| **Type** | `string` |
+| **Default** | `undefined` |
+
+Experimental. A text field whose value, where an entry has one, is that entry's own public address, for a collection whose entries are not all served under one pattern. An entry whose field is empty is served at `publicAddress`, which this needs.
+
+```ts
+defineCollection({
+  slug: "features",
+  fields: [
+    text({ name: "title" }),
+    text({ name: "slug" }),
+    text({ name: "address", admin: { description: "Leave empty for /features/{slug}" } }),
+  ],
+  publicAddress: "/features/{slug}",
+  publicAddressField: "address",
+});
+```
+
+Here an entry with `address` set to `/brand-voice` is served at `/brand-voice`, and the others at `/features/{slug}`.
+
+- The value is judged as a template's result is: an address on this site from its root, with no other host, query, fragment or trailing `/`, and nothing under a path Nextly keeps. A save with any other value is refused on the field.
+- Two pages can't share an address, so a value another page holds is refused like any other clash.
+- Changing the value moves the entry's address, as changing its slug does. With the [SEO plugin](/docs/plugins/seo), the old address redirects to the new one.
+
+A field that is not a text field of the collection, or a collection without `publicAddress`, stops the configuration from loading.
+
 ## Admin options
 
 Configure how the collection appears in the admin panel via the `admin` property.

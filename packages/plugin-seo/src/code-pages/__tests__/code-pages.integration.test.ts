@@ -355,8 +355,10 @@ describe.each(getConfiguredTestDialects())(
         node => (node as { "@type"?: unknown })["@type"]
       );
       expect(types).toContain("AboutPage");
-      expect(types).toContain("FAQPage");
-      expect(text).toContain("Who are we?");
+      // Questions the route gives are described only on a page whose kind is
+      // Questions and answers, never beside a page of another kind.
+      expect(types).not.toContain("FAQPage");
+      expect(text).not.toContain("Who are we?");
     });
 
     it("says where each page's title and description come from, grouped as the Overview counts them", async () => {
