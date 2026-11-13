@@ -84,6 +84,7 @@ import {
   SITEMAP_LIMITS,
   type SitemapLimits,
 } from "./outputs/sitemap-files";
+import { withVerification } from "./outputs/verification";
 import { checklistRoutes } from "./overview/checklist";
 import {
   IMPORT_PAGE,
@@ -104,6 +105,7 @@ import { problemRoutes } from "./problems/route";
 import { problemsCollection } from "./problems/store";
 import { RECEIVED_PAGE } from "./received/contract";
 import { receivedRoutes } from "./received/route";
+import { verificationCheckRoute } from "./received/verification-check";
 import { redirectsCollection } from "./redirects/collection";
 import { REDIRECTS_PAGE, REDIRECTS_PAGE_HREF } from "./redirects/contract";
 import { heldRedirectKeys } from "./redirects/held-keys";
@@ -126,6 +128,7 @@ import { SETTINGS_PAGE, SETTINGS_PAGE_HREF } from "./settings/contract";
 import {
   readBrandFacts,
   readSeoRules,
+  readVerificationTags,
   rememberSettingsSingle,
   setupWaiting,
 } from "./settings/rules";
@@ -691,18 +694,22 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // Every page's head, worked out by the one order of who wins, with its
   // links to its other languages, its social card completed, and its
   // structured data, worked out from that same answer and the settings'
-  // brand facts, with the plugin's options where the settings say nothing.
+  // brand facts, with the plugin's options where the settings say nothing;
+  // the home page also carries the verification codes the settings hold.
   // What the site's routes are answered, and what the check of what search
   // engines received compares each page with.
   const pageMetadata = (ctx: PluginContext): PageMetadataResolver =>
-    withStructuredData(
-      ctx,
-      withSocialCard(
+    withVerification(
+      withStructuredData(
         ctx,
-        withLanguageLinks(ctx, seoPageMetadata(ctx, readRules), readRules),
-        readSocialCardRules
+        withSocialCard(
+          ctx,
+          withLanguageLinks(ctx, seoPageMetadata(ctx, readRules), readRules),
+          readSocialCardRules
+        ),
+        structuredDataFromSettings(readStructuredDataRules)
       ),
-      structuredDataFromSettings(readStructuredDataRules)
+      () => readVerificationTags(ctx)
     );
 
   // What the problem list checks, read with the rules every page's head is
@@ -974,6 +981,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       pageMetadata,
       structuredDataReaders: problemChecks.readers,
       aiCrawlers: options.aiCrawlers,
+    }),
+    // Whether the live home page carries the saved verification codes.
+    verificationCheckRoute({
+      baseUrl: options.baseUrl,
+      readRules,
+      readTags: readVerificationTags,
     }),
     ...tab.routes,
     // What a Page Builder template's SEO panel reads.
