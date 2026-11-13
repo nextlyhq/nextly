@@ -9,12 +9,14 @@
  *
  * - **idle**: how many pages use the Layout, the first few with where they
  *   name it, and a note on the published ones, which switch to the site
- *   default's header and footer once the Layout is gone rather than moving;
+ *   default's header and footer right away;
  * - **moving**: the route's ticks (`move-pages.ts`), called one after
  *   another while the dialog stays open, with a bar of the pages moved;
  * - **stopped**: after Stop, or a move the server stopped (its lease lapsed);
  *   the pages moved stay moved, and the rest can be moved again;
- * - **done**: every page moved and the Layout removed;
+ * - **done**: every page moved and the Layout removed, with the published
+ *   pages whose live version still names it, where the person may edit them
+ *   but not publish them, so only their drafts moved;
  * - **refused**: pages that could not be moved, each with why.
  *
  * Closing the dialog while pages move stops the move: the next tick is never
@@ -38,13 +40,18 @@ import {
 import { CircleCheck } from "lucide-react";
 import { useEffect, useRef, useState, type JSX, type ReactNode } from "react";
 
-import type { MoveProgress, UnmovedPage } from "../layout-removal/move-pages";
+import type {
+  LiveCopiesLeft,
+  MoveProgress,
+  UnmovedPage,
+} from "../layout-removal/move-pages";
 import type {
   CheckedPage,
   CheckedPageState,
   RemovalCheck,
   RemoveResult,
 } from "../layout-removal/remove-layout";
+import { liveCopiesLeftSentence } from "../layout-removal/words";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 
 /** What a move removes the Layout by once its pages have moved. */
@@ -55,7 +62,11 @@ type Phase =
   | { readonly kind: "idle" }
   | { readonly kind: "moving"; readonly action: MoveAction }
   | { readonly kind: "stopped"; readonly action: MoveAction }
-  | { readonly kind: "done"; readonly action: MoveAction }
+  | {
+      readonly kind: "done";
+      readonly action: MoveAction;
+      readonly liveLeft?: LiveCopiesLeft;
+    }
   | {
       readonly kind: "refused";
       readonly action: MoveAction;
@@ -85,6 +96,8 @@ interface TickBody {
   readonly token?: string;
   readonly after?: string;
   readonly stop?: true;
+  /** The pages this move's earlier ticks could not move, sent back with each. */
+  readonly refused?: readonly string[];
 }
 
 /** One tick of the move, through the route. */
@@ -270,6 +283,50 @@ function RefusedBody({
   );
 }
 
+/**
+ * The done state's note on the published pages whose live version still names
+ * the Layout, each linked so a publisher can open it, the rest counted.
+ */
+function LiveLeftBody({
+  left,
+  pagesCollection,
+}: {
+  left: LiveCopiesLeft;
+  pagesCollection: string;
+}): JSX.Element {
+  return (
+    <div className="space-y-3">
+      <Alert variant="warning">
+        <AlertDescription>
+          {liveCopiesLeftSentence(left.pages.length + left.unreadable)}
+        </AlertDescription>
+      </Alert>
+      {left.pages.length > 0 ? (
+        <ul className="max-h-60 overflow-y-auto text-sm">
+          {left.pages.map(page => (
+            <PageRow
+              key={page.id}
+              page={page}
+              pagesCollection={pagesCollection}
+              tag="Published version kept"
+            />
+          ))}
+        </ul>
+      ) : null}
+      {left.unreadable > 0 ? (
+        <p className="text-sm text-muted-foreground">
+          {`And ${pages(left.unreadable)} you can't view.`}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** How many pages a finished move left with their live version on the Layout. */
+function liveLeftCount(left: LiveCopiesLeft | undefined): number {
+  return left === undefined ? 0 : left.pages.length + left.unreadable;
+}
+
 /** The verb a sentence uses for what the move does to the Layout. */
 function removed(action: MoveAction): string {
   return action === "delete" ? "deleted" : "unpublished";
@@ -335,12 +392,22 @@ const FACES: {
     ),
     body: <MoveBar moved={moved} total={total} running={false} />,
   }),
-  done: (phase, { check, total }) => ({
-    title: phase.action === "delete" ? "Layout deleted" : "Layout unpublished",
-    succeeded: true,
-    sentence: `${pages(total)} moved to the site default${check.siteDefault === null ? "" : `, ${check.siteDefault}`}, and the Layout was ${removed(phase.action)}.`,
-    body: null,
-  }),
+  done: (phase, { check, total }) => {
+    const left = liveLeftCount(phase.liveLeft);
+    return {
+      title:
+        phase.action === "delete" ? "Layout deleted" : "Layout unpublished",
+      succeeded: true,
+      sentence: `${pages(Math.max(total - left, 0))} moved to the site default${check.siteDefault === null ? "" : `, ${check.siteDefault}`}, and the Layout was ${removed(phase.action)}.`,
+      body:
+        phase.liveLeft === undefined || left === 0 ? null : (
+          <LiveLeftBody
+            left={phase.liveLeft}
+            pagesCollection={check.pagesCollection}
+          />
+        ),
+    };
+  },
   refused: (phase, { check, moved, total, reasons }) => {
     const left = phase.pages.length + phase.unreadable;
     const still =
@@ -494,6 +561,9 @@ export function MovePagesDialog({
   const stopAsked = useRef(false);
   // The running move's token and action, so closing can stop it.
   const running = useRef<{ token: string; action: MoveAction } | null>(null);
+  // The pages this move's ticks could not move, sent with every next tick so
+  // the server keeps a page in the way whose failure left no other trace.
+  const refusedIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     open.current = true;
@@ -507,6 +577,7 @@ export function MovePagesDialog({
 
   const start = (action: MoveAction): void => {
     stopAsked.current = false;
+    refusedIds.current = new Set();
     setPhase({ kind: "moving", action });
     void runTicks(action);
   };
@@ -550,7 +621,14 @@ export function MovePagesDialog({
     running.current = { token: move.token, action };
     noteRefusals(move.refused);
     if (!stopAsked.current) {
-      return { action, move: true, token: move.token, after: move.after };
+      const refused = [...refusedIds.current];
+      return {
+        action,
+        move: true,
+        token: move.token,
+        after: move.after,
+        ...(refused.length === 0 ? {} : { refused }),
+      };
     }
     running.current = null;
     await callTick(entryId, {
@@ -565,6 +643,7 @@ export function MovePagesDialog({
 
   const noteRefusals = (refused: readonly UnmovedPage[]): void => {
     if (refused.length === 0) return;
+    for (const page of refused) refusedIds.current.add(page.id);
     setReasons(known => {
       const next = new Map(known);
       for (const page of refused) {
@@ -581,7 +660,11 @@ export function MovePagesDialog({
     switch (move.state) {
       case "done":
         onRemoved(action);
-        setPhase({ kind: "done", action });
+        setPhase({
+          kind: "done",
+          action,
+          ...(move.liveLeft === undefined ? {} : { liveLeft: move.liveLeft }),
+        });
         return;
       case "stopped":
         setPhase({ kind: "stopped", action });

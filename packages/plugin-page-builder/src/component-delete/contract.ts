@@ -132,9 +132,12 @@ export interface DeletePlan {
   /** The documents whose copies are turned into plain blocks. */
   readonly convert: DocumentList;
   /**
-   * Published documents holding unpublished changes: their working draft is
-   * converted, and their live row keeps the component until the author
-   * publishes or discards the changes, so the component is kept until then.
+   * Published documents holding unpublished changes whose live row can't be
+   * converted with them (a Single's): their working draft is converted, and
+   * their live row keeps the component until the author publishes or
+   * discards the changes, so the component is kept until then. A collection
+   * entry's live row and drafts are converted together, so it is listed
+   * under `convert`.
    */
   readonly drafts: DocumentList;
 }
