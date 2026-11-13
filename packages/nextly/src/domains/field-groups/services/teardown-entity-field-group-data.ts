@@ -147,9 +147,31 @@ async function assertNoRowsForFrontier(
   componentTable: string,
   parent: Frontier
 ): Promise<void> {
+  const count = await countRowsUnder(adapter, componentTable, parent);
+  if (count === 0) return;
+
+  throw NextlyError.internal({
+    logContext: {
+      reason: "component-table-unresolvable-with-rows",
+      componentTable,
+      parentTable: parent.table,
+      rows: count,
+    },
+  });
+}
+
+/**
+ * How many rows of `componentTable` the frontier entry owns; none for a table without a
+ * `_parent_table` column, which holds no component instances whatever its prefix.
+ */
+async function countRowsUnder(
+  adapter: TeardownComponentDataAdapter,
+  componentTable: string,
+  parent: Frontier
+): Promise<number> {
   // `ids: null` means every row under this parent table belongs to the entity; otherwise
   // only the instances deleted at the previous level own the rows below them.
-  if (parent.ids !== null && parent.ids.length === 0) return;
+  if (parent.ids !== null && parent.ids.length === 0) return 0;
 
   const pg = adapter.dialect === "postgresql";
   const quoted = q(componentTable, adapter.dialect);
@@ -179,21 +201,11 @@ async function assertNoRowsForFrontier(
     // No `_parent_table` column means the table does not hold component instances at all,
     // despite the `comp_` prefix, so it cannot own rows for this entity. Any other failure
     // leaves the question unanswered and must not be read as "empty".
-    if (String(error).includes(STORAGE_FORMAT.columns.parentTable)) return;
+    if (String(error).includes(STORAGE_FORMAT.columns.parentTable)) return 0;
     throw error;
   }
 
-  const count = Number(rows[0]?.n ?? 0);
-  if (count === 0) return;
-
-  throw NextlyError.internal({
-    logContext: {
-      reason: "component-table-unresolvable-with-rows",
-      componentTable,
-      parentTable: parent.table,
-      rows: count,
-    },
-  });
+  return Number(rows[0]?.n ?? 0);
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -277,18 +289,12 @@ async function listRegisteredComponentTables(
 }
 
 /**
- * Deletes every component instance owned by `parentTable`, following nesting, and the
- * matching `comp_<slug>_locales` rows.
- *
- * Call this BEFORE dropping the entity's main table — it reads nothing from that table,
- * but running first keeps the entity intact if the sweep fails.
+ * Every table that can hold component rows: `comp_` and `fg_` prefixed ones, and every table the
+ * registry names, without the registry itself or any translations table.
  */
-
-export async function teardownEntityComponentData(
-  args: TeardownEntityComponentDataArgs
-): Promise<TeardownEntityComponentDataResult> {
-  const { adapter, parentTable } = args;
-
+async function componentTablesOf(
+  adapter: TeardownComponentDataAdapter
+): Promise<string[]> {
   // Component data tables: `comp_` prefixed by convention, plus every table the
   // registry has registered — a row written before names resolved canonically can
   // point at a table carrying no prefix, so prefix discovery alone would leave its
@@ -298,7 +304,7 @@ export async function teardownEntityComponentData(
   const discovered = await adapter.listTables();
   const registered = await listRegisteredComponentTables(adapter, discovered);
   const registry = await registryTableName(adapter);
-  const componentTables = [
+  return [
     ...new Set([
       // Both prefixes. The registry-derived list below cannot recover a table
       // whose metadata row is exactly what went missing, so prefix discovery is
@@ -316,6 +322,42 @@ export async function teardownEntityComponentData(
     // `_parent_table` column breaks the delete and a permissive adapter could
     // damage the metadata.
   ].filter(name => name !== registry && !isCompanionTable(name));
+}
+
+/**
+ * The component rows an entity's table owns directly, for each component table holding any: what a
+ * create over a leftover entity table counts as that table's content (`clearLeftoverStorage`), so
+ * it is refused rather than taken by this teardown. Reads only.
+ */
+export async function countEntityComponentRows(args: {
+  adapter: TeardownComponentDataAdapter;
+  parentTable: string;
+}): Promise<{ table: string; rows: number }[]> {
+  const owned: { table: string; rows: number }[] = [];
+  for (const table of await componentTablesOf(args.adapter)) {
+    const rows = await countRowsUnder(args.adapter, table, {
+      table: args.parentTable,
+      ids: null,
+    });
+    if (rows > 0) owned.push({ table, rows });
+  }
+  return owned;
+}
+
+/**
+ * Deletes every component instance owned by `parentTable`, following nesting, and the
+ * matching `comp_<slug>_locales` rows.
+ *
+ * Call this BEFORE dropping the entity's main table — it reads nothing from that table,
+ * but running first keeps the entity intact if the sweep fails.
+ */
+
+export async function teardownEntityComponentData(
+  args: TeardownEntityComponentDataArgs
+): Promise<TeardownEntityComponentDataResult> {
+  const { adapter, parentTable } = args;
+
+  const componentTables = await componentTablesOf(adapter);
 
   if (componentTables.length === 0) {
     return { instancesDeleted: 0, tablesTouched: [], skippedTables: [] };

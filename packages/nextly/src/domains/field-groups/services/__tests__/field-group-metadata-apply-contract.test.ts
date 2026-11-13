@@ -23,6 +23,14 @@ import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
  */
 const bound: string[] = [];
 
+// Whether the created table holds every requested column is judged by the comparison a push makes,
+// tested on its own (`created-table-shape.test.ts`); the double here runs no introspection, so the
+// check answers that nothing was left out and these tests stay on what they inject.
+vi.mock("../../../schema/services/created-table-shape", () => ({
+  columnsTheCreateLeftOut: vi.fn(async () => []),
+  describeColumnsLeftOut: vi.fn(() => ""),
+}));
+
 // A registry write's transaction, and the schema version stored in it, are
 // the integration suite's subject (`schema-version-writers.integration.test.ts`):
 // here a registry write runs on the adapter itself, as it did before it had one.
@@ -135,14 +143,23 @@ function adapterDouble(
   // leaves a SQLite TEXT untouched, and a guard tested on one dialect says nothing about the other.
   dialect: "postgresql" | "mysql" | "sqlite" = "postgresql"
 ) {
+  // The parameter is declared even though nothing here reads it: `entityStatements` reads the
+  // recorded calls, and a mock with no declared parameters records them as an empty tuple.
+  const executeQuery = vi.fn(async (_sql: string) => []);
   return withMigrationLockSurface({
     getCapabilities: () => ({ dialect }),
-    // The parameter is declared even though nothing here reads it: `entityStatements` reads the
-    // recorded calls, and a mock with no declared parameters records them as an empty tuple.
-    executeQuery: vi.fn(async (_sql: string) => []),
-    tableExists: vi.fn(async (name: string) =>
-      name === "nextly_meta" ? false : tableExists()
-    ),
+    executeQuery,
+    // Recorded so a refusal can be shown to have dropped nothing.
+    dropTable: vi.fn(async (_table: string) => {}),
+    // Before the create's own DDL, its table is not there, so the leftover probe finds nothing to
+    // clear; after it, the supplied answer governs the verification these tests inject.
+    tableExists: vi.fn(async (name: string) => {
+      if (name === "nextly_meta") return false;
+      const built = executeQuery.mock.calls.some(
+        ([sql]) => !isMigrationLockStatement(sql)
+      );
+      return built ? tableExists() : false;
+    }),
   });
 }
 
@@ -227,6 +244,50 @@ describe("a field-group create records its outcome rather than raising it", () =
     // rebound the existing field group's storage to this request's fields.
     expect(entityStatements(adapter)).toEqual([]);
     expect(registry.registerComponent).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A field group's tables are its main table and its `_locales` translations table. A create that
+ * would share one with another field group is refused before anything runs, since building it
+ * would clear or adopt a table that belongs to the other. An address reading as another's
+ * translations table is refused by the address rule itself; a field group stored before that rule
+ * could still hold one, and creating the field group it reads as is refused by name.
+ */
+describe("a field-group create sharing a table with another's family", () => {
+  it("is refused by the address rule when its main table would be another's translations table", async () => {
+    const registry = registryDouble();
+    registry.getAllComponents.mockResolvedValue([
+      { slug: "hero", tableName: "comp_hero" },
+    ]);
+    const adapter = adapterDouble(async () => true);
+
+    await expect(
+      serviceOver(registry, adapter).createFieldGroup({
+        ...INPUT,
+        slug: "hero-locales",
+        tableName: "comp_hero_locales",
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(entityStatements(adapter)).toEqual([]);
+    expect(adapter.dropTable).not.toHaveBeenCalled();
+  });
+
+  it("is refused by name when its translations table is another's main table", async () => {
+    const registry = registryDouble();
+    registry.getAllComponents.mockResolvedValue([
+      { slug: "hero_locales_legacy", tableName: "comp_hero_locales" },
+    ]);
+    const adapter = adapterDouble(async () => true);
+
+    await expect(
+      serviceOver(registry, adapter).createFieldGroup(INPUT)
+    ).rejects.toMatchObject({
+      code: "DUPLICATE",
+      publicMessage: expect.stringContaining('"hero"'),
+    });
+    expect(entityStatements(adapter)).toEqual([]);
+    expect(adapter.dropTable).not.toHaveBeenCalled();
   });
 });
 

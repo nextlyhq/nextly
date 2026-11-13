@@ -16,6 +16,14 @@ import { beforeEach, describe, expect, it, vi, beforeAll } from "vitest";
 /** Set to make the plugin-option validator refuse, standing in for a registry swapped underneath. */
 const pluginOptionRefusal: { error: unknown } = { error: undefined };
 
+// Whether the created table holds every requested column is judged by the comparison a push makes,
+// tested on its own (`created-table-shape.test.ts`); this double runs no introspection, so the check
+// answers that nothing was left out and the test stays on the statements.
+vi.mock("../created-table-shape", () => ({
+  columnsTheCreateLeftOut: vi.fn(async () => []),
+  describeColumnsLeftOut: vi.fn(() => ""),
+}));
+
 // A registry write's transaction, and the schema version stored in it, are
 // the integration suite's subject (`schema-version-writers.integration.test.ts`):
 // here a registry write runs on the adapter itself, as it did before it had one.
@@ -90,6 +98,9 @@ function makeAdapter(options: MigrationLockSurfaceOptions = {}) {
         return name.includes("_locales") ? false : created;
       }),
       selectOne: vi.fn(async (): Promise<{ id: string } | null> => null),
+      // Read before any DDL to find field-group rows a removed Single of this name left behind:
+      // a fresh database has no tables to scan.
+      listTables: vi.fn(async (): Promise<string[]> => []),
       // The slug guard also lists the addresses already used, to refuse one with the same
       // snake_case form; none are.
       select: vi.fn(

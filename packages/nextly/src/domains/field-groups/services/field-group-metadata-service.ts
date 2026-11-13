@@ -243,6 +243,34 @@ export class FieldGroupMetadataService {
     // 1a. REFUSE names the database would not store, read from the statements themselves.
     await this.assertIdentifiersFit(input, migrationSQL);
 
+    // 1b. CLEAR THE GROUND. A table already standing where this create is about to build is never
+    // adopted: empty, it is dropped so the apply renders every column from this request; holding
+    // rows, the create is refused before any statement runs (`clearLeftoverStorage`).
+    if (this.adapter) {
+      const adapter = this.adapter;
+      const { clearLeftoverStorage } = await import(
+        "../../schema/services/leftover-storage"
+      );
+      await clearLeftoverStorage({
+        adapter,
+        kind: "fieldGroup",
+        slug: input.slug,
+        tableName: input.tableName,
+        // A component row keeps a many-to-many as a list of its own, so a field group's create
+        // makes no junction table: anything referencing its leftover belongs to something else.
+        makesJunctionTables: false,
+        logger: this.logger,
+        // The translations table references the main one, so it goes first. No CASCADE: anything
+        // else depending on these tables has already refused the create rather than go with them.
+        dropFamily: async () => {
+          await adapter.dropTable(`${input.tableName}_locales`, {
+            ifExists: true,
+          });
+          await adapter.dropTable(input.tableName, { ifExists: true });
+        },
+      });
+    }
+
     // 2. APPLY. Never throws; a failure is reported as a status so the row can still record it.
     const migrationStatus = await this.applyCreateDdl(input, migrationSQL);
 
@@ -1126,9 +1154,21 @@ export class FieldGroupMetadataService {
     // that exists, and the registration after it would rebind that table to this request's fields
     // before the registry rejected the duplicate. Two callers racing can still both pass; the
     // registry declares `table_name` unique, so the database rejects the second insert.
-    const owner = held.find(existing => existing.tableName === tableName);
+    //
+    // A field group's tables are its main table and its `_locales` translations table, which a
+    // localization creates under exactly that name. Two field groups must not share either: one
+    // whose main table is another's translations table (`foo-locales` beside `foo`) would clear or
+    // adopt that table as its own, and the other would lose its translations.
+    const family = (table: string) => [table, `${table}_locales`];
+    const wanted = new Set(family(tableName));
+    const owner = held.find(existing =>
+      family(existing.tableName).some(name => wanted.has(name))
+    );
     if (owner) {
+      // Names the slug the caller asked for, which tells it nothing it did not send; the field
+      // group already owning the table stays in the log.
       throw NextlyError.duplicate({
+        message: `The field group "${slug}" could not be created: its name is already taken.`,
         logContext: {
           reason: "component-table-conflict",
           slug,
@@ -1137,6 +1177,37 @@ export class FieldGroupMetadataService {
         },
       });
     }
+  }
+
+  /**
+   * What the create left out of its table, as one line, or null when the table holds every
+   * requested column as the type asked for. The request is the desired table a push compares the
+   * live one with, built as the creating SQL renders a field group's columns.
+   */
+  private async columnsLeftOut(
+    input: CreateFieldGroupInput,
+    adapter: NonNullable<typeof this.adapter>
+  ): Promise<string | null> {
+    const { buildDesiredTableFromComponentFields } = await import(
+      "../../schema/pipeline/diff/build-from-fields"
+    );
+    const { columnsTheCreateLeftOut, describeColumnsLeftOut } = await import(
+      "../../schema/services/created-table-shape"
+    );
+    const dialect = adapter.getCapabilities().dialect;
+    const leftOut = await columnsTheCreateLeftOut(
+      adapter.getDrizzle(),
+      dialect,
+      buildDesiredTableFromComponentFields(
+        input.tableName,
+        input.fields as unknown as Parameters<
+          typeof buildDesiredTableFromComponentFields
+        >[1],
+        dialect,
+        { localized: storesPerLanguage(input), builtBy: "fieldGroup" }
+      )
+    );
+    return leftOut.length === 0 ? null : describeColumnsLeftOut(leftOut);
   }
 
   /** Render the DDL. Separated from the apply because this half is allowed to reject the request. */
@@ -1185,10 +1256,18 @@ export class FieldGroupMetadataService {
       );
       await applyMigrationStatements(adapter, migrationSQL);
 
-      // Observed, not assumed. "Applied" has to mean the table is there.
+      // Observed, not assumed. "Applied" has to mean the table is there, holding every requested
+      // column as the type asked for (`columnsTheCreateLeftOut`).
       if (!(await adapter.tableExists(input.tableName))) {
         this.logger.error(
           `[FieldGroups] Table "${input.tableName}" was not created after migration`
+        );
+        return "failed";
+      }
+      const leftOut = await this.columnsLeftOut(input, adapter);
+      if (leftOut !== null) {
+        this.logger.error(
+          `[FieldGroups] Table "${input.tableName}" was not created as requested: ${leftOut}`
         );
         return "failed";
       }
