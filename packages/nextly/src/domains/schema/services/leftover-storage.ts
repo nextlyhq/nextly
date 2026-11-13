@@ -352,19 +352,25 @@ export function viewedRefusal(
   });
 }
 
-/** The refusal of a create whose leftover other tables reference. */
+/**
+ * The refusal of a create whose leftover other tables reference. A referencing table keeps its
+ * reference under a new name of its own, so renaming one leaves the create refused; the reference
+ * goes, or the leftover itself is moved out of the way.
+ */
 export function referencedRefusal(
   args: LeftoverRefusalSubject,
   others: readonly string[]
 ): NextlyError {
   const { kind, slug, tableName } = args;
+  const one = others.length === 1;
   const named = others.map(table => `"${table}"`).join(", ");
   return NextlyError.conflict({
     reason: "state",
     message:
       `Creating the ${KIND_NAMES[kind]} "${slug}" was refused: "${tableName}" already exists, ` +
-      `and ${named} ${others.length === 1 ? "references" : "reference"} it, which nothing ` +
-      "registered owns. Drop or rename those tables, then retry the create.",
+      `and ${named} ${one ? "references" : "reference"} it, which nothing registered owns. ` +
+      `Drop ${one ? "that table or its reference" : "those tables or their references"} to ` +
+      `"${tableName}", or rename "${tableName}" itself, then retry the create.`,
     logContext: {
       reason: "create-table-referenced",
       kind,

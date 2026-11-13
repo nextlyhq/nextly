@@ -12,7 +12,8 @@ Before it builds anything, a field group's or Single's create checks the tables 
 ## Fix
 
 - Check the tables the message names. If they hold data you need, back it up first.
-- For a table, drop or rename it, then retry the create.
+- For a table that holds rows, or one standing where the create would build, drop or rename it, then retry the create.
+- For a leftover table other tables reference, drop those tables or their references to it, or rename the leftover table itself, then retry the create. Renaming a referencing table is not enough: under its new name it still references the leftover.
 - For a view, drop it, or redefine it to read other tables, then retry the create. Renaming a view is not enough: under its new name it still reads the same tables.
 
 ## Example

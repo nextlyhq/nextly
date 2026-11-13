@@ -41,7 +41,7 @@ describe("a create refused over storage nothing registered owns", () => {
       error: referencedRefusal(SINGLE, ["dc_audit"]),
       what: 'Creating the Single "home" was refused.',
       why: '"single_home" already exists, and "dc_audit" references it, which nothing registered owns.',
-      next: "Drop or rename those tables, then retry the create.",
+      next: 'Drop that table or its reference to "single_home", or rename "single_home" itself, then retry the create.',
     },
     {
       refusal: "a leftover table holding rows",
@@ -75,6 +75,16 @@ describe("a create refused over storage nothing registered owns", () => {
   it("never tells a view's owner to rename it", () => {
     expect(toCliError(viewedRefusal(SINGLE, ["home_report"])).next).not.toMatch(
       /rename/i
+    );
+  });
+
+  // Renaming a referencing table keeps its reference, so only the leftover itself is to be renamed.
+  it("tells the owner of a referencing table to drop it or its reference, not to rename it", () => {
+    const next = toCliError(
+      referencedRefusal(GROUP, ["a_audit", "b_audit"])
+    ).next;
+    expect(next).toBe(
+      'Drop those tables or their references to "comp_card", or rename "comp_card" itself, then retry the create.'
     );
   });
 });
