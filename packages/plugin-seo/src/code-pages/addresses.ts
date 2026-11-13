@@ -30,8 +30,10 @@ import {
 } from "../languages/versions";
 import { candidates, type Candidate } from "../outputs/listing";
 import { isRecord, textOf } from "../plain-values";
+import { singleKey } from "../problems/page-types";
 import type { SeoAnswer, Sourced } from "../resolver/order";
 import type { ReadRules } from "../resolver/provider";
+import { isSeoOff } from "../settings/seo-off";
 
 import {
   codePages,
@@ -265,6 +267,28 @@ async function entryAddressOf(
   // language included where the language rule prefixes it too.
   const path = (await servedAt(own, options.language)) ?? own;
   const label = await options.label(type);
+  const entry = {
+    kind: type.kind,
+    slug: type.slug,
+    id: holder.id,
+    ...(translation ? { locale: options.language } : {}),
+  };
+  const name = textOf(document.title) ?? textOf(document.name) ?? label;
+  // A type whose SEO is switched off stays listed, marked so: the plugin
+  // answers its pages nothing, so its route's own code sets what is served.
+  const key = type.kind === "single" ? singleKey(type.slug) : type.slug;
+  const rules = await options.readRules?.(ctx, options.language);
+  if (rules !== undefined && isSeoOff(rules, key)) {
+    return {
+      path,
+      name,
+      source: "entry",
+      from: label,
+      standing: "seo-off",
+      sources: {},
+      entry,
+    };
+  }
   const answer = await resolveIn(
     ctx,
     type,
@@ -274,7 +298,7 @@ async function entryAddressOf(
   );
   return {
     path,
-    name: textOf(document.title) ?? textOf(document.name) ?? label,
+    name,
     source: "entry",
     from: label,
     standing: standingOfAnswer(answer),
@@ -283,12 +307,7 @@ async function entryAddressOf(
       ...servedText(answer),
       canonical: canonicalOf(answer, options.origin),
     }),
-    entry: {
-      kind: type.kind,
-      slug: type.slug,
-      id: holder.id,
-      ...(translation ? { locale: options.language } : {}),
-    },
+    entry,
   };
 }
 

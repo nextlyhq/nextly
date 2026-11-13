@@ -40,6 +40,7 @@ import {
 import { seoSettingsSingle } from "./single";
 import {
   hiddenTypesProblem,
+  typesWithSeoOffProblem,
   patternsProblem,
   socialProfilesProblem,
 } from "./stored-values";
@@ -78,6 +79,11 @@ export interface SeoRules {
    * are, once the settings name any.
    */
   hiddenTypes?: string[];
+  /**
+   * The content types whose SEO is switched off, keyed as `patterns` are,
+   * once the settings name any. Every type is on until listed.
+   */
+  typesWithSeoOff?: string[];
   /** Whether IndexNow is told of changed pages: only once switched on. */
   indexNow?: boolean;
   /** Whether `/llms.txt` is served: only once switched on. */
@@ -208,6 +214,10 @@ async function rulesOf(
     defaultPatterns: { title: defaultTitlePattern(separatorOf(document)) },
     ...withDefined("aiCrawlers", aiCrawlersOf(document)),
     ...withDefined("hiddenTypes", hiddenTypesOf(document)),
+    ...withDefined(
+      "typesWithSeoOff",
+      checked<string[]>(document.typesWithSeoOff, typesWithSeoOffProblem)
+    ),
     // Off unless stored as switched on: a value that is not `true` is off.
     ...withDefined("indexNow", document.indexNow === true ? true : undefined),
     ...withDefined("llmsTxt", document.llmsTxt === true ? true : undefined),

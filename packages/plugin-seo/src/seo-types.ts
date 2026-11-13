@@ -39,7 +39,7 @@ export interface SeoTypes {
 }
 
 /** The types a site named, fixed for as long as the plugin runs. */
-function namedSeoTypes(
+export function namedSeoTypes(
   collections: readonly string[],
   singles: readonly string[]
 ): SeoTypes {

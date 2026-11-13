@@ -33,6 +33,7 @@ import { productionAddressesProblem } from "./production-addresses";
 import { robotsRulesProblem } from "./robots-rules-stored";
 import {
   hiddenTypesProblem,
+  typesWithSeoOffProblem,
   patternsProblem,
   socialProfilesProblem,
 } from "./stored-values";
@@ -130,6 +131,15 @@ export function seoSettingsSingle(): SingleConfig {
         name: "hiddenTypes",
         label: "Content types hidden from search",
         validate: refusing(hiddenTypesProblem),
+      }),
+      // The content types whose SEO is switched off: a list of keys, a
+      // collection's slug or `single:<slug>`, as `hiddenTypes` keys them.
+      // Off changes no schema and no stored value; every type is on until
+      // listed here.
+      json({
+        name: "typesWithSeoOff",
+        label: "Content types with SEO off",
+        validate: refusing(typesWithSeoOffProblem),
       }),
       json({
         name: "structuredData",

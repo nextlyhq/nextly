@@ -48,6 +48,11 @@ export interface SiteRules {
    * are: every page of one is served `noindex` and left out of the sitemap.
    */
   hiddenTypes?: readonly string[];
+  /**
+   * The content types whose SEO is switched off, keyed as `patterns` are:
+   * the plugin answers nothing for their pages and lists none of them.
+   */
+  typesWithSeoOff?: readonly string[];
   /** What robots.txt asks AI crawlers to do, where the site has chosen. */
   aiCrawlers?: AiCrawlerChoice;
   /** Whether IndexNow is told of changed pages: only once switched on. */

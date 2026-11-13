@@ -50,6 +50,7 @@ import {
 import { singleKey } from "../problems/page-types";
 import type { SeoAnswer } from "../resolver/order";
 import type { ReadRules } from "../resolver/provider";
+import { isSeoOff } from "../settings/seo-off";
 import { publishedWhere, toLastModified } from "../sitemap";
 import { mappedImageOf } from "../structured-data/graph";
 import type { ReadStructuredDataRules } from "../structured-data/rules";
@@ -198,8 +199,14 @@ export async function* candidates(
   ctx: PluginContext,
   options: ListingOptions
 ): AsyncGenerator<Candidate[]> {
+  // A type whose SEO is switched off lists none of its pages: no sitemap or
+  // llms.txt entry, though they keep their addresses.
+  const language = await recordLanguage(ctx);
+  const rules = await options.readRules?.(ctx, language);
   for (const type of await ctx.publicAddresses.types()) {
-    if (!(await covered(type, options, await recordLanguage(ctx)))) continue;
+    const key = type.kind === "single" ? singleKey(type.slug) : type.slug;
+    if (rules !== undefined && isSeoOff(rules, key)) continue;
+    if (!(await covered(type, options, language))) continue;
     yield* type.kind === "single"
       ? singlePages(type)
       : collectionPages(ctx, type);
@@ -246,7 +253,10 @@ export async function listPages(
     options.readStructuredDataRules === undefined
       ? undefined
       : onceEach(options.readStructuredDataRules);
-  for await (const batch of candidates(ctx, options)) {
+  for await (const batch of candidates(ctx, {
+    ...options,
+    ...(readRules === undefined ? {} : { readRules }),
+  })) {
     await listBatch(
       ctx,
       batch,
