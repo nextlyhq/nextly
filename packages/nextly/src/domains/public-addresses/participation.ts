@@ -19,6 +19,7 @@
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import type { Logger } from "../../shared/types";
 import type { MetaService } from "../meta/services/meta-service";
 
 import { participatingOwners } from "./participants";
@@ -50,30 +51,40 @@ const sameOwners = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && a.every((owner, at) => owner === b[at]);
 
 /**
- * The count this process started with, kept beside the participant list on
- * `globalThis` so every copy of this module reads the one value.
+ * The count this process started with, and the participation reloads still
+ * have to keep, in order, kept beside the participant list on `globalThis`
+ * so every copy of this module reads and queues on the one value.
  */
 const shared = globalThis as unknown as {
   __nextly_addressParticipation?: { count: number };
+  __nextly_addressParticipationQueue?: Promise<void>;
 };
 
 /**
- * Record the plugins taking part now, against `stored`, the row as the start
- * read it with its other meta rows: nothing written where the set is the
- * same; otherwise, under the row's lock, the new set and the count one
- * higher, so two starts running with one new set raise it once.
+ * Record `owners`, the plugins taking part (the ones asked now, by
+ * default), against `stored`, the row as the caller read it: nothing written
+ * where the set is the same.
+ *
+ * Otherwise the row is first made where there is none, by one insert the
+ * database skips when another start made it first, so a missing row is never
+ * read as the absence two starts both act on; then, under the row's lock,
+ * the new set and the count one higher, so two starts running with one new
+ * set raise it once. Throws what the database refused; this process's count
+ * is then the one `stored` holds.
  */
 export async function recordParticipation(
   adapter: DrizzleAdapter,
   meta: MetaService,
-  stored: unknown
+  stored: unknown,
+  owners: readonly string[] = participatingOwners()
 ): Promise<void> {
-  const owners = participatingOwners();
   const kept = participationOf(stored);
-  if (sameOwners(kept.owners, owners)) {
-    shared.__nextly_addressParticipation = { count: kept.count };
-    return;
-  }
+  shared.__nextly_addressParticipation = { count: kept.count };
+  if (sameOwners(kept.owners, owners)) return;
+  await meta.insertIfAbsent(PARTICIPATION_META_KEY, {
+    owners: [],
+    count: 0,
+  } satisfies Participation);
   const count = await adapter.transaction(async tx => {
     const executor = tx.getDrizzle();
     const entry = await meta.getEntry(PARTICIPATION_META_KEY, executor, {
@@ -81,11 +92,32 @@ export async function recordParticipation(
     });
     const now = participationOf(entry.present ? entry.value : undefined);
     if (sameOwners(now.owners, owners)) return now.count;
-    const next: Participation = { owners, count: now.count + 1 };
+    const next: Participation = { owners: [...owners], count: now.count + 1 };
     await meta.set(PARTICIPATION_META_KEY, next, executor);
     return next.count;
   });
   shared.__nextly_addressParticipation = { count };
+}
+
+/**
+ * {@link recordParticipation} for a start, which it never fails: what it
+ * keeps only makes participants check their records again, so a database
+ * refusing it costs at most one catch-up that does not run, never a site
+ * that does not start. The refusal is logged.
+ */
+export async function recordStartParticipation(
+  adapter: DrizzleAdapter,
+  meta: MetaService,
+  stored: unknown,
+  logger: Pick<Logger, "warn">
+): Promise<void> {
+  try {
+    await recordParticipation(adapter, meta, stored);
+  } catch (error) {
+    logger.warn?.(
+      `[Nextly] The plugins keeping public addresses unique could not be recorded at start: ${String(error)}`
+    );
+  }
 }
 
 /**
@@ -97,17 +129,27 @@ export function participationCount(): number {
 }
 
 /**
- * Record the participation as a config reload in development left it, read
- * from the database rather than from a start's meta rows: a plugin the
- * reload switched off is no longer asked, and saves made until it is
- * switched back on reach no record of its.
+ * Keep `owners`, the plugins taking part as a config reload in development
+ * left them, after every set an earlier reload queued: each reload's set is
+ * read when it commits and kept in the order the reloads ran, so a plugin
+ * switched off and quickly on again still raises the count twice, rather than
+ * both writes finding it on. Read from the database each time, since the
+ * reload has no start's meta rows.
  */
-export async function recordParticipationNow(): Promise<void> {
-  const { getService } = await import("../../di/service-access");
-  const meta = getService("metaService");
-  await recordParticipation(
-    getService("adapter"),
-    meta,
-    await meta.get(PARTICIPATION_META_KEY)
-  );
+export function queueParticipation(owners: readonly string[]): Promise<void> {
+  const keep = async (): Promise<void> => {
+    const { getService } = await import("../../di/service-access");
+    const meta = getService("metaService");
+    await recordParticipation(
+      getService("adapter"),
+      meta,
+      await meta.get(PARTICIPATION_META_KEY),
+      owners
+    );
+  };
+  const next = (shared.__nextly_addressParticipationQueue ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(keep);
+  shared.__nextly_addressParticipationQueue = next.catch(() => undefined);
+  return next;
 }

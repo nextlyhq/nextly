@@ -53,6 +53,7 @@ import {
   publishesPerLanguage,
   storesPerLanguage,
 } from "../domains/i18n/per-language-storage";
+import { participatingOwners } from "../domains/public-addresses/participants";
 import { publishRetentionPolicies } from "../domains/retention/published-policies";
 import {
   clearActiveExtensionSchema,
@@ -1044,9 +1045,12 @@ function stageConfigHooks(newConfig: {
         [...candidates].filter(owner => !stillRunning.has(owner))
       );
       // A plugin switched off, or on again, may change which plugins keep
-      // public addresses unique; recorded after the reload, never failing it.
+      // public addresses unique: the set is read now, as this reload leaves
+      // it, and kept after the reload in the order reloads ran, never
+      // failing it.
+      const owners = participatingOwners();
       void import("../domains/public-addresses/participation")
-        .then(({ recordParticipationNow }) => recordParticipationNow())
+        .then(({ queueParticipation }) => queueParticipation(owners))
         .catch((error: unknown) => {
           consoleLogger.warn(
             `[Nextly] The plugins keeping public addresses could not be recorded after a reload: ${String(error)}`

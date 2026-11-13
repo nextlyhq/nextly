@@ -1454,7 +1454,12 @@ async function registerServicesOnce(
   );
   // Which plugins take part in keeping public addresses unique, against the
   // set the last start ran with.
-  await recordBootParticipation(adapter, metaService, storedMeta);
+  await recordBootParticipation(
+    adapter,
+    metaService,
+    storedMeta,
+    resolvedLogger
+  );
   // Which of the started plugins provides each capability, for code that asks
   // a provider at request time: the route helpers ask the page-metadata
   // provider for every page's head. From the same list, so a plugin that never
@@ -2649,19 +2654,21 @@ async function registerMigrationJournal(
 async function recordBootParticipation(
   adapter: DrizzleAdapter,
   metaService: MetaService,
-  storedMeta: () => Promise<Record<string, unknown>>
+  storedMeta: () => Promise<Record<string, unknown>>,
+  logger: Logger
 ): Promise<void> {
   const { isLifecycleCommandBoot } = await import(
     "../domains/schema/ownership/plugin-lifecycle-state"
   );
   if (isLifecycleCommandBoot()) return;
-  const { PARTICIPATION_META_KEY, recordParticipation } = await import(
+  const { PARTICIPATION_META_KEY, recordStartParticipation } = await import(
     "../domains/public-addresses/participation"
   );
-  await recordParticipation(
+  await recordStartParticipation(
     adapter,
     metaService,
-    (await storedMeta())[PARTICIPATION_META_KEY]
+    (await storedMeta())[PARTICIPATION_META_KEY],
+    logger
   );
 }
 

@@ -29,6 +29,9 @@ import {
 import { defineCollection } from "../../../collections/config/define-collection";
 import { text } from "../../../collections/fields/helpers";
 import { createAdapter } from "../../../database/factory";
+import { getActiveHookRegistry } from "../../../hooks/hook-registry";
+import { consoleLogger } from "../../../shared/types";
+import { MetaService } from "../../meta/services/meta-service";
 import {
   definePlugin,
   type PluginContext,
@@ -38,7 +41,17 @@ import {
   getConfiguredTestDialects,
   type TestDialect,
 } from "../../../plugins/test-nextly";
-import { PARTICIPATION_META_KEY } from "../participation";
+import {
+  addParticipant,
+  participatingOwners,
+  removeParticipant,
+  type ParticipantRunner,
+} from "../participants";
+import {
+  PARTICIPATION_META_KEY,
+  queueParticipation,
+  recordParticipation,
+} from "../participation";
 
 import { memoryParticipant } from "./memory-participant";
 
@@ -75,6 +88,43 @@ const posts = defineCollection({
   fields: [text({ name: "title" }), text({ name: "slug" })],
   publicAddress: "/blog/{slug}",
 });
+
+/** The participation row as stored on `adapter`'s database. */
+async function storedParticipation(adapter: DrizzleAdapter) {
+  return new MetaService(adapter, consoleLogger).get<{
+    owners: string[];
+    count: number;
+  }>(PARTICIPATION_META_KEY);
+}
+
+/**
+ * Two starts' writes of the participation row, held so that both begin at
+ * once: the first waits until the second arrives (or a second has passed,
+ * where the second is itself waiting on the first), and both are released
+ * together. Two starts that both read no row both go on to write it, as two
+ * instances starting at once can, rather than one committing before the
+ * other looks.
+ */
+function writingTogether() {
+  let arrived = 0;
+  let release: () => void = () => undefined;
+  const released = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  return (meta: MetaService) => {
+    const write = meta.set.bind(meta);
+    meta.set = (async (...args: Parameters<MetaService["set"]>) => {
+      arrived += 1;
+      if (arrived === 2) release();
+      await Promise.race([
+        released,
+        new Promise(resolve => setTimeout(resolve, 1_000)),
+      ]);
+      return write(...args);
+    }) as MetaService["set"];
+    return meta;
+  };
+}
 
 /** Whether `call` writes the participation row of `nextly_meta`. */
 const writesParticipation = (call: RecordedStatement) =>
@@ -147,6 +197,83 @@ describe.each(getConfiguredTestDialects())(
 
       expect(first.fingerprint).toEqual(expect.any(String));
       expect(after.fingerprint).not.toBe(first.fingerprint);
+    }, 120_000);
+
+    it.skipIf(dialect === "sqlite")(
+      "lets two first starts at once both start, and raises the count once",
+      async () => {
+        // The core tables, made by a start with no participant: no row yet.
+        const setup = await createTestNextly({
+          adapter: (await adapterFor()) as never,
+          plugins: [bystander],
+        });
+        await setup.destroy();
+        const runner = {} as ParticipantRunner;
+        addParticipant(runner, "plugin:@test/racing");
+        const together = writingTogether();
+        const first = await adapterFor();
+        const second = await adapterFor();
+        try {
+          const owners = participatingOwners();
+          const outcomes = await Promise.allSettled([
+            recordParticipation(
+              first,
+              together(new MetaService(first, consoleLogger)),
+              undefined,
+              owners
+            ),
+            recordParticipation(
+              second,
+              together(new MetaService(second, consoleLogger)),
+              undefined,
+              owners
+            ),
+          ]);
+
+          expect(outcomes.map(outcome => outcome.status)).toEqual([
+            "fulfilled",
+            "fulfilled",
+          ]);
+          expect(await storedParticipation(first)).toEqual({
+            owners: ["plugin:@test/racing"],
+            count: 1,
+          });
+        } finally {
+          removeParticipant(runner);
+          await first.disconnect().catch(() => undefined);
+          await second.disconnect().catch(() => undefined);
+        }
+      },
+      120_000
+    );
+
+    it("raises the count for a switch-off and a switch-back that both commit before the first is kept", async () => {
+      const { plugin, seen } = participating();
+      const adapter = await adapterFor();
+      const t = await createTestNextly({
+        adapter: adapter as never,
+        collections: [posts],
+        plugins: [plugin, bystander],
+      });
+      try {
+        const before = await storedParticipation(t.adapter as never);
+        const registry = getActiveHookRegistry();
+        // Two reloads in a row, as the dev watcher runs them: the plugin off,
+        // then on again, before the first one's write has landed.
+        registry.setSuspendedOwners(["plugin:@test/address-participant"]);
+        const off = queueParticipation(participatingOwners());
+        registry.setSuspendedOwners([]);
+        const on = queueParticipation(participatingOwners());
+        await Promise.all([off, on]);
+
+        expect(await storedParticipation(t.adapter as never)).toEqual({
+          owners: ["plugin:@test/address-participant"],
+          count: (before?.count ?? 0) + 2,
+        });
+        expect(seen.ctx).toBeDefined();
+      } finally {
+        await t.destroy();
+      }
     }, 120_000);
 
     it("stays the same, and is not written, when every start runs with the same participants", async () => {
