@@ -5099,7 +5099,7 @@ async function reconcileSingleTablesForBoot(
  * single or field group created by its own DDL came up without those
  * columns while its runtime table named them, so every read of it failed.
  */
-interface BootTableWork {
+export interface BootTableWork {
   /** Only tables that do not exist yet: see `createMissingCodeFirstTables`. */
   desired: DesiredSchema;
   /** Checked in order once the apply has run. */
@@ -5129,8 +5129,13 @@ function emptyBootTableWork(): BootTableWork {
  * existing table can raise a prompt that boot has no terminal to answer.
  * Drift on existing tables belongs to `nextly db:sync` and the HMR reload,
  * which can.
+ *
+ * Each table's creation waits for a busy database in the schema pipeline's tries, bounded by
+ * `NEXTLY_LOCK_TIMEOUT` and `NEXTLY_LOCK_TIMEOUT_TOTAL` as every pipeline apply is; one that stays
+ * busy past them leaves the start incomplete with the stop's report as the warning. Exported for
+ * the test that holds the database while a start creates its tables.
  */
-async function createMissingCodeFirstTables(
+export async function createMissingCodeFirstTables(
   adapter: DrizzleAdapter,
   logger: Logger,
   work: BootTableWork
