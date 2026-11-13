@@ -1089,77 +1089,54 @@ export class FieldGroupMetadataService {
 
   /**
    * Whether a new field group may take `slug`, its table named `tableName`: the address rule,
-   * another field group's address of the same snake_case form, and a table another field group
-   * owns. Public so the Schema Builder's address check asks these very preconditions before a
-   * create, rather than a copy of them that could drift from what the create refuses.
+   * another field group's address of the same snake_case form, an address a field group already
+   * holds, and a table another field group owns, refused in that order. Public so the Schema
+   * Builder's address check asks these very preconditions before a create, rather than a copy of
+   * them that could drift from what the create refuses.
    */
   async assertNewAddressAvailable(
     slug: string,
     tableName: string
   ): Promise<void> {
-    await this.assertAddressAllowed(slug);
-    // A field group already under this address, whatever table it was recorded with: an older one
-    // may keep a table name of its own, which the table check below cannot see. Refused here,
-    // before any DDL, rather than by the registry after the new table is built.
-    const held = (await this.registry.getAllComponents()).some(
-      existing => existing.slug === slug
-    );
-    if (held) {
-      throw NextlyError.duplicate({
-        logContext: { reason: "field-group-address-taken", slug },
-      });
-    }
-    await this.assertTableUnowned({ slug, tableName });
-  }
-
-  private async assertAddressAllowed(slug: string): Promise<void> {
+    // The rule first, from the address alone, before anything is read.
     assertAddressAllowed("fieldGroup", slug);
+    // One read of the field groups, which every check below is judged over: the Builder asks this
+    // as an address is typed, and a read per check would multiply that traffic.
+    const held = await this.registry.getAllComponents();
     const twin = findSameSnakeCaseAddress(
       "fieldGroup",
       slug,
-      (await this.registry.getAllComponents()).map(existing => ({
+      held.map(existing => ({
         kind: "fieldGroup" as const,
         address: existing.slug,
       }))
     );
     if (twin) throw addressRefusalError(twin, slug);
-  }
-
-  /**
-   * Refuse a create whose table another field group already owns.
-   *
-   * Keyed on the TABLE NAME rather than the slug, because the two are not the same key: a slug is
-   * normalised on its way to a table name, so `foo-bar` and `foo_bar` name one physical table while
-   * looking like two free slugs.
-   *
-   * It has to run before the DDL rather than after. `CREATE TABLE IF NOT EXISTS` reports success
-   * against a table that already exists, the runtime registration that follows then rebinds that
-   * table to THIS request's fields, and only afterwards does the registry reject the duplicate — so
-   * a refused create would leave the existing field group reading through a schema that does not
-   * describe it, until the process restarts.
-   *
-   * Here rather than in a request handler because all three create transports need it and only one
-   * of them had it. The same reason the DDL itself moved into this service.
-   *
-   * Two callers racing can still both pass this check; the registry table declares `table_name`
-   * unique, so the second insert is rejected by the database rather than by this.
-   */
-  private async assertTableUnowned(
-    input: Pick<CreateFieldGroupInput, "slug" | "tableName">
-  ): Promise<void> {
-    const owner = (await this.registry.getAllComponents()).find(
-      existing => existing.tableName === input.tableName
-    );
-    if (!owner) return;
-
-    throw NextlyError.duplicate({
-      logContext: {
-        reason: "component-table-conflict",
-        slug: input.slug,
-        tableName: input.tableName,
-        ownedBy: owner.slug,
-      },
-    });
+    // A field group already under this address, whatever table it was recorded with: an older one
+    // may keep a table name of its own, which the table check below cannot see. Refused here,
+    // before any DDL, rather than by the registry after the new table is built.
+    if (held.some(existing => existing.slug === slug)) {
+      throw NextlyError.duplicate({
+        logContext: { reason: "field-group-address-taken", slug },
+      });
+    }
+    // A table another field group owns, keyed on the TABLE NAME: a slug is normalised on its way to
+    // a table name, so `foo-bar` and `foo_bar` name one physical table while looking like two free
+    // slugs. Before the DDL, because `CREATE TABLE IF NOT EXISTS` reports success against a table
+    // that exists, and the registration after it would rebind that table to this request's fields
+    // before the registry rejected the duplicate. Two callers racing can still both pass; the
+    // registry declares `table_name` unique, so the database rejects the second insert.
+    const owner = held.find(existing => existing.tableName === tableName);
+    if (owner) {
+      throw NextlyError.duplicate({
+        logContext: {
+          reason: "component-table-conflict",
+          slug,
+          tableName,
+          ownedBy: owner.slug,
+        },
+      });
+    }
   }
 
   /** Render the DDL. Separated from the apply because this half is allowed to reject the request. */

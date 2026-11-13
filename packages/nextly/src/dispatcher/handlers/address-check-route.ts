@@ -9,7 +9,10 @@
  */
 import { z } from "zod";
 
-import { respondData } from "../../api/response-shapes";
+import {
+  respondData,
+  SKIP_DATE_FORMATTING_HEADER,
+} from "../../api/response-shapes";
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import { checkNewAddress } from "../../domains/collections/address-check";
 import { NextlyError } from "../../errors/nextly-error";
@@ -66,5 +69,10 @@ export async function respondAddressCheck(
     { adapter, fieldGroups, singleRegistry },
     { kind, address, pendingCreates }
   );
-  return respondData({ kind, address, refusal });
+  // The address comes back exactly as sent, so a client checking as a person types can match the
+  // answer to its request: one that reads as a date is not reformatted as one.
+  return respondData(
+    { kind, address, refusal },
+    { headers: { [SKIP_DATE_FORMATTING_HEADER]: "1" } }
+  );
 }
