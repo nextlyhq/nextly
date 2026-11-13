@@ -311,6 +311,28 @@ describe("shellModuleBreaches", () => {
     expect(breach.measured).toContain("placed there beside");
   });
 
+  it("follows an import through a module the bundler folded away, never through a route's", () => {
+    const { report, record } = shellBuild(
+      {
+        "index.mjs": ["src/index.ts", "src/lib/check.ts"],
+        "shared.mjs": ["react-hook-form/dist/form.mjs"],
+        "route.mjs": ["src/pages/form.tsx"],
+      },
+      {
+        "src/index.ts": ["src/lib/check.ts", "src/pages/form.tsx"],
+        // Through a route's module: not how the shell reached it.
+        "src/pages/form.tsx": ["react-hook-form/dist/form.mjs"],
+        // Through a package index no chunk holds: how it did.
+        "src/lib/check.ts": ["react-hook-form/index.mjs"],
+        "react-hook-form/index.mjs": ["react-hook-form/dist/form.mjs"],
+      }
+    );
+    const [breach] = shellModuleBreaches(report, record, keptOut, []);
+    expect(breach.measured).toContain(
+      "src/index.ts -> src/lib/check.ts -> react-hook-form/index.mjs -> react-hook-form/dist/form.mjs"
+    );
+  });
+
   it("lets the shell hold a module it is allowed to, under a kept-out start", () => {
     const { report, record } = shellBuild({
       "index.mjs": ["src/index.ts", "src/components/field-ui/constants.ts"],
