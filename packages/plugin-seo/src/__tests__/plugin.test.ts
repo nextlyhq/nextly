@@ -773,3 +773,89 @@ describe("the SEO section", () => {
     ]);
   });
 });
+
+describe("SEO on every content type, where the site names none", () => {
+  const EVERY = { every: ["collection", "single"] };
+
+  it("adds the seo group to every collection and Single the site defines", () => {
+    const plugin = seoPlugin({ sitemap: false });
+    expect(plugin.contributes?.extend).toHaveLength(1);
+    expect(plugin.contributes?.extend?.[0]?.target).toEqual(EVERY);
+    expect(seoGroup(plugin).name).toBe("seo");
+  });
+
+  it("leaves out each type the site excludes", () => {
+    const plugin = seoPlugin({ exclude: ["logs", "logs", "audit"] });
+    expect(plugin.contributes?.extend?.[0]?.target).toEqual({
+      ...EVERY,
+      except: ["logs", "audit"],
+    });
+  });
+
+  it("adds a plugin's collection the site includes by name, and keeps it out of the scope", () => {
+    const plugin = seoPlugin({ include: ["forms"], exclude: ["logs"] });
+    const [named, scope] = plugin.contributes?.extend ?? [];
+    expect(named?.target).toEqual(["forms"]);
+    expect(named?.fields?.[0]).toBe(scope?.fields?.[0]);
+    // Named once: the scope never reaches it a second time.
+    expect(scope?.target).toEqual({ ...EVERY, except: ["logs", "forms"] });
+  });
+
+  it("keeps a site's named list exactly as before", () => {
+    const plugin = seoPlugin({ collections: ["posts"], singles: ["home"] });
+    expect(plugin.contributes?.extend?.map(clause => clause.target)).toEqual([
+      ["posts", "home"],
+    ]);
+  });
+
+  it.each([
+    ["exclude", { collections: ["posts"], exclude: ["logs"] }],
+    ["include", { singles: ["home"], include: ["forms"] }],
+  ] as const)(
+    "refuses %s beside a named list, which already says which types",
+    (_, options) => {
+      expect(() => seoPlugin(options)).toThrow(/collections|singles/);
+    }
+  );
+
+  it("draws the SEO tab and its line wherever its own group was added", () => {
+    const plugin = seoPlugin({ sitemap: false });
+    const edit = editPageContributions(plugin);
+    expect(edit.map(each => [each.id, each.place])).toEqual([
+      ["nextlyhq-plugin-seo.tab", "collection.edit"],
+      ["nextlyhq-plugin-seo.status", "collection.edit"],
+      ["nextlyhq-plugin-seo.single-tab", "single.edit"],
+      ["nextlyhq-plugin-seo.single-status", "single.edit"],
+    ]);
+    for (const each of edit) {
+      // Offered by core on the types the start added the group to, the
+      // Schema Builder's included and a type with its own `seo` left out.
+      expect(each).toMatchObject({ extendedWith: ["seo"] });
+      expect(each).not.toHaveProperty("collections");
+      expect(each).not.toHaveProperty("singles");
+    }
+  });
+
+  it("refuses page permissions, which are declared for named types before the site starts", () => {
+    expect(() => seoPlugin({ pagePermissions: true })).toThrow(
+      /pagePermissions/
+    );
+  });
+
+  it("shows the dashboard card and its line to whoever manages site-wide SEO", () => {
+    const plugin = seoPlugin({ sitemap: false });
+    const dashboard = plugin.contributes?.dashboard;
+    expect(dashboard?.widgets?.map(widget => widget.access)).toEqual([
+      "manage-seo",
+    ]);
+    expect(dashboard?.attention).toEqual([
+      expect.objectContaining({ id: "seo/problems", permission: "manage-seo" }),
+    ]);
+  });
+
+  it("takes a sitemap list it cannot check until the site starts", () => {
+    expect(() =>
+      seoPlugin({ sitemap: { collections: ["posts"] } })
+    ).not.toThrow();
+  });
+});

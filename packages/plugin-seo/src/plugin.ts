@@ -99,7 +99,6 @@ import {
 import { problemsForCard } from "./problems/card-source";
 import { PROBLEMS_PAGE, PROBLEMS_PAGE_HREF } from "./problems/contract";
 import { watchSaves } from "./problems/hooks";
-import { singleKey } from "./problems/page-types";
 import { problemRoutes } from "./problems/route";
 import { problemsCollection } from "./problems/store";
 import { RECEIVED_PAGE } from "./received/contract";
@@ -117,6 +116,7 @@ import { seoPageMetadata, type ReadRules } from "./resolver/provider";
 import { routeValuesCollection } from "./route-values/collection";
 import { withRouteValues } from "./route-values/record";
 import { seoSchema, seoSchemaPlugin } from "./schema/definition";
+import { seoExtendClauses, seoTypesOf, type SeoTypes } from "./seo-types";
 import {
   contentTypesRoute,
   settingsDocumentRoute,
@@ -155,6 +155,7 @@ import { PAGE_BUILDER_TAB } from "./template/contributions";
 import { seoTemplateRoute } from "./template/route";
 import {
   SEO_PROBLEMS_ATTENTION_ID,
+  seoIssuesSetup,
   seoIssuesWidget,
   seoProblemsAttentionItem,
 } from "./widget-card";
@@ -168,15 +169,38 @@ const { version: PLUGIN_VERSION } = require("../package.json") as {
 
 export interface SeoPluginOptions {
   /**
-   * The collections to extend with the SEO field group. SEO is added ONLY to
-   * these — collections you do not name are untouched.
+   * The collections to extend with the SEO field group, where the site names
+   * its types. SEO is then added ONLY to these and to `singles`: types you do
+   * not name are untouched.
+   *
+   * Leave both `collections` and `singles` out to add SEO to every collection
+   * and Single the site defines, in code or in the Schema Builder, now or
+   * later, and to a plugin's collection that holds the site's pages (such as
+   * Page Builder's `pages`). Users, media and plugins' other collections never
+   * get it. Removing a list moves a site to every type: run
+   * `nextly migrate:create` and `nextly migrate` after.
    */
-  collections: string[];
+  collections?: string[];
   /**
-   * The Singles to extend with the SEO field group, such as a homepage. None
-   * when absent. A Single's page gets the same SEO tab a collection's has.
+   * The Singles to extend with the SEO field group, such as a homepage, where
+   * the site names its types. None when absent and `collections` is given. A
+   * Single's page gets the same SEO tab a collection's has.
    */
   singles?: string[];
+  /**
+   * @experimental Where the site names no `collections` or `singles`: types
+   * to leave without SEO, by slug, such as an internal log. A type left out
+   * before its first migration gets no SEO column; one left out later keeps
+   * its column and values, unused, until `nextly prune` drops them.
+   */
+  exclude?: string[];
+  /**
+   * @experimental Where the site names no `collections` or `singles`: a
+   * plugin's collections to add SEO to as well, by slug. For a plugin
+   * collection whose pages are public but which its plugin does not mark as
+   * the site's content; Page Builder's `pages` needs no entry here.
+   */
+  include?: string[];
   /**
    * The fields placed INSIDE the `seo` group. Defaults to
    * {@link defaultSeoFields}. Custom fields are still nested under `seo` (e.g. a `focusKeyword`
@@ -428,13 +452,16 @@ function sitemapLimits(sitemap: SeoPluginOptions["sitemap"]): SitemapLimits {
  */
 function subsetOf(
   sitemap: SeoPluginOptions["sitemap"],
-  targets: readonly string[]
+  types: SeoTypes
 ): string[] | undefined {
   if (typeof sitemap !== "object" || sitemap.collections === undefined) {
     return undefined;
   }
   const subset = [...new Set(sitemap.collections)];
-  const unknown = subset.filter(slug => !targets.includes(slug));
+  // Every type's list is known only once the site starts, so only a named
+  // list is checked here.
+  if (!types.named) return subset;
+  const unknown = subset.filter(slug => !types.collections.includes(slug));
   if (unknown.length > 0) {
     throw new Error(
       `seoPlugin: sitemap.collections must be a subset of collections; ` +
@@ -600,16 +627,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       : {}),
   });
 
-  // Dedupe once: a repeated slug would make the schema-extend fold add `seo`
-  // twice (a duplicate-field error), and would list the same URLs twice in the
-  // sitemap.
-  const targets = [...new Set(options.collections)];
-  const singleTargets = [...new Set(options.singles ?? [])];
-  // Every type SEO is added to by the key bulk edit and the problem list
-  // name it by: a collection's slug, or `single:<slug>`.
-  const pageTypeKeys = [...targets, ...singleTargets.map(singleKey)];
+  // Which types carry the group: the ones the site names, or every type,
+  // read from what the start added it to. Every part below reads it when
+  // asked, so a Schema Builder type is answered once it has the group.
+  const types = seoTypesOf(options);
 
-  const sitemapSubset = subsetOf(options.sitemap, targets);
+  const sitemapSubset = subsetOf(options.sitemap, types);
   const readRules = rulesReader(options);
   // The addresses redirects hold, kept for the Proxy and dropped whenever a
   // redirect saved here commits.
@@ -646,8 +669,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // The SEO tab on each page the group is added to, and the route it reads
   // a page's automatic values from.
   const tab = seoTabParts({
-    collections: targets,
-    singles: singleTargets,
+    types,
     fields: seoFields,
     baseUrl: options.baseUrl,
     readRules,
@@ -676,8 +698,13 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // What the problem list checks, read with the rules every page's head is
   // worked out by, so the list and the page never disagree.
   const problemChecks = {
-    targets,
-    singles: singleTargets,
+    // Read on each check, as the types are.
+    get targets() {
+      return types.collections;
+    },
+    get singles() {
+      return types.singles;
+    },
     readers: {
       readRules,
       readStructuredDataRules: structuredDataFromSettings(
@@ -691,11 +718,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // problem list finds as each person may read it, so the dashboard and the
   // list never disagree; the line's count is the
   // Problems menu item's badge too. Withheld where no collection carries SEO (see
-  // `widget-card`).
-  const issues = {
-    collections: targets,
-    problemsFor: problemsForCard(problemChecks),
-  };
+  // `widget-card`). Where SEO is on every type, which types those are is
+  // known only once the site starts, so whoever manages site-wide SEO is
+  // shown them instead.
+  const issues = seoIssuesSetup(types, problemsForCard(problemChecks));
   const issuesCard = seoIssuesWidget(issues);
   const issuesItem = seoProblemsAttentionItem(issues);
 
@@ -706,12 +732,12 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const routes: PluginRoute[] = [];
 
   const contributes: PluginContributions = {
-    // Add the SEO group to each named collection.
-    extend: [{ target: [...targets, ...singleTargets], fields: [seoGroup] }],
+    // Add the SEO group to each named type, or to every type.
+    extend: seoExtendClauses(options, types, [seoGroup]),
     // Site-wide SEO, the check of what search engines received, and, where
-    // the site asks for it, each content type's page SEO.
+    // the site asks for it, each named content type's page SEO.
     permissions: seoPermissionDeclarations({
-      types: [...targets, ...singleTargets],
+      types: types.named ? [...types.collections, ...types.singles] : [],
       pagePermissions,
     }),
     // The redirects whose From addresses the address record holds, the log
@@ -745,10 +771,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       pageMetadata: ctx =>
         withCodePageConnections(
           ctx,
-          withRouteValues(ctx, pageMetadata(ctx), {
-            collections: targets,
-            singles: singleTargets,
-          })
+          withRouteValues(ctx, pageMetadata(ctx), types)
         ),
       // The pages the site lists and the problems that left any out, read by
       // the same rules as the head: one reading for every listing output.
@@ -817,6 +840,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // The collections whose pages the SEO tab edits, so the tab in the
         // Page Builder's Settings knows a page it has a group to edit.
         tabCollections: tab.tabCollections,
+        // Where SEO is on every type, the tab there edits each page whose
+        // type has the group, which only the page's own fields say.
+        tabEveryType: tab.tabEveryType,
       },
       // The section's menu, in the order the section is used: where it
       // stands, its pages, what to fix, its redirects, its rules. Each
@@ -894,7 +920,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // What an import reads and writes with, from the Import screen and the
   // Overview's checklist alike.
   const importSetup = {
-    targets: pageTypeKeys,
+    get targets() {
+      return types.keys;
+    },
     readRules,
     checks: problemChecks,
     pagePermissions,
@@ -915,14 +943,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     shareImageRoute(options.baseUrl),
     // What the settings screen reads: the types SEO is added to, and which
     // Single holds the settings.
-    contentTypesRoute(targets),
+    contentTypesRoute(types),
     settingsDocumentRoute(),
     // What the redirects screen reads and writes.
     ...redirectRoutes(),
     // What Inspect checks.
     ...receivedRoutes({
-      collections: targets,
-      singles: singleTargets,
+      get collections() {
+        return types.collections;
+      },
+      get singles() {
+        return types.singles;
+      },
       ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
       readRules,
       pageMetadata,
@@ -946,7 +978,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // The bulk edit table, and the import beside it, over every type SEO is
     // added to: each collection, and each Single as `single:<slug>`.
     ...bulkRoutes({
-      targets: pageTypeKeys,
+      get targets() {
+        return types.keys;
+      },
       readRules,
       checks: problemChecks,
       pagePermissions,
@@ -954,7 +988,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     ...importRoutes(importSetup),
     // The Overview's setup checklist, read from what the plugin stores.
     ...checklistRoutes({
-      types: pageTypeKeys,
+      get types() {
+        return types.keys;
+      },
       readRules,
       readBrand: ctx => readBrandFacts(ctx),
       readSetupWaiting: setupWaiting,
@@ -1046,11 +1082,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       watchSaves(ctx, problemChecks);
       keepCodeRoutes(codeRoutes);
       // Changed pages noted for IndexNow, told once they settle.
-      stopIndexNow = watchForIndexNow(
-        ctx,
-        { readRules, ...siteOrigin },
-        targets
-      );
+      stopIndexNow = watchForIndexNow(ctx, { readRules, ...siteOrigin }, types);
     },
     // Between an uninstall that keeps the data and the next install, the
     // plugin does not run: pages saved meanwhile reach no record. Both
