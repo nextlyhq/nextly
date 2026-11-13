@@ -195,6 +195,25 @@ describe("a plugin's item at the rail's foot", () => {
     expect(effects).toEqual({ runs: 1, cleanups: 0 });
   });
 
+  it("sits in a box of its own above the account's box in the rail, so the account's box keeps the size its outline drew", () => {
+    // The rail's foot is held to the window's bottom: an item drawn inside
+    // the account's box grows that box upwards as the answers arrive, which
+    // the browser records as the shell moving. Its own box appears whole.
+    const { rerender } = render(<Shell />);
+    const account = screen.getByTestId("rail-account");
+    expect(account).not.toContainElement(helper());
+    expect(account).toContainElement(screen.getByTestId("bell"));
+    const box = screen.getByTestId("rail-foot-plugin-box");
+    expect(box).toContainElement(helper());
+    expect(box.nextElementSibling).toBe(account);
+    // The space above the foot is the items' box's while it shows.
+    expect(account.className).toContain("mt-0");
+
+    // In the bar the controls sit in one row, so the item stays in it.
+    rerender(<Shell railTaken />);
+    expect(screen.getByTestId("bar-account")).toContainElement(helper());
+  });
+
   it("is hidden with the rest of the foot until the answers are in, and mounted all the while", () => {
     mockWorkspacePending = true;
     const { rerender } = render(<Shell />);

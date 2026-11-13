@@ -26,9 +26,15 @@ export type ValueResult =
   | "waiting"
   | "none";
 
+/**
+ * A title or description cell's result: the engine's, or `absent` where the
+ * source holds no value for it, so there is nothing to bring in.
+ */
+type CellResult = ValueResult | "absent";
+
 /** Each result's words, and the line under it. */
 export const RESULT_WORDS: Readonly<
-  Record<Exclude<ValueResult, "none">, { label: string; why?: string }>
+  Record<Exclude<CellResult, "none">, { label: string; why?: string }>
 > = {
   set: { label: "Will set" },
   same: { label: "Same as automatic", why: "left empty" },
@@ -36,6 +42,7 @@ export const RESULT_WORDS: Readonly<
   neverServed: { label: "Skipped", why: "never served" },
   withDraft: { label: "With the draft", why: "live once published" },
   waiting: { label: "Skipped", why: "a draft waits" },
+  absent: { label: "Nothing to import", why: "not in the source" },
 };
 
 /** `place`'s result on the page `entry` reports. */
@@ -50,6 +57,22 @@ export function resultOf(
   if (entry.withDraft?.includes(place) === true) return "withDraft";
   if (entry.waiting?.includes(place) === true) return "waiting";
   return "none";
+}
+
+/**
+ * A page's title or description result, as its cell in the report shows it:
+ * the engine's result, read from `resultOf`; where the engine reports none
+ * and the source holds no value for the place, `absent`, so every cell says
+ * what happens to it rather than one being left blank.
+ */
+export function cellResultOf(
+  entry: ImportReportEntry,
+  place: "title" | "description"
+): CellResult {
+  const result = resultOf(entry, place);
+  if (result !== "none") return result;
+  const value = entry.values[place];
+  return value === undefined || value.trim() === "" ? "absent" : "none";
 }
 
 /** Each version's name in words: its language, where it has one, and its form. */
@@ -190,9 +213,16 @@ function cell(value: string): string {
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-/** A value's result in words, for the downloaded report. */
-function resultWords(entry: ImportReportEntry, place: ImportTarget): string {
-  const result = resultOf(entry, place);
+/**
+ * A value's result in words, for the downloaded report: the words its cell
+ * shows, and none for a record that matched no page, which has no cells.
+ */
+function resultWords(
+  entry: ImportReportEntry,
+  place: "title" | "description"
+): string {
+  if (entry.id === undefined) return "";
+  const result = cellResultOf(entry, place);
   if (result === "none") return "";
   const words = RESULT_WORDS[result];
   return words.why === undefined

@@ -165,6 +165,12 @@ and content events. What those then read is limited to the entries the filter ma
 document lock is read only for a document the filter matches. Every other REST route still
 refuses a caller whose rule answers with a filter, as it did before.
 
+A refused read and a missing one give the same answer, not the same time. A read rule that
+does slow work makes a refused read slower than a read of a slug that does not exist, so a
+signed-in caller probing repeatedly can tell that a collection exists and has a read rule.
+Nothing about what the rule allows or what the entries hold reaches them. Keep a read rule's
+own work small where that matters.
+
 `defineCollection` types the filter by the collection's own fields, so a misspelt field or
 operator, or a value of the wrong kind, fails to compile:
 
