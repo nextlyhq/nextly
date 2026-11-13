@@ -1477,13 +1477,23 @@ function siteStyleReads(
   return {
     documentOn,
     styleNow: async () => siteStyleOfDocument(await documentNow(), defaults),
-    definitions: async transaction =>
-      siteDefinitionsOfDocument(
-        transaction === undefined
-          ? await documentNow()
-          : await documentOn(transaction),
-        defaults
-      ),
+    definitions: async transaction => {
+      if (transaction !== undefined) {
+        return siteDefinitionsOfDocument(
+          await documentOn(transaction),
+          defaults
+        );
+      }
+      // Inside a field rewrite's transaction, the definitions it read before
+      // opening it: read through the pool there, they would wait on the
+      // connection the rewrite holds. Imported at call time: server-only.
+      const { siteDefinitionsInScope } = await import(
+        "./host-rewrite/rewrite-scope"
+      );
+      return siteDefinitionsInScope(async () =>
+        siteDefinitionsOfDocument(await documentNow(), defaults)
+      );
+    },
   };
 }
 
@@ -1583,6 +1593,21 @@ function rewriteInstallFor(
     // Page Builder beside the person who deleted the component.
     rewriteField: (request, as) =>
       ctx.services.collections.rewriteField(request, as),
+    // The site's definitions read before the rewrite opens its transaction,
+    // and each copy as it is decided, for the validation core runs inside it
+    // (`host-rewrite/rewrite-scope`).
+    rewriteScope: async (field, run) => {
+      const { withRewriteScope } = await import("./host-rewrite/rewrite-scope");
+      const scope = {
+        siteDefinitions: await composition.siteDefinitions?.(),
+        current: null as { field: string; stored: unknown } | null,
+      };
+      return withRewriteScope(scope, () =>
+        run(stored => {
+          scope.current = { field, stored };
+        })
+      );
+    },
     // A field rewrite runs no save hooks, the usage indexes' among them, so
     // each rewritten document is brought in line once the rewrite commits.
     afterRewrite: async document => {

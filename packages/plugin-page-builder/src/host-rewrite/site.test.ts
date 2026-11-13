@@ -634,6 +634,48 @@ describe("the copies writer", () => {
     expect(askedInside).toEqual([]);
   });
 
+  it("makes the rewrite inside its scope, naming each copy as it is decided", async () => {
+    const copies = { live: { copy: true }, draft: { copy: true, own: 2 } };
+    const { rewriteField } = rewriteOver(copies);
+    const decided: unknown[] = [];
+    const scoped: string[] = [];
+    let inScope = false;
+
+    const result = await siteCopiesWriter({
+      rewriteField,
+      as: async () => undefined,
+      reason: "r",
+      scope: async (field, run) => {
+        scoped.push(field);
+        inScope = true;
+        try {
+          return await run(stored => {
+            // Told inside the scope, as core asks for the copy.
+            decided.push({ stored, inScope });
+          });
+        } finally {
+          inScope = false;
+        }
+      },
+    })({
+      host,
+      rev: "7",
+      liveForm: "published",
+      step,
+      seeds: [
+        { value: { copy: true }, form: "published" },
+        { value: { copy: true, own: 2 }, form: "draft" },
+      ],
+    });
+
+    expect(result).toEqual({ kind: "written" });
+    expect(scoped).toEqual(["content"]);
+    expect(decided).toEqual([
+      { stored: { copy: true }, inScope: true },
+      { stored: { copy: true, own: 2 }, inScope: true },
+    ]);
+  });
+
   it("answers a copy the step refuses, and brings nothing in line", async () => {
     const copies = { live: { copy: true }, draft: { refuse: true } };
     const { rewriteField } = rewriteOver(copies);

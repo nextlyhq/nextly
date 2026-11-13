@@ -1095,7 +1095,22 @@ export interface CopiesSite<TOpts> {
     readonly slug: string;
     readonly id: string;
   }) => Promise<void>;
+  /**
+   * Runs one rewrite inside the scope the validation core runs inside it
+   * reads (`rewrite-scope`), handing it the call that names each copy as it
+   * is decided. Absent, the rewrite runs with none.
+   */
+  readonly scope?: RewriteScopeRunner;
 }
+
+/**
+ * Runs `run` inside a rewrite's scope for `field`; `run` is handed what to
+ * call with each copy's stored value as the rewrite decides that copy.
+ */
+export type RewriteScopeRunner = <T>(
+  field: string,
+  run: (deciding: (stored: unknown) => void) => Promise<T>
+) => Promise<T>;
 
 /**
  * The most rewrites one copies write makes: far more copies than one
@@ -1164,8 +1179,8 @@ async function rewriteOnce<TOpts>(
 > {
   let refused: string | undefined;
   let unjudged: { value: unknown; form: HostForm } | undefined;
-  try {
-    await site.rewriteField(
+  const call = (opts: TOpts | undefined, deciding: (stored: unknown) => void) =>
+    site.rewriteField(
       {
         collection: write.host.slug,
         id: write.host.id ?? "",
@@ -1179,6 +1194,7 @@ async function rewriteOnce<TOpts>(
         expectedVersion: write.rev,
         set: {
           from: (current, copy) => {
+            deciding(current);
             if (current === null || current === undefined) return null;
             const form = copy.form === "live" ? write.liveForm : "draft";
             const outcome = judged.answer(current, form);
@@ -1195,8 +1211,14 @@ async function rewriteOnce<TOpts>(
         },
         reason: site.reason,
       },
-      await site.as()
+      opts
     );
+  try {
+    // Resolved before the scope opens: who the rewrite is made as.
+    const opts = await site.as();
+    await (site.scope === undefined
+      ? call(opts, () => undefined)
+      : site.scope(field, deciding => call(opts, deciding)));
   } catch (error) {
     if (refused !== undefined) return { kind: "step-refused", detail: refused };
     if (unjudged !== undefined) return { kind: "unjudged", ...unjudged };

@@ -584,8 +584,8 @@ function plannedOf(
 /**
  * A copies write, made: the host rewritten on every copy, read again when it
  * changed since the read, left where the step refused a copy the walk did not
- * read, and, where the person may not make the rewrite, what the host comes
- * to without it.
+ * read, and, where the person may not make the rewrite or a field's rules
+ * refuse it, what the host comes to without it.
  */
 async function copiesWritten(
   walk: Walk,
@@ -598,7 +598,10 @@ async function copiesWritten(
   if (result.kind === "step-refused") {
     return { kind: "left", reason: "refused", detail: result.detail };
   }
-  if (result.kind === "forbidden") {
+  // Refused for want of the right to publish, or by a field's own rules on
+  // one of the copies: the host comes to what it did without the rewrite,
+  // its draft written alone, so no refusal leaves it worse than before.
+  if (result.kind === "forbidden" || result.kind === "refused") {
     const { fallback } = decision;
     if (fallback.kind === "done") return fallback.result;
     return writtenBy(await walk.deps.write(fallback.write), fallback);

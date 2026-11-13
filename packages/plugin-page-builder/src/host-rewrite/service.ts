@@ -58,6 +58,7 @@ import {
 import { rewriteHosts, type HostSource, type RunStore } from "./rewrite";
 import {
   siteCopiesWriter,
+  type RewriteScopeRunner,
   siteHostReader,
   siteHostSource,
   siteHostWriter,
@@ -190,6 +191,8 @@ export interface RewriteInstall {
    * draft converted alone.
    */
   readonly rewriteField?: SiteFieldRewrite<ServiceOpts>;
+  /** The scope a rewrite runs in, for the validation core runs inside it. */
+  readonly rewriteScope?: RewriteScopeRunner;
   /**
    * What follows a committed field rewrite of a document: the work its save
    * hooks would have done, which a rewrite runs none of (the usage indexes).
@@ -425,6 +428,9 @@ function rewriteAsCaller(
               ...(installed.afterRewrite === undefined
                 ? {}
                 : { afterRewrite: installed.afterRewrite }),
+              ...(installed.rewriteScope === undefined
+                ? {}
+                : { scope: installed.rewriteScope }),
             }),
           }),
     },

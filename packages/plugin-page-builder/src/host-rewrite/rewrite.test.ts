@@ -653,7 +653,12 @@ describe("a pending draft rewritten with its live copy", () => {
    */
   function withCopies(
     s: ReturnType<typeof site>,
-    options: { forbidden?: boolean; changedTimes?: number; rev?: boolean } = {}
+    options: {
+      forbidden?: boolean;
+      refusedByRules?: boolean;
+      changedTimes?: number;
+      rev?: boolean;
+    } = {}
   ): HostCopiesWrite[] {
     const asked: HostCopiesWrite[] = [];
     let changed = options.changedTimes ?? 0;
@@ -666,6 +671,9 @@ describe("a pending draft rewritten with its live copy", () => {
       writeCopies: async (write: HostCopiesWrite): Promise<CopiesResult> => {
         asked.push(write);
         if (options.forbidden === true) return { kind: "forbidden" };
+        if (options.refusedByRules === true) {
+          return { kind: "refused", detail: "A locked block would go." };
+        }
         if (changed > 0) {
           changed -= 1;
           return { kind: "changed" };
@@ -725,6 +733,24 @@ describe("a pending draft rewritten with its live copy", () => {
   it("converts the draft alone where the person may not make the rewrite, and leaves the live copy", async () => {
     const s = both();
     withCopies(s, { forbidden: true });
+
+    const report = await rewriteHosts(s.deps, args);
+
+    expect(s.writes.map(write => [write.mode, write.expected.form])).toEqual([
+      ["save", "draft"],
+    ]);
+    expect(s.stored.get("a")).toMatchObject({
+      published: { copies: 1 },
+      draft: { copies: 0, edit: "draft" },
+    });
+    expect(report.left).toContainEqual(
+      expect.objectContaining({ reason: "pending-draft" })
+    );
+  });
+
+  it("converts the draft alone, as before, where a field's rules refuse the rewrite", async () => {
+    const s = both();
+    withCopies(s, { refusedByRules: true });
 
     const report = await rewriteHosts(s.deps, args);
 
