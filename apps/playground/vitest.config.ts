@@ -15,6 +15,9 @@ export default defineConfig({
     experimental: { recordDependencies: true },
     globals: false,
     environment: "node",
-    include: ["scripts/__tests__/**/*.test.ts"],
+    // The upgrade gate's own units beside it; its gate needs a database, so it
+    // runs in the integration config.
+    include: ["scripts/__tests__/**/*.test.ts", "upgrade-gate/**/*.test.ts"],
+    exclude: ["**/node_modules/**", "**/*.integration.test.ts"],
   },
 });

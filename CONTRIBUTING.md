@@ -274,6 +274,73 @@ every push, as the merge queue does. A documentation-only change (files under
 3. Stamp `ctx.prefix` on every schema, database, or table name your test creates.
 4. Drop everything you created in `afterAll`.
 
+### The upgrade gate
+
+An existing site that upgrades Nextly must meet no schema change nobody chose.
+`apps/playground/upgrade-gate/` holds the playground as the last published
+release built it, on each dialect: its database, schema and rows, and the app
+migrations that release wrote (`baseline/`, named in `baseline/meta.json`).
+`upgrade-plan.integration.test.ts` restores it, upgrades it with your checkout
+the way a site does (`nextly migrate:create`, `nextly migrate`, then
+`nextly migrate:check`), and compares the database's catalog before and after.
+Every table, column, index, constraint and trigger the upgrade added, dropped
+or changed is an operation, and the operations must be exactly the ones
+`upgrade-gate/allowlist.ts` holds for that dialect, no more and no fewer.
+
+It runs on every integration leg, after the fixture plugin's test, and takes
+about ten seconds a dialect. To run it locally, first build what the
+playground's config loads:
+
+```bash
+pnpm turbo build --filter=nextly --filter="@nextlyhq/adapter-*" \
+  --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-form-builder \
+  --filter=@nextlyhq/plugin-seo
+```
+
+then, from `apps/playground`:
+
+```bash
+pnpm test:integration upgrade-gate                         # SQLite
+TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5435/<your test db> \
+  pnpm test:integration upgrade-gate                       # PostgreSQL
+TEST_MYSQL_URL=mysql://root:root@127.0.0.1:3307/<your test db> \
+  pnpm test:integration upgrade-gate                       # MySQL
+```
+
+**When it fails with operations the allowlist does not hold**, your change makes
+existing sites meet them on upgrade. The failure names each one, for example
+`create index user_roles.user_roles_stray_idx: (role_id, user_id)`, and prints
+the entry to add. Then either:
+
+- change the code so the upgrade no longer plans it, or
+- if it is intended, add the entry to `allowlist.ts` with a `reason` that says
+  what it does to an existing site's data and why that is safe (a new nullable
+  column, an index over an existing column), on each dialect the failure names.
+  A reviewer judges that reason as part of the pull request.
+
+A change to one of the playground's own collections, Singles or field groups,
+or to a first-party plugin's collections, shows up here too, since the
+baseline was built from the release's playground. Allowlist it the same way.
+
+**When it fails with operations the upgrade no longer plans**, remove those
+entries.
+
+**After a release**, record the baseline again from it and empty the allowlist
+of what the release now ships:
+
+```bash
+cd apps/playground
+TEST_POSTGRES_URL=... TEST_MYSQL_URL=... pnpm upgrade-gate:record \
+  [--release 0.0.2-alpha.76] [--pg-dump-container nextly-postgres17-test]
+```
+
+It installs that release's packages from npm (by default the `alpha` tag) beside
+the playground of the commit that versioned it, builds the playground with that
+release's `nextly migrate:create` and `nextly migrate` on each dialect, and
+writes the dumps. Then run the gate on each dialect and bring the allowlist to
+what it reports. `pg_dump` must be at least the server's major version;
+`--pg-dump-container` runs the one inside the test container instead.
+
 ### Test conventions
 
 - Tests are co-located with source files in `__tests__/` directories
@@ -456,6 +523,7 @@ Commit the generated `.changeset/*.md` file with your PR.
    - `changeset publish` — publishes each package to `@nextlyhq/*` with `--provenance` attestation
    - Creates one git tag `vX.Y.Z`
    - Creates one consolidated GitHub Release containing all package CHANGELOGs
+6. Record the upgrade gate's baseline from the new release and trim its allowlist ([The upgrade gate](#the-upgrade-gate)).
 
 ### Pre-releases (alpha / beta / rc)
 
