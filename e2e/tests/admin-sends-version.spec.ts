@@ -4,8 +4,9 @@
  *
  * Recorded at the network: each write the admin sends to a document is read
  * back, and none goes without a version. A save, a held working-draft save, a
- * publish, an unpublish, a restore and a list's bulk publish for an entry;
- * a save and the Page Builder screen's save for a Single.
+ * publish, an unpublish, the save of a restored version's values and a list's
+ * bulk publish for an entry; a save and the Page Builder screen's save for a
+ * Single.
  *
  * @module tests/admin-sends-version
  */
@@ -160,7 +161,9 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
       .click();
     await sent;
 
-    // A restore of an earlier version.
+    // A restore of an earlier version. It puts the version's values into the
+    // editor as unsaved edits and writes nothing, so the write is the save
+    // that follows.
     await gotoAdmin(page, `/collections/posts/${id}?history=1`);
     const rows = page.getByRole("button", { name: /Version \d+/ });
     await expect(rows.first()).toBeVisible({ timeout: 30_000 });
@@ -169,11 +172,15 @@ test.describe("the admin sends a version", { tag: EVERY_DIALECT }, () => {
       .getByRole("button", { name: "Restore this version" })
       .first()
       .click();
-    sent = nextWrite(page, r => r.url().includes(`${POSTS}/${id}/versions/`));
     await page
       .getByRole("alertdialog")
-      .getByRole("button", { name: /^Restore version \d+$/ })
+      .getByRole("button", { name: /^Restore \d+ fields?$/ })
       .click();
+    await expect(page.getByText(/^\d+ fields? restored from /)).toBeVisible({
+      timeout: 30_000,
+    });
+    sent = nextWrite(page, toThis);
+    await saveChanges.click();
     await sent;
 
     // A list's bulk publish.

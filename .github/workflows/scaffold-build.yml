@@ -524,10 +524,17 @@ jobs:
           read -ra specs <<< "$VERSIONS"
           if [ "${{ matrix.pm }}" = pnpm ]; then pnpm add "${specs[@]}"; else npm install "${specs[@]}"; fi
 
+      # A template's `build` script runs `nextly migrate` first. Nextly joins an existing app
+      # without touching its scripts, so that leg runs the step the installation guide gives
+      # an existing app before its build: neither `next build` nor a production start creates
+      # a table, and a production start refuses a database `nextly migrate` has not set up.
       - name: Build the scaffolded project
         shell: bash
         run: |
           cd /tmp/scaffold-build/scaffolded-app
+          if [ "${{ matrix.existing }}" = "create-next-app" ]; then
+            NEXTLY_TELEMETRY_DISABLED=1 npx --no-install nextly migrate
+          fi
           npm run build
 
       # `next build` exiting 0 is the assertion, and this is the check that it did the

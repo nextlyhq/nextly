@@ -69,6 +69,12 @@ fixed.
   `/admin` with no session, once the start is quiet, must get the same bytes and
   headers a shared cache may keep. The admin route is no longer prebuilt.
 
+Each counted load begins at least 2.5 s after the last admin request. The
+server reads the stored schema version at most once every 2 s and the RBAC
+epoch at most once a second, so a load begun sooner reuses the previous load's
+reads, and its count would turn on how fast that load ended; after the gap,
+every load pays both reads, as a visit arriving cold does.
+
 Each screen is loaded five times, and its requests are pinned by kind (method
 and path, with ids made generic), each kind counting the fewest times any of
 the five loads sent it. Some requests are sent more often in some loads than
