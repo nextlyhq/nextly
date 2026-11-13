@@ -2683,18 +2683,24 @@ ${allColumnDefs.join(",\n")}
       oldFields,
       newFields
     );
-    if (oldOnly.length === 0 || newOnly.length === 0) return null;
-    refuseAmbiguousRename({
-      code: "FIELD_GROUP_RENAME_AMBIGUOUS",
-      what: "field groups",
-      moves: "the group's existing rows to the new field name",
-      one: "field group",
-      oldOnly,
-      newOnly,
-    });
+    // A name on both sides (a field group that changed what it holds) is a remove and an add, and
+    // is never paired with itself: renaming a field to its own name moves nothing.
+    const pairs = oldOnly.flatMap(from =>
+      newOnly.filter(to => to.name !== from.name).map(to => ({ from, to }))
+    );
+    if (pairs.length === 0) return null;
+    if (pairs.length > 1) {
+      refuseAmbiguousRename({
+        code: "FIELD_GROUP_RENAME_AMBIGUOUS",
+        what: "field groups",
+        moves: "the group's existing rows to the new field name",
+        one: "field group",
+        oldOnly: [...new Set(pairs.map(p => p.from))],
+        newOnly: [...new Set(pairs.map(p => p.to))],
+      });
+    }
 
-    const from = oldOnly[0];
-    const to = newOnly[0];
+    const { from, to } = pairs[0];
     // The same rows under either name (`keepsFieldGroupRows`), which `migrate:create` asks too.
     if (!keepsFieldGroupRows(from, to)) return null;
     return { from, to };

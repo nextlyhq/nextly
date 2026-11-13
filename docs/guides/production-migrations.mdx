@@ -85,7 +85,10 @@ over.
   rename writes an `UPDATE` that moves those rows to the new name, for that collection, Single or
   field group only, and its reverse in the `DOWN`. Both run in the migration's transaction. A
   removed and an added field group are asked about only when they hold the same groups (in any
-  order) and are both repeatable or both not.
+  order) and are both repeatable or both not. A field group whose name is taken in the same
+  change by a different field (a field of another kind, such as the SEO plugin's `seo` group
+  added where your own `seo` field group was, or a field group holding other groups) counts as
+  removed, so its rename is still asked about.
 
 ```sql
 -- UP

@@ -50,14 +50,33 @@ export function removedAndAddedFields<T extends { name: string }>(
   };
 }
 
-/** The removed and the added field-group fields of a change (`removedAndAddedFields`). */
+/**
+ * The removed and the added field-group fields of a change.
+ *
+ * A name on both sides is the same field only when it still keeps the rows stored under it
+ * (`keepsFieldGroupRows`). Otherwise the field under that name was removed and a different one
+ * added: a field group whose name now holds a field of another kind (a site renaming its own `seo`
+ * field group while the SEO plugin adds its `seo` group to the same type), or one that now holds
+ * other groups or another cardinality. Compared by name alone, such a field group read as kept, so
+ * no detector offered its rename, and its rows stayed keyed by a name nothing reads any more. A
+ * same-name pair is never itself a rename: by construction it does not keep its rows.
+ */
 export function removedAndAddedFieldGroups<T extends RenamedFieldShape>(
   oldFields: readonly T[],
   newFields: readonly T[]
 ): { oldOnly: T[]; newOnly: T[] } {
-  return removedAndAddedFields(oldFields, newFields, f =>
-    isFieldGroupFieldType(f.type)
-  );
+  const oldByName = new Map(oldFields.map(f => [f.name, f]));
+  const newByName = new Map(newFields.map(f => [f.name, f]));
+  const kept = (from: T | undefined, to: T | undefined) =>
+    from !== undefined && to !== undefined && keepsFieldGroupRows(from, to);
+  return {
+    oldOnly: oldFields.filter(
+      f => isFieldGroupFieldType(f.type) && !kept(f, newByName.get(f.name))
+    ),
+    newOnly: newFields.filter(
+      f => isFieldGroupFieldType(f.type) && !kept(oldByName.get(f.name), f)
+    ),
+  };
 }
 
 /**
