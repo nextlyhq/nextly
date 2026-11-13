@@ -241,6 +241,8 @@ function renameStep(
 
   return {
     id: `${entry.kind}:${entry.from}->${entry.to}`,
+    // Its renames wait for a table another session is using, in tries for a busy table.
+    changesStructure: true,
     async run(session) {
       // Observed BEFORE the transaction opens. The observer reads through the
       // adapter, which takes its own connection; asking it from inside the
@@ -397,6 +399,8 @@ function columnStep(entry: ManifestEntry, context: StepContext): MigrationStep {
 
   return {
     id: `column:${table}.${entry.from}->${entry.to}`,
+    // Its rename waits for a table another session is using, in tries for a busy table.
+    changesStructure: true,
     async run(session) {
       if (applied) return;
       // Observed BEFORE the transaction, for the same reason the table path is:

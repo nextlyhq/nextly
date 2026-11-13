@@ -25,6 +25,10 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { MetaService } from "../../meta/services/meta-service";
+import {
+  busyTableBounds,
+  type BusyTableBounds,
+} from "../../schema/busy-table/bounds";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { withSchemaLock } from "../../schema/pipeline/schema-lock";
 import { readIdentifierCaseRules } from "../../schema/utils/read-identifier-case";
@@ -241,6 +245,16 @@ export interface RunMigrationArgs {
    * as every command-line run waits; a test shortens it.
    */
   lockWaitMs?: number;
+  /**
+   * How a writing run's renames wait for a table another database session is using: the bounds
+   * and where each try's notice goes. A step that stays busy past them stops the run with
+   * `NEXTLY_TABLE_BUSY`, and the next run resumes from it. Absent, from the environment
+   * (`NEXTLY_LOCK_TIMEOUT`, `NEXTLY_LOCK_TIMEOUT_TOTAL`) with each notice sent to `logger.warn`.
+   */
+  busyTable?: {
+    readonly bounds: BusyTableBounds;
+    readonly notify: (line: string) => void;
+  };
 }
 
 /**
@@ -281,6 +295,15 @@ export async function runFieldGroupMigration(
       },
     });
   }
+
+  // Read before anything else of the database, so a bound outside its range refuses the run
+  // before it has read a catalog or contended for the lock. A dry run sends no schema change.
+  const busyTable = dryRun
+    ? undefined
+    : (args.busyTable ?? {
+        bounds: busyTableBounds({ env: process.env }),
+        notify: (line: string) => logger.warn(line),
+      });
 
   const dialect: MigrationDialect = adapter.getCapabilities().dialect;
   // Read from the server, not derived from the dialect. MySQL folds table names
@@ -847,6 +870,15 @@ export async function runFieldGroupMigration(
         migrationId,
         steps,
         fromStep,
+        ...(busyTable === undefined
+          ? {}
+          : {
+              busyTable: {
+                ...busyTable,
+                adapter,
+                command: `nextly migrate:field-groups --apply (${direction})`,
+              },
+            }),
       });
 
       // The structural half of the question the settle steps ask about
