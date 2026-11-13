@@ -62,7 +62,8 @@ function confirmationOf(
 function renderDialogs(
   p: SchemaPreviewResponse | null,
   onConfirm = vi.fn(),
-  overrides: Partial<SchemaChangeConfirmation> = {}
+  overrides: Partial<SchemaChangeConfirmation> = {},
+  creating = false
 ) {
   const result = render(
     <BuilderSchemaChangeDialogs
@@ -70,6 +71,7 @@ function renderDialogs(
       kind="collection"
       entityName="posts"
       onConfirm={onConfirm}
+      creating={creating}
     />
   );
   return { ...result, onConfirm };
@@ -576,5 +578,56 @@ describe("a rename that keeps the rows but converts their values", () => {
       })
     );
     expect(screen.getByText(/data preserved/i)).toBeInTheDocument();
+  });
+
+  // Saving an entity not created yet is its create. Its review is built in the
+  // browser, not by the server, so it says what will be created and makes no
+  // claim that the change is safe.
+  it("says what saving a new entity creates, with no safety verdict", async () => {
+    const { onConfirm } = renderDialogs(
+      preview({
+        changes: {
+          added: [
+            {
+              name: "headline",
+              type: "text",
+              required: true,
+              hasDefault: false,
+              classification: "safe",
+            },
+          ],
+          removed: [],
+          changed: [],
+          unchanged: [],
+        },
+      }),
+      vi.fn(),
+      {},
+      true
+    );
+    const dialog = screen.getByRole("alertdialog");
+    expect(
+      within(dialog).getByRole("heading", {
+        name: "Create the collection posts?",
+      })
+    ).toBeInTheDocument();
+    expect(dialog).toHaveTextContent(
+      "The collection posts will be created with these fields."
+    );
+    expect(dialog).toHaveTextContent("headline");
+    expect(dialog).not.toHaveTextContent(/safe change/i);
+    expect(dialog).not.toHaveTextContent(/do not affect existing data/i);
+
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Create" })
+    );
+    expect(onConfirm).toHaveBeenCalledWith({}, []);
+  });
+
+  it("says a new entity with no fields is created with none", () => {
+    renderDialogs(preview(), vi.fn(), {}, true);
+    expect(screen.getByRole("alertdialog")).toHaveTextContent(
+      "The collection posts will be created, with no fields yet."
+    );
   });
 });

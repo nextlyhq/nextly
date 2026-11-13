@@ -31,6 +31,7 @@ export function createPreview(
       })),
       removed: [],
       changed: [],
+      unchanged: [],
     },
     warnings: [],
     interactiveFields: [],
