@@ -374,3 +374,56 @@ describe("canonicalIsOwn", () => {
     ).toBe(false);
   });
 });
+
+describe("a page robots.txt blocks", () => {
+  const blocked = { line: 3, rule: "Disallow: /blog" };
+
+  it("is a problem while a rule of the site's own keeps crawlers from it", () => {
+    const problems = pageProblems(facts({ robotsBlock: blocked }));
+    expect(problems).toEqual([
+      {
+        kind: "robotsBlocked",
+        subject: SUBJECT,
+        what: "Line 3 of your own robots.txt rules keeps crawlers away: Disallow: /blog",
+        action: "Change your own rules",
+        fix: { place: "settings", tab: "crawlers" },
+      },
+    ]);
+  });
+
+  it("is said of Nextly's own rule where that is the one blocking it", () => {
+    const problems = pageProblems(
+      facts({ robotsBlock: { rule: "Disallow: /admin$" } })
+    );
+    expect(problems[0]?.what).toBe(
+      "Nextly's own robots.txt rule keeps crawlers away: Disallow: /admin$"
+    );
+  });
+
+  it("is no problem on a page hidden from search, which robots.txt may block", () => {
+    const hidden = facts({
+      robotsBlock: blocked,
+      answer: {
+        ...facts().answer,
+        robots: { value: { index: false, follow: true }, from: "page" },
+      },
+    });
+    expect(kinds(pageProblems(hidden))).toEqual([]);
+  });
+});
+
+describe("a page robots.txt blocks, whose canonical names another address", () => {
+  it("is no sitemap conflict, since the sitemap leaves such a page out", () => {
+    const problems = pageProblems(
+      facts({
+        robotsBlock: { line: 3, rule: "Disallow: /blog" },
+        canonicalIsOwn: false,
+        answer: {
+          ...facts().answer,
+          canonical: { value: "/original", from: "address" },
+        },
+      })
+    );
+    expect(kinds(problems)).not.toContain("robotsBlocked");
+  });
+});
