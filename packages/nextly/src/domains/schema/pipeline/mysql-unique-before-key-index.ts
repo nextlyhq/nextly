@@ -31,15 +31,17 @@ function droppedIndex(
   return alter ? { index: alter[2], table: alter[1] } : undefined;
 }
 
-/** `CREATE UNIQUE INDEX \`u\` ON \`t\` (\`c\`, ...)`: its table and leading column. */
+/** `CREATE UNIQUE INDEX \`u\` ON \`t\` (\`c\`, ...)`: its name, table and leading column. */
 function createdUnique(
   statement: string
-): { table: string; column: string } | undefined {
+): { index: string; table: string; column: string } | undefined {
   const create =
-    /^\s*CREATE\s+UNIQUE\s+INDEX\s+`[^`]+`\s+ON\s+`([^`]+)`\s*\(\s*`([^`]+)`/i.exec(
+    /^\s*CREATE\s+UNIQUE\s+INDEX\s+`([^`]+)`\s+ON\s+`([^`]+)`\s*\(\s*`([^`]+)`/i.exec(
       statement
     );
-  return create ? { table: create[1], column: create[2] } : undefined;
+  return create
+    ? { index: create[1], table: create[2], column: create[3] }
+    : undefined;
 }
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -65,10 +67,12 @@ export function uniqueCreatedBeforeKeyIndexDrop(
     const later = ordered.findIndex((statement, i) => {
       if (i <= at) return false;
       const create = createdUnique(statement);
+      // A unique index under the plain one's own name cannot be made before it goes.
       return (
         create !== undefined &&
         same(create.table, drop.table) &&
-        same(create.column, column)
+        same(create.column, column) &&
+        !same(create.index, drop.index)
       );
     });
     if (later === -1) continue;
@@ -99,7 +103,8 @@ function keyIndex(
 /**
  * The index drops among `ops` that wait for the unique index replacing them: on MySQL, a plain
  * index led by a column a foreign key of the live table uses, where `ops` also adds a unique index
- * led by that column on the same table.
+ * led by that column on the same table, under another name: one under the plain index's own
+ * name cannot be made before that index goes, so its drop is left where it was.
  */
 export function keyIndexDropsHeldForUnique(
   ops: readonly Operation[],
@@ -116,6 +121,7 @@ export function keyIndexDropsHeldForUnique(
         add =>
           add.type === "add_index" &&
           add.index.unique &&
+          !same(add.index.name, op.index.name) &&
           same(add.tableName, op.tableName) &&
           add.index.columns[0] !== undefined &&
           same(add.index.columns[0], column)

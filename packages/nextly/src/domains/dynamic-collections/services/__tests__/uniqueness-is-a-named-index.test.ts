@@ -95,6 +95,54 @@ describe("a field declared unique", () => {
   );
 });
 
+describe("turning a field's Unique mark off", () => {
+  it.each(DIALECTS)(
+    "drops the index it had by its name while the live table does not show it yet, on %s",
+    dialect => {
+      // Outside development a save queues its file without running it: Unique turned on and then
+      // off before either file runs reads a live table without the index, and the second file
+      // must still drop what the first creates.
+      const service = new DynamicCollectionSchemaService(undefined, dialect);
+      const sql = service.generateAlterTableMigration(
+        "dc_widgets",
+        [
+          { name: "sku", type: "text", unique: true },
+        ] as unknown as FieldDefinition[],
+        [{ name: "sku", type: "text" }] as unknown as FieldDefinition[],
+        { uniqueColumns: new Map(), indexNames: new Set() }
+      );
+      expect(sql).toContain("uq_dc_widgets_sku");
+    }
+  );
+
+  it.each(DIALECTS)(
+    "drops nothing for an earlier one-to-one the live table shows without one, on %s",
+    dialect => {
+      // An earlier release made a one-to-one without any unique index: the live table decides.
+      const service = new DynamicCollectionSchemaService(undefined, dialect);
+      const sql = service.generateAlterTableMigration(
+        "dc_widgets",
+        [
+          {
+            name: "profile",
+            type: "relationship",
+            options: { target: "profiles", relationType: "oneToOne" },
+          },
+        ] as unknown as FieldDefinition[],
+        [
+          {
+            name: "profile",
+            type: "relationship",
+            options: { target: "profiles", relationType: "manyToOne" },
+          },
+        ] as unknown as FieldDefinition[],
+        { uniqueColumns: new Map(), indexNames: new Set() }
+      );
+      expect(sql).not.toContain("uq_dc_widgets_profile");
+    }
+  );
+});
+
 describe("a one-to-one relationship", () => {
   const oneToOne = [
     {
