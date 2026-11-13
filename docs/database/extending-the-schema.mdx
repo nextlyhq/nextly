@@ -588,6 +588,8 @@ how one of those columns is stored, within what the field holds, with
 import { defineConfig } from "nextly";
 import { col } from "nextly/schema-extension";
 
+import { posts } from "./collections/posts";
+
 export default defineConfig({
   collections: [posts],
   db: {
