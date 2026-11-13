@@ -306,39 +306,28 @@ function stillLiveIssues(judged: Judged): Issue[] {
 }
 
 /**
- * The value rules of each language going live: a chosen one, or, for every language, each stored
- * one. A language already live does not go live again.
+ * The value rules of each language going live: each one of `locales`, or, for every language,
+ * each stored one. A language already live does not go live again.
  */
-function goingLiveIssues(judged: Judged): Issue[] {
-  if (judged.direction !== "publish") return [];
-  const { state } = judged.reads;
-  return judged.chosen.flatMap(locale => {
+function valueIssues(
+  state: PartsState,
+  locales: readonly string[] | "all"
+): Issue[] {
+  const every = locales === "all";
+  return (every ? state.configured : locales).flatMap(locale => {
     const stored = state.languages.get(locale);
     if (stored?.live) return [];
-    if (judged.everyLanguage && stored === undefined) return [];
+    if (every && stored === undefined) return [];
     return ownValueIssues(state, locale);
   });
 }
 
-/**
- * A publish that leaves the shared part as it is, of a language whose pending change also edits
- * shared fields: publishing that change would put its shared edits live, so the caller is told to
- * publish the shared part with it. Nothing of the change is lost.
- */
-function sharedEditIssues(judged: Judged): Issue[] {
-  if (judged.direction !== "publish" || judged.sharedPart) return [];
-  return judged.chosen.flatMap((locale): Issue[] => {
-    const edits = judged.reads.state.languages.get(locale)?.pendingSharedEdits;
-    if (edits === undefined || edits.length === 0) return [];
-    return [
-      {
-        path: edits.join(", "),
-        code: "SHARED_EDITS_PENDING",
-        locale,
-        message: `${namedLanguage(locale)}'s pending change also edits ${edits.join(", ")}, which every language shares: publish the shared part with it (\`shared: true\`).`,
-      },
-    ];
-  });
+function goingLiveIssues(judged: Judged): Issue[] {
+  if (judged.direction !== "publish") return [];
+  return valueIssues(
+    judged.reads.state,
+    judged.everyLanguage ? "all" : judged.chosen
+  );
 }
 
 /** Every refusal the request meets before anything is written. */
@@ -367,6 +356,22 @@ function refused(issues: Issue[]): CollectionServiceResult {
     message: issues.map(issue => issue.message).join(" "),
     data: null,
   };
+}
+
+/**
+ * Why the value rules refuse putting `locales` live (each one, or every stored language for
+ * `"all"`): a unique translated field, or under `requireEveryLanguage` a required one, with no
+ * value of its own. Null where nothing refuses. The judgement a publish of chosen parts makes,
+ * for the other ways a language is published to ask too.
+ *
+ * @experimental
+ */
+export function publishValueRefusal(
+  state: PartsState,
+  locales: readonly string[] | "all"
+): CollectionServiceResult | null {
+  const issues = valueIssues(state, locales);
+  return issues.length > 0 ? refused(issues) : null;
 }
 
 /** The issues a preview's blockers stand for: what the publish it previews would refuse. */

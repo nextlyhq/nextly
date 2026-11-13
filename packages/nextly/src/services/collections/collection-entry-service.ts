@@ -51,10 +51,12 @@ import type {
 import { publishGate } from "../../domains/collections/services/publish-gate";
 import {
   publishParts,
+  publishValueRefusal,
   type PublishPartsRequest,
 } from "../../domains/collections/services/publish-parts";
 import type { DynamicCollectionService } from "../../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
+import { EVERY_LOCALE } from "../../domains/i18n/locale-selector";
 import {
   type LocalizationSource,
   localizationNow,
@@ -924,6 +926,18 @@ export class CollectionEntryService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ) {
+    // A save that publishes is judged by the value rules a publish of chosen languages applies,
+    // with the save's own values counted in the language it writes: they go live with it.
+    if (body.status === "published") {
+      const refusal = await this.valueRuleRefusal(
+        params,
+        params.locale === EVERY_LOCALE
+          ? "all"
+          : [params.locale ?? this.localization?.defaultLocale ?? ""],
+        params.locale === EVERY_LOCALE ? undefined : body
+      );
+      if (refusal) return refusal;
+    }
     const result = await withRuleLanguage(
       writeLanguagesFor(this.localization, params.locale),
       () => this.mutationService.updateEntry(params, body, depth)
@@ -932,14 +946,65 @@ export class CollectionEntryService extends BaseService {
     return result;
   }
 
-  /** i18n M7: publish every language of an entry at once (spec §10). */
+  /**
+   * i18n M7: publish every language of an entry at once (spec §10). Refused first where a
+   * language going live breaks a value rule a publish of chosen languages applies, so the two
+   * ways of publishing every language agree.
+   */
   async publishAllLocales(params: EveryLanguageLifecycleParams) {
+    const refusal = await this.valueRuleRefusal(params, "all");
+    if (refusal) return refusal;
+    return this.transitionEveryLanguage(params);
+  }
+
+  /** The transition of every language (or of `params.parts`), judged by its own rules alone. */
+  private async transitionEveryLanguage(params: EveryLanguageLifecycleParams) {
     const result = await withRuleLanguage(
       everyLanguageOf(this.localization),
       () => this.mutationService.publishAllLocales(params)
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
+  }
+
+  /**
+   * Why the value rules refuse putting `locales` of an entry live, or null: read as a publish of
+   * chosen parts reads the entry, with `written`'s translated values laid over the one language
+   * written, since a save that publishes puts them live. Null too where the entry cannot be read:
+   * the write itself answers that.
+   */
+  private async valueRuleRefusal(
+    params: Pick<
+      EveryLanguageLifecycleParams,
+      "collectionName" | "entryId" | "user" | "overrideAccess"
+    >,
+    locales: readonly string[] | "all",
+    written?: Readonly<Record<string, unknown>>
+  ): Promise<CollectionServiceResult | null> {
+    const read = await this.mutationService.publishPartsReads(params, {
+      action: "publish",
+      locales: [],
+      shared: false,
+    });
+    if ("answer" in read) return null;
+    const { state } = read;
+    if (written === undefined || locales === "all") {
+      return publishValueRefusal(state, locales);
+    }
+    const languages = new Map(state.languages);
+    for (const locale of locales) {
+      const stored = languages.get(locale);
+      const own = Object.fromEntries(
+        state.fields
+          .filter(field => field.translatable && field.name in written)
+          .map(field => [field.name, written[field.name]])
+      );
+      languages.set(locale, {
+        live: stored?.live ?? false,
+        values: { ...stored?.values, ...own },
+      });
+    }
+    return publishValueRefusal({ ...state, languages }, locales);
   }
 
   /**
@@ -979,8 +1044,9 @@ export class CollectionEntryService extends BaseService {
       move: (direction, parts, describe) => {
         const scoped = parts === undefined ? params : { ...params, parts };
         if (describe) return this.previewPublishAllLocales(scoped);
+        // The value rules were judged above, with the rest of the request.
         return direction === "publish"
-          ? this.publishAllLocales(scoped)
+          ? this.transitionEveryLanguage(scoped)
           : this.unpublishAllLocales(scoped);
       },
     });

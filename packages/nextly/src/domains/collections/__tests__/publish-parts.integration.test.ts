@@ -419,6 +419,50 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
     expect(after?.tagline).toBe("Changed");
   });
 
+  // Every way of publishing a language applies the same value rules: publishing every language
+  // through its own door, and a save that carries a published status.
+  it("applies requireEveryLanguage to publishing every language and to a save that publishes", async () => {
+    await boot(posts({ requireEveryLanguage: true }));
+    // Spanish has a row of its own, and its required title is empty.
+    const id = await entry({ es: { title: "" } });
+    const before = await states(id);
+    const handler = t!.getService("collectionsHandler") as unknown as {
+      publishAllLocales(params: Record<string, unknown>): Promise<{
+        success: boolean;
+        message?: string;
+      }>;
+    };
+
+    const everyLanguage = await handler.publishAllLocales({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: true,
+      data: { _overwrite: true },
+    });
+    const saved = await refusalOf(
+      t!.nextly.update({
+        collection: "posts",
+        id,
+        locale: "es",
+        data: { status: "published", _overwrite: true },
+      })
+    );
+
+    expect(everyLanguage.success).toBe(false);
+    expect(everyLanguage.message).toMatch(/title/);
+    expect(saved).toMatch(/REQUIRED_IN_LANGUAGE/);
+    expect(await states(id)).toEqual(before);
+
+    // The save's own value counts: with a title, Spanish publishes.
+    await t!.nextly.update({
+      collection: "posts",
+      id,
+      locale: "es",
+      data: { title: "Hola", status: "published", _overwrite: true },
+    });
+    expect((await states(id)).es).toBe("published");
+  });
+
   /** A gate holding back the parts `held` names: a language code, or "shared". */
   function holdBack(held: readonly string[]): void {
     container.registerSingleton<PublishGate>("publishGate", () => ({
