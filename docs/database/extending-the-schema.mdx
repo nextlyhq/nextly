@@ -551,7 +551,15 @@ export default definePlugin({
   nextly: ">=0.0.2-alpha.67",
   contributes: {
     schema: {
-      extend: [({ schema }) => schema.extendTable("dc_posts", { columns })],
+      extend: [
+        ({ schema }) => {
+          // Absent when the plugin's own modules are generated, since the
+          // app's migrations carry this column.
+          if (schema.getTable("dc_posts")) {
+            schema.extendTable("dc_posts", { columns });
+          }
+        },
+      ],
     },
   },
   async init(ctx) {
@@ -563,6 +571,17 @@ export default definePlugin({
   },
 });
 ```
+
+The column has to exist before the call. On a collection's, Single's or field
+group's table, development push adds it; in production, and on an extendable
+core table everywhere, it arrives with the app's migrations (`nextly
+migrate:create`, then `nextly migrate`), and until then the call refuses,
+naming the column (`PLUGIN_COLUMN_NOT_MIGRATED`). The hook checks `schema.getTable` first because
+`nextly migrate:create --plugin` compiles the plugin's own modules without the
+app's tables (see [Hooks](/docs/plugins/schema#hooks-when-a-declaration-is-not-enough)).
+A full plugin uninstall leaves such a column in place, since the app's
+migrations made it; once the plugin is removed from the config, the app's next
+`nextly migrate:create` drops it, asking for the data-loss consent.
 
 It reaches the row's id and the columns the CALLER contributed, and nothing
 else: naming the table's own columns, or a column another plugin contributed,
@@ -738,3 +757,11 @@ failing inside the query; `col.ref()` alone records a reference for documentatio
 `decimal(p, s)` is planned as a change of the column's type, where the dialect
 stores the size; a narrowing fails on rows whose values no longer fit, so check
 the data first.
+
+A table you declare owns its constraints as well as its columns and indexes. A
+check or foreign key added to it any other way, by hand or by a migration file
+of your own, is drift: development push drops it, and a plugin's next generated
+module does not know it. Declare it with `defineTable`'s `checks` and
+`foreignKeys` (or, for the app, an `afterDrizzle` hook) to keep it. A
+collection's, Single's, field group's or core table is different: a constraint
+it does not declare is left in place.

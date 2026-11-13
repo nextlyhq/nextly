@@ -35,7 +35,11 @@ import {
 export type ExtensionSchemaRecord = Pick<
   ExtensionSchema,
   "specs" | "owners" | "entityColumns" | "entityIndexes" | "elementOwners"
->;
+> &
+  // The relation edges and the tables declaring them, for an uninstall
+  // asking who queries through the plugin's tables. Optional: a record read
+  // where relations are not asked about need not carry them.
+  Partial<Pick<ExtensionSchema, "relations" | "adoptedRelations" | "tables">>;
 
 /** The kinds of element another owner can add to a table. */
 export type DependentElementKind = "column" | "index" | "fk" | "check";

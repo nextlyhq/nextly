@@ -51,6 +51,11 @@ import {
   filesWithinStep,
   stepContinuedNotice,
 } from "../../domains/i18n/migration/step-windows";
+import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
+import {
+  runUnitInTries,
+  type BusyTableRun,
+} from "../../domains/schema/busy-table/run-unit";
 import { isPluginLedgerRow } from "../../domains/schema/events/ledger-scope";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import {
@@ -62,7 +67,10 @@ import {
   SchemaEventsRepository,
   type SchemaEventRow,
 } from "../../domains/schema/events/schema-events-repository";
-import type { ExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
+import type {
+  ExtensionSchema,
+  ServerConstructCapabilities,
+} from "../../domains/schema/extension/build-extension-schema";
 import { overriddenColumns } from "../../domains/schema/extension/entity-contributions";
 import { compileExtensionSchema } from "../../domains/schema/extension/publish";
 import {
@@ -168,6 +176,10 @@ import {
   refuseRequiredColumnsOverNulls,
 } from "../../domains/schema/migrate/required-column-guard";
 import { resolveDeclaredSchema } from "../../domains/schema/migrate/resolved-schema";
+import {
+  constructsAdded,
+  refuseUnitTheServerCannotHold,
+} from "../../domains/schema/migrate/server-constructs";
 import {
   assertRunnableStatements,
   marksNoTransaction,
@@ -298,6 +310,15 @@ export interface MigrateCommandOptions {
   forceUnlock?: boolean;
 
   /**
+   * One try's bound for a busy table, in whole seconds, as typed (`--lock-timeout`); checked with
+   * the total before anything changes (`busyTableBounds`).
+   */
+  lockTimeout?: string;
+
+  /** Every try's bound together, in whole seconds, as typed (`--lock-timeout-total`). */
+  lockTimeoutTotal?: string;
+
+  /**
    * Copy existing content into the translation tables of localized entities that carry no record
    * of ever having transitioned.
    *
@@ -388,6 +409,28 @@ interface ParsedMigration {
   transaction: boolean;
 }
 
+/** The busy-table bounds a run's options and the environment give (`busyTableBounds`). */
+function busyTableBoundsOf(
+  options: Pick<MigrateCommandOptions, "lockTimeout" | "lockTimeoutTotal">
+): ReturnType<typeof busyTableBounds> {
+  return busyTableBounds({
+    flags: {
+      lockTimeout: options.lockTimeout,
+      lockTimeoutTotal: options.lockTimeoutTotal,
+    },
+    env: process.env,
+  });
+}
+
+/** `read`'s value, or the run ended through `fail` with what it threw. */
+function orFail<T>(read: () => T, fail: (error: unknown) => never): T {
+  try {
+    return read();
+  } catch (error) {
+    return fail(error);
+  }
+}
+
 /**
  * Execute the migrate command
  *
@@ -413,6 +456,10 @@ export async function runMigrate(
     if (options.throwOnFailure === true) throw error;
     return exitWithError(logger, error, status);
   };
+
+  // The busy-table bounds are checked first, so a value outside its range is refused before
+  // anything is read or changed.
+  const bounds = orFail(() => busyTableBoundsOf(options), fail);
 
   logger.debug("Validating database environment...");
   let dbValidation: ReturnType<typeof databaseEnvOrThrow>;
@@ -507,6 +554,20 @@ export async function runMigrate(
       },
     });
 
+    const serverConstructs = (
+      adapter as unknown as DrizzleAdapter
+    ).getCapabilities();
+    const extensionSchema = await compileExtensionSchema({
+      dialect,
+      plugins: configResult.config.plugins ?? [],
+      config: configResult.config,
+      // The connected server's limits: a declared check it will not enforce
+      // or an expression index it cannot build is refused at the compile,
+      // before any migration applies it.
+      server: serverConstructs,
+      logger: { warn: m => logger.warn(m) },
+    });
+
     if (options.dryRun) {
       await previewMigrate({
         adapter,
@@ -517,6 +578,8 @@ export async function runMigrate(
         plugins: configResult.config.plugins ?? [],
         step: options.step,
         logger,
+        serverConstructs,
+        extensionSchema,
       });
       logger.success("Dry run complete (no changes made).");
       return;
@@ -555,12 +618,6 @@ export async function runMigrate(
     // extraneous table) and BEFORE the event is recorded; idempotent. A thrown
     // error here maps to a non-zero CLI exit (the core itself never exits).
     try {
-      const extensionSchema = await compileExtensionSchema({
-        dialect,
-        plugins: configResult.config.plugins ?? [],
-        config: configResult.config,
-        logger: { warn: m => logger.warn(m) },
-      });
       const { applied, pluginModulesApplied, metadata } = await migrateCore({
         extensionSchema,
         dialect,
@@ -574,6 +631,12 @@ export async function runMigrate(
         // run does not put unmigrated edits back to the snapshot. Everywhere
         // else the rows are brought to the newest applied snapshot.
         registryRows: configWatchAllowed() ? "insert-missing" : "write",
+        // An app file or a plugin module waits for a busy table in tries; each try's notice goes
+        // to standard error, so a run with --json keeps one document on standard output.
+        busyTable: {
+          bounds,
+          notify: line => process.stderr.write(`${line}\n`),
+        },
         // A run that finds the schema lock held waits about a minute for it, then stops naming
         // what holds it.
         lockMode: "wait",
@@ -952,6 +1015,13 @@ export interface MigrateCoreDeps {
    * stops naming the holder; `fail-fast` stops at once.
    */
   lockMode?: "fail-fast" | "wait";
+  /**
+   * How an app file's or a plugin module's statements wait for a busy table: the bounds, and
+   * where each try's notice goes. The plugin phase reads it from the same deps, so the boot and
+   * `nextly migrate` give both streams one bound. Absent, a unit runs in one try with no bound of
+   * its own, as before.
+   */
+  busyTable?: Omit<BusyTableRun, "appliedBefore">;
   /** The schema lock's lease, in seconds (`db.migrateLockTtlSeconds`). */
   ttlSeconds?: number;
   /** How long `wait` waits for a held lock, in milliseconds. Default about a minute. */
@@ -1148,8 +1218,15 @@ export async function previewMigrate(args: {
   logger: CommandContext["logger"];
   /** As `MigrateCoreDeps.readEventTriggersFn`. */
   readEventTriggers?: () => Promise<readonly string[]>;
+  /** Connected server capabilities, judged identically to execution. */
+  serverConstructs?: ServerConstructCapabilities;
+  /** The compiled schema, whose plugin prefixes a real run checks first. */
+  extensionSchema?: Pick<ExtensionSchema, "pluginPrefixes"> | undefined;
 }): Promise<void> {
   const { adapter, db, dialect, logger } = args;
+  // Refused as a real run refuses, before anything is listed: a plugin whose
+  // prefix moved since its tables were created (`assertPluginPrefixesHold`).
+  await assertPluginPrefixesHold(args);
   const hasLedger = await (
     adapter as unknown as { tableExists: (n: string) => Promise<boolean> }
   ).tableExists("nextly_schema_events");
@@ -1164,28 +1241,38 @@ export async function previewMigrate(args: {
     rows,
     declaredPlugins,
     limit: args.step,
+    serverConstructs: args.serverConstructs,
+    existingTables: async () => new Set(await safeListTables(adapter)),
   });
   const pendingModules = modules.filter(module => !module.recorded);
 
   const appStep = appStepAfter(args.step, pendingModules.length);
   // The files a real run with this step applies, a move out of translation run whole included.
-  const pendingFiles =
+  const listed =
     appStep === 0
       ? []
-      : filesWithinStep(
-          (
-            await listMigrationFiles(
-              adapter,
-              db,
-              dialect,
-              args.migrationsDir,
-              logger,
-              args.declared
-            )
-          ).map(({ file, applied }) => ({ file, done: applied })),
-          appStep,
-          "up"
-        ).run;
+      : (
+          await listMigrationFiles(
+            adapter,
+            db,
+            dialect,
+            args.migrationsDir,
+            logger,
+            args.declared
+          )
+        ).map(({ file, applied }) => ({ file, done: applied }));
+  const pendingFiles =
+    appStep === 0 ? [] : filesWithinStep(listed, appStep, "up").run;
+
+  if (args.serverConstructs !== undefined) {
+    await refusePendingFilesTheServerCannotHold({
+      files: listed,
+      pending: new Set(pendingFiles),
+      metaDir: resolve(args.migrationsDir, "meta"),
+      dialect,
+      server: args.serverConstructs,
+    });
+  }
 
   logger.newline();
   logger.keyValue(
@@ -1475,6 +1562,16 @@ export async function maybeForceUnlock(
   await forceUnlock(db, dialect);
 }
 
+/** A run's busy-table bounds, naming `applied` as the files before each one; none without bounds. */
+function withAppliedBefore(
+  busyTable: Omit<BusyTableRun, "appliedBefore"> | undefined,
+  applied: readonly string[]
+): BusyTableRun | undefined {
+  return busyTable === undefined
+    ? undefined
+    : { ...busyTable, appliedBefore: () => [...applied] };
+}
+
 /**
  * One SQL executor for every phase: split, run as the unit is marked to —
  * in one transaction unless it is marked to run outside one — and count.
@@ -1488,7 +1585,8 @@ export async function maybeForceUnlock(
 function buildSqlExecutor(
   dz: DrizzleAdapter,
   dialect: SupportedDialect,
-  logger: CommandContext["logger"]
+  logger: CommandContext["logger"],
+  busyTable?: BusyTableRun
 ): (
   sqlText: string,
   unit: MigrationUnit,
@@ -1496,12 +1594,11 @@ function buildSqlExecutor(
 ) => Promise<number> {
   return async (sqlText, unit, after) => {
     if (!unit.transaction) logger.warn(outsideTransactionNotice(unit.source));
-    return runMigrationStatements(
-      dz,
-      splitSqlStatements(sqlText, dialect, unit),
-      unit,
-      after
-    );
+    const statements = splitSqlStatements(sqlText, dialect, unit);
+    // With bounds, a unit waits for a busy table in tries (`runUnitInTries`); without, in one.
+    return busyTable === undefined
+      ? runMigrationStatements(dz, statements, unit, after)
+      : runUnitInTries(dz, statements, unit, after, busyTable);
   };
 }
 
@@ -1736,6 +1833,31 @@ async function appliedPluginModules(
 }
 
 /**
+ * Refuse a plugin whose schema prefix differs from the one its recorded
+ * tables were created under (`plugin-prefix-check.ts`), before anything in
+ * the run is planned or applied: its modules would create its tables again
+ * under the new names, beside the old ones and their rows.
+ */
+async function assertPluginPrefixesHold(deps: {
+  extensionSchema?: Pick<ExtensionSchema, "pluginPrefixes"> | undefined;
+  db: unknown;
+  dialect: SupportedDialect;
+  adapter: unknown;
+}): Promise<void> {
+  // Dynamic, as the owner repository is everywhere in this file: it sits on
+  // cycles that close through this command.
+  const { assertPluginPrefixesKeptIn } = await import(
+    "../../domains/schema/ownership/plugin-prefix-check"
+  );
+  await assertPluginPrefixesKeptIn({
+    prefixes: deps.extensionSchema?.pluginPrefixes,
+    db: deps.db,
+    dialect: deps.dialect,
+    adapter: deps.adapter,
+  });
+}
+
+/**
  * Phase 1.5 — plugin migration modules, between core and the app's files,
  * under the caller's lock. Plugins run first because an app migration may
  * index an entity table a plugin contributes. The first failure propagates
@@ -1748,6 +1870,9 @@ export async function runPluginPhase(
   if (!deps.pluginMigrationSets || deps.pluginMigrationSets.length === 0) {
     return { applied: 0, adopted: 0, skipped: 0 };
   }
+  // Asked here as well as by `migrateCore`: `nextly plugins install` runs
+  // this phase alone.
+  await assertPluginPrefixesHold(deps);
   deps.logger.info("Phase 1.5: applying plugin migrations...");
   const dz = deps.adapter as unknown as DrizzleAdapter;
   const eventsRepo = new SchemaEventsRepository(deps.db, deps.dialect);
@@ -1782,10 +1907,38 @@ export async function runPluginPhase(
     // decide the other's stream.
     elementStream.set(ownerRecordKey(record), record.migratedBy);
   }
+  // The modules this run ran, named by a busy table's report as the changes before the one that
+  // stopped. A module waits for a busy table in tries as an app file does (`runUnitInTries`), its
+  // ledger and owner rows written in `after` with its statements.
+  const appliedModules: string[] = [];
+  const executeModule = buildSqlExecutor(
+    dz,
+    deps.dialect,
+    deps.logger,
+    withAppliedBefore(deps.busyTable, appliedModules)
+  );
+  const pluginExecuteSql: typeof executeModule = async (
+    sqlText,
+    unit,
+    after
+  ) => {
+    const ran = await executeModule(sqlText, unit, after);
+    // An adoption runs no statements and records a run of modules under its first one's name,
+    // so only a module whose statements ran is named.
+    if (sqlText.trim() !== "") appliedModules.push(unit.source);
+    return ran;
+  };
   const pluginOutcome = await runPluginMigrations(deps.pluginMigrationSets, {
     dialect: deps.dialect,
     appliedShas,
     declaredPlugins: deps.declaredPlugins,
+    // The server about to run the modules judges their snapshots: a check it
+    // ignores or an expression index it cannot build is refused before any
+    // module applies one.
+    serverConstructs: dz.getCapabilities(),
+    // A key may reach a table the database already holds: an installed
+    // dependency's, an adopted one.
+    existingTables: async () => new Set(await safeListTables(deps.adapter)),
     // `--step` counts plugin modules first, as they run first; see
     // `appStepAfter` for the app files' share.
     limit: deps.step,
@@ -1859,7 +2012,7 @@ export async function runPluginPhase(
       }
       return live;
     },
-    executeSql: buildSqlExecutor(dz, deps.dialect, deps.logger),
+    executeSql: pluginExecuteSql,
     repo: eventsRepo,
     recordOwner: async ({
       pluginName,
@@ -2142,6 +2295,7 @@ async function runMigrationStreams(
     ...(deps.collectionSources === undefined
       ? {}
       : { collectionSources: deps.collectionSources }),
+    ...(deps.busyTable === undefined ? {} : { busyTable: deps.busyTable }),
     columnOverrides: overriddenColumns(deps.extensionSchema),
   });
   return { pluginModulesApplied, applied };
@@ -2171,6 +2325,9 @@ export async function migrateCore(
   // The history checks that need no database, before the lock is waited on:
   // a list edited by hand is refused with nothing changed.
   assertPluginListsSound(deps.pluginMigrationSets ?? []);
+  // A plugin whose prefix moved since its tables were created, before the
+  // lock and before any stream plans its tables under the new names.
+  await assertPluginPrefixesHold(deps);
   // The ledger's old Builder marks in the declared names every reader below
   // reads the folder through: the command and the boot alike hand only what
   // is declared. Read again under the lock.
@@ -3705,6 +3862,41 @@ async function safeListTables(adapter: CLIDatabaseAdapter): Promise<string[]> {
 }
 
 /** Load a migration's paired target snapshot, or null if absent. */
+/**
+ * Refuse, in a dry run as the run would, a pending app file that adds what the
+ * server cannot hold: each file judged on what its snapshot adds over the one
+ * before it — an applied file's, or a pending file's ahead of it — and on its
+ * statements (`server-constructs.ts`).
+ */
+async function refusePendingFilesTheServerCannotHold(args: {
+  files: readonly { file: ParsedMigration; done: boolean }[];
+  pending: ReadonlySet<ParsedMigration>;
+  metaDir: string;
+  dialect: SupportedDialect;
+  server: ServerConstructCapabilities;
+}): Promise<void> {
+  let before: NextlySchemaSnapshot = EMPTY_SNAPSHOT;
+  for (const { file } of args.files) {
+    const targetFile = await loadTargetSnapshot(args.metaDir, file.name);
+    if (args.pending.has(file)) {
+      refuseUnitTheServerCannotHold({
+        source: `${file.name}.sql`,
+        dialect: args.dialect,
+        server: args.server,
+        statements: splitSqlStatements(file.upSql, args.dialect, file),
+        added: targetFile
+          ? constructsAdded(
+              before.tables,
+              targetFile.snapshot.tables,
+              targetFile.contributions ?? {}
+            )
+          : [],
+      });
+    }
+    if (targetFile) before = targetFile.snapshot;
+  }
+}
+
 async function loadTargetSnapshot(
   metaDir: string,
   name: string
@@ -3941,6 +4133,8 @@ export async function runFileMigrations(args: {
    * creates with itself is that plugin's (`RegistryWriteDeps.collectionSources`).
    */
   collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
+  /** See `MigrateCoreDeps.busyTable`. */
+  busyTable?: Omit<BusyTableRun, "appliedBefore">;
   /**
    * The columns whose storage the app overrides (`overriddenColumns`): the
    * one in-place change to another owner's column its files may make.
@@ -3970,7 +4164,15 @@ export async function runFileMigrations(args: {
   const metaDir = resolve(migrationsDir, "meta");
 
   const dz = adapter as unknown as DrizzleAdapter;
-  const executeSql = buildSqlExecutor(dz, dialect, logger);
+  // The files this run applied, named by a busy table's report as the changes before the one
+  // that stopped.
+  const appliedFiles: string[] = [];
+  const executeSql = buildSqlExecutor(
+    dz,
+    dialect,
+    logger,
+    withAppliedBefore(args.busyTable, appliedFiles)
+  );
 
   // Owner rows for the drop guard: an app file dropping a plugin-migrated
   // table is refused whole, before its first statement. Read once; an absent
@@ -4037,6 +4239,21 @@ export async function runFileMigrations(args: {
       // identically with or without a paired snapshot, before the ledger
       // records an attempt.
       const upStatements = splitSqlStatements(m.upSql, dialect, m);
+      // What the file adds that this server cannot hold, judged with or
+      // without a paired snapshot (`server-constructs.ts`).
+      refuseUnitTheServerCannotHold({
+        source: filename,
+        dialect,
+        server: (adapter as unknown as DrizzleAdapter).getCapabilities(),
+        statements: upStatements,
+        added: target
+          ? constructsAdded(
+              before.tables,
+              target.tables,
+              targetFile?.contributions ?? {}
+            )
+          : [],
+      });
       assertNoForeignDrops({
         statements: upStatements,
         stream: "app",
@@ -4131,6 +4348,7 @@ export async function runFileMigrations(args: {
         }
         applied++;
         lastApplied = filename;
+        appliedFiles.push(filename);
         running = undefined;
         logger.success(`Applied ${filename}`);
         previous = m.name;
@@ -4207,6 +4425,7 @@ export async function runFileMigrations(args: {
       });
       applied++;
       lastApplied = filename;
+      appliedFiles.push(filename);
       running = undefined;
       logger.success(`Applied ${filename}`);
       // Once the file is recorded applied, so what its snapshot no longer declares leaves with it.

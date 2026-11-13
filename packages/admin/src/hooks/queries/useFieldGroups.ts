@@ -35,7 +35,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import {
   fieldGroupApi,
   type CreateComponentPayload,

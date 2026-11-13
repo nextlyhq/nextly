@@ -30,7 +30,7 @@ import { nextlyI18nArchiveTables } from "../../../schemas/nextly-i18n-archive";
 import { affectedRowCount } from "../../auth/services/auth-service";
 
 import { q } from "./ddl-types";
-import { ensureI18nArchive } from "./ensure-archive";
+import { ensureI18nArchive, runI18nSchemaStatements } from "./ensure-archive";
 import { labelLegacyArchiveRows } from "./label-legacy-archive-rows";
 import type { I18nTransitionKind } from "./transition-state";
 
@@ -131,7 +131,14 @@ export async function teardownEntityI18n(
       adapter.dialect === "postgresql"
         ? `DROP TABLE IF EXISTS ${quoted} CASCADE`
         : `DROP TABLE IF EXISTS ${quoted}`;
-    await adapter.executeQuery(dropSql);
+    // Waits for a companion another database session holds in short tries, then stops with
+    // `NEXTLY_TABLE_BUSY` naming it and its holder, rather than holding the delete without bound.
+    await runI18nSchemaStatements(
+      adapter,
+      [dropSql],
+      "the localization teardown",
+      () => `the drop of table ${JSON.stringify(companionTable)}`
+    );
     companionDropped = true;
     // Readiness remembers only that a companion exists, and this is one of the two things that
     // makes that false. Forgetting it here rather than at the call sites keeps the memory tied to
