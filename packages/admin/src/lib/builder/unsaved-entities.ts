@@ -16,8 +16,8 @@ import { useMemo, useSyncExternalStore } from "react";
 
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
 import type { BuilderKind } from "@admin/components/features/schema-builder/builder-config";
-import type { BuilderField } from "@admin/components/features/schema-builder/types";
 import type { PendingAddress } from "@admin/services/addressCheckApi";
+import type { FieldDefinition } from "@admin/types/collection";
 
 /** An entity created in the dialog and not saved yet. */
 export interface UnsavedEntity {
@@ -26,8 +26,11 @@ export interface UnsavedEntity {
   address: string;
   /** What the dialog set, the baseline of the entity's settings. */
   settings: BuilderSettingsValues;
-  /** The fields it starts with (the starting field, if one was chosen). */
-  fields: BuilderField[];
+  /**
+   * The fields it starts with (the starting field, if one was chosen), in the
+   * server's shape, as the editor loads a saved entity's.
+   */
+  fields: FieldDefinition[];
 }
 
 /** The address check's name for each kind. */
