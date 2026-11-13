@@ -87,9 +87,9 @@ let running = 0;
 const CHECK_BODY = z.object({ address: z.string().min(1).max(2048) });
 
 /** The site's production addresses, the only places a page may be fetched. */
-async function originsOf(
+export async function originsOf(
   ctx: PluginContext,
-  setup: ReceivedSetup
+  setup: Pick<ReceivedSetup, "readRules"> & { baseUrl?: string | undefined }
 ): Promise<string[]> {
   const rules = await setup.readRules(ctx, undefined);
   const configured = originOf(setup.baseUrl);
@@ -102,7 +102,7 @@ async function originsOf(
 }
 
 /** The signed-in caller, or a refusal for anyone else. */
-function signedIn(
+export function signedIn(
   ctx: PluginRouteContext
 ): NonNullable<PluginRouteContext["caller"]> {
   if (ctx.caller === null) {

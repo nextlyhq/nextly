@@ -45,9 +45,12 @@ const PLUGIN = "@nextlyhq/plugin-seo";
 
 /**
  * Where the media library keeps uploads in a test, as it serves them: the
- * package's own `public` folder, the default local storage.
+ * `public` folder below the instance's base path, the default local storage.
  */
-const UPLOADS = path.resolve(import.meta.dirname, "../../../public");
+function uploadsDir(): string {
+  if (current === undefined) throw new Error("no instance is running");
+  return path.join(current.basePath, "public");
+}
 
 let current: TestNextly | undefined;
 /** The media items a test added, deleted with every file made for them. */
@@ -58,8 +61,10 @@ afterEach(async () => {
   for (const id of stored.splice(0)) {
     await current?.nextly.media.delete({ id });
   }
+  const uploads = current === undefined ? undefined : uploadsDir();
   await current?.destroy();
   current = undefined;
+  if (uploads === undefined) return;
   // The folders the uploads were put in, where nothing else is left in them.
   const month = new Date();
   for (const folder of [
@@ -68,7 +73,7 @@ afterEach(async () => {
     "uploads",
     "",
   ]) {
-    await rmdir(path.join(UPLOADS, folder)).catch(() => undefined);
+    await rmdir(path.join(uploads, folder)).catch(() => undefined);
   }
 });
 
@@ -222,7 +227,9 @@ function serveUploads(status = 200) {
     }
     if (status !== 200) return new Response(null, { status });
     return new Response(
-      await readFile(path.join(UPLOADS, decodeURIComponent(address.pathname)))
+      await readFile(
+        path.join(uploadsDir(), decodeURIComponent(address.pathname))
+      )
     );
   });
   return reads;
@@ -288,7 +295,7 @@ describe.each(getConfiguredTestDialects())("social cards (%s)", dialect => {
     // The file the library holds is the card: read back from where it was
     // stored, not from what the action said of it.
     const copy = await t.nextly.media.findByID({ id: item.id });
-    const bytes = await readFile(path.join(UPLOADS, copy.url));
+    const bytes = await readFile(path.join(uploadsDir(), copy.url));
     const file = await sharp(bytes).metadata();
     expect(file.format).toBe("jpeg");
     expect([file.width, file.height]).toEqual([1200, 630]);

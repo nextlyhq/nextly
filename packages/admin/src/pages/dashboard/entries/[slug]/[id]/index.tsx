@@ -198,6 +198,11 @@ export default function EditEntryPage({
   // Above every return, as a hook, so the loading outline is folded too.
   useCollectionFoldedPanel(slug);
 
+  // The panel folded, where the collection's plugin says its document
+  // screens start so, as the frame's outline of this address was drawn.
+  // Above every return, as a hook, so the loading outline is folded too.
+  useCollectionFoldedPanel(slug);
+
   // Active content language for this editor. `undefined` = the app's default locale
   // (the backend resolves it). Switching triggers a refetch (useEntry is keyed by locale) and
   // routes saves to the chosen language (EntryForm → useUpdateEntry).

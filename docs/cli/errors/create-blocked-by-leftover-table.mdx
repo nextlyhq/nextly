@@ -1,0 +1,30 @@
+---
+title: CREATE_BLOCKED_BY_LEFTOVER_TABLE
+description: "A collection, field group or Single create was refused, because tables nothing registered owns stand where it would build and they hold rows or something else depends on them."
+---
+
+## Cause
+
+A collection, field group or Single create was refused, because tables nothing registered owns stand where it would build and they hold rows or something else depends on them.
+
+A create that was interrupted between building its tables and recording them leaves tables that no collection, field group or Single describes. A create never builds over such a leftover, since it would adopt columns it never made. When every table of the leftover is empty, the create drops them and builds its own. When it cannot tell the leftover is safe to drop, it refuses instead, names the tables, and changes nothing:
+
+- **Rows.** The leftover's main table, its translations table or one of its junction tables holds rows, or rows in the field-group tables still name it as their parent. The Why line names each table and how many rows it holds.
+- **References.** A table that is not one of the create's own junction tables has a foreign key to the leftover.
+- **Taken names.** A table stands where the create would build a junction table but is not keyed as one, or a view reads one of the leftover's tables.
+
+## Fix
+
+- If the tables hold data you want to keep, rename them, or create the entity under another slug.
+- If they are leftovers you no longer need, drop the tables or views the Why line names. For field-group rows that still name the leftover as their parent, delete those rows.
+
+Then run the create again.
+
+## Example
+
+```text
+✗ Creating the Single "home" was refused.
+  Why:  "comp_hero" (2 rows) already exists and holds rows, but nothing registered describes them.
+  Next: Drop or rename those tables, then retry the create.
+  Docs: https://nextlyhq.com/docs/cli/errors/create-blocked-by-leftover-table  (CREATE_BLOCKED_BY_LEFTOVER_TABLE)
+```

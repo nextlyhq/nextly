@@ -31,8 +31,10 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import { catchUp, lastCatchUp } from "../address-record/catch-up";
 import { forgetNote } from "../address-record/__tests__/record-tables";
+import { contentDatesSettled } from "../content-dates/hooks";
 import type { ListedPagesService } from "../outputs/listing";
 import { seoPlugin, type SeoPluginOptions } from "../plugin";
+import { SEO_SETTINGS_SLUG } from "../settings/contract";
 
 const SITE = "https://acme.example";
 
@@ -121,7 +123,13 @@ async function boot(
         slug: "posts",
         status: true,
         access: open,
-        fields: [text({ name: "title" }), text({ name: "slug" })],
+        fields: [
+          text({ name: "title" }),
+          text({ name: "slug" }),
+          // A cover under a name no share-image guess reads: structured
+          // data reads it where the plugin's options map it.
+          upload({ name: "picture", relationTo: "media" }),
+        ],
         publicAddress: "/blog/{slug}",
       }),
       // A kind of listing page, with no draft state.
@@ -181,8 +189,9 @@ async function listed(query = ""): Promise<string[]> {
   return [...body.matchAll(/<url><loc>([^<]*)<\/loc>/g)].map(m => m[1] ?? "");
 }
 
-/** The `<url>` entry of one page, as the sitemap writes it. */
+/** The `<url>` entry of one page, as the sitemap writes it, once dates settle. */
 async function entryOf(loc: string): Promise<string | undefined> {
+  await contentDatesSettled();
   const { body } = await rootFile("sitemap.xml");
   return body.split("\n").find(line => line.includes(`<url><loc>${loc}</loc>`));
 }
@@ -465,7 +474,7 @@ describe.each(getConfiguredTestDialects())(
       expect(published).not.toBe(first);
     });
 
-    it("holds an SEO change as a draft, in the page's head and its lastmod, until the page is published", async () => {
+    it("holds an SEO change as a draft until the page is published, and never moves the page's lastmod", async () => {
       const { t } = await boot(dialect);
       const id = await create(t, "pages", {
         title: "About",
@@ -500,9 +509,8 @@ describe.each(getConfiguredTestDialects())(
         },
       });
       expect(await titleOf()).toContain("About Acme, rewritten");
-      const published = await entryOf(`${SITE}/about`);
-      expect(published).toMatch(/<lastmod>[^<]+<\/lastmod>/);
-      expect(published).not.toBe(first);
+      // Only the page's SEO changed: its content, and so its date, did not.
+      expect(await entryOf(`${SITE}/about`)).toBe(first);
     });
 
     it("lists each page's main image from published content only", async () => {
@@ -526,6 +534,69 @@ describe.each(getConfiguredTestDialects())(
         `<image:loc>${new URL(live.url, SITE).href}</image:loc>`
       );
       expect(entry).not.toContain(new URL(drafted.url, SITE).pathname);
+    });
+
+    it("lists a post's mapped cover, and never the site's default share image", async () => {
+      const { t } = await boot(dialect, {
+        structuredData: {
+          types: {
+            posts: {
+              type: "article",
+              details: { article: { image: "picture" } },
+            },
+          },
+        },
+      });
+      const card = await image(t, "seo-site-card.png");
+      const cover = await image(t, "seo-post-cover.png");
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, image: card.id },
+      });
+      await create(t, "posts", {
+        title: "Hello",
+        slug: "hello",
+        status: "published",
+        picture: cover.id,
+      });
+      // A page whose own card is the site's default one, and a page with no
+      // image of its own.
+      await create(t, "pages", {
+        title: "About",
+        slug: "about",
+        status: "published",
+        seo: { ogImage: card.id },
+      });
+      await create(t, "tags", { title: "News", slug: "news" });
+
+      const post = await entryOf(`${SITE}/blog/hello`);
+      expect(post).toContain(
+        `<image:loc>${new URL(cover.url, SITE).href}</image:loc>`
+      );
+      const cardPath = new URL(card.url, SITE).pathname;
+      expect(post).not.toContain(cardPath);
+      expect(await entryOf(`${SITE}/about`)).not.toContain("<image:");
+      expect(await entryOf(`${SITE}/tags/news`)).not.toContain("<image:");
+    });
+
+    it("lists a cover mapped for a type a route chooses, which the listing can't see", async () => {
+      // Only the route's code says these posts are tech articles, while it
+      // renders; the listing reads the field the type maps an image from.
+      const { t } = await boot(dialect, {
+        structuredData: {
+          types: { posts: { details: { techArticle: { image: "picture" } } } },
+        },
+      });
+      const cover = await image(t, "seo-tech-cover.png");
+      await create(t, "posts", {
+        title: "Hooks",
+        slug: "hooks",
+        status: "published",
+        picture: cover.id,
+      });
+      expect(await entryOf(`${SITE}/blog/hooks`)).toContain(
+        `<image:loc>${new URL(cover.url, SITE).href}</image:loc>`
+      );
     });
 
     // Each limit crossed on its own: two addresses a file, or room in a file

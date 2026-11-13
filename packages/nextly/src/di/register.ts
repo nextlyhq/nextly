@@ -210,6 +210,11 @@ import {
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { warnUndescribedPlugins } from "../plugins/describe-check";
+import {
+  builderExtensionsOf,
+  installedBuilderEntities,
+  publishBuilderExtensions,
+} from "../plugins/extended-types";
 import { reportUserMenuItemProblems } from "../plugins/header-item";
 import { setInitializedPlugins } from "../plugins/initialized-plugins";
 import {
@@ -261,6 +266,7 @@ import {
 } from "../plugins/routes/collect-routes";
 import {
   rateLimitProxyWarning,
+  undeclaredRouteWarning,
   unkeyedAuthRouteWarnings,
 } from "../plugins/routes/route-options";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
@@ -2197,6 +2203,9 @@ async function reconcileBuilderTargets<T>(
 
   const judged = await args.beforeWrites(changed.components);
 
+  // The changed entities this start installed: each `kind:slug` whose
+  // plugin fields reached its table and registry row.
+  const materialized = new Set<string>();
   // Not in `next build`, which writes nothing: a plugin's field on a Builder
   // entity reaches the database through `nextly migrate`, and the build reads
   // the entity as the database holds it.
@@ -2215,8 +2224,31 @@ async function reconcileBuilderTargets<T>(
       dialect,
       builderEntities,
       changed,
+      materialized,
     });
   }
+  // Which Builder types each plugin's fields are on, for `typesExtendedBy`
+  // and the admin contributions offered only there: as each entity is
+  // served, so a change not installed (a production start before
+  // `nextly migrate`, or one that failed) is read as stored.
+  publishBuilderExtensions(
+    builderExtensionsOf({
+      collections: installedBuilderEntities(
+        "collection",
+        entities.collections,
+        changed.collections,
+        builderEntities.collections,
+        materialized
+      ),
+      singles: installedBuilderEntities(
+        "single",
+        entities.singles,
+        changed.singles,
+        builderEntities.singles,
+        materialized
+      ),
+    })
+  );
 
   finalizeBuilderTargets(args, builderEntities);
   return judged;
@@ -2251,6 +2283,8 @@ interface MaterializeBuilderArgs {
   dialect: SupportedDialect;
   builderEntities: BuilderEntities;
   changed: ChangedBuilderEntities;
+  /** Told each `kind:slug` whose change was installed. */
+  materialized: Set<string>;
 }
 
 /** The context every kind's materialization shares. */
@@ -2259,6 +2293,8 @@ interface MaterializeContext {
   logger: Logger;
   schemaRegistry: SchemaRegistry | undefined;
   dialect: SupportedDialect;
+  /** Told each `kind:slug` whose change was installed. */
+  materialized: Set<string>;
   addMissingColumnsForFields: (
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -2360,6 +2396,7 @@ async function materializeBuilderKind(
           }
         }
       }
+      ctx.materialized.add(`${args.kind}:${ent.slug}`);
     } catch (err) {
       ctx.logger.warn?.(
         `[plugins] Failed to materialize plugin fields onto Builder ${args.kind} "${ent.slug}": ${
@@ -2456,6 +2493,7 @@ async function materializeBuilderChanges(
     logger: args.logger,
     schemaRegistry: args.schemaRegistry,
     dialect: args.dialect,
+    materialized: args.materialized,
     addMissingColumnsForFields,
   };
 
@@ -5327,6 +5365,8 @@ async function initializePlugins(
     readProxyTrustSettings(() => transformedConfig).trustProxy
   );
   if (proxyWarning) logger.warn?.(proxyWarning);
+  const undeclared = undeclaredRouteWarning(collectedRoutes);
+  if (undeclared) logger.warn?.(undeclared);
   for (const warning of unkeyedAuthRouteWarnings(
     collectedRoutes,
     readAuthRateLimit(() => transformedConfig).requestsPerHour > 0

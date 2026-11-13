@@ -3,10 +3,12 @@
 // the legitimate first-admin form. See docs/auth/csrf.md.
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { respondAction, respondData } from "../../api/response-shapes";
+import { appPasswordRule } from "../../di/password-digester";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
+import { clientPasswordRule } from "../password/policy";
 import { sessionCookies } from "../cookies/session-cookies";
 import { validatePasswordStrength } from "../credentials/password-strength";
 import { buildClaims } from "../jwt/claims";
@@ -126,11 +128,16 @@ export async function handleSetupStatus(
     // the sign-in page offers "Sign up", and the register page its form, only
     // where a registration would be taken. It tells nobody more than a
     // registration attempt's own refusal does.
+    // `passwordRule` is what the admin's password forms check before they
+    // submit: the minimum length, and the byte limit of the app's hasher
+    // where it has one. Every sign-up, reset and invite page shows these rules
+    // anyway, and the server judges each write in full.
     return respondData({
       isSetup,
       requiresInitialUser: !isSetup,
       requiresSetupToken: !isSetup && deps.setupToken.required,
       allowRegistration: deps.allowRegistration,
+      passwordRule: clientPasswordRule(appPasswordRule().hasher),
     });
   } catch (err) {
     // Surface a 503 rather than synthesising a default `isSetup` -- the
@@ -357,7 +364,8 @@ function setupInputRefusal(
     });
   }
 
-  const strengthResult = validatePasswordStrength(password);
+  // Judged by the app's hasher, which hashes the first account.
+  const strengthResult = validatePasswordStrength(password, appPasswordRule());
   if (strengthResult.ok) return null;
   // The rules a password failed are the only part of this a person can act
   // on, so they travel on `data.errors` -- the key the canonical envelope

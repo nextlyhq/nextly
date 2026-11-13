@@ -16,7 +16,16 @@ const { FakeUnavailable } = vi.hoisted(() => ({
 
 const mockIsAuthenticated = vi.fn();
 vi.mock("@admin/lib/auth/session", () => ({
-  isAuthenticated: (...args: unknown[]) => mockIsAuthenticated(...args),
+  // The session's standing, from the one read the mock answers: a signed-in
+  // account here holds a role.
+  sessionStanding: async () => {
+    const isAuthenticated = Boolean(await mockIsAuthenticated());
+    return {
+      isAuthenticated,
+      hasRole: isAuthenticated,
+      email: isAuthenticated ? "staff@example.com" : null,
+    };
+  },
   SessionUnavailableError: FakeUnavailable,
 }));
 
@@ -76,6 +85,8 @@ describe("useAuthSession", () => {
     expect(result.current.data).toEqual({
       isSetup: true,
       isAuthenticated: false,
+      hasRole: false,
+      email: null,
     });
     expect(mockIsAuthenticated).toHaveBeenCalledTimes(1);
   });
@@ -100,6 +111,8 @@ describe("useAuthSession", () => {
     expect(result.current.data).toEqual({
       isSetup: true,
       isAuthenticated: true,
+      hasRole: true,
+      email: "staff@example.com",
     });
   });
 
@@ -125,6 +138,8 @@ describe("useAuthSession", () => {
     expect(result.current.data).toEqual({
       isSetup: true,
       isAuthenticated: true,
+      hasRole: true,
+      email: "staff@example.com",
     });
   });
 });

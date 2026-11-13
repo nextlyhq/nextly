@@ -38,6 +38,7 @@ import {
   socialProfilesProblem,
 } from "./stored-values";
 import { structuredDataSettingsProblem } from "./structured-data-choices";
+import { verificationProblem, verificationTagsOf } from "./verification-stored";
 
 /** A content type's patterns: the title's, and the description's. */
 export interface TypePatterns {
@@ -409,4 +410,48 @@ export async function readStructuredDataSettings(
         structuredDataSettingsProblem
       ) ?? {},
   };
+}
+
+/**
+ * The stored values already warned about, so a value refused on read is
+ * logged once per process rather than on every home page it would have
+ * reached. Bounded: a value edited again and again past the screen warns
+ * afresh only while the set has room.
+ */
+const warnedVerification = new Set<string>();
+const MAX_WARNED = 20;
+
+/**
+ * The verification tags the home page's head carries, by meta name, read
+ * with the rule they were saved under. Nothing where none is saved, where
+ * the settings were saved before the field existed, or where the stored
+ * value fails its rule: that one is ignored, never emitted, with a warning.
+ * Never awaited while the site starts.
+ */
+export async function readVerificationTags(
+  ctx: PluginContext
+): Promise<Record<string, string>> {
+  const document = await readSeoSettingsDocument(ctx);
+  return verificationTagsFrom(document.verificationCodes, message =>
+    ctx.logger.warn(message)
+  );
+}
+
+/** The tags a stored value gives, warning once about a value its rule refuses. */
+export function verificationTagsFrom(
+  stored: unknown,
+  warn: (message: string) => void
+): Record<string, string> {
+  const problem = verificationProblem(stored);
+  if (problem !== null) {
+    const key = JSON.stringify(stored) ?? "";
+    if (!warnedVerification.has(key) && warnedVerification.size < MAX_WARNED) {
+      warnedVerification.add(key);
+      warn(
+        `The SEO settings' verification codes were not placed on the home page: ${problem} Save them again on Settings, Connections.`
+      );
+    }
+    return {};
+  }
+  return verificationTagsOf(stored);
 }

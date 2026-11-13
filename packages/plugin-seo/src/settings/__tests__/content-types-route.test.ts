@@ -59,7 +59,7 @@ function context(): PluginRouteContext {
 
 describe("the content types route", () => {
   it("offers the fields a group with no name lays out, which the entry itself holds", async () => {
-    const route = contentTypesRoute(["posts"]);
+    const route = contentTypesRoute({ collections: ["posts"] });
     const response = await route.handler(new Request("http://x/"), context());
     const body = (await (response as Response).json()) as {
       items: { fields: unknown; mappableFields: unknown }[];

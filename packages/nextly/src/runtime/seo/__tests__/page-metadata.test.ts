@@ -736,3 +736,78 @@ describe("a worker where nothing has started Nextly yet", () => {
     expect(start.calls).toBe(1);
   });
 });
+
+describe("the answer's verification tags", () => {
+  it("are placed as meta tags by name", () => {
+    expect(
+      metadataFromAnswer({
+        verification: {
+          "msvalidate.01": "8A2F61C4",
+          "p:domain_verify": "a91c7e04",
+        },
+      })
+    ).toEqual({
+      verification: {
+        other: { "msvalidate.01": "8A2F61C4", "p:domain_verify": "a91c7e04" },
+      },
+    });
+  });
+
+  it("are nothing where the answer has none, or an empty set", () => {
+    expect(metadataFromAnswer({}).verification).toBeUndefined();
+    expect(
+      metadataFromAnswer({ verification: {} }).verification
+    ).toBeUndefined();
+  });
+
+  it("join the route's own, keeping both where they share a name", async () => {
+    provide({
+      resolve: () => ({
+        verification: {
+          "msvalidate.01": "ANSWERED",
+          "yandex-verification": "y1",
+        },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: {
+        verification: { google: "g1", other: { "msvalidate.01": "OWN" } },
+      },
+      tags: [],
+    });
+    expect(metadata.verification).toEqual({
+      google: "g1",
+      other: {
+        "msvalidate.01": ["OWN", "ANSWERED"],
+        "yandex-verification": "y1",
+      },
+    });
+  });
+
+  it("keep the route's own where the answer has none", async () => {
+    provide({ resolve: () => ({ title: "Answered" }) });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: { verification: { google: "g1" } },
+      tags: [],
+    });
+    expect(metadata.verification).toEqual({ google: "g1" });
+  });
+
+  it("refuse an answer naming a tag by something that is not a meta name", async () => {
+    provide({
+      resolve: () => ({
+        title: "Answered",
+        verification: { 'x" onload="alert(1)': "a" },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: { title: "Own" },
+      tags: [],
+    });
+    expect(metadata.verification).toBeUndefined();
+    expect(cacheOutcomes).toEqual([{ refused: true }]);
+  });
+});

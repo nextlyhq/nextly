@@ -1446,14 +1446,20 @@ async function runWritten(
       : await unitOf(deps, files.adopt);
   let before = await scopedSnapshotBefore(deps, ordered[0], table);
   for (const filename of ordered) {
+    // A column made required over rows that would break it, refused before
+    // any statement, as `nextly migrate` refuses it. Asked outside the
+    // judgement of what stayed: nothing of the file has run, so the refusal
+    // is thrown as it is. Inside it, a MySQL file whose tables the judgement
+    // cannot name (a column restated through a prepared statement) was taken
+    // as part-way, and a refusal that ran nothing was reported as a failure
+    // whose statements stayed applied, its files kept for `migrate:resolve`.
+    await refuseBeforeAnyStatement(filename);
     await runJudgingWhatStayed(deps, table, filename, () => runOne(filename));
     applied.push(filename);
   }
 
-  async function runOne(filename: string): Promise<void> {
+  async function refuseBeforeAnyStatement(filename: string): Promise<void> {
     const file = await unitOf(deps, filename);
-    // A column made required over rows that would break it, refused before
-    // any statement, as `nextly migrate` refuses it.
     await refuseRequiredColumnsOverNulls(
       db,
       dialect,
@@ -1462,6 +1468,10 @@ async function runWritten(
       }),
       filename
     );
+  }
+
+  async function runOne(filename: string): Promise<void> {
+    const file = await unitOf(deps, filename);
     const target = await snapshotOf(deps, filename);
     if (target === null) {
       await runRecordedAttempt({ file, dialect, repo, executeSql });

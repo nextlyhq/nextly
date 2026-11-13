@@ -856,7 +856,12 @@ export async function runMigrate(
     // succeeded. Here in the CLI run only, never in the core a boot shares.
     try {
       const notice = plainTextPasswordNotice(
-        (await plainTextPasswordCleanup(adapter).find()).length
+        (
+          await plainTextPasswordCleanup(
+            adapter,
+            configResult.config.auth?.passwordHasher
+          ).find()
+        ).length
       );
       if (notice) logger.warn(notice);
     } catch (err) {
