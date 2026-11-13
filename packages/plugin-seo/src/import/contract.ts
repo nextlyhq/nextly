@@ -206,8 +206,9 @@ export interface ImportReportEntry {
   /** The places a person already filled, which keep what they hold, the same value or another. */
   kept: ImportTarget[];
   /**
-   * The places whose value never reached the page, since its own code sets
-   * that value: left out unless the import includes them.
+   * The places whose page's code sets its own, different value now, so
+   * importing would change what the page shows: left out unless the import
+   * includes them.
    */
   neverServed: ImportTarget[];
   /**
@@ -246,8 +247,10 @@ export interface DryRunBody {
   /** Values a person already typed here, which the import keeps. */
   kept: number;
   /**
-   * Values left out as never served: the page's own code sets them, so they
-   * never reached it. Zero where the import includes them.
+   * Values left out because the page's code sets its own value now, so
+   * importing them would change what the page shows. The name is kept for
+   * callers; what the page showed before is unknown. Zero where the import
+   * includes them.
    */
   neverServed: number;
   /** Redirects the import would add. */

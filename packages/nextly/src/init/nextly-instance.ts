@@ -29,6 +29,8 @@ import type {
   BulkDeleteMediaArgs,
   PublishArgs,
   PublishResult,
+  RewriteFieldArgs,
+  RewriteSingleFieldArgs,
   BulkOperationResult,
   ChangePasswordArgs,
   CollectionSlug,
@@ -131,6 +133,7 @@ import type {
   EmailTemplateComparison,
   OwnerUpdateUndo,
 } from "../domains/email/services/email-template-service";
+import type { FieldRewriteResult } from "../domains/versions/field-rewrite";
 import type { NextlyPrincipals } from "../plugins/principals/types";
 import type { PublicSiteSettings } from "../runtime/site-settings-read";
 import type { EmailProviderRecord } from "../schemas/email-providers/types";
@@ -222,6 +225,15 @@ export interface Nextly {
   update: <TSlug extends CollectionSlug>(
     args: UpdateArgs<TSlug>
   ) => Promise<MutationResult<RowFromCollectionSlug<TSlug>>>;
+
+  /**
+   * @experimental Rewrite one field of an entry or a Single on its live copy
+   * and on every pending draft that holds it, without publishing, from the
+   * version the caller read. See `RewriteFieldArgs`.
+   */
+  rewriteField: (
+    args: RewriteFieldArgs | RewriteSingleFieldArgs
+  ) => Promise<MutationResult<FieldRewriteResult>>;
 
   /**
    * Delete a document by ID or by where clause.

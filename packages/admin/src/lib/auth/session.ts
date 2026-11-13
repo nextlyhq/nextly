@@ -11,7 +11,11 @@ interface SessionUser {
   email: string;
   name: string;
   image: string | null;
-  roleIds: string[];
+  /**
+   * The roles the session's token was minted with. Absent where the app's
+   * own `determineUser` resolved the person, which names no roles.
+   */
+  roleIds?: string[];
   [key: string]: unknown;
 }
 
@@ -132,8 +136,36 @@ export async function getSession(): Promise<Session | null> {
  * @throws SessionUnavailableError when the server could not answer.
  */
 export async function isAuthenticated(): Promise<boolean> {
-  const session = await getSession();
-  return Boolean(session?.user?.id);
+  return (await sessionStanding()).isAuthenticated;
+}
+
+/** What the session says about who is signed in here. */
+export interface SessionStanding {
+  /** Whether this browser holds a valid session. */
+  isAuthenticated: boolean;
+  /**
+   * Whether the signed-in account holds any role. An account with none (one
+   * that registered itself, say) has no staff work to do here; the server
+   * refuses its actions, and the admin says so rather than drawing screens
+   * whose every action would be refused.
+   */
+  hasRole: boolean;
+  /** The signed-in account's email, for saying who is signed in. */
+  email: string | null;
+}
+
+/** The session's standing, from one read of it. */
+export async function sessionStanding(): Promise<SessionStanding> {
+  const user = (await getSession())?.user;
+  const isAuthenticated = Boolean(user?.id);
+  return {
+    isAuthenticated,
+    // Only a session that names its roles, and names none, is role-less: one
+    // that names none at all (the app's own `determineUser`) is not known to
+    // lack one, and the server still refuses whatever it may not do.
+    hasRole: isAuthenticated && (user?.roleIds?.length ?? 1) > 0,
+    email: isAuthenticated ? (user?.email ?? null) : null,
+  };
 }
 
 /**

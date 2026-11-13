@@ -8,7 +8,7 @@
  *   - logout           -> respondAction("Logged out.")
  *   - refresh          -> respondData({ user, accessToken, refreshToken, expiresAt })
  *   - register         -> respondAction(message, ...)  [silent vs reveal paths]
- *   - setup-status     -> respondData({ isSetup, requiresInitialUser })
+ *   - setup-status     -> respondData({ isSetup, requiresInitialUser, ... })
  *   - setup            -> respondAction("Setup complete.", { user, ... }, status 201)
  *   - forgot-password  -> respondAction("If an account exists ...")  [no email leak]
  *   - reset-password   -> respondAction("Password reset.")
@@ -867,6 +867,7 @@ describe("setup-status handler: respondData shape", () => {
       requiresInitialUser: true,
       requiresSetupToken: false,
       allowRegistration: false,
+      passwordRule: { minLength: 8, maxBytes: 72 },
     });
     expect(body).not.toHaveProperty("data");
     expect(body).not.toHaveProperty("isSetupComplete");
@@ -890,6 +891,7 @@ describe("setup-status handler: respondData shape", () => {
       requiresInitialUser: false,
       requiresSetupToken: false,
       allowRegistration: true,
+      passwordRule: { minLength: 8, maxBytes: 72 },
     });
   });
 

@@ -467,8 +467,9 @@ install that already has an account a create without one is refused with
 `VALIDATION_ERROR` before this rule is reached (on an empty install every plugin create is
 refused with `FORBIDDEN` first, as above). The refusal is judged on the account a write
 leaves, and only for a write that changes its activation, verification or address. A
-stored password counts as one when it is a hash core made, or, where the app passes its
-own `passwordHasher` to `getNextly`, whatever that hasher stored. An account core made this way
+stored password counts as one when it is a hash core made, or, where the app brings its
+own `passwordHasher`, one that hasher recognises (any stored value, if it declares no
+`isHash`). An account core made this way
 still takes your plugin's other edits, and can be deactivated or given a password, but a
 plugin cannot verify an active account that has no password (re-verifying one core made
 included), activate a verified one that has none, reactivate one core made, or move one

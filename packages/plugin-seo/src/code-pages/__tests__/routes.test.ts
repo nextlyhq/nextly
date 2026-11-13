@@ -133,6 +133,35 @@ describe("reading the build", () => {
     ]);
   });
 
+  it("leaves out an address the build answered not found, a declared one or a fixed one", () => {
+    const appDir = app();
+    writeFileSync(
+      join(appDir, "build/server/app-paths-manifest.json"),
+      JSON.stringify({
+        "/(site)/pricing/page": "app/(site)/pricing/page.js",
+        "/(site)/retired/page": "app/(site)/retired/page.js",
+        "/(site)/tools/[name]/page": "app/(site)/tools/[name]/page.js",
+      })
+    );
+    writeFileSync(
+      join(appDir, "build/prerender-manifest.json"),
+      JSON.stringify({
+        version: 4,
+        routes: {
+          "/pricing": { srcRoute: "/pricing", initialStatus: 200 },
+          "/retired": { srcRoute: "/retired", initialStatus: 404 },
+          "/tools/counter": { srcRoute: "/tools/[name]" },
+          // A topic with nothing in it: its page calls `notFound()`.
+          "/tools/empty": { srcRoute: "/tools/[name]", initialStatus: 404 },
+        },
+      })
+    );
+
+    expect(
+      readCodeRoutes({ appDir, buildDir: "build" }).map(route => route.path)
+    ).toEqual(["/pricing", "/tools/counter"]);
+  });
+
   it("reads nothing where there is no build", () => {
     const appDir = app();
 

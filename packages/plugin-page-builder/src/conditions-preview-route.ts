@@ -182,6 +182,7 @@ export function conditionsPreviewEntryRoute(setup: {
   readonly guard: () => TemplateGuardSetup;
 }): {
   method: "POST";
+  checksAccess: true;
   path: string;
   noStore: true;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
@@ -189,6 +190,7 @@ export function conditionsPreviewEntryRoute(setup: {
   return {
     method: "POST",
     path: CONDITIONS_PREVIEW_ENTRY_PATH,
+    checksAccess: true, // The handler judges each caller.
     noStore: true,
     handler: async (req, ctx) => {
       const body = await readBodyWith(req, Body, ROUTE);

@@ -1207,12 +1207,14 @@ function recordOf(value: unknown): Record<string, unknown> | null {
 /** The template actions route declaration. */
 export function templateActionsRoute(setup: TemplateActionsSetup): {
   method: "POST";
+  checksAccess: true;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
   return {
     method: "POST",
     path: TEMPLATE_ACTIONS_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     // Signed in is all reaching the route asks: each action asks its own
     // rights on the templates collection before it reads anything.
     handler: async (req, ctx) => {
@@ -1253,12 +1255,14 @@ export async function readTemplateRoutingAccess(ctx: {
  */
 export function templateRoutingRoute(): {
   method: "GET";
+  siteWide: false;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
   return {
     method: "GET",
     path: TEMPLATE_ROUTING_ROUTE_PATH,
+    siteWide: false, // Acts on no site content; signing in is enough.
     handler: async (_req, ctx) =>
       Response.json(await readTemplateRoutingAccess(ctx)),
   };
@@ -1374,6 +1378,7 @@ export function templateCollectionRetargetRoute(setup: {
   readonly guard: () => TemplateGuardSetup;
 }): {
   method: "GET";
+  checksAccess: true;
   path: string;
   noStore: true;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
@@ -1381,6 +1386,7 @@ export function templateCollectionRetargetRoute(setup: {
   return {
     method: "GET",
     path: TEMPLATE_COLLECTION_RETARGET_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     // A collection is added, renamed or removed, and an address cleared, at
     // any time.
     noStore: true,

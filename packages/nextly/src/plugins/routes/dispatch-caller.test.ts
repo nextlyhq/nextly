@@ -124,6 +124,7 @@ let seen: PluginRouteContext | null = null;
 
 function route(extra: Partial<PluginRoute>): PluginRoute {
   return {
+    siteWide: false,
     method: "GET",
     path: "/r",
     handler: (_req, ctx) => {

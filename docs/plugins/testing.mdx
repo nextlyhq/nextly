@@ -71,7 +71,16 @@ Without it nothing is listed, and the refusal (`PLUGIN_RESOLUTION_ERROR`,
 - **Behaviour:** hooks fire and can modify/abort; events emit after commit (use
   `await t.events.settle()` before asserting, since events are best-effort).
 - **Routes & permissions:** a route requires the right permission; `{ as: "system" }`
-  vs `{ as: "user" }` calls behave as expected.
+  vs `{ as: "user" }` calls behave as expected. Assert that every route declares what
+  reaching it takes, so an undeclared one fails your suite rather than every request:
+
+  ```ts
+  import { undeclaredPluginRoutes } from "@nextlyhq/plugin-sdk/testing";
+
+  it("declares what every route takes", () => {
+    expect(undeclaredPluginRoutes(myPlugin())).toEqual([]);
+  });
+  ```
 - **Uninstall:** removing the plugin orphans its tables and `nextly prune` would drop
   only `plugin:*` provenance (see [Schema & data lifecycle](/docs/plugins/schema)).
 

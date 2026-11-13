@@ -574,6 +574,7 @@ export function directEntryReads(
 /** A read-only route's declaration, as the two below share it. */
 interface PreviewRoute {
   method: "POST";
+  checksAccess?: true;
   path: string;
   noStore: true;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
@@ -591,6 +592,7 @@ export function templatePreviewEntriesRoute(setup: {
   return {
     method: "POST",
     path: TEMPLATE_PREVIEW_ENTRIES_PATH,
+    checksAccess: true, // The handler judges each caller.
     noStore: true,
     handler: async (req, ctx) => {
       const body = await readBodyWith(
@@ -614,6 +616,7 @@ export function templatePreviewEntryRoute(setup: {
   return {
     method: "POST",
     path: TEMPLATE_PREVIEW_ENTRY_PATH,
+    checksAccess: true, // The handler judges each caller.
     noStore: true,
     handler: async (req, ctx) => {
       const body = await readBodyWith(req, EntryBody, "template preview entry");

@@ -29,6 +29,11 @@ export interface CodePageRow {
   connected: boolean;
   /** What the route's code supplied when it last called, as its head used it. */
   code: PageMetadataValues;
+  /**
+   * When the route says the page last changed, as ISO text, from its
+   * `openGraph.modifiedTime` when it last called: the page's sitemap date.
+   */
+  lastModified?: string;
 }
 
 /** The longest address kept; a longer one is not a page anyone links to. */
@@ -99,6 +104,23 @@ export function codeValuesOf(value: unknown): PageMetadataValues {
   return values;
 }
 
+/** A date as ISO text, where `value` is one. */
+function isoDateOf(value: unknown): string | undefined {
+  if (!(value instanceof Date) && typeof value !== "string") return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+/**
+ * The date a route states its page last changed: its metadata's
+ * `openGraph.modifiedTime`, as ISO text. Nothing where it states none: a
+ * page built in code is never given the time of a build or a request.
+ */
+export function statedDateOf(metadata: unknown): string | undefined {
+  if (!isRecord(metadata) || !isRecord(metadata.openGraph)) return undefined;
+  return isoDateOf(metadata.openGraph.modifiedTime);
+}
+
 /** JSON with object keys sorted, so equal values are equal text. */
 export function sortedJson(value: unknown): string {
   return JSON.stringify(value, (_key, inner: unknown) =>
@@ -129,6 +151,13 @@ function codePageRowOf(entry: unknown): CodePageRow {
     noindex: row.noindex === true,
     connected: row.connected === true,
     code: codeValuesOf(row.codeValues),
+    // Kept beside the code values, in the same stored JSON.
+    ...optional(
+      "lastModified",
+      isRecord(row.codeValues)
+        ? isoDateOf(row.codeValues.lastModified)
+        : undefined
+    ),
   };
 }
 
@@ -183,12 +212,15 @@ export async function readCodePages(
 export function codePageDocument(
   path: string,
   row: CodePageRow | undefined,
-  name: string | undefined
+  name: string | undefined,
+  lastModified?: string
 ): Record<string, unknown> {
   return {
     id: row?.id ?? "",
     path,
     title: name ?? row?.name ?? nameOfAddress(path),
+    // The date the route states, recorded with its call.
+    ...(lastModified === undefined ? {} : { lastModified }),
     seo: {
       ...(row?.metaTitle === undefined ? {} : { metaTitle: row.metaTitle }),
       ...(row?.metaDescription === undefined
@@ -240,6 +272,8 @@ export interface Connection {
   name?: string;
   /** The values the route's code supplied, as the page's head reads them. */
   code: PageMetadataValues;
+  /** When the route says the page last changed, as ISO text. */
+  lastModified?: string;
 }
 
 /** Whether `row` already says what `connection` would record. */
@@ -251,6 +285,7 @@ export function recorded(
     row !== undefined &&
     row.connected &&
     row.name === connection.name &&
+    row.lastModified === connection.lastModified &&
     sortedJson(row.code) === sortedJson(codeValuesOf(connection.code))
   );
 }
@@ -270,7 +305,12 @@ export async function recordConnection(
   await upsert(ctx, path, {
     connected: true,
     name: connection.name ?? null,
-    codeValues: codeValuesOf(connection.code),
+    codeValues: {
+      ...codeValuesOf(connection.code),
+      ...(connection.lastModified === undefined
+        ? {}
+        : { lastModified: connection.lastModified }),
+    },
   });
 }
 

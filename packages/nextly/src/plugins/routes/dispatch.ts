@@ -64,6 +64,7 @@ import {
   publicCallerCredential,
   rateLimitKey,
   routeCsrfMode,
+  routeDeclaresAccess,
   shouldNotStore,
   type CallerCredential,
 } from "./route-options";
@@ -166,6 +167,23 @@ async function resolvePluginRouteAuth(
       // whether that cookie authenticates is what decides, not the presence
       // of it or of any other cookie.
       credential: publicCallerCredential(req, await sessionAuthenticates(req)),
+    };
+  }
+
+  // A route that says nothing about what reaching it takes could act on the
+  // whole site for anyone signed in, a role-less account or a key with no
+  // grants included. Refused for every caller, before any credential is read,
+  // until it declares a permission, `checksAccess: true` or `siteWide: false`.
+  if (!routeDeclaresAccess(route)) {
+    return {
+      error: NextlyError.forbidden({
+        logContext: {
+          reason: "plugin-route-undeclared",
+          plugin: self.name,
+          method: route.method,
+          path: route.path,
+        },
+      }),
     };
   }
 

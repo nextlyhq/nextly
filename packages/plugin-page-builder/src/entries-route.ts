@@ -560,12 +560,14 @@ function directEntriesReads(ctx: EntriesRouteContext): EntriesReads {
  */
 export function entriesRoute(): {
   method: "GET";
+  checksAccess: true;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
   return {
     method: "GET",
     path: ENTRIES_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     // No `public: true`, which is what makes this authenticated, and no
     // `requiredPermission`: the collection is chosen by the query, which a
     // permission resolver never sees. The read's own access is core's.

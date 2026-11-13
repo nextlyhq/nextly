@@ -139,6 +139,7 @@
   "PLUGIN_ROUTE_MOUNT_INVALID": "A plugin declares a route whose `mount` is neither \"plugin\" nor \"root\".",
   "PLUGIN_ROUTE_ROOT_UNREACHABLE": "A plugin declares a root-mounted route at a path a request never reaches it on.",
   "PLUGIN_SCHEMA_BEHIND": "In production, a plugin expects a schema version its applied migrations have not reached.",
+  "PLUGIN_SCHEMA_PREFIX_CHANGED": "A plugin's schema prefix is not the one its existing tables were created under.",
   "PLUGIN_SCHEMA_UNINSTALLED": "A plugin that has been uninstalled is still listed in the configuration.",
   "PLUGIN_SCHEMA_VERSION_MISSING": "The plugin given to `--plugin` declares no `schemaVersion`, which its migrations are numbered by.",
   "PLUGIN_SCHEMA_VERSION_NOT_ADVANCED": "A plugin's declared `schemaVersion` does not move past the one on its last migration.",
@@ -205,5 +206,6 @@
   "PLUGIN_REGISTRATION_UNKNOWN": "`nextly plugins add` cannot tell how to register a package: it declares nothing, and its entry exports no single plugin.",
   "PLUGIN_OPTION_MISSING": "A plugin asks for options at install, and `nextly plugins add` was given none for some of them with no one at the terminal to ask.",
   "PLUGIN_OPTION_INVALID": "An option given to `nextly plugins add` is malformed, is not one the plugin asks for, or was refused by the plugin.",
-  "PLUGIN_CONFIG_NOT_EDITABLE": "`nextly plugins add` cannot place a plugin in the configuration file safely, so it left the file as it was."
+  "PLUGIN_CONFIG_NOT_EDITABLE": "`nextly plugins add` cannot place a plugin in the configuration file safely, so it left the file as it was.",
+  "CREATE_BLOCKED_BY_LEFTOVER_TABLE": "A collection, field group or Single create was refused, because tables nothing registered owns stand where it would build and they hold rows or something else depends on them."
 }

@@ -67,7 +67,10 @@ function PageSeo({
   // where it has one, stays among the page's own fields.
   const config = usePluginClientConfig(SEO_PLUGIN_NAME);
   const tabbed = config?.tabCollections;
-  if (!Array.isArray(tabbed) || !tabbed.includes(collection)) {
+  // Where SEO is on every type, the Page Builder's pages have the group
+  // unless the site left them out, which the tab's own read then says.
+  const everyType = config?.tabEveryType === true;
+  if (!everyType && (!Array.isArray(tabbed) || !tabbed.includes(collection))) {
     return (
       <p className="m-0 pt-4 text-[13px] text-muted-foreground">
         SEO isn&apos;t added to this content type. Pages of it are described by

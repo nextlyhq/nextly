@@ -610,6 +610,16 @@ interface AdminContributionBase {
    * Single's when absent.
    */
   singles?: string[];
+  /**
+   * @experimental On a collection's list or edit page or a Single's edit
+   * page: offered only on the content types where this plugin's
+   * `contributes.extend` added every one of these fields, as the latest start
+   * resolved them (`typesExtendedBy`). For a plugin that extends every
+   * content type, so its tab or panel follows its fields to Schema Builder
+   * types and skips a type that kept a field of its own by that name.
+   * Narrows `collections` and `singles` where they are also given.
+   */
+  extendedWith?: string[];
 }
 
 /**

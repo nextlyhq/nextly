@@ -169,6 +169,14 @@ export interface PageMetadataAnswer {
    * Plain JSON only, since the answer is cached as JSON.
    */
   structuredData?: StructuredDataNode[];
+  /**
+   * Tags a service reads to confirm who owns the site, placed in the head as
+   * `<meta name content>`, keyed by name, such as
+   * `{ "msvalidate.01": "8A2F61C4" }`. A name is a letter followed by letters,
+   * digits and `. _ : -`; an answer naming one otherwise is refused whole.
+   * They join any the route sets itself.
+   */
+  verification?: Record<string, string>;
 }
 
 /** @experimental A JSON value, as a structured data node may hold. */

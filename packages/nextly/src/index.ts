@@ -718,6 +718,9 @@ export {
   type ContentTypeKind,
   type ContentTypeScope,
 } from "./plugins/content-type-scope";
+// Which types a plugin's `extend` added each field to, as the start resolved
+// them. @experimental
+export { typesExtendedBy, type ExtendedType } from "./plugins/extended-types";
 
 // The later pages of a paginated list's address (`/news/page/2`): one
 // spelling per page, read the way the content routes read them.

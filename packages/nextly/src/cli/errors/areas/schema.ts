@@ -84,6 +84,29 @@ function invalidSchemaName(error: NextlyError): CliErrorParts {
   };
 }
 
+/**
+ * A create refused over tables nothing registered owns, as its three parts.
+ *
+ * `clearLeftoverStorage` writes 'Creating the <kind> "<slug>" was refused: <the tables and why
+ * they stay>. <what to drop or rename, then retry>.', so the message is split at its first
+ * `": "` and its last sentence rather than reworded, and the CLI and the server log keep one
+ * wording.
+ */
+function leftoverRefusal(error: NextlyError): CliErrorParts {
+  const message = error.publicMessage;
+  const colon = message.indexOf(": ");
+  const rest = sentences(colon === -1 ? "" : message.slice(colon + 2));
+  const next = rest.length > 1 ? rest[rest.length - 1] : undefined;
+  const why = (next === undefined ? rest : rest.slice(0, -1)).join(" ");
+  return {
+    what: colon === -1 ? message : `${message.slice(0, colon)}.`,
+    why:
+      why ||
+      "Tables nothing registered owns stand where it would build, and they hold rows or something else depends on them.",
+    next: next ?? "Drop or rename the tables it names, then retry the create.",
+  };
+}
+
 /** Whether `error`'s message starts with the words its throw site gives one cause. */
 const startsWith =
   (prefix: string) =>
@@ -273,6 +296,34 @@ export const SCHEMA_CODES = defineCodes({
             next: "Run it again when you are ready.",
           };
         },
+      },
+    ],
+  },
+  // A create never builds over a table nothing registered owns: it drops an empty leftover, and
+  // refuses one that holds rows, is referenced from outside, or stands where it would build a
+  // junction or under a view. Each refusal names its tables and changes nothing.
+  CREATE_BLOCKED_BY_LEFTOVER_TABLE: {
+    cause:
+      "A collection, field group or Single create was refused, because tables nothing registered owns stand where it would build and they hold rows or something else depends on them.",
+    from: [
+      {
+        // A table of the leftover's family holds rows, or rows elsewhere name it as their parent.
+        code: "CONFLICT",
+        reason: "create-table-occupied",
+        describe: leftoverRefusal,
+      },
+      {
+        // A table that is not one of the create's own junctions references the leftover.
+        code: "CONFLICT",
+        reason: "create-table-referenced",
+        describe: leftoverRefusal,
+      },
+      {
+        // A table not keyed as the create's junction stands where it would build one, or a view
+        // reads one of the leftover's tables.
+        code: "CONFLICT",
+        reason: "create-objects-taken",
+        describe: leftoverRefusal,
       },
     ],
   },
