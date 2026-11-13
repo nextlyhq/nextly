@@ -955,4 +955,54 @@ describe("resolvePromotedDocument judges a pending value by the document it prod
       ).publicData?.errors?.map(e => e.path)
     ).toEqual(["ops.secret"]);
   });
+  it("refuses a pending deletion of a protected value the produced siblings would deny", async () => {
+    // `ops` needs `kind` "public"; `ops.secret` needs its sibling `mode` to be "allow".
+    const rules = (document: Record<string, unknown>): Promise<void> => {
+      const ops = document.ops as Record<string, unknown> | undefined;
+      if (!ops) return Promise.resolve();
+      if (document.kind !== "public") delete document.ops;
+      else if (ops.mode !== "allow") delete ops.secret;
+      return Promise.resolve();
+    };
+    const pending = { kind: "private", ops: { mode: "deny" } };
+    const callerSupplied = { kind: "public" };
+    let refused: unknown;
+    try {
+      await resolvePromotedDocument({
+        slug: "posts",
+        applyRules: rules,
+        before: { kind: "public", ops: { mode: "deny" } },
+        live: { kind: "public", ops: { mode: "allow", secret: "live secret" } },
+        pending,
+        callerSupplied,
+      });
+    } catch (error) {
+      refused = error;
+    }
+    expect(
+      (
+        refused as { publicData?: { errors?: { path: string }[] } }
+      ).publicData?.errors?.map(e => e.path)
+    ).toEqual(["ops.secret"]);
+  });
+
+  it("never writes a pending value's __proto__ key onto the shared prototype", async () => {
+    const rules = (document: Record<string, unknown>): Promise<void> => {
+      if (document.kind !== "public") delete document.payload;
+      return Promise.resolve();
+    };
+    const pending = JSON.parse(
+      '{"kind":"private","payload":{"__proto__":{"reviewProbe":"injected"}}}'
+    ) as Record<string, unknown>;
+    const callerSupplied = { kind: "public", payload: {} };
+    await resolvePromotedDocument({
+      slug: "posts",
+      applyRules: rules,
+      before: { kind: "public", payload: {} },
+      live: { kind: "public", payload: {} },
+      pending,
+      callerSupplied,
+    });
+    expect(({} as Record<string, unknown>).reviewProbe).toBeUndefined();
+  });
 });
