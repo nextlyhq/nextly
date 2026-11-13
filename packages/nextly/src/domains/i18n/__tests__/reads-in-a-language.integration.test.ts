@@ -890,6 +890,42 @@ describe.each(getConfiguredTestDialects())(
       expect(writer.name).toBe("Ana");
     }, 90_000);
 
+    // Whole-document fallback reads the document as a request for the
+    // language it answers in, so a related document published in both
+    // languages is read in that language too, not in the one first asked.
+    it("reads a related document in the language whole-document fallback answers in", async () => {
+      const t = await boot(dialect);
+      const post = (
+        await t.nextly.create({
+          collection: POSTS,
+          locale: "en",
+          data: { title: "Post", status: "published" },
+        })
+      ).item.id;
+      await t.nextly.update({
+        collection: POSTS,
+        id: String(post),
+        locale: "es",
+        data: { title: "Entrada", status: "published", _overwrite: true },
+      });
+      // Published in English only.
+      const note = (
+        await t.nextly.create({
+          collection: NOTES,
+          locale: "en",
+          data: { title: "Note", post, status: "published" },
+        })
+      ).item.id;
+
+      const read = await restGet(
+        ["collections", NOTES, "entries", String(note)],
+        "?locale=es&fallback=document&depth=1"
+      );
+      expect(read.status, JSON.stringify(read.json)).toBe(200);
+      expect(read.json._locale).toBe("en");
+      expect((read.json.post as Record<string, unknown>).title).toBe("Post");
+    }, 90_000);
+
     // Every language's structured values beside a read are the field's own
     // type, as the row's are: on a driver that stores JSON as text, a value
     // left encoded would reach the reader as a string.

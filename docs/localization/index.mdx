@@ -172,6 +172,33 @@ English. Without a chain, the default locale is used. A chain may pass through o
 starts from: a loop is refused when the configuration loads, and when the list is changed through
 the API.
 
+## Reading in a language
+
+A public read in a language answers for that language only:
+
+- **A document not published in the language is not there.** Reading an entry or a Single in a
+  language it isn't published in answers `404`, and a list or count leaves it out. A due release
+  counts as published.
+- **Whole-document fallback, when asked.** With `?fallback=document` (Direct API
+  `wholeDocumentFallback: true`), a read of one document answers in the first language of its
+  fallback chain that it is published in, and says which in `_locale`. That language is then read
+  throughout, related documents included. A list asked for it is refused with `400`.
+- **Unique fields never fall back.** A translated unique field, such as a slug, reads in the
+  requested language only.
+- **Filters and search judge the value shown.** In a read that falls back, a filter or search on a
+  translated field matches the value the reader sees: the requested language's, or the fallback
+  language's where the requested one has none. A sort orders by the same value.
+
+A read can also say more about its values:
+
+- **`?source-locales=1`** (Direct API `sourceLocales: true`) adds `_sources`: for each translated
+  field, the language its value came from, or `null` where no language holds one.
+- **`?translations=all`** (Direct API `translations: "all"`) adds `_allLocales`: each translated
+  field's value in every language, while the document's own fields stay in the language read.
+  `locale=all` is this on the default language. Each language's values are judged as the document
+  is: field read rules and field `afterRead` hooks run per language, and the read rule is asked
+  for every language. A field withheld from the document is withheld from both keys.
+
 ## Publishing one language at a time
 
 Per-locale publishing needs **two** flags, not one. `localized` gives you translations;
