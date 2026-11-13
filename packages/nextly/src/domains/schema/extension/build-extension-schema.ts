@@ -153,6 +153,13 @@ export interface ExtensionSchema {
    * it changed. `codeFirstTables` is this map's keys.
    */
   entityOwners: ReadonlyMap<string, EntityOwner>;
+  /**
+   * Plugin id → the prefix its tables are named with, as this compile
+   * resolved it, for every plugin that declares a schema (disabled ones
+   * included). What a boot or command compares with the prefix the plugin's
+   * recorded tables were created under (`assertPluginPrefixesKept`).
+   */
+  pluginPrefixes: ReadonlyMap<string, string>;
   /** Stable hash of the compiled output, for caches. */
   fingerprint: string;
 }
@@ -1011,6 +1018,7 @@ export async function buildExtensionSchema(
     adoptedRelations,
     codeFirstTables: new Set(entityOwners.keys()),
     entityOwners,
+    pluginPrefixes: input.pluginPrefixes,
     fingerprint: fingerprintOf(specs, entityIndexes, entityColumns),
   };
 }
