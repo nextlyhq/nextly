@@ -95,7 +95,7 @@ suite("an installation in a named PostgreSQL schema", () => {
     const tables = await tablesBySchema(handle);
     expect(tables.public).toEqual([]);
     expect(tables[SCHEMA]).toEqual(
-      expect.arrayContaining(["nextly_schema_events", "users", "npn_notes"])
+      expect.arrayContaining(["nextly_schema_events", "users", "npn__notes"])
     );
     expect(tables[SCHEMA]?.some(name => name.includes("npn_posts"))).toBe(true);
 
@@ -121,8 +121,8 @@ suite("an installation in a named PostgreSQL schema", () => {
     const kit = await getPgDrizzleKit();
     const { users } = core;
 
-    const answer = await pushInActiveSchema({ users }, schema =>
-      kit.pushSchema({ users }, handle.adapter.getDrizzle() as never, {
+    const answer = await pushInActiveSchema({ users }, (schema, desired) =>
+      kit.pushSchema(desired, handle.adapter.getDrizzle() as never, {
         schemas: [schema],
         tables: ["users"],
       })

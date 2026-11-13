@@ -2020,8 +2020,8 @@ export class PushSchemaPipeline {
           // desired tables are placed in it for the push, or the kit reads
           // them as `public`'s and proposes moving every one.
           pushSchema: (schema, db, tablesFilter) =>
-            pushInActiveSchema(schema, active =>
-              kit.pushSchema(schema, db, {
+            pushInActiveSchema(schema, (active, desired) =>
+              kit.pushSchema(desired, db, {
                 schemas: [active],
                 tables: tablesFilter,
               })

@@ -9,7 +9,9 @@
  * table between them.
  *
  * So for the push alone, each desired table is told the configured schema, and
- * restored afterwards. The statements drizzle-kit then writes name that schema
+ * restored afterwards, and the schema itself is declared beside them: the kit
+ * takes the schemas it should keep from the `pgSchema` objects it is handed,
+ * so a schema holding the tables but not declared reads as one to drop. The statements drizzle-kit then writes name that schema
  * (`"cms"."users"`), and the qualifier is taken back off: every connection's
  * `search_path` is that schema, so the unqualified statement reaches the same
  * table, and everything that reads the statements afterwards — the drop
@@ -20,7 +22,7 @@
  * @module domains/schema/pipeline/pg-active-schema-push
  */
 import { is, Table } from "drizzle-orm";
-import { PgTable } from "drizzle-orm/pg-core";
+import { pgSchema, PgTable } from "drizzle-orm/pg-core";
 
 import type { KitHint } from "../../../database/drizzle-kit-lazy";
 import {
@@ -109,19 +111,30 @@ async function withTablesInSchema<T>(
 }
 
 /**
+ * The key the configured schema's `pgSchema` object is handed to drizzle-kit
+ * under, beside the tables. Only the kit reads the set, and only by value.
+ */
+const SCHEMA_ENTRY = "__nextlyPostgresSchema";
+
+/**
  * drizzle-kit's push over the configured schema, its answer written as a
  * `public` installation's would be.
  *
- * @param imports - The desired tables, as handed to drizzle-kit
- * @param push - The kit call, given the schema to introspect
+ * @param imports - The desired tables
+ * @param push - The kit call, given the schema to introspect and the set to
+ *   hand drizzle-kit as desired (the tables, plus the schema when it is not
+ *   `public`)
  */
 export async function pushInActiveSchema<R extends PushAnswer>(
   imports: Record<string, unknown>,
-  push: (schema: string) => Promise<R>
+  push: (schema: string, desired: Record<string, unknown>) => Promise<R>
 ): Promise<R> {
   const schema = activePostgresSchema();
-  if (schema === DEFAULT_POSTGRES_SCHEMA) return push(schema);
-  const answer = await withTablesInSchema(imports, schema, () => push(schema));
+  if (schema === DEFAULT_POSTGRES_SCHEMA) return push(schema, imports);
+  const desired = { ...imports, [SCHEMA_ENTRY]: pgSchema(schema) };
+  const answer = await withTablesInSchema(imports, schema, () =>
+    push(schema, desired)
+  );
   return {
     ...answer,
     sqlStatements: answer.sqlStatements.map(statement =>

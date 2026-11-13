@@ -287,8 +287,8 @@ async function pushForDialect(
       // uses it: the adapter writes through `search_path`, so introspecting
       // `public` would compare against a namespace nothing is in, and the
       // desired tables must be read as that schema's too.
-      return pushInActiveSchema(schema, active =>
-        kit.pushSchema(schema, db, {
+      return pushInActiveSchema(schema, (active, desired) =>
+        kit.pushSchema(desired, db, {
           schemas: [active],
           tables: drizzleTableNames(schema),
         })

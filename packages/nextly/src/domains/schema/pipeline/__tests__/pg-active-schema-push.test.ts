@@ -7,7 +7,8 @@
  * that schema only (a literal, and another schema's qualifier, untouched), and
  * every table must be put back afterwards, even when the push throws.
  */
-import { getTableConfig, pgTable, text } from "drizzle-orm/pg-core";
+import { is } from "drizzle-orm";
+import { getTableConfig, PgSchema, pgTable, text } from "drizzle-orm/pg-core";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -60,21 +61,37 @@ describe("pushInActiveSchema", () => {
   it("shows drizzle-kit the desired tables in the configured schema, and puts them back", async () => {
     setActivePostgresSchema("cms");
     const { users, posts } = tables();
-    let seen: { schema: string; users?: string; posts?: string } | undefined;
+    let seen:
+      | { schema: string; users?: string; posts?: string; declared: string[] }
+      | undefined;
 
-    const answer = await pushInActiveSchema({ users, posts }, schema => {
-      seen = {
-        schema,
-        users: getTableConfig(users).schema,
-        posts: getTableConfig(posts).schema,
-      };
-      return Promise.resolve({
-        sqlStatements: ['CREATE TABLE "cms"."users" ("id" text PRIMARY KEY);'],
-        hints: [{ hint: "x", statement: 'DROP TABLE "cms"."old";' }],
-      });
+    const answer = await pushInActiveSchema(
+      { users, posts },
+      (schema, desired) => {
+        seen = {
+          schema,
+          users: getTableConfig(users).schema,
+          posts: getTableConfig(posts).schema,
+          // The schema itself is declared, or the kit reads it as one to drop.
+          declared: Object.values(desired)
+            .filter((value): value is PgSchema => is(value, PgSchema))
+            .map(value => value.schemaName),
+        };
+        return Promise.resolve({
+          sqlStatements: [
+            'CREATE TABLE "cms"."users" ("id" text PRIMARY KEY);',
+          ],
+          hints: [{ hint: "x", statement: 'DROP TABLE "cms"."old";' }],
+        });
+      }
+    );
+
+    expect(seen).toEqual({
+      schema: "cms",
+      users: "cms",
+      posts: "cms",
+      declared: ["cms"],
     });
-
-    expect(seen).toEqual({ schema: "cms", users: "cms", posts: "cms" });
     expect(answer.sqlStatements).toEqual([
       'CREATE TABLE "users" ("id" text PRIMARY KEY);',
     ]);
@@ -105,14 +122,20 @@ describe("pushInActiveSchema", () => {
       sqlStatements: ['CREATE TABLE "users" ("id" text PRIMARY KEY);'],
       hints: [],
     };
-    let seen: { schema: string; table?: string } | undefined;
+    let seen:
+      | { schema: string; table?: string; desired: Record<string, unknown> }
+      | undefined;
 
-    const answer = await pushInActiveSchema({ users }, schema => {
-      seen = { schema, table: getTableConfig(users).schema };
+    const answer = await pushInActiveSchema({ users }, (schema, desired) => {
+      seen = { schema, table: getTableConfig(users).schema, desired };
       return Promise.resolve(kitAnswer);
     });
 
-    expect(seen).toEqual({ schema: "public", table: undefined });
+    expect(seen).toEqual({
+      schema: "public",
+      table: undefined,
+      desired: { users },
+    });
     expect(answer).toBe(kitAnswer);
   });
 });
