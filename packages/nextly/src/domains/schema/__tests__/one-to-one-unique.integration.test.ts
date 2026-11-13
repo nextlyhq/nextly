@@ -894,5 +894,22 @@ describeEachDialect(
       await apply(t, profileFields("oneToOne", false), true);
       expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
     }, 120_000);
+
+    // The relationship's key needs an index on MySQL, and the Unique mark replaces the plain one
+    // with a unique one as the field leaves translation: the unique one is made first.
+    it("keeps a many-to-one marked Unique unique as translation is turned off", async () => {
+      const markedUnique = (localized: boolean) => [
+        { name: "title", type: "text" },
+        { ...person("manyToOne", localized), unique: true },
+      ];
+      const t = await boot(dialect, "manyToOne", { localized: true });
+      await apply(t, markedUnique(true), true);
+      const ada = await aPerson(t, "Ada");
+      await aProfile(t, ada, "en");
+
+      await apply(t, markedUnique(false), true);
+
+      expect(await refusedAsRepeat(aProfile(t, ada, "en"))).toBe(true);
+    }, 120_000);
   }
 );
