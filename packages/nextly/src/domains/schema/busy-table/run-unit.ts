@@ -52,6 +52,12 @@ export interface BusyTableRun {
   readonly notify: (line: string) => void;
   /** The units this run applied before the one about to run. */
   readonly appliedBefore: () => readonly string[];
+  /**
+   * A statement whose failure this accepts is passed over and counts as run (a runner that
+   * tolerates a statement already applied); see `StatementTryBound.passOver` for where it is
+   * honoured.
+   */
+  readonly passOver?: (error: unknown, statement: string) => boolean;
 }
 
 /** The tables of this database with a trigger a row change would fire. */
@@ -262,6 +268,7 @@ export async function runUnitInTries(
               await watchdog.stop();
             },
             beforeStatement: () => watchdog.idle(),
+            ...(run.passOver === undefined ? {} : { passOver: run.passOver }),
           }
         );
         await watchdog.stop();

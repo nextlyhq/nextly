@@ -89,6 +89,14 @@ export interface StatementTryBound {
    * a cancel meant for the statement that waited can never end the next one.
    */
   readonly beforeStatement?: () => Promise<void>;
+  /**
+   * A statement whose failure this accepts is passed over, and the unit goes on to the next, as
+   * a runner that tolerates a statement already applied does; it counts as run. Honoured only
+   * where a refused statement leaves the unit able to go on: outside a transaction, and on MySQL,
+   * which rolls back the statement alone. In a PostgreSQL or SQLite transaction a refused
+   * statement aborts the transaction, so there it is never consulted.
+   */
+  readonly passOver?: (error: unknown, statement: string) => boolean;
 }
 
 /**
@@ -472,7 +480,17 @@ async function runUnitStatements(
           await assertSchemaLockHeld();
           await bound?.beforeStatement?.();
           bound?.onStatement?.(index);
-          await tx.execute(sent(statement));
+          try {
+            await tx.execute(sent(statement));
+          } catch (error) {
+            // Only MySQL's transaction goes on after a refused statement (see `passOver`).
+            if (
+              dialect !== "mysql" ||
+              bound?.passOver?.(error, statement) !== true
+            ) {
+              throw error;
+            }
+          }
         }
         bound?.onStatement?.(statements.length);
         await bound?.settle?.();
@@ -514,6 +532,7 @@ async function runUnitStatements(
       try {
         await execute(sent(statement));
       } catch (error) {
+        if (bound?.passOver?.(error, statement) === true) continue;
         throw partialFailure(unit, index, statements.length, error);
       }
     }

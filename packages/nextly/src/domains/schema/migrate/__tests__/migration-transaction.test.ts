@@ -256,6 +256,54 @@ describe("a unit run outside a transaction that fails part-way", () => {
   });
 });
 
+describe("a statement a try passes over", () => {
+  const ALREADY = [
+    "INSERT INTO parent VALUES ('p4', 'four')",
+    "INSERT INTO missing_table VALUES ('x')",
+    "INSERT INTO parent VALUES ('p5', 'five')",
+  ];
+  const missingTable = (error: unknown) =>
+    String((error as Error).message).includes("no such table: missing_table");
+
+  it("is passed over outside a transaction, and the unit goes on to the next", async () => {
+    const seen: string[] = [];
+    await expect(
+      runMigrationStatements(
+        adapter,
+        ALREADY,
+        { source: "0001_x.sql", transaction: false },
+        undefined,
+        {
+          tryMs: 1_000,
+          passOver: (error, statement) => {
+            seen.push(statement);
+            return missingTable(error);
+          },
+        }
+      )
+    ).resolves.toBe(3);
+    expect(seen).toEqual(["INSERT INTO missing_table VALUES ('x')"]);
+    const rows = await adapter.executeQuery<{ id: string }>(
+      "SELECT id FROM parent WHERE id IN ('p4', 'p5') ORDER BY id"
+    );
+    expect(rows.map(row => row.id)).toEqual(["p4", "p5"]);
+  });
+
+  it("is never consulted in a SQLite transaction, whose refused statement aborts it", async () => {
+    const passOver = vi.fn(() => true);
+    await expect(
+      runMigrationStatements(
+        adapter,
+        ALREADY,
+        { source: "0001_x.sql", transaction: true },
+        undefined,
+        { tryMs: 1_000, passOver }
+      )
+    ).rejects.toThrow();
+    expect(passOver).not.toHaveBeenCalled();
+  });
+});
+
 describe("a unit run outside a transaction refused at a column made required", () => {
   // The refusal says itself which statements ran and that they stayed applied, so it reaches the
   // caller as it is, under its own code, rather than as a statement that failed part-way.
