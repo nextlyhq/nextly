@@ -306,10 +306,12 @@ session, the menu and the settings, before its own code has loaded. Your page's
 > **Experimental.** `startupReads` on a place contribution may change before it is
 > marked stable.
 
-A part you add to an admin place (a block, a tab, a side panel section, any kind) can
-name the reads of your plugin's own routes it makes as it opens, with the same
-`startupReads` a page takes. Its paths may name the place's ids in braces, which the
-page fills in from its address:
+A part you add to an editor's places (a block, a tab, a side panel section, any kind)
+can name the reads of your plugin's own routes it makes as it opens, with the same
+`startupReads` a page takes. The places whose page starts them are `collection.edit`,
+`single.edit` and `entry.form` (the form inside both); the app refuses to start if a
+part names `startupReads` anywhere else, where nothing would start them. Its paths may
+name the place's ids in braces, which the page fills in from its address:
 
 ```ts
 {
@@ -333,10 +335,10 @@ on the document, for up to a second, since that decides whether the fields may b
 written.)
 
 - The ids a path may name are the place's context ids other than `userId`:
-  `{collection}` and `{entryId}` at `collection.edit`, `{single}` at `single.edit`,
-  `{collection}` at `collection.list`, `{kind}`, `{slug}` and `{entryId}` at
-  `entry.form`, `{shownUserId}` at `user.detail`, and none elsewhere or at a plugin's
-  own place.
+  `{collection}` and `{entryId}` at `collection.edit`, `{single}` at `single.edit`, and
+  `{kind}`, `{slug}` and `{entryId}` at `entry.form`. On a Single's page the form's
+  `{entryId}` is not known until the Single has loaded, so a read naming it is not
+  started there.
 - Each id is filled in URI-component encoded. Build the path your component asks for
   the same way, with `encodeURIComponent`, and with its parameters in the same order,
   or the started read and your component's read are two different reads.
@@ -346,7 +348,8 @@ written.)
 - Name only quick reads, at most four. A read that can be slow belongs outside
   `startupReads`: the editor would wait its 250 ms for it.
 - The app refuses to start if a part names more than four reads, a path that isn't a
-  route path starting with `/`, or an id its place doesn't give.
+  route path starting with `/`, an id its place doesn't give, or `startupReads` at a
+  place other than these three.
 - A part that can't declare its reads, and draws nothing until they answer, can sit
   last in its place instead (`after: "details"` in the side panel), where it moves
   nothing when it lands.

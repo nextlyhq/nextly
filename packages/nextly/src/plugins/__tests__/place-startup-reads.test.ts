@@ -16,7 +16,8 @@ import {
 } from "../place-startup-reads";
 
 /** The page builder's Design section's read, as it would declare it. */
-const DESIGN_READ = "/templates/entry-designs?collection={collection}&entry={entryId}";
+const DESIGN_READ =
+  "/templates/entry-designs?collection={collection}&entry={entryId}";
 
 /** A plugin declaring one side panel section with these startup reads. */
 function sectionWith(
@@ -56,13 +57,17 @@ function refusal(plugin: PluginDefinition): string {
 }
 
 describe("the ids a place's reads may name", () => {
-  it("names every id of every core place's context but the reader's", () => {
+  it("names every id of each starting place's context but the reader's", () => {
     expectTypeOf<UnnamedPlaceStartupIds>().toBeNever();
     expect(PLACE_STARTUP_IDS["collection.edit"]).toEqual([
       "collection",
       "entryId",
     ]);
-    expect(PLACE_STARTUP_IDS.dashboard).toEqual([]);
+    expect(Object.keys(PLACE_STARTUP_IDS)).toEqual([
+      "collection.edit",
+      "single.edit",
+      "entry.form",
+    ]);
   });
 
   it("reads the ids a path names, in order", () => {
@@ -117,10 +122,31 @@ describe("the boot check of a contribution's startup reads", () => {
     expect(message).toContain('"/designs?single={single}" names {single}');
   });
 
-  it("refuses an id at a place that gives none", () => {
-    expect(
-      refusal(sectionWith([{ path: "/totals/{collection}" }], "dashboard"))
-    ).toContain('the place "dashboard" does not give');
+  it.each(["dashboard", "collection.list", "user.detail", "account"])(
+    "refuses startup reads at %s, where no page starts them, naming the places that do",
+    place => {
+      const message = refusal(sectionWith([{ path: "/totals" }], place));
+      expect(message).toContain(`at "${place}"`);
+      expect(message).toContain(
+        '"collection.edit", "single.edit" and "entry.form"'
+      );
+    }
+  );
+
+  it("starts reads at an entry's form, with its kind, slug and id", () => {
+    expect(PLACE_STARTUP_IDS["entry.form"]).toEqual([
+      "kind",
+      "slug",
+      "entryId",
+    ]);
+    expect(() =>
+      contributedAdminContributions([
+        sectionWith(
+          [{ path: "/notes?{kind}={slug}&entry={entryId}" }],
+          "entry.form"
+        ),
+      ])
+    ).not.toThrow();
   });
 
   it("refuses more reads than the startup request takes", () => {

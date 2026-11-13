@@ -34,32 +34,38 @@ type NamedKeys<T> = keyof {
 };
 
 /**
- * @experimental The ids each core place's reads may name, in braces: the keys
- * of its `AdminPlaces` context other than `userId`. Checked against that type
- * both ways below, so a place or an id added there is named here too.
+ * The places whose page starts a part's reads as it first renders: an entry's
+ * and a Single's edit page, and the form inside them. Another place's page
+ * does not, so boot refuses `startupReads` there rather than accept a
+ * declaration nothing would honour.
+ */
+type StartingPlace = "collection.edit" | "single.edit" | "entry.form";
+
+/**
+ * @experimental The ids each starting place's reads may name, in braces: the
+ * keys of its `AdminPlaces` context other than `userId`. Checked against that
+ * type both ways below, so an id added there is named here too.
  */
 export const PLACE_STARTUP_IDS = Object.freeze({
-  dashboard: [],
-  "collection.list": ["collection"],
   "collection.edit": ["collection", "entryId"],
   "single.edit": ["single"],
   "entry.form": ["kind", "slug", "entryId"],
-  settings: [],
-  "user.detail": ["shownUserId"],
-  account: [],
-  login: [],
-} as const satisfies { [P in CoreAdminPlaceId]: readonly PlaceIds<P>[] });
+} as const satisfies { [P in StartingPlace]: readonly PlaceIds<P>[] });
 
 /**
- * The ids of a place's context the list above leaves out: `never` while it
- * names them all, which its test holds it to.
+ * The ids of a starting place's context that `PLACE_STARTUP_IDS` leaves out:
+ * `never`, which a type test holds it to.
  */
 export type UnnamedPlaceStartupIds = {
-  [P in CoreAdminPlaceId]: Exclude<
+  [P in StartingPlace]: Exclude<
     PlaceIds<P>,
     (typeof PLACE_STARTUP_IDS)[P][number]
   >;
-}[CoreAdminPlaceId];
+}[StartingPlace];
+
+/** The starting places, as an operator reads them in a refusal. */
+const STARTING_PLACES_SAID =
+  '"collection.edit", "single.edit" and "entry.form"';
 
 /** One id named in a read's path: `{collection}`. */
 const NAMED_ID = /\{([A-Za-z]+)\}/g;
@@ -90,11 +96,11 @@ export function fillPlaceStartupPath(
   return missing ? null : filled;
 }
 
-/** The ids `place` lets a read name: none for a plugin's own place. */
-function idsOf(place: string): readonly string[] {
+/** The ids `place` lets a read name, or `undefined` where no page starts them. */
+function idsOf(place: string): readonly string[] | undefined {
   return Object.hasOwn(PLACE_STARTUP_IDS, place)
-    ? PLACE_STARTUP_IDS[place as CoreAdminPlaceId]
-    : [];
+    ? PLACE_STARTUP_IDS[place as StartingPlace]
+    : undefined;
 }
 
 /**
@@ -113,6 +119,12 @@ export function placeStartupReadsProblem(
     return `it declares ${reads.length} startup reads; a contribution may declare at most ${MAX_PAGE_STARTUP_READS}`;
   }
   const allowed = idsOf(place);
+  if (allowed === undefined) {
+    return (
+      `it declares \`startupReads\` at "${place}", where no page starts ` +
+      `them; only ${STARTING_PLACES_SAID} start a part's reads as they open`
+    );
+  }
   for (const read of reads as unknown[]) {
     if (
       typeof read !== "object" ||
@@ -128,9 +140,7 @@ export function placeStartupReadsProblem(
     if (stray !== undefined) {
       return (
         `its startup read "${declared.path}" names {${stray}}, which ` +
-        (allowed.length === 0
-          ? `the place "${place}" does not give`
-          : `is not one of the place's ids (${allowed.map(id => `{${id}}`).join(", ")})`)
+        `is not one of the place's ids (${allowed.map(id => `{${id}}`).join(", ")})`
       );
     }
     // Filled as the page fills it, each id with a sample value, so the path

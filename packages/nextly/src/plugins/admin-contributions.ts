@@ -619,7 +619,8 @@ interface AdminContributionBase {
    * address, each one URI-component encoded:
    * `/templates/entry-designs?collection={collection}&entry={entryId}` at
    * `collection.edit`. The ids are those of `AdminPlaces[place]["context"]`
-   * other than `userId`; a plugin's own place takes none.
+   * other than `userId`. Taken at `collection.edit`, `single.edit` and
+   * `entry.form` only, whose pages start them; boot refuses them elsewhere.
    *
    * The page starts them as it first renders, beside its own reads, rather
    * than after the component has mounted, and the component's first read
