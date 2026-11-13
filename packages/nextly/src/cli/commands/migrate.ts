@@ -51,6 +51,11 @@ import {
   filesWithinStep,
   stepContinuedNotice,
 } from "../../domains/i18n/migration/step-windows";
+import { busyTableBounds } from "../../domains/schema/busy-table/bounds";
+import {
+  runUnitInTries,
+  type BusyTableRun,
+} from "../../domains/schema/busy-table/run-unit";
 import { isPluginLedgerRow } from "../../domains/schema/events/ledger-scope";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import {
@@ -304,6 +309,15 @@ export interface MigrateCommandOptions {
   forceUnlock?: boolean;
 
   /**
+   * One try's bound for a busy table, in whole seconds, as typed (`--lock-timeout`); checked with
+   * the total before anything changes (`busyTableBounds`).
+   */
+  lockTimeout?: string;
+
+  /** Every try's bound together, in whole seconds, as typed (`--lock-timeout-total`). */
+  lockTimeoutTotal?: string;
+
+  /**
    * Copy existing content into the translation tables of localized entities that carry no record
    * of ever having transitioned.
    *
@@ -394,6 +408,28 @@ interface ParsedMigration {
   transaction: boolean;
 }
 
+/** The busy-table bounds a run's options and the environment give (`busyTableBounds`). */
+function busyTableBoundsOf(
+  options: Pick<MigrateCommandOptions, "lockTimeout" | "lockTimeoutTotal">
+): ReturnType<typeof busyTableBounds> {
+  return busyTableBounds({
+    flags: {
+      lockTimeout: options.lockTimeout,
+      lockTimeoutTotal: options.lockTimeoutTotal,
+    },
+    env: process.env,
+  });
+}
+
+/** `read`'s value, or the run ended through `fail` with what it threw. */
+function orFail<T>(read: () => T, fail: (error: unknown) => never): T {
+  try {
+    return read();
+  } catch (error) {
+    return fail(error);
+  }
+}
+
 /**
  * Execute the migrate command
  *
@@ -419,6 +455,10 @@ export async function runMigrate(
     if (options.throwOnFailure === true) throw error;
     return exitWithError(logger, error, status);
   };
+
+  // The busy-table bounds are checked first, so a value outside its range is refused before
+  // anything is read or changed.
+  const bounds = orFail(() => busyTableBoundsOf(options), fail);
 
   logger.debug("Validating database environment...");
   let dbValidation: ReturnType<typeof databaseEnvOrThrow>;
@@ -589,6 +629,12 @@ export async function runMigrate(
         // run does not put unmigrated edits back to the snapshot. Everywhere
         // else the rows are brought to the newest applied snapshot.
         registryRows: configWatchAllowed() ? "insert-missing" : "write",
+        // An app file or a plugin module waits for a busy table in tries; each try's notice goes
+        // to standard error, so a run with --json keeps one document on standard output.
+        busyTable: {
+          bounds,
+          notify: line => process.stderr.write(`${line}\n`),
+        },
         // A run that finds the schema lock held waits about a minute for it, then stops naming
         // what holds it.
         lockMode: "wait",
@@ -967,6 +1013,13 @@ export interface MigrateCoreDeps {
    * stops naming the holder; `fail-fast` stops at once.
    */
   lockMode?: "fail-fast" | "wait";
+  /**
+   * How an app file's or a plugin module's statements wait for a busy table: the bounds, and
+   * where each try's notice goes. The plugin phase reads it from the same deps, so the boot and
+   * `nextly migrate` give both streams one bound. Absent, a unit runs in one try with no bound of
+   * its own, as before.
+   */
+  busyTable?: Omit<BusyTableRun, "appliedBefore">;
   /** The schema lock's lease, in seconds (`db.migrateLockTtlSeconds`). */
   ttlSeconds?: number;
   /** How long `wait` waits for a held lock, in milliseconds. Default about a minute. */
@@ -1502,6 +1555,16 @@ export async function maybeForceUnlock(
   await forceUnlock(db, dialect);
 }
 
+/** A run's busy-table bounds, naming `applied` as the files before each one; none without bounds. */
+function withAppliedBefore(
+  busyTable: Omit<BusyTableRun, "appliedBefore"> | undefined,
+  applied: readonly string[]
+): BusyTableRun | undefined {
+  return busyTable === undefined
+    ? undefined
+    : { ...busyTable, appliedBefore: () => [...applied] };
+}
+
 /**
  * One SQL executor for every phase: split, run as the unit is marked to —
  * in one transaction unless it is marked to run outside one — and count.
@@ -1515,7 +1578,8 @@ export async function maybeForceUnlock(
 function buildSqlExecutor(
   dz: DrizzleAdapter,
   dialect: SupportedDialect,
-  logger: CommandContext["logger"]
+  logger: CommandContext["logger"],
+  busyTable?: BusyTableRun
 ): (
   sqlText: string,
   unit: MigrationUnit,
@@ -1523,12 +1587,11 @@ function buildSqlExecutor(
 ) => Promise<number> {
   return async (sqlText, unit, after) => {
     if (!unit.transaction) logger.warn(outsideTransactionNotice(unit.source));
-    return runMigrationStatements(
-      dz,
-      splitSqlStatements(sqlText, dialect, unit),
-      unit,
-      after
-    );
+    const statements = splitSqlStatements(sqlText, dialect, unit);
+    // With bounds, a unit waits for a busy table in tries (`runUnitInTries`); without, in one.
+    return busyTable === undefined
+      ? runMigrationStatements(dz, statements, unit, after)
+      : runUnitInTries(dz, statements, unit, after, busyTable);
   };
 }
 
@@ -1809,6 +1872,27 @@ export async function runPluginPhase(
     // decide the other's stream.
     elementStream.set(ownerRecordKey(record), record.migratedBy);
   }
+  // The modules this run ran, named by a busy table's report as the changes before the one that
+  // stopped. A module waits for a busy table in tries as an app file does (`runUnitInTries`), its
+  // ledger and owner rows written in `after` with its statements.
+  const appliedModules: string[] = [];
+  const executeModule = buildSqlExecutor(
+    dz,
+    deps.dialect,
+    deps.logger,
+    withAppliedBefore(deps.busyTable, appliedModules)
+  );
+  const pluginExecuteSql: typeof executeModule = async (
+    sqlText,
+    unit,
+    after
+  ) => {
+    const ran = await executeModule(sqlText, unit, after);
+    // An adoption runs no statements and records a run of modules under its first one's name,
+    // so only a module whose statements ran is named.
+    if (sqlText.trim() !== "") appliedModules.push(unit.source);
+    return ran;
+  };
   const pluginOutcome = await runPluginMigrations(deps.pluginMigrationSets, {
     dialect: deps.dialect,
     appliedShas,
@@ -1893,7 +1977,7 @@ export async function runPluginPhase(
       }
       return live;
     },
-    executeSql: buildSqlExecutor(dz, deps.dialect, deps.logger),
+    executeSql: pluginExecuteSql,
     repo: eventsRepo,
     recordOwner: async ({
       pluginName,
@@ -2176,6 +2260,7 @@ async function runMigrationStreams(
     ...(deps.collectionSources === undefined
       ? {}
       : { collectionSources: deps.collectionSources }),
+    ...(deps.busyTable === undefined ? {} : { busyTable: deps.busyTable }),
   });
   return { pluginModulesApplied, applied };
 }
@@ -4009,6 +4094,8 @@ export async function runFileMigrations(args: {
    * creates with itself is that plugin's (`RegistryWriteDeps.collectionSources`).
    */
   collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
+  /** See `MigrateCoreDeps.busyTable`. */
+  busyTable?: Omit<BusyTableRun, "appliedBefore">;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // The files about to run judged once more, as they read now: the folder may
@@ -4033,7 +4120,15 @@ export async function runFileMigrations(args: {
   const metaDir = resolve(migrationsDir, "meta");
 
   const dz = adapter as unknown as DrizzleAdapter;
-  const executeSql = buildSqlExecutor(dz, dialect, logger);
+  // The files this run applied, named by a busy table's report as the changes before the one
+  // that stopped.
+  const appliedFiles: string[] = [];
+  const executeSql = buildSqlExecutor(
+    dz,
+    dialect,
+    logger,
+    withAppliedBefore(args.busyTable, appliedFiles)
+  );
 
   // Owner rows for the drop guard: an app file dropping a plugin-migrated
   // table is refused whole, before its first statement. Read once; an absent
@@ -4206,6 +4301,7 @@ export async function runFileMigrations(args: {
         }
         applied++;
         lastApplied = filename;
+        appliedFiles.push(filename);
         running = undefined;
         logger.success(`Applied ${filename}`);
         previous = m.name;
@@ -4282,6 +4378,7 @@ export async function runFileMigrations(args: {
       });
       applied++;
       lastApplied = filename;
+      appliedFiles.push(filename);
       running = undefined;
       logger.success(`Applied ${filename}`);
       // Once the file is recorded applied, so what its snapshot no longer declares leaves with it.

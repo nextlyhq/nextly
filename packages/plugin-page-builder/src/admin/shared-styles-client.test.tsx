@@ -28,8 +28,9 @@ let writeBehaviour: () => Promise<unknown> = async () => ({});
 let refetches = 0;
 
 // The real error readers, so a refusal is read as the admin reads it.
-const admin =
-  await vi.importActual<typeof import("@nextlyhq/admin")>("@nextlyhq/admin");
+const admin = await vi.importActual<typeof import("@nextlyhq/admin/kit")>(
+  "@nextlyhq/admin/kit"
+);
 
 vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   readPluginRoute: async (read: { path: string }) => {

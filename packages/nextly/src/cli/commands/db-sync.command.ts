@@ -8,6 +8,7 @@ import { Option, type Command } from "commander";
 
 import { ACCEPT_DATA_LOSS_HELP } from "../../domains/schema/migrate/data-loss-consent-help";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../shared/types/typescript-config-defaults";
+import { withBusyTableBounds } from "../busy-table-options";
 import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
@@ -74,8 +75,9 @@ export function registerDbSyncCommand(program: Command): void {
     // and type changes still need a terminal to answer their prompts.
     .option("--accept-data-loss [targets]", ACCEPT_DATA_LOSS_HELP);
   // `--dry-run` carries the one meaning and help line it has everywhere. Refused with `--watch`,
-  // which never ends: a dry run reports once and exits 0.
-  withDryRun(command, { conflicts: ["watch"] }).action(
+  // which never ends: a dry run reports once and exits 0. The busy-table bounds carry theirs too:
+  // how long the sync's schema change waits for a table another session is using.
+  withBusyTableBounds(withDryRun(command, { conflicts: ["watch"] })).action(
     lazyAction(async () => (await import("./db-sync")).dbSyncAction)
   );
 }

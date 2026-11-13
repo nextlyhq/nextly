@@ -21,8 +21,10 @@ const collectionsResult = vi.hoisted(() => ({
     isLoading: false,
   },
 }));
-vi.mock("@admin/hooks/queries", async importOriginal => ({
-  ...(await importOriginal<typeof import("@admin/hooks/queries")>()),
+vi.mock("@admin/hooks/queries/useCollections", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("@admin/hooks/queries/useCollections")
+  >()),
   useCollections: () => ({ ...collectionsResult.current, error: null }),
 }));
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
