@@ -62,6 +62,7 @@ import {
   type GoogleClient,
 } from "./connections/search-console-send";
 import { CONNECTION_SECRETS, connectionSettings } from "./connections/store";
+import { watchContentDates } from "./content-dates/hooks";
 import { defaultSeoFields } from "./fields";
 import { importRoutes } from "./import/route";
 import { withLanguageLinks } from "./languages/head";
@@ -637,6 +638,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const problemChecks = {
     targets,
     singles: singleTargets,
+    // The pages built in code the sitemap lists, for the check of its dates.
+    codeRoutes,
     readers: {
       readRules,
       readStructuredDataRules: structuredDataFromSettings(
@@ -993,6 +996,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       keepSeoContext(ctx);
       // Each saved page checked again for the problem list.
       watchSaves(ctx, problemChecks);
+      // Each saved page's sitemap date moved only where its content changed.
+      watchContentDates(ctx, { collections: targets, singles: singleTargets });
       keepCodeRoutes(codeRoutes);
       // Changed pages noted for IndexNow, told once they settle.
       stopIndexNow = watchForIndexNow(

@@ -31,6 +31,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 
 import { catchUp, lastCatchUp } from "../address-record/catch-up";
 import { forgetNote } from "../address-record/__tests__/record-tables";
+import { contentDatesSettled } from "../content-dates/hooks";
 import type { ListedPagesService } from "../outputs/listing";
 import { seoPlugin, type SeoPluginOptions } from "../plugin";
 
@@ -181,8 +182,9 @@ async function listed(query = ""): Promise<string[]> {
   return [...body.matchAll(/<url><loc>([^<]*)<\/loc>/g)].map(m => m[1] ?? "");
 }
 
-/** The `<url>` entry of one page, as the sitemap writes it. */
+/** The `<url>` entry of one page, as the sitemap writes it, once dates settle. */
 async function entryOf(loc: string): Promise<string | undefined> {
+  await contentDatesSettled();
   const { body } = await rootFile("sitemap.xml");
   return body.split("\n").find(line => line.includes(`<url><loc>${loc}</loc>`));
 }
@@ -465,7 +467,7 @@ describe.each(getConfiguredTestDialects())(
       expect(published).not.toBe(first);
     });
 
-    it("holds an SEO change as a draft, in the page's head and its lastmod, until the page is published", async () => {
+    it("holds an SEO change as a draft until the page is published, and never moves the page's lastmod", async () => {
       const { t } = await boot(dialect);
       const id = await create(t, "pages", {
         title: "About",
@@ -500,9 +502,8 @@ describe.each(getConfiguredTestDialects())(
         },
       });
       expect(await titleOf()).toContain("About Acme, rewritten");
-      const published = await entryOf(`${SITE}/about`);
-      expect(published).toMatch(/<lastmod>[^<]+<\/lastmod>/);
-      expect(published).not.toBe(first);
+      // Only the page's SEO changed: its content, and so its date, did not.
+      expect(await entryOf(`${SITE}/about`)).toBe(first);
     });
 
     it("lists each page's main image from published content only", async () => {

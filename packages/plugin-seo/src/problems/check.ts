@@ -21,7 +21,9 @@ import {
 
 import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
+import type { CodeRoute } from "../code-pages/routes";
 import { readConnections } from "../connections/store";
+import { pruneContentDates } from "../content-dates/store";
 import { pageLanguageLinks } from "../languages/head";
 import {
   heldLanguages,
@@ -29,7 +31,11 @@ import {
   type HeldLanguages,
 } from "../languages/versions";
 import { originOf } from "../origin";
-import { listPages } from "../outputs/listing";
+import {
+  listPages,
+  type ListedPage,
+  type ListingProblem,
+} from "../outputs/listing";
 import { isRecord, textOf } from "../plain-values";
 import { destinationOf, pathOf } from "../redirects/addresses";
 import { redirectsSlug } from "../redirects/collection";
@@ -54,6 +60,7 @@ import {
   type Problem,
   type ProblemListBody,
 } from "./contract";
+import { datesTodayProblems } from "./dates-check";
 import { addressShapes, brokenLinks } from "./links";
 import { canonicalIsOwn, pageProblems } from "./page-checks";
 import { pageTypeOf, singleKey } from "./page-types";
@@ -95,6 +102,11 @@ export interface ProblemChecks {
   /** The Singles SEO is added to. */
   singles: readonly string[];
   readers: CheckReaders;
+  /**
+   * The pages the site's routes render from their own code, which the
+   * sitemap lists beside the entries, where the site has any.
+   */
+  codeRoutes?: () => readonly CodeRoute[];
 }
 
 /** Every type the checks read pages of, by its kept key. */
@@ -575,13 +587,23 @@ async function runSiteCheck(
       }
     });
   }
+  // The content dates of pages no longer listed in a language go, so the
+  // table holds rows only for pages the sitemap may still list.
+  await pruneContentDates(ctx);
+  // The listing the sitemap is made from, read once for what it leaves out
+  // and for its dates.
+  const listing = await siteListing(ctx, checks);
   await saveSiteCheck(ctx, {
     startedAt,
     checkedAt: new Date().toISOString(),
     // Each language of a page is a page to a search engine.
     pagesChecked: seen.size,
     problems: [
-      ...(await leftOutOfListing(ctx, checks)),
+      ...(await leftOutOfListing(ctx, listing.problems)),
+      ...(await datesTodayProblems(
+        ctx,
+        listing.pages.map(page => page.lastModified)
+      )),
       ...redirectChainProblems(await redirectChains(ctx)),
     ],
   });
@@ -590,6 +612,24 @@ async function runSiteCheck(
 /** The origin pages are listed on where the site names none: only paths are kept. */
 const NO_ORIGIN = "https://site.invalid";
 
+/** The site's listing, as the sitemap is made from it. */
+async function siteListing(
+  ctx: PluginContext,
+  checks: ProblemChecks
+): Promise<{ pages: ListedPage[]; problems: ListingProblem[] }> {
+  const rules = await checks.readers.readRules(ctx, undefined);
+  const origin =
+    productionAddressesOf(rules.productionAddresses)[0] ?? NO_ORIGIN;
+  return listPages(ctx, {
+    origin,
+    readRules: checks.readers.readRules,
+    collections: checks.targets,
+    ...(checks.codeRoutes === undefined
+      ? {}
+      : { codeRoutes: checks.codeRoutes }),
+  });
+}
+
 /**
  * The pages the sitemap leaves out though their type declares them an
  * address, read by the same listing the sitemap is made from, and named as
@@ -597,16 +637,8 @@ const NO_ORIGIN = "https://site.invalid";
  */
 async function leftOutOfListing(
   ctx: PluginContext,
-  checks: ProblemChecks
+  problems: readonly ListingProblem[]
 ): Promise<Problem[]> {
-  const rules = await checks.readers.readRules(ctx, undefined);
-  const origin =
-    productionAddressesOf(rules.productionAddresses)[0] ?? NO_ORIGIN;
-  const { problems } = await listPages(ctx, {
-    origin,
-    readRules: checks.readers.readRules,
-    collections: checks.targets,
-  });
   const labels = new Map(
     (await readPages(ctx)).map(row => [
       `${row.subject.type}:${row.subject.id}`,

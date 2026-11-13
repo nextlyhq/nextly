@@ -32,6 +32,7 @@ import {
 import { codePages, heldByDocuments } from "../code-pages/answers";
 import { codePagesSlug } from "../code-pages/collection";
 import type { CodeRoute } from "../code-pages/routes";
+import { readContentDates } from "../content-dates/store";
 import { languageLinks } from "../languages/links";
 import {
   absolute,
@@ -295,6 +296,11 @@ async function listCodePages(
       language: options.language,
       holder: { collection: codePagesSlug(ctx), id: row.id },
       images: ownImage(answer, options.origin),
+      // Only the date its route states: a page built in code is never given
+      // the time it was built or asked for.
+      ...(row.lastModified === undefined
+        ? {}
+        : { lastModified: row.lastModified }),
     });
   }
 }
@@ -383,13 +389,23 @@ async function listIn(
   const paths = owns.flatMap(own =>
     own.status === "resolved" ? [own.path] : []
   );
+  // When each page's content last changed in this language: one read for
+  // the batch.
+  const dates = await contentDatesOf(ctx, candidates, language);
   await withAddressHolders(ctx, language, paths, async () => {
     for (const [at, candidate] of candidates.entries()) {
       const own = owns[at];
       const outcome =
         own === undefined
           ? null
-          : await listed(ctx, candidate, own, language, options);
+          : await listed(
+              ctx,
+              candidate,
+              own,
+              language,
+              options,
+              dates.get(candidate.holder.id)
+            );
       if (outcome === null) continue;
       const { holder, path } = "lost" in outcome ? outcome.lost : outcome.page;
       const holds = held.get(holder.id)?.get(language)?.has(path) === true;
@@ -411,17 +427,39 @@ function ownImage(answer: SeoAnswer, origin: string): string[] {
   return image === null ? [] : [image];
 }
 
+/** The content dates of `candidates` in `language`, by id. */
+async function contentDatesOf(
+  ctx: PluginContext,
+  candidates: readonly Candidate[],
+  language: string
+): Promise<Map<string, string>> {
+  const [first] = candidates;
+  if (first === undefined) return new Map();
+  return readContentDates(
+    ctx,
+    first.holder.collection,
+    candidates.map(candidate => candidate.holder.id),
+    language
+  );
+}
+
 /**
  * The version `candidate` is in `language`, as it would be listed, the
  * address it lost where it lost its own, or null where it is not listed at
  * all: hidden, with no declared address, or naming another page.
+ *
+ * Its date is when its published content last changed (`contentDate`), so
+ * a save that changed only its SEO, or nothing, leaves it. A page saved
+ * before its content dates were kept has none yet, and takes its own last
+ * save until its next one: nothing is written while a sitemap is read.
  */
 async function listed(
   ctx: PluginContext,
   candidate: Candidate,
   own: PublicAddress,
   language: string,
-  options: ListingOptions
+  options: ListingOptions,
+  contentDate?: string
 ): Promise<
   | { page: ListedPage }
   | { lost: { holder: AddressHolder; path: string } }
@@ -446,7 +484,7 @@ async function listed(
   );
   if (at === null) return null;
   if (at === "lost") return { lost: { holder, path: own.path } };
-  const lastModified = toLastModified(document.updatedAt);
+  const lastModified = contentDate ?? toLastModified(document.updatedAt);
   return {
     page: {
       loc: at.loc,
@@ -460,7 +498,7 @@ async function listed(
 }
 
 /** The type a holder's documents are of, where it is one the site lists. */
-async function typeOf(
+export async function typeOf(
   ctx: PluginContext,
   holder: AddressHolder
 ): Promise<PublicAddressType | undefined> {
@@ -502,7 +540,10 @@ async function listedVersionOf(
     { type, holder, document },
     own,
     language,
-    options
+    options,
+    (await readContentDates(ctx, holder.collection, [holder.id], language)).get(
+      holder.id
+    )
   );
   if (outcome === null || "lost" in outcome) return null;
   // The record's word on what the page holds, as the listing reads it.
