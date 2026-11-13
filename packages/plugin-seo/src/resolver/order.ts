@@ -16,6 +16,11 @@
  * page hidden whatever the answer says, so the answer says so too, and the
  * sitemap and the admin agree with the page.
  *
+ * The social card's title and description put what a person typed for
+ * search between their own typed text and the route's card text, so a title
+ * typed for the page is not hidden by a route that copies its heading into
+ * the card (`socialValue` below).
+ *
  * A level with nothing for a value, or only blank text, gives way to the next
  * rather than answering it empty. Every value is reported with the level
  * that supplied it, so the SEO tab can say where an automatic value comes
@@ -166,17 +171,23 @@ function textValue(
 }
 
 /**
- * The social card's own text: set at a level that speaks for the card (a
- * person, code or the design), or else the page's own, with its source.
+ * The social card's own text, with its source: what a person typed for the
+ * card, then what they typed for search, then the card text the route's
+ * code or the design sets, and else the page's own value as the order works
+ * it out. A person's typed search text comes before the route's card text
+ * because most hand-written routes copy their heading into the card, which
+ * would otherwise hide what was typed for the page.
  */
 function socialValue(
   levels: Levels,
   key: "socialTitle" | "socialDescription",
   page: Sourced<string> | undefined
 ): Sourced<string> | undefined {
+  const typed = key === "socialTitle" ? "title" : "description";
   return (
     first([
       at("page", levels.page[key]),
+      at("page", levels.page[typed]),
       at("code", levels.code[key]),
       at("template", levels.template[key]),
     ]) ?? page

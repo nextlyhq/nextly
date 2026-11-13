@@ -18,6 +18,9 @@ import { FRAMEWORK_CRAWL_EXCLUSIONS } from "@nextlyhq/plugin-sdk";
 
 import { isRecord } from "../plain-values";
 
+import { isNextBuild } from "./building";
+import { declaredAddresses } from "./static-params";
+
 /** A page a route renders from its own code. */
 export interface CodeRoute {
   /** The address, from the site's root. */
@@ -26,6 +29,12 @@ export interface CodeRoute {
   source: "built" | "dynamic";
   /** The route's file in the app, such as `app/pricing/page.tsx`. */
   route: string;
+  /**
+   * Declared through `seoStaticParams` while `next build` runs, before the
+   * page has rendered: its route calls `seoMetadata`, which it may not have
+   * recorded yet.
+   */
+  declared?: true;
 }
 
 /** An address the build prerendered, and the route that rendered it. */
@@ -33,6 +42,14 @@ export interface Prerendered {
   path: string;
   /** The route, as Next.js names it: `/integrations/[name]`. */
   srcRoute: string | null;
+  /**
+   * Whether the build's render of it answered not found (status 404), as a
+   * page whose `generateStaticParams` names an address it then finds empty
+   * does: no page is served there, so it is no page of the site.
+   */
+  notFound?: boolean;
+  /** Declared through `seoStaticParams` while the build runs (`CodeRoute`). */
+  declared?: true;
 }
 
 /** Where the app's routes are, and where `next build` wrote. */
@@ -85,9 +102,32 @@ export function addressOfAppPath(appPath: string): string | undefined {
 const isDynamic = (path: string) => path.includes("[");
 
 /**
+ * The page `prerendered` names for a route with a variable part, `dynamic`
+ * keyed by the name Next.js gives each; none for an address no such route
+ * made, one with a variable part left, or one of the framework's own.
+ */
+function dynamicRouteOf(
+  { path, srcRoute, declared }: Prerendered,
+  dynamic: ReadonlyMap<string, string>,
+  fileOf: (appPath: string) => string
+): CodeRoute | undefined {
+  const appPath = srcRoute === null ? undefined : dynamic.get(srcRoute);
+  if (appPath === undefined || isDynamic(path) || frameworkAddress(path)) {
+    return undefined;
+  }
+  return {
+    path,
+    source: "dynamic",
+    route: fileOf(appPath),
+    ...(declared === true ? { declared } : {}),
+  };
+}
+
+/**
  * The pages the routes at `appPaths` render from their own code: each one
  * with no variable part, and each address `prerendered` names for one that
- * has. Sorted by address; an address listed twice is listed once.
+ * has, but never an address the build answered not found. Sorted by
+ * address; an address listed twice is listed once.
  */
 export function codeRoutesOf(
   appPaths: readonly string[],
@@ -106,15 +146,21 @@ export function codeRoutesOf(
       found.set(path, { path, source: "built", route: fileOf(appPath) });
     }
   }
-  for (const { path, srcRoute } of prerendered) {
-    const appPath = srcRoute === null ? undefined : dynamic.get(srcRoute);
-    if (appPath === undefined || isDynamic(path) || found.has(path)) continue;
-    if (frameworkAddress(path)) continue;
-    found.set(path, { path, source: "dynamic", route: fileOf(appPath) });
+  for (const each of prerendered) {
+    const route = dynamicRouteOf(each, dynamic, fileOf);
+    if (route !== undefined && !found.has(route.path)) {
+      found.set(route.path, route);
+    }
   }
-  return [...found.values()].sort((left, right) =>
-    left.path < right.path ? -1 : left.path > right.path ? 1 : 0
+  // No page is served where the build's render answered not found.
+  const notFound = new Set(
+    prerendered.flatMap(each => (each.notFound === true ? [each.path] : []))
   );
+  return [...found.values()]
+    .filter(route => !notFound.has(route.path))
+    .sort((left, right) =>
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0
+    );
 }
 
 /** A JSON file's contents, or nothing where it is missing or unreadable. */
@@ -143,9 +189,16 @@ function appPathsIn(dir: string): string[] {
   return isRecord(manifest) ? Object.keys(manifest) : [];
 }
 
-/** Every address the build prerendered, with the route that rendered it. */
+/**
+ * Every address the build prerendered, with the route that rendered it.
+ * Until `next build` writes its prerender manifest, which it does once every
+ * page is rendered, those the build declared through `seoStaticParams`; the
+ * manifest wins once it exists.
+ */
 function prerenderedIn(dir: string): Prerendered[] {
-  const manifest = readJson(join(dir, "prerender-manifest.json"));
+  const file = join(dir, "prerender-manifest.json");
+  if (!existsSync(file)) return isNextBuild() ? declaredAddresses(dir) : [];
+  const manifest = readJson(file);
   const routes = isRecord(manifest) ? manifest.routes : undefined;
   if (!isRecord(routes)) return [];
   return Object.entries(routes).map(([path, route]) => ({
@@ -154,6 +207,9 @@ function prerenderedIn(dir: string): Prerendered[] {
       isRecord(route) && typeof route.srcRoute === "string"
         ? route.srcRoute
         : null,
+    ...(isRecord(route) && route.initialStatus === 404
+      ? { notFound: true }
+      : {}),
   }));
 }
 

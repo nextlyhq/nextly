@@ -149,6 +149,75 @@ export async function servedSchemaVersion(): Promise<number | undefined> {
 }
 
 /**
+ * Run `load`, a load of this copy's definitions from the registry rows made
+ * by the start, and record the stored version it loaded them at: the version
+ * is read just before, so a change landing while they load is still seen as
+ * a move by the next follow. Without the record the first follow (a page's
+ * first Direct API call, the first admin request) could not tell what the
+ * start loaded, and loaded every definition again to be sure. Not recorded
+ * where the version could not be read, where `loaded` says the load fell
+ * short, or where a change was marked here while it ran.
+ */
+export async function loadingDefinitions<T>(
+  load: () => Promise<T>,
+  options: {
+    /** The adapter loaded through; the registered one where not given. */
+    adapter?: DrizzleAdapter;
+    /** Whether `load` loaded every definition. */
+    loaded?: (result: T) => boolean;
+  } = {}
+): Promise<T> {
+  const adapter = options.adapter ?? registeredAdapter();
+  if (adapter === undefined) return load();
+  const before = await versionBeforeLoading(adapter);
+  const result = await load();
+  if ((options.loaded ?? (() => true))(result)) {
+    definitionsLoaded(adapter, before);
+  }
+  return result;
+}
+
+/** The stored version read just before a load, for {@link definitionsLoaded}. */
+export interface VersionBeforeLoading {
+  seq: number | undefined;
+  stale: boolean;
+}
+
+/**
+ * {@link loadingDefinitions}'s first half, for a caller whose load is not
+ * one call: the stored version, read now, before the definitions load.
+ */
+export async function versionBeforeLoading(
+  adapter: DrizzleAdapter
+): Promise<VersionBeforeLoading> {
+  const seq = await storedSchemaSeq(adapter, { fresh: true });
+  return { seq, stale: served().stale };
+}
+
+/**
+ * {@link loadingDefinitions}'s second half: every definition loaded, at the
+ * version read before the load began.
+ */
+export function definitionsLoaded(
+  adapter: DrizzleAdapter,
+  before: VersionBeforeLoading
+): void {
+  const state = served();
+  if (
+    before.seq === undefined ||
+    before.stale ||
+    state.stale ||
+    state.inFlight !== null
+  ) {
+    return;
+  }
+  state.database = adapter;
+  state.seq = before.seq;
+  state.inSync = true;
+  state.readAt = monotonicNow();
+}
+
+/**
  * Run `operation` once this copy's definitions follow the stored schema
  * version ({@link servedSchemaVersion}), as every admin API request does
  * before it is handled: for the Direct API, which every page a site renders

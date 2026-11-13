@@ -1099,6 +1099,7 @@ export function siteStylePermission(
  */
 export function sharedStyleRoutes(setup: SharedStyleRouteSetup): {
   method: "GET" | "POST";
+  checksAccess?: true;
   path: string;
   requiredPermission?: string | ((scope: PluginRoutePermissionScope) => string);
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
@@ -1119,6 +1120,7 @@ export function sharedStyleRoutes(setup: SharedStyleRouteSetup): {
     {
       method: "GET",
       path: SHARED_STYLE_USAGE_ROUTE_PATH,
+      checksAccess: true, // The handler judges each caller.
       handler: async (req, ctx) => {
         await admitUsageReader(ctx);
         return respondDoc(
@@ -1129,6 +1131,7 @@ export function sharedStyleRoutes(setup: SharedStyleRouteSetup): {
     {
       method: "GET",
       path: SHARED_STYLE_WHERE_USED_ROUTE_PATH,
+      checksAccess: true, // The handler judges each caller.
       handler: async (req, ctx) => {
         await admitUsageReader(ctx);
         return readSharedStyleUses(

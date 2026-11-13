@@ -35,6 +35,7 @@ const opaque = { items: [{ props: { heading: "2026-09-08T12:34Z" } }] };
 
 function route(extra: Partial<PluginRoute>): PluginRoute {
   return {
+    siteWide: false,
     method: "GET",
     path: "/r",
     handler: () => Response.json(opaque),

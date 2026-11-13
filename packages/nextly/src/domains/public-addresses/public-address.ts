@@ -25,6 +25,7 @@ import type { SingleRegistryService } from "../singles/services/single-registry-
 import {
   addressableFieldNames,
   fillPublicAddress,
+  ownAddressOf,
   publicAddressProblem,
   type PublicAddressKind,
 } from "./public-address-template";
@@ -59,12 +60,18 @@ export type PublicAddress =
 export interface Declared {
   template: string;
   pathFields: readonly string[];
+  /**
+   * The field whose value, where an entry has one, is the entry's own
+   * address in place of the template's (`publicAddressField`).
+   */
+  entryField?: string;
 }
 
 /** A type as the configuration or the registry holds it. */
 export interface TypeRecord {
   fields?: readonly unknown[];
   publicAddress?: string;
+  publicAddressField?: string;
   db?: { slugPaths?: boolean };
   source?: string;
   /** Whether it has Draft/Published. */
@@ -171,6 +178,9 @@ export async function declaredFor(
     return {
       template: code.publicAddress,
       pathFields: code.db?.slugPaths === true ? ["slug"] : [],
+      ...(code.publicAddressField === undefined
+        ? {}
+        : { entryField: code.publicAddressField }),
     };
   }
   const record = row ?? (await registered(type, executor));
@@ -214,6 +224,14 @@ export function addressFrom(
     return { status: "resolved", path: declared.template };
   }
   if (entry === undefined) return { status: "unavailable" };
+  if (declared.entryField !== undefined) {
+    // The entry's own address wins where it has one; one no visitor could
+    // be served at (stored before the rule refused it) is no address, never
+    // a guessed one.
+    const own = ownAddressOf(entry[declared.entryField]);
+    if (own.status === "resolved") return own;
+    if (own.status === "invalid") return { status: "unavailable" };
+  }
   const path = fillPublicAddress(declared.template, entry, {
     pathFields: declared.pathFields,
   });

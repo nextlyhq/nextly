@@ -261,6 +261,7 @@ import {
 } from "../plugins/routes/collect-routes";
 import {
   rateLimitProxyWarning,
+  undeclaredRouteWarning,
   unkeyedAuthRouteWarnings,
 } from "../plugins/routes/route-options";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
@@ -1126,6 +1127,12 @@ async function registerServicesOnce(
     adapter,
     resolvedLogger,
     async () => {
+      // At the stored version read first, so the first follow of the version
+      // does not load every definition again (`loadingDefinitions`).
+      const { versionBeforeLoading, definitionsLoaded } = await import(
+        "../route-handler/schema-version"
+      );
+      const loadedAt = await versionBeforeLoading(adapter);
       const registry = await initializeSchemaRegistry(
         adapter,
         staticRegistry,
@@ -1136,6 +1143,7 @@ async function registerServicesOnce(
         // it, in their own reload.
         { createMissingCompanions: !structure.productionStart }
       );
+      if (registry !== undefined) definitionsLoaded(adapter, loadedAt);
 
       // Publish the webhook recording policy from the config INDEPENDENTLY of the
       // schema registry. `registerConfigTablesInResolver` (below) only runs when the
@@ -5327,6 +5335,8 @@ async function initializePlugins(
     readProxyTrustSettings(() => transformedConfig).trustProxy
   );
   if (proxyWarning) logger.warn?.(proxyWarning);
+  const undeclared = undeclaredRouteWarning(collectedRoutes);
+  if (undeclared) logger.warn?.(undeclared);
   for (const warning of unkeyedAuthRouteWarnings(
     collectedRoutes,
     readAuthRateLimit(() => transformedConfig).requestsPerHour > 0

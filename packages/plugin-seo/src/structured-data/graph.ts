@@ -1080,23 +1080,6 @@ const ABOUT_THE_BRAND: readonly StructuredDataTypeKey[] = [
   "contactPage",
 ];
 
-/**
- * The questions a page of another kind shows, described beside it; nothing
- * on a questions page, whose questions are its own main subject.
- */
-function questionsBeside(
-  facts: PageFacts,
-  page: DescribedPage,
-  type: StructuredDataTypeKey
-): StructuredDataNode | undefined {
-  if (type === "faqPage") return undefined;
-  const read = readDetail(facts.document, "questions", facts.mapping.questions);
-  const questions = questionsValue(facts, read);
-  return questions === undefined
-    ? undefined
-    : { "@type": "FAQPage", "@id": `${page.url}#faq`, mainEntity: questions };
-}
-
 /** The `@id` reference to a node, where there is one. */
 const refTo = (target: StructuredDataNode | undefined) =>
   ref(target?.["@id"] as string | undefined);
@@ -1125,8 +1108,11 @@ function mainEntityOf(
 /**
  * The page's nodes: the page, as its own kind where it is described as one
  * and has what it needs, else a web page; its trail; the entries it lists;
- * its questions; and its subject, where it is described as a thing and has
- * what that needs.
+ * and its subject, where it is described as a thing and has what that needs.
+ * Questions and answers are described only as the main subject of a page
+ * whose kind someone chose as Questions and answers: a page of another kind
+ * gets no `FAQPage` beside it, whatever questions its route or fields hold,
+ * since markup nobody chose is markup the plugin made up.
  */
 async function pageNodesOf(
   facts: PageFacts,
@@ -1161,14 +1147,9 @@ async function pageNodesOf(
   });
   // The brand's founders are described where the site says who it is: the
   // founders are given only for a described About page.
-  return [
-    pageNode,
-    breadcrumb,
-    itemList,
-    questionsBeside(facts, page, type),
-    subject,
-    ...founders,
-  ].filter(each => each !== undefined);
+  return [pageNode, breadcrumb, itemList, subject, ...founders].filter(
+    each => each !== undefined
+  );
 }
 
 /** The details a type is missing, the name a described thing needs first. */
@@ -1295,6 +1276,34 @@ function present<T extends object>(value: T): T {
   ) as T;
 }
 
+/**
+ * The image a listed page's structured data reads from a field its content
+ * type maps, such as a post's cover under a name no share-image guess reads;
+ * none where the type maps no image field. The field mapped for the type the
+ * page is described as, where the page or its content type chooses one; a
+ * route's own choice (`structuredDataHints.type`) reaches the plugin only
+ * while the route renders, so where the decided type maps no image, the
+ * field the content type maps an image from for any of its types is read.
+ */
+export async function mappedImageOf(
+  ctx: PluginContext,
+  key: string,
+  document: Readonly<Record<string, unknown>>,
+  rules: StructuredDataRules
+): Promise<PageMetadataImage | undefined> {
+  const rule = rules.types[key];
+  if (rule?.details === undefined) return undefined;
+  const offered = structuredDataTypesFor({ hidden: false });
+  const automatic = automaticType(document, {}, offered);
+  const { type } = chosenType({ document }, rule, offered, automatic);
+  const source =
+    rule.details[type]?.image ??
+    Object.values(rule.details).find(mapping => mapping?.image !== undefined)
+      ?.image;
+  if (source === undefined) return undefined;
+  return pictureOf(ctx, readDetail(document, "image", source));
+}
+
 /** The type a page is described as, how that was decided, and what is offered. */
 function decidedType(
   document: Readonly<Record<string, unknown>>,
@@ -1378,8 +1387,8 @@ async function graphOf(
  * The page's structured data, worked out from its answer, its fields and
  * what its route says about it: the organisation and website from the brand
  * facts, the page, a breadcrumb trail from the site's home, the entries it
- * lists and the questions it answers, and the page's subject as its chosen
- * type describes it. A type missing a detail it needs is left out, and
+ * lists, and the page's subject as its chosen type describes it, the
+ * questions it answers where that type is Questions and answers. A type missing a detail it needs is left out, and
  * listed as a problem.
  */
 export async function buildStructuredData(

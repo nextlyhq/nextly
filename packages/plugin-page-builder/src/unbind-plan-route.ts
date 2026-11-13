@@ -210,6 +210,7 @@ export function unbindPlanRoute(
   } = {}
 ): {
   method: "POST";
+  checksAccess: true;
   path: string;
   noStore: true;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
@@ -217,6 +218,7 @@ export function unbindPlanRoute(
   return {
     method: "POST",
     path: UNBIND_PLAN_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     noStore: true,
     handler: async (req, ctx) => {
       const raw = await readBodyWith(req, z.unknown(), "unbind plan");

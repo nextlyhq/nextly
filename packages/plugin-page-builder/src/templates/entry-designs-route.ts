@@ -608,12 +608,14 @@ function directEntryDesignsReads(
  */
 export function entryDesignsRoute(setup: EntryDesignsSetup): {
   method: "GET";
+  checksAccess: true;
   path: string;
   handler: (req: Request, ctx: PluginRouteContext) => Promise<Response>;
 } {
   return {
     method: "GET",
     path: ENTRY_DESIGNS_ROUTE_PATH,
+    checksAccess: true, // The handler judges each caller.
     handler: async (req, ctx) => {
       const query = parseEntryDesignsQuery(req.url);
       const guard = setup.guard();

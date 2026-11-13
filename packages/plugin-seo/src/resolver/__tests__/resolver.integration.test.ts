@@ -111,6 +111,48 @@ describe.each(getConfiguredTestDialects())(
       expect(head.robots).toMatchObject({ index: true, follow: true });
     });
 
+    it("a typed title beats a route that copies its heading into the social card", async () => {
+      const t = await boot(dialect);
+      await t.nextly.create({
+        collection: "pages",
+        data: {
+          title: "Pricing",
+          slug: "pricing",
+          status: "published",
+          seo: { metaTitle: "How we price our plans" },
+        },
+      });
+      await t.nextly.create({
+        collection: "pages",
+        data: { title: "Careers", slug: "careers", status: "published" },
+      });
+      // Most hand-written routes copy their heading into the card.
+      const headWithCard = (slug: string) =>
+        createPublicContentRoute({
+          collections: ["pages"],
+          nextly: t.nextly,
+          render: (entry: ContentEntry) => entry.title,
+          buildMetadata: () => ({
+            title: "Blog",
+            openGraph: { title: "Blog", description: "Every post." },
+          }),
+        }).generateMetadata({ params: { slug: [slug] } });
+
+      const typed = await headWithCard("pricing");
+      const untyped = await headWithCard("careers");
+
+      // Served whole, as every title the answer decides is.
+      expect(typed.openGraph).toMatchObject({
+        title: { absolute: "How we price our plans" },
+        description: "Every post.",
+      });
+      // Nothing typed for the page: the route's own card text still wins.
+      expect(untyped.openGraph).toMatchObject({
+        title: "Blog",
+        description: "Every post.",
+      });
+    });
+
     it("a page hidden from search is served noindex", async () => {
       const t = await boot(dialect);
       await t.nextly.create({

@@ -35,6 +35,7 @@ import {
   STRUCTURED_DATA_TYPE_KEYS,
   STRUCTURED_DATA_TYPES,
   isStructuredDataTypeKey,
+  structuredDataChoiceText,
   type StructuredDataDetail,
   type StructuredDataTypeKey,
 } from "../structured-data/catalog";
@@ -447,12 +448,13 @@ function DetailsEditor({
           }}
         >
           <SelectTrigger className="w-auto" aria-label="Details for">
-            <SelectValue />
+            {/* The type's name alone: the list beside it carries its note. */}
+            <SelectValue>{label}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             {MAPPABLE_TYPES.map(key => (
               <SelectItem key={key} value={key}>
-                {STRUCTURED_DATA_TYPES[key].label}
+                {structuredDataChoiceText(key)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -503,6 +505,13 @@ function DetailsEditor({
   );
 }
 
+/** A content type's choice of type as its closed chooser names it. */
+function typeName(chosen: StructuredDataTypeKey | undefined): string {
+  return chosen === undefined
+    ? "Automatic"
+    : STRUCTURED_DATA_TYPES[chosen].label;
+}
+
 /** A type's structured data choice, and the way to map its details. */
 function StructuredData({
   type,
@@ -549,13 +558,14 @@ function StructuredData({
             className="w-56"
             aria-label={`Structured data for ${type.label}`}
           >
-            <SelectValue />
+            {/* The type's name alone: the list carries its note. */}
+            <SelectValue>{typeName(chosen)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={AUTOMATIC}>Automatic</SelectItem>
             {STRUCTURED_DATA_TYPE_KEYS.map(key => (
               <SelectItem key={key} value={key}>
-                {STRUCTURED_DATA_TYPES[key].label}
+                {structuredDataChoiceText(key)}
               </SelectItem>
             ))}
           </SelectContent>

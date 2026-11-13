@@ -8,6 +8,8 @@ import { nextlyRobots } from "nextly/runtime";
 import { describe, expect, it } from "vitest";
 
 import {
+  AI_CRAWLERS,
+  AI_CRAWLERS_CHECKED,
   AI_SEARCH_CRAWLERS,
   AI_TRAINING_CRAWLERS,
   robotsTxt,
@@ -111,5 +113,56 @@ describe("robots.txt for each AI crawler choice", () => {
     expect(nextlyRobots()().rules).toMatchObject({
       disallow: [...FRAMEWORK_CRAWL_EXCLUSIONS],
     });
+  });
+});
+
+describe("the AI crawler names, as data", () => {
+  it("states each crawler's provider page and the day the names were checked", () => {
+    expect(AI_CRAWLERS_CHECKED).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    for (const crawler of AI_CRAWLERS) {
+      // A provider that publishes no page for its crawler says so with null,
+      // rather than pointing at someone else's list.
+      if (crawler.source !== null) {
+        expect(new URL(crawler.source).protocol).toBe("https:");
+      }
+    }
+    const names = AI_CRAWLERS.map(crawler => crawler.name);
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  it("keeps the names the providers' pages list today", () => {
+    const of = (use: string) =>
+      AI_CRAWLERS.filter(crawler => crawler.use === use).map(
+        crawler => crawler.name
+      );
+    expect(of("training")).toEqual(
+      expect.arrayContaining(["MistralAI-Training"])
+    );
+    expect(of("answers")).toEqual(
+      expect.arrayContaining([
+        "Meta-WebIndexer",
+        "MistralAI-Index",
+        "Amzn-SearchBot",
+        "Amzn-User",
+        "Claude-Agent",
+      ])
+    );
+    expect(of("own-request")).toEqual(["OAI-AdsBot", "Google-CloudVertexBot"]);
+  });
+
+  it.each(["all", "search", "block"] as AiCrawlerChoice[])(
+    "%s: never asks a crawler that visits only what the site itself asked for",
+    aiCrawlers => {
+      const file = robotsTxt({ sitemap: SITEMAP, aiCrawlers });
+      for (const agent of ["OAI-AdsBot", "Google-CloudVertexBot"]) {
+        expect(file).not.toContain(agent);
+      }
+    }
+  );
+
+  it("search but not training asks Mistral's training crawler, not its index", () => {
+    const file = robotsTxt({ sitemap: SITEMAP, aiCrawlers: "search" });
+    expect(shutOut(file)).toContain("MistralAI-Training");
+    expect(shutOut(file)).not.toContain("MistralAI-Index");
   });
 });

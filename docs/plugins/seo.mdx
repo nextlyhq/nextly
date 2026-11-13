@@ -266,6 +266,7 @@ in `optionalDependsOn`.
 | `socialCard`      | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                                        |
 | `pagePermissions` | `boolean`                                                        | `false`            | Gives a page's SEO a [permission of its own](#who-may-change-seo), per content type                              |
 | `nextBuildDir`    | `string`                                                         | `".next"`          | Where `next build` writes, if `next.config` sets `distDir`: read for [pages built in code](#pages-built-in-code) |
+| `gonePage`        | `string`                                                         | none               | Experimental. The site's own page shown with a [Gone (410)](#redirects) answer, such as `"/gone"`                |
 | `urlFor`          | `(entry, collection) => string \| null \| undefined`             | none               | Deprecated: no longer shapes the sitemap. Declare `publicAddress` instead                                        |
 | `basePath`        | `string`, or a function                                          | none               | Deprecated, as `urlFor`                                                                                          |
 
@@ -338,9 +339,11 @@ Each entry carries:
   each of its languages, itself included, and `x-default`, the same links as its head;
 - `<lastmod>`, when the published page last changed. Saving a working draft leaves it as
   it was;
-- the page's main image as an `<image:image>`: its share image, or the cover image its
-  content offers, as the page's head uses it. The site's default share image, which every
-  page shares, is not listed.
+- the page's main images as `<image:image>`: its share image, or the cover image its
+  content offers, as the page's head uses it, and the image its
+  [structured data](#structured-data) reads where the content type maps one, such as a
+  post's cover. The site's default share image, which every page shares, is never listed,
+  whichever level names it: a route that hands its page the default card lists none.
 
 **Large sites get a sitemap index.** One file holds at most 50,000 addresses and 50 MB.
 Past either, `/sitemap.xml` answers a sitemap index naming each file as
@@ -411,6 +414,12 @@ Sitemap: https://example.com/sitemap.xml
 These are requests. Well-behaved tools follow them; some ignore them. Asking Google not to
 use your pages for AI training (`Google-Extended`) also limits what Gemini can use from
 them. Google Search and Bing are not affected by any choice.
+
+The crawler names come from each provider's own page (OpenAI, Anthropic, Google, Apple, Common
+Crawl, Meta, Amazon, Perplexity, DuckDuckGo and Mistral), last checked on 13 November 2026. Two crawlers are never asked to stay away, because they visit only what the site itself
+asked for: OpenAI's ads checker `OAI-AdsBot`, which visits only pages submitted as ads in
+ChatGPT, and `Google-CloudVertexBot`, which crawls only for a Vertex AI agent the site's owner
+set up.
 
 ### The site's address, and why it affects caching
 
@@ -809,6 +818,12 @@ gap. What a person typed always wins, so a route's code fills only what nobody t
   it is served as `title: { absolute }` and a root layout's `title.template` cannot add the
   name again. The route's own title, where it is the one served, keeps the form the route gave
   it. The social card's titles follow the same rule.
+- **The social card's title and description** have an order of their own: the social text a
+  person typed for the page, then the title or description a person typed for it, then the
+  social text the route's code sets, then the Page Builder design's, and else the page's title
+  or description as the table above works it out. A typed title beats the route's card text
+  because many routes copy their heading (such as "Blog") into `openGraph.title`; where nobody
+  typed anything for the page, the route's own card text is still the one shared.
 - **The canonical** is the page's own declared address, in the language it was read in, formed by
   the site's [language rule](/docs/localization#each-languages-address). A page whose type
   declares no address gets no canonical rather than a guessed one, and so does a page whose
@@ -934,7 +949,10 @@ A page is described as one linked graph, each node naming the others by `@id`:
   a page built in code goes by), so a post reads Home › Blog › the post. A part of the address that
   holds no page gets no step, since a trail leads only through pages a visitor can open;
 - the page's **subject**, as its type describes it (`<address>#<type>`), and, where the page lists
-  entries or answers questions, the list and the questions.
+  entries, the list. Questions and answers are described only on a page whose type is Questions
+  and answers, chosen for its content type, for the page or by its route: a page of any other
+  type gets no `FAQPage` markup, whatever questions it shows. The choosers list it as
+  "Questions and answers · no longer shown by Google".
 
 The home page is the start of every trail, so it has none; it is named by its whole title, and
 what it describes, such as the site's app, by the brand's name. Every address is spelled as the
@@ -1087,8 +1105,9 @@ export const route = createPublicContentRoute({
 `items` lists the entries a page shows, in order, each `{ name, url }`: the page is then a
 Collection page with an `ItemList` as its main subject, unless somebody chose another type.
 `questions` lists the questions it answers, each `{ question, answer }`: on a Questions and answers
-page they are its main subject, and on any other page they are described beside it as an
-`FAQPage`. Questions can also come from a field: a list named `faq`, `faqs` or `questions`, each
+page they are its main subject. On a page of any other type they are not described: no `FAQPage`
+is added beside it, since Google no longer shows these results and markup nobody chose for a page
+is markup made up for it. Questions can also come from a field: a list named `faq`, `faqs` or `questions`, each
 item with its `question` and its `answer` (plain or rich text). Give only what the page shows:
 Google asks that structured data describe content a visitor can see, and the plugin never makes a
 question, a list or a rating up.
@@ -1141,7 +1160,7 @@ A redirect's From address is held like a page's address, so a published page and
 
 ### The redirects screen
 
-**SEO › Redirects** in the admin lists every redirect: its From and To addresses, the status the site answers with (301 permanent, 302 temporary, or 410 Gone), who made it (a page that moved, a file imported, or the person, "You" for your own), how many requests it has answered and when it last did. **Add redirect** opens a form: type the From and To addresses as visitors open them (`/old-page`, or `/de/alt` on a site with language prefixes), with a pattern such as `/old/*` to `/new/*` for a whole section. A To address may also be a full `https://` address on another site. A redirect is permanent unless you choose Temporary, which tells search engines the page is coming back. Choose **Gone (410)** for a page removed for good with nothing to replace it: the address answers `410 Gone`, which search engines drop sooner than a 404, and needs no To address. Each row's menu edits or removes it.
+**SEO › Redirects** in the admin lists every redirect: its From and To addresses, the status the site answers with (301 permanent, 302 temporary, or 410 Gone), who made it (a page that moved, a file imported, or the person, "You" for your own), how many requests it has answered and when it last did. **Add redirect** opens a form: type the From and To addresses as visitors open them (`/old-page`, or `/de/alt` on a site with language prefixes), with a pattern such as `/old/*` to `/new/*` for a whole section. A To address may also be a full `https://` address on another site. A redirect is permanent unless you choose Temporary, which tells search engines the page is coming back. Choose **Gone (410)** for a page removed for good with nothing to replace it: the address answers `410 Gone`, which search engines drop sooner than a 404, and needs no To address. The visitor sees a one-line page saying the page is gone, or the site's own page where the site names one with the `gonePage` option (experimental): the Proxy reads that page and sends it with status 410, so search engines still read Gone. Where that page can't be read, or doesn't answer 200, the one-line page is sent. Hide the page itself from search on SEO › Pages. Each row's menu edits or removes it.
 
 Hits are counted by the site's Proxy as it answers each request, in the background, so no visitor waits on the count; a redirect saved before counting began shows none until its next request. Where the Proxy does not run, the list says the redirects are saved but not served, with a note to copy for a developer.
 
@@ -1311,6 +1330,32 @@ export default async function Missing(): Promise<never> {
 ```
 
 `notFoundLogged` reads the request before it answers, so the answer is made for each request and never kept from a build. With Cache Components on, Next.js then refuses to build the catch-all unless `Missing` renders inside `<Suspense>` from the page, as any part of a page that reads the request must. A not-found answered while the page renders is sent with status 200 and a `noindex` tag rather than a 404, as Next.js answers every request-time not-found under Cache Components; it is logged either way. A site with an optional catch-all at its root (`app/[[...slug]]`) has no addresses left for this one: pass the helper to that route instead.
+
+#### With Next.js's `global-not-found` page
+
+A site that turns on `experimental.globalNotFound` in `next.config` answers every address no route matches with `app/global-not-found.tsx`, so it needs no catch-all. Log there with `logNotFound`, from the package root, once the response is sent. Don't call `notFoundLogged` there: the page is the not-found answer already, and that helper answers not found again.
+
+```tsx
+// src/app/global-not-found.tsx
+import { logNotFound } from "@nextlyhq/plugin-seo";
+import { headers } from "next/headers";
+import { after } from "next/server";
+
+export default async function GlobalNotFound() {
+  // Read now, while the request is in hand; logged once the page is sent.
+  const requestHeaders = await headers();
+  after(() => logNotFound(requestHeaders));
+  return (
+    <html lang="en">
+      <body>
+        <h1>Page not found</h1>
+      </body>
+    </html>
+  );
+}
+```
+
+Reading the request makes the page answer each request, so each miss is logged. Next.js renders this page only for addresses no route matches. A miss a route decides itself, with `notFound()`, never reaches it, so log those with `notFoundLogged` in the route, as above.
 
 A request is counted once, though its page and its `generateMetadata` both answer it. A prefetch is not counted (the visit, if it comes, is), and neither is a request the Proxy did not pass on. `notFoundLogged` throws only Next.js's own errors, and on the Edge runtime, where the plugin does not run, it answers not found and logs nothing. `logNotFound(headers)`, from the package root, is what it calls once the response is sent.
 
@@ -1494,15 +1539,18 @@ it keeps working drafts can't be read from the plugin; change its SEO in its own
 
 2. **Match the fields.** Each field of a group, with an example of what it holds and how many
    pages have a value, goes to one place in the plugin, matched by its name for you to check, or
-   to **Don't import**. A file's fields are matched by the tool's own names. Values a page's own
-   code sets differently, such as a page whose route writes its own title, never reached that
-   page, so they are skipped as **never served**; **Include anyway** imports them too, which
-   changes what those pages show.
+   to **Don't import**. A file's fields are matched by the tool's own names. Where a page's code
+   now sets its own value, such as a page whose route writes its own title, a different stored
+   value is skipped: importing it would change what the page shows. The plugin can't know what
+   the page showed before it was installed, so if the page showed the stored values and should
+   again (for example, the site's own code read them until this release), tick
+   **Include anyway** to import them too.
 
 3. **Check the result.** A dry run, changing nothing: how many values it will set and on how many
    pages, how many are the same as the page's automatic value (left empty, so the automatic value
    keeps working), how many a person already typed in the SEO tab (kept as they are), and how many
-   are skipped as never served, then each page's title and description with what happens to each.
+   are skipped because the page's code sets its own, then each page's title and description with
+   what happens to each.
    A page in several languages, or with a draft beside its published version, gets one row per
    version (**English · published**, **English · draft**, **Deutsch · published**), each value
    with its own result. **Import** applies exactly that, in one step: every version and redirect,
@@ -1690,6 +1738,44 @@ The screen marks **Not connected** each route that has not called `seoMetadata`.
 for its address is kept, and reaches the page once the line is in. A route records that it is
 connected when it renders: while `next build` renders the site, or later for an address the
 site knows of. A request for any other address records nothing.
+
+### Pages a sitemap lists while `next build` runs
+
+Next.js writes the addresses a route declares through `generateStaticParams` to its prerender
+manifest only once every page is built. A sitemap or `llms.txt` the site renders during the
+build, from its own `app/sitemap.ts` reading `listedPages`, would otherwise list none of them.
+Wrap the route's `generateStaticParams` in `seoStaticParams` (experimental), with the route's
+address as Next.js names it, route groups left out:
+
+```tsx
+// src/app/integrations/[name]/page.tsx
+import { seoStaticParams } from "@nextlyhq/plugin-seo";
+
+export const generateStaticParams = seoStaticParams(
+  "/integrations/[name]",
+  () => [{ name: "wordpress" }, { name: "webflow" }]
+);
+```
+
+Use it on a route that calls `seoMetadata` and whose pages search engines may list: a page it
+declares is listed during the build as one whose route does, even before the page has rendered
+and said otherwise. A route that hides its pages through its own metadata has nothing to add to
+a sitemap, so leave it unwrapped. It returns the route's own params
+unchanged. During `next build` only, it also records the
+addresses they make in the build directory, where the listing reads them until Next.js writes
+its prerender manifest, which wins from then on. A catch-all (`/docs/[...slug]`) and a nested
+route, which Next.js hands its parent's params, are filled the same way. A record that can't be
+written warns once and changes nothing the route gets. If `next.config` sets `distDir`, pass it
+as `{ buildDir }`, as `nextBuildDir`. An address the build answered not found, such as a topic
+whose page calls `notFound()` because it has no posts yet, is left out once Next.js has written
+its prerender manifest. While the build runs, nothing has said yet which declared pages will
+answer not found, so a sitemap made then lists every address the params make: return params only
+for pages that exist, leaving out a topic with no posts.
+
+A sitemap rendered per request needs none of this: the plugin's own `/sitemap.xml` is answered
+per request, as is a site's `app/sitemap.ts` with `export const dynamic = "force-dynamic"`. One
+with a `revalidate` is still first made during the build, so without `seoStaticParams` it lists
+those pages only from its first refresh.
 
 <Callout type="info">
 **The list of routes comes from the build.** The plugin reads the routes and the addresses
