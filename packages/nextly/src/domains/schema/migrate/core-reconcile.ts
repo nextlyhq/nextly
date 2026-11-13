@@ -471,7 +471,7 @@ export function coreDestructiveRefused(
 }
 
 /** The words of `coreDestructiveRefused`. */
-export function coreDestructiveRefusedMessage(
+function coreDestructiveRefusedMessage(
   deletions: readonly Deletion[]
 ): string {
   return (
@@ -508,7 +508,7 @@ export function coreUpgradeUnsupported(
 }
 
 /** The words of `coreUpgradeUnsupported`. */
-export function coreUpgradeUnsupportedMessage(
+function coreUpgradeUnsupportedMessage(
   tables: readonly string[]
 ): string {
   const named = tables.length === 0 ? "Nextly's own tables" : tables.join(", ");

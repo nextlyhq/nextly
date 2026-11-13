@@ -35,7 +35,7 @@ export const RETIRED_ACCESS_RULES_TABLES: readonly string[] = [
 ];
 
 /** The consent that drops the retired column from both registry tables. */
-export const RETIRED_ACCESS_RULES_CONSENT = RETIRED_ACCESS_RULES_TABLES.map(
+const RETIRED_ACCESS_RULES_CONSENT = RETIRED_ACCESS_RULES_TABLES.map(
   table => `${table}.${RETIRED_ACCESS_RULES_COLUMN}`
 ).join(",");
 

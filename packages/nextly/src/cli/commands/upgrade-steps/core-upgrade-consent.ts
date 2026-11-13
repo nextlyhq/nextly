@@ -43,7 +43,7 @@ export function coreUpgradeSource(deletion: Deletion): DeletionSource {
 }
 
 /** `deletions`, each listed under the core upgrade's heading. */
-export function coreUpgradeSources(
+function coreUpgradeSources(
   deletions: readonly Deletion[]
 ): Map<Deletion, DeletionSource> {
   return new Map(
