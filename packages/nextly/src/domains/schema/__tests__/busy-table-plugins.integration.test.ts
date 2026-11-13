@@ -15,6 +15,10 @@
  * with nothing made durable ends "nothing applied" and runs again; one that stopped part-way is
  * not recorded applied, and the next run refuses it by name until the operator has looked.
  */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql } from "drizzle-orm";
 import {
@@ -31,7 +35,10 @@ import {
   downDatabaseDeps,
   migrateDownCore,
 } from "../../../cli/commands/migrate-down";
-import { runPluginPhase } from "../../../cli/commands/migrate";
+import {
+  runFileMigrations,
+  runPluginPhase,
+} from "../../../cli/commands/migrate";
 import { pluginModuleDown } from "../../../cli/commands/plugin-module-rollback";
 import { createLogger } from "../../../cli/utils/logger";
 import { CORE_TABLE_NAMES } from "../../../schemas/index";
@@ -343,6 +350,42 @@ describe.each(LOCK_DIALECTS)(
       expect(notices).toHaveLength(2);
       expect(await columnsOf(notesTable())).toEqual(["extra", "id", "label"]);
       expect(await statuses(ADD_COLUMN())).toEqual(["applied"]);
+    });
+
+    it("names the plugin modules the run applied before an app file a busy table stops", async () => {
+      const bounds = { tryMs: 1_000, totalMs: 3_000 };
+      const outcome = await migratePlugin([modules.create], bounds);
+      expect(outcome.ran).toHaveLength(1);
+      expect(outcome.ran[0]).toContain(modules.create.name);
+
+      const dir = mkdtempSync(join(tmpdir(), "nextly-btp-app-"));
+      try {
+        mkdirSync(join(dir, "migrations"));
+        writeFileSync(
+          join(dir, "migrations", "20261113_000001_000_btp_app.sql"),
+          `-- Migration: btp_app\n\n-- UP\nALTER TABLE ${notesTable()} ADD COLUMN app_col integer;\n\n-- DOWN\n`
+        );
+        await holdTheTable();
+        const stopped = await runFileMigrations({
+          adapter: adapter as unknown as Parameters<
+            typeof runFileMigrations
+          >[0]["adapter"],
+          db: adapter.getDrizzle(),
+          dialect,
+          migrationsDir: join(dir, "migrations"),
+          logger: quiet,
+          busyTable: { bounds, notify: line => notices.push(line) },
+          appliedBefore: outcome.ran,
+        }).catch((error: unknown) => error);
+
+        expect(stopped).toMatchObject({
+          code: "NEXTLY_TABLE_BUSY",
+          logContext: { stop: { appliedBefore: [...outcome.ran] } },
+        });
+        expect(String((stopped as Error).message)).toContain(outcome.ran[0]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
 
     it("stops with the table busy and nothing changed, and the next run applies the module with no refusal", async () => {

@@ -1805,12 +1805,15 @@ async function appliedPluginModules(
  * index an entity table a plugin contributes. The first failure propagates
  * and stops Phase 2: later migrations assume a database state that was never
  * reached.
+ *
+ * Returns, besides the counts, the modules whose statements ran (`ran`), in order: the app's
+ * files that run after them name them as applied before, where a busy table stops one.
  */
 export async function runPluginPhase(
   deps: MigrateCoreDeps
-): Promise<PluginMigrationRunResult> {
+): Promise<PluginMigrationRunResult & { readonly ran: readonly string[] }> {
   if (!deps.pluginMigrationSets || deps.pluginMigrationSets.length === 0) {
-    return { applied: 0, adopted: 0, skipped: 0 };
+    return { applied: 0, adopted: 0, skipped: 0, ran: [] };
   }
   deps.logger.info("Phase 1.5: applying plugin migrations...");
   const dz = deps.adapter as unknown as DrizzleAdapter;
@@ -2023,7 +2026,7 @@ export async function runPluginPhase(
       `Plugin migrations: ${pluginOutcome.applied} applied, ${pluginOutcome.adopted} adopted, ${pluginOutcome.skipped} already recorded.`
     );
   }
-  return pluginOutcome;
+  return { ...pluginOutcome, ran: [...appliedModules] };
 }
 
 /**
@@ -2227,7 +2230,13 @@ async function runMigrationStreams(
     ...(deps.collectionSources === undefined
       ? {}
       : { collectionSources: deps.collectionSources }),
-    ...(deps.busyTable === undefined ? {} : { busyTable: deps.busyTable }),
+    ...(deps.busyTable === undefined
+      ? {}
+      : {
+          busyTable: deps.busyTable,
+          // A file's busy-table stop names the plugin modules this run applied before it too.
+          appliedBefore: pluginOutcome.ran,
+        }),
   });
   return { pluginModulesApplied, applied };
 }
@@ -4028,6 +4037,11 @@ export async function runFileMigrations(args: {
   collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
   /** See `MigrateCoreDeps.busyTable`. */
   busyTable?: Omit<BusyTableRun, "appliedBefore">;
+  /**
+   * What this run applied before the app's files (the plugin modules of its plugin phase), named
+   * first by a busy table's report as the changes before the one that stopped.
+   */
+  appliedBefore?: readonly string[];
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // The files about to run judged once more, as they read now: the folder may
@@ -4052,9 +4066,9 @@ export async function runFileMigrations(args: {
   const metaDir = resolve(migrationsDir, "meta");
 
   const dz = adapter as unknown as DrizzleAdapter;
-  // The files this run applied, named by a busy table's report as the changes before the one
-  // that stopped.
-  const appliedFiles: string[] = [];
+  // What this run applied, named by a busy table's report as the changes before the one that
+  // stopped: the plugin modules it ran first, then each file as it applies.
+  const appliedFiles: string[] = [...(args.appliedBefore ?? [])];
   const executeSql = buildSqlExecutor(
     dz,
     dialect,
