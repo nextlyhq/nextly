@@ -157,7 +157,10 @@ the DOWN of each applied module, newest first. Each boots the app from your conf
 build the hook's context, and only when the plugin declares the hook. Write both so
 they can run again: an install that failed part-way is repaired by running it again,
 which calls `onInstall` again, and an uninstall that stopped part-way is finished by
-running it again, which calls `onUninstall` again. A plugin counts as installed only
+running it again, which calls `onUninstall` again. Once an install has finished, running
+it again calls no `onInstall` and records no second install: it applies only the
+migration modules, permissions and roles an upgraded package added (see
+[Installing](/docs/guides/production-migrations#installing)). A plugin counts as installed only
 once `nextly plugins install` has finished on that database: a production boot
 refuses it before then while it is enabled, and so does the install of a plugin that depends on it.
 `nextly plugins install --all` installs every enabled plugin in your config, its
