@@ -142,7 +142,9 @@ type Props = {
  * What the MANIFEST does with an empty description is the manifest's own
  * question, answered where its entity is built.
  */
-function normalized(values: BuilderSettingsValues): BuilderSettingsValues {
+export function normalizedSettings(
+  values: BuilderSettingsValues
+): BuilderSettingsValues {
   return { ...values, description: values.description?.trim() };
 }
 
@@ -159,16 +161,20 @@ const EMPTY_VALUES: BuilderSettingsValues = {
 // doesn't have to flip the switch every time. We key off advancedFields
 // instead of `kind` so this stays correct if a future kind opts in or
 // out of the status flag. Edit mode preserves whatever value was loaded.
+export function createDefaults(config: BuilderConfig): BuilderSettingsValues {
+  return {
+    ...EMPTY_VALUES,
+    ...(config.advancedFields.includes("status") ? { status: true } : {}),
+  };
+}
+
 function computeInitialValues(
   mode: "create" | "edit",
   config: BuilderConfig,
   initialValues: BuilderSettingsValues | null
 ): BuilderSettingsValues {
   if (mode === "edit" && initialValues) return initialValues;
-  return {
-    ...EMPTY_VALUES,
-    ...(config.advancedFields.includes("status") ? { status: true } : {}),
-  };
+  return createDefaults(config);
 }
 
 /**
@@ -286,7 +292,7 @@ export function BuilderSettingsModal({
               <Button variant="outline" onClick={onCancel}>
                 Cancel
               </Button>
-              <Button onClick={() => onSubmit(normalized(values))}>
+              <Button onClick={() => onSubmit(normalizedSettings(values))}>
                 {primaryLabel}
               </Button>
             </>
