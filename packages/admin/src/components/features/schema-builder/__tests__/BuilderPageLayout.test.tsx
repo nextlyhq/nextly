@@ -198,6 +198,21 @@ describe("BuilderPageLayout", () => {
     expect(screen.getByText("Saving collection changes…")).toBeInTheDocument();
   });
 
+  // A save on its way keeps what it was started with: discarding then would
+  // clear the editor while the save could still write the discarded values.
+  it("offers no Discard all while a save or its preview is on its way", () => {
+    const { unmount } = renderLayout({ unsavedCount: 2 });
+    expect(
+      screen.getByRole("button", { name: "Discard all changes" })
+    ).toBeEnabled();
+    unmount();
+
+    renderLayout({ unsavedCount: 2, isSaving: true });
+    expect(
+      screen.getByRole("button", { name: "Discard all changes" })
+    ).toBeDisabled();
+  });
+
   it("carries the lock through to the field list", () => {
     renderLayout({ locked: true });
     // Every editing affordance on a row is gone when the entity is code-first.

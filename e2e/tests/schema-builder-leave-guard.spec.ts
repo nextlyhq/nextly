@@ -43,8 +43,11 @@ async function withPendingChange(
   body: (builderUrl: string) => Promise<void>
 ): Promise<void> {
   const slug = `leave_guard_${Date.now()}`;
+  // The browser context's request client, not the page's: it outlives the
+  // page, so the collection is removed even when a test's page has closed.
+  const api = page.context().request;
   try {
-    await createRuntimeCollection(page.request, slug, [
+    await createRuntimeCollection(api, slug, [
       {
         name: "summary",
         type: "text",
@@ -69,7 +72,7 @@ async function withPendingChange(
     // The collection only. Its migration files stay: the server's ledger
     // records them as applied, and deleting them while it runs makes it
     // refuse every later schema change.
-    if (!page.isClosed()) await removeRuntimeCollection(page.request, slug);
+    await removeRuntimeCollection(api, slug);
   }
 }
 
