@@ -40,7 +40,11 @@ import type {
   TableSpec,
 } from "../pipeline/diff/types";
 
-import { ELEMENT_NOUNS, ownerRecordKey, type OwnerRecord } from "./owner-registry";
+import {
+  ELEMENT_NOUNS,
+  ownerRecordKey,
+  type OwnerRecord,
+} from "./owner-registry";
 
 /** The kinds of element one owner can add to another's table. */
 export type ElementKind = "column" | "index" | "fk" | "check";
@@ -275,9 +279,9 @@ export function withKeptElements(
         const add = mine
           .filter(element => element.kind === kind)
           .flatMap(element =>
-            (
-              (elementsOf(liveTable, kind) ?? []) as readonly T[]
-            ).filter(live => live.name === element.name)
+            ((elementsOf(liveTable, kind) ?? []) as readonly T[]).filter(
+              live => live.name === element.name
+            )
           );
         return add.length === 0 ? [...current] : [...current, ...add];
       };
@@ -307,28 +311,67 @@ interface Change {
 function changeOf(op: Operation): Change | undefined {
   switch (op.type) {
     case "drop_column":
-      return { table: op.tableName, kind: "column", name: op.columnName, act: "drop" };
+      return {
+        table: op.tableName,
+        kind: "column",
+        name: op.columnName,
+        act: "drop",
+      };
     case "rename_column":
-      return { table: op.tableName, kind: "column", name: op.fromColumn, act: "rename" };
+      return {
+        table: op.tableName,
+        kind: "column",
+        name: op.fromColumn,
+        act: "rename",
+      };
     case "change_column_type":
     case "change_column_nullable":
     case "change_column_default":
-      return { table: op.tableName, kind: "column", name: op.columnName, act: "change" };
+      return {
+        table: op.tableName,
+        kind: "column",
+        name: op.columnName,
+        act: "change",
+      };
     case "drop_index":
-      return { table: op.tableName, kind: "index", name: op.index.name, act: "drop" };
+      return {
+        table: op.tableName,
+        kind: "index",
+        name: op.index.name,
+        act: "drop",
+      };
     case "drop_check":
-      return { table: op.tableName, kind: "check", name: op.check.name, act: "drop" };
+      return {
+        table: op.tableName,
+        kind: "check",
+        name: op.check.name,
+        act: "drop",
+      };
     case "drop_foreign_key":
-      return { table: op.tableName, kind: "fk", name: op.foreignKey.name, act: "drop" };
+      return {
+        table: op.tableName,
+        kind: "fk",
+        name: op.foreignKey.name,
+        act: "drop",
+      };
     case "change_foreign_key_action":
-      return { table: op.tableName, kind: "fk", name: op.constraintName, act: "change" };
+      return {
+        table: op.tableName,
+        kind: "fk",
+        name: op.constraintName,
+        act: "change",
+      };
     default:
       return undefined;
   }
 }
 
 /** The refusal of a push that would change a removed plugin's element. */
-function keptElementRefusal(change: Change, ownerId: string, why?: string): NextlyError {
+function keptElementRefusal(
+  change: Change,
+  ownerId: string,
+  why?: string
+): NextlyError {
   const noun = ELEMENT_NOUNS[change.kind];
   return NextlyError.validation({
     errors: [
@@ -336,7 +379,7 @@ function keptElementRefusal(change: Change, ownerId: string, why?: string): Next
         path: `schema.${change.table}`,
         code: "SCHEMA_CHANGE_OF_REMOVED_PLUGINS_ELEMENT",
         message:
-          `This schema change would ${change.act} the ${noun} "${change.name}" on the table "${change.table}"${why ?? ""}, which the plugin "${ownerId}" added. ` +
+          `This schema change would ${change.act} the ${noun} "${change.name}" that the plugin "${ownerId}" added to the table "${change.table}"${why ?? ""}. ` +
           `"${ownerId}" is no longer in the configuration, so its ${noun} is kept as it is and nothing was applied. ` +
           `Add "${ownerId}" back to the configuration, or run \`nextly plugins uninstall ${ownerId}\` to remove what it added, then apply the change again.`,
       },
@@ -406,9 +449,14 @@ export function refuseChangesToKeptElements(input: {
     const gone = (spec?.columns ?? []).find(column => !columns.has(column));
     if (gone === undefined) continue;
     throw keptElementRefusal(
-      { table: element.table, kind: element.kind, name: element.name, act: "drop" },
+      {
+        table: element.table,
+        kind: element.kind,
+        name: element.name,
+        act: "drop",
+      },
       element.ownerId,
-      ` with the column "${gone}"`
+      ` along with the column "${gone}"`
     );
   }
 }
@@ -441,7 +489,7 @@ export function refuseRebuildsLosingKeptElements(
     throw keptElementRefusal(
       { table: lost.table, kind: lost.kind, name: lost.name, act: "drop" },
       lost.ownerId,
-      ` by rebuilding the table, which SQLite needs for this change`
+      ` when SQLite rebuilds the table for this change`
     );
   }
 }
@@ -451,7 +499,9 @@ export function describeKept(kept: readonly KeptElement[]): string {
   const byOwner = new Map<string, string[]>();
   for (const element of kept) {
     const list = byOwner.get(element.ownerId) ?? [];
-    list.push(`${ELEMENT_NOUNS[element.kind]} "${element.name}" on "${element.table}"`);
+    list.push(
+      `${ELEMENT_NOUNS[element.kind]} "${element.name}" on "${element.table}"`
+    );
     byOwner.set(element.ownerId, list);
   }
   return [...byOwner]
@@ -510,8 +560,11 @@ export async function pushElementOwners(input: {
   let exists: boolean;
   try {
     exists =
-      (await introspectTableNames(input.db, input.dialect, [SCHEMA_OWNERS_TABLE]))
-        .length > 0;
+      (
+        await introspectTableNames(input.db, input.dialect, [
+          SCHEMA_OWNERS_TABLE,
+        ])
+      ).length > 0;
   } catch {
     // A handle that cannot answer a catalog question (a stub in a unit test)
     // has no registry either.
@@ -531,7 +584,11 @@ export async function pushElementOwners(input: {
     live: input.live,
   });
   for (const row of retired) {
-    await repository.deleteElement(row.tableName, row.elementKind, row.elementName ?? "");
+    await repository.deleteElement(
+      row.tableName,
+      row.elementKind,
+      row.elementName ?? ""
+    );
   }
   const gone = new Set(retired.map(row => ownerRecordKey(row)));
   rows = rows.filter(row => !gone.has(ownerRecordKey(row)));

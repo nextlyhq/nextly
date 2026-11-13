@@ -267,9 +267,7 @@ function insertPost(dialect: TestDialect): string {
 describeEachDialect("a plugin removed from the configuration", dialect => {
   it("keeps the column and index it added to a collection's table through a push", async () => {
     const adapter = await firstBoot(dialect);
-    await adapter.executeQuery(
-      insertPost(dialect)
-    );
+    await adapter.executeQuery(insertPost(dialect));
     // The premise: the first boot's push made both, and recorded whose they
     // are.
     expect(await columnsOf(adapter, dialect, POSTS)).toContain("stamp");
@@ -301,9 +299,7 @@ describeEachDialect("a plugin removed from the configuration", dialect => {
 
   it("keeps them through a change to the table they are on, or refuses it on SQLite", async () => {
     const adapter = await firstBoot(dialect);
-    await adapter.executeQuery(
-      insertPost(dialect)
-    );
+    await adapter.executeQuery(insertPost(dialect));
 
     const pushed = await restartAndPush(adapter, [staying(true)], false, true);
     if (dialect === "sqlite") {

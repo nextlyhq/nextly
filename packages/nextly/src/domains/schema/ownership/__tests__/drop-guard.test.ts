@@ -175,7 +175,10 @@ describe("pluginMigratedTablesOf", () => {
       elementKind: "column",
       elementName: "stamp",
     };
-    const table: OwnerRecord = { ...owner("plugin:seo"), tableName: "SEO__Meta" };
+    const table: OwnerRecord = {
+      ...owner("plugin:seo"),
+      tableName: "SEO__Meta",
+    };
     expect([...pluginMigratedTablesOf([element, table])]).toEqual([
       "seo__meta",
     ]);

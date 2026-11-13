@@ -47,8 +47,16 @@ function row(
 
 const headline = { name: "headline", type: "text", nullable: false };
 const stamp = { name: "stamp", type: "text", nullable: true };
-const stampIndex = { name: "idx_dc_posts_stamp", columns: ["stamp"], unique: false };
-const ownIndex = { name: "idx_dc_posts_headline", columns: ["headline"], unique: false };
+const stampIndex = {
+  name: "idx_dc_posts_stamp",
+  columns: ["stamp"],
+  unique: false,
+};
+const ownIndex = {
+  name: "idx_dc_posts_headline",
+  columns: ["headline"],
+  unique: false,
+};
 
 /** The posts table as the database has it: the removed plugin's column and index on it. */
 const liveTable: TableSpec = {
@@ -66,7 +74,10 @@ const desired: NextlySchemaSnapshot = {
 /** A compiled schema in which only `ids` add an element to the posts table. */
 function schemaFrom(
   ids: readonly string[]
-): Pick<ExtensionSchema, "owners" | "elementOwners" | "entityColumns" | "entityIndexes"> {
+): Pick<
+  ExtensionSchema,
+  "owners" | "elementOwners" | "entityColumns" | "entityIndexes"
+> {
   return {
     owners: new Map(),
     elementOwners: new Map(),
@@ -133,7 +144,8 @@ describe("contributedElements", () => {
       ]),
     } as unknown as Parameters<typeof contributedElements>[0];
     const got = contributedElements(schema, "postgresql").map(
-      e => `${e.table}:${e.elementKind}:${e.owner.kind === "plugin" ? e.owner.id : "app"}`
+      e =>
+        `${e.table}:${e.elementKind}:${e.owner.kind === "plugin" ? e.owner.id : "app"}`
     );
     expect(got).toEqual([
       "kh__items:fk:ka",
@@ -278,7 +290,7 @@ describe("refuseChangesToKeptElements", () => {
           errors: [
             expect.objectContaining({
               message: expect.stringMatching(
-                /change the column "stamp" on the table "dc_posts", which the plugin "gone" added/
+                /change the column "stamp" that the plugin "gone" added to the table "dc_posts"/
               ),
             }),
           ],
@@ -333,7 +345,9 @@ describe("refuseRebuildsLosingKeptElements", () => {
     expect(() =>
       refuseRebuildsLosingKeptElements([POSTS], [column, index])
     ).toThrow();
-    expect(() => refuseRebuildsLosingKeptElements([POSTS], [index])).not.toThrow();
+    expect(() =>
+      refuseRebuildsLosingKeptElements([POSTS], [index])
+    ).not.toThrow();
     expect(() =>
       refuseRebuildsLosingKeptElements(["dc_other"], [column])
     ).not.toThrow();
