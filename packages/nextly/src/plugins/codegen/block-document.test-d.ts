@@ -123,6 +123,7 @@ expectTypeOf<keyof BlockNode>().toEqualTypeOf<
   | "name"
   | "customCss"
   | "cssId"
+  | "nosnippet"
   | "attributes"
   | "migrationFailed"
   | "origin"

@@ -775,6 +775,28 @@ describe("block document schema", () => {
     };
     expect(parseBlockDocument(doc).success).toBe(true);
   });
+
+  it("reads a node marked never to be quoted, and refuses a mark that is not on or off", () => {
+    const marked = (nosnippet: unknown) => ({
+      ...emptyPage(),
+      nodes: [
+        { id: "a", type: "core/section", version: 1, props: {}, nosnippet },
+      ],
+    });
+    expect(parseBlockDocument(marked(true)).success).toBe(true);
+    expect(parseBlockDocument(marked("yes")).success).toBe(false);
+  });
+
+  it("reads a document written before the mark existed as it was", () => {
+    const before = {
+      ...emptyPage(),
+      nodes: [{ id: "a", type: "core/section", version: 1, props: {} }],
+    };
+    const result = parseBlockDocument(structuredClone(before));
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data).toEqual(before);
+  });
 });
 
 describe("the frozen contract", () => {

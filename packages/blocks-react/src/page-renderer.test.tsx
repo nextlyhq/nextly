@@ -1027,6 +1027,40 @@ describe("PageRenderer", () => {
       expect(html).toMatch(bothClasses("test/text"));
     });
 
+    it("marks the root of a block never to be quoted with data-nosnippet", async () => {
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "Plans from $29" },
+              nosnippet: true,
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).toMatch(
+        /<[a-z]+ [^>]*data-nosnippet=""[^>]*>Plans from \$29/
+      );
+      expect(html).toMatch(bothClasses("test/text"));
+    });
+
+    it("renders a block written before the mark, or with it off, as it did", async () => {
+      const render = (extra: Record<string, unknown>) =>
+        renderToHtml(
+          <PageRenderer
+            document={doc(
+              node("a", "test/text", { props: { value: "Plans" }, ...extra })
+            )}
+            blocks={createBlockResolver([text as AnyBlockDefinition])}
+          />
+        );
+      const before = await render({});
+      expect(before).not.toContain("data-nosnippet");
+      expect(await render({ nosnippet: false })).toBe(before);
+    });
+
     it("emits no id at all for an empty cssId, rather than an empty one", async () => {
       const html = await renderToHtml(
         <PageRenderer

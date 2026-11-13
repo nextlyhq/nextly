@@ -591,6 +591,8 @@ interface StoredDecoration {
   cssId: string | undefined;
   /** The author's attribute bag, when it is one. */
   attributes: Record<string, unknown> | undefined;
+  /** Whether the node is marked never to be quoted in search snippets. */
+  nosnippet: boolean;
   /** Whether the node contributes anything at all besides editor markers. */
   any: boolean;
 }
@@ -618,8 +620,15 @@ function storedDecoration(node: ResolvedBlockNode): StoredDecoration {
       : undefined;
   const hasAttributes =
     attributes !== undefined && Object.keys(attributes).length > 0;
+  // Only a stored `true` marks it: anything else a document holds is no mark.
+  const nosnippet = node.nosnippet === true;
 
-  return { cssId, attributes, any: cssId !== undefined || hasAttributes };
+  return {
+    cssId,
+    attributes,
+    nosnippet,
+    any: cssId !== undefined || hasAttributes || nosnippet,
+  };
 }
 
 /**
@@ -758,6 +767,9 @@ function withNodeAttributes(
    * What this rule decides is which of the NODE's two spellings reaches the
    * page, never whether the block may keep an id of its own.
    */
+  // "Never quote this": a boolean attribute, so its value is empty. Google
+  // ignores any value a boolean attribute is given.
+  if (decoration.nosnippet) extra["data-nosnippet"] = "";
   const renderedId = renderedDomId(node);
   if (renderedId !== undefined) extra.id = renderedId;
   // LAST, so every marker wins over a value the document or the block tried to

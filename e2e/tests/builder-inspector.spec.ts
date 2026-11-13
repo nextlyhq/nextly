@@ -460,6 +460,65 @@ test.describe("the inspector", () => {
     ).toHaveValue("hero-two");
   });
 
+  test("marks a section never to be quoted after Show when, through a save and reload", async ({
+    page,
+  }) => {
+    const id = await createPage(page.request);
+    await openBuilder(page, id);
+
+    // Offered on a container, not on a heading.
+    await select(page, HEADING);
+    await expect(
+      page.getByRole("switch", { name: "Never quote this" })
+    ).toHaveCount(0);
+
+    await select(page, SECTION);
+    const never = page.getByRole("switch", { name: "Never quote this" });
+    await expect(never).toHaveAttribute("aria-checked", "false");
+    // After the block's own fields and Visible on, before Advanced.
+    const order = await page
+      .locator("[data-visible-on], [data-never-quote], .nx-inspector__advanced")
+      .evaluateAll(elements =>
+        elements.map(element =>
+          element.hasAttribute("data-visible-on")
+            ? "visible-on"
+            : element.hasAttribute("data-never-quote")
+              ? "never-quote"
+              : "advanced"
+        )
+      );
+    expect(order).toEqual(["visible-on", "never-quote", "advanced"]);
+
+    await never.click();
+    await expect(page.getByText("On: marked")).toBeVisible();
+    // The canvas draws through the page's own renderer, so the section's
+    // element carries the mark as the published page will.
+    await expect(
+      canvasFrame(page)
+        .locator(`.nx-canvas [data-nx-node="${SECTION}"][data-nosnippet]`)
+        .first()
+    ).toBeAttached();
+
+    await saveDraft(page);
+    await expect
+      .poll(async () => {
+        const section = (await storedNodes(page.request, id)).find(
+          node => node.id === SECTION
+        );
+        return section?.nosnippet;
+      })
+      .toBe(true);
+
+    await page.reload();
+    await expect(page.getByRole("region", { name: "Canvas" })).toBeVisible({
+      timeout: 60_000,
+    });
+    await select(page, SECTION);
+    await expect(
+      page.getByRole("switch", { name: "Never quote this" })
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
   test("locks from the card's menu, reads as locked with every control read-only, and unlocks", async ({
     page,
   }) => {

@@ -150,8 +150,23 @@ export function containerContentModel(props: ContainerProps): ContentModel {
  * The renderer and the content model both ask this, so a link the renderer
  * would drop never makes the block count as interactive, and the reverse.
  */
-function linkOf(props: ContainerProps): string | undefined {
+function linkOf(props: Pick<ContainerProps, "link">): string | undefined {
   return url(props.link);
+}
+
+/**
+ * The element a container preset's root renders as: `a` for a linkable preset
+ * while it is linked, else its tag, and `div` for a tag it may not render.
+ * The render functions below draw it, and an editor asks it, through
+ * `containerRootTag`, to say what the page will hold, so the two never
+ * disagree. Read from stored props, which may hold anything.
+ */
+export function rootTagOf(
+  props: { readonly as?: unknown; readonly link?: unknown },
+  linkable: boolean
+): ContainerTag | "a" {
+  if (linkable && url(props.link) !== undefined) return "a";
+  return isContainerTag(props.as) ? props.as : "div";
 }
 
 /**
@@ -210,7 +225,7 @@ export function renderContainer({
   // be an object. A stored `as: "img"` would reach React as a void element
   // handed children and throw, taking the page with it, so an unknown tag falls
   // back to the one every container can safely be.
-  const Tag = isContainerTag(props.as) ? props.as : "div";
+  const Tag = rootTagOf(props, false);
   const classes =
     props.contained === true
       ? `${className} ${CONTENT_WIDTH_CLASS}`

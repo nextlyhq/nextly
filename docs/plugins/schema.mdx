@@ -162,7 +162,13 @@ when it gets the field. An admin tab or panel section that edits the field takes
 A plugin whose collection holds the site's own pages marks it so scopes reach it:
 
 ```ts
-defineCollection({ slug: "pages", siteContent: true, fields: [/* … */] });
+defineCollection({
+  slug: "pages",
+  siteContent: true,
+  fields: [
+    /* … */
+  ],
+});
 ```
 
 The plugin's other collections, such as form submissions or internal records, stay out of

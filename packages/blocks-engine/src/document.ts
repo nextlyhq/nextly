@@ -212,6 +212,15 @@ export interface BlockNode {
   customCss?: string;
   /** CSS id applied to the node's root element. */
   cssId?: string;
+  /**
+   * "Never quote this": the node's root element carries `data-nosnippet`, so
+   * search engines that read it, Google's among them, show none of its text
+   * in a result's snippet. Stored only while on. Google reads the attribute
+   * on `span`, `div` and `section` elements
+   * (https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag),
+   * so it is offered on blocks whose root is one of those.
+   */
+  nosnippet?: boolean;
   /** Sanitized custom HTML attributes applied to the node's root element. */
   attributes?: Record<string, string>;
   /**

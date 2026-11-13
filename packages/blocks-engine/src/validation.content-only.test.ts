@@ -248,6 +248,7 @@ describe("a contentOnly slot", () => {
     ["locked", (n: BlockNode) => (n.locked = true)],
     ["cssId", (n: BlockNode) => (n.cssId = "sale")],
     ["attributes", (n: BlockNode) => (n.attributes = { title: "Sale" })],
+    ["nosnippet", (n: BlockNode) => (n.nosnippet = true)],
   ])("refuses a change to its %s", (what, change) => {
     const { card, headline } = sealed();
     change(headline);
