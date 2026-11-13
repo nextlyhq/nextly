@@ -411,19 +411,31 @@ function arrivalRefusal(
   container: BuilderField | null,
   ctx: MoveContext
 ): MoveVerdict | null {
+  const into = arrivalLevel(fields, chain, container);
+  if (into === undefined) return null;
   const field = chain[chain.length - 1];
-  // Judged by level, not by container: a layout container is part of the level holding it, so
-  // moving into or out of one takes the field nowhere new.
-  const from = namingLevel(chain.slice(0, -1));
-  const into = container
-    ? namingLevel(chainTo(fields, container.id) ?? [container])
-    : null;
-  if ((from?.id ?? null) === (into?.id ?? null)) return null;
   return (
     containerChangeRefusal(field, ctx) ??
     lockedInsideRefusal(field, chain, ctx) ??
     nameRefusal(field, into, namedFieldsIn(siblingsIn(fields, into)), ctx)
   );
+}
+
+/**
+ * The naming level a move takes the field at the end of `chain` to (null for the top level), or
+ * undefined when it stays on its own. Judged by level, not by container: a layout container is
+ * part of the level holding it, so moving into or out of one takes the field nowhere new.
+ */
+function arrivalLevel(
+  fields: readonly BuilderField[],
+  chain: readonly BuilderField[],
+  container: BuilderField | null
+): BuilderField | null | undefined {
+  const from = namingLevel(chain.slice(0, -1));
+  const into = container
+    ? namingLevel(chainTo(fields, container.id) ?? [container])
+    : null;
+  return (from?.id ?? null) === (into?.id ?? null) ? undefined : into;
 }
 
 /**
