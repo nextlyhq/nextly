@@ -854,18 +854,19 @@ describe.each(getConfiguredTestDialects())(
         en: Record<string, unknown>,
         es: Record<string, unknown>
       ): Promise<string> => {
-        const created = (await t.nextly.create({
+        const created = await t.nextly.create({
           collection,
           locale: "en",
           data: { ...en, status: "published" },
-        })) as { item: { id: string } };
+        });
+        const id = String(created.item.id);
         await t.nextly.update({
           collection,
-          id: created.item.id,
+          id,
           locale: "es",
           data: { ...es, status: "published", _overwrite: true },
         });
-        return created.item.id;
+        return id;
       };
       const author = await inBoth(AUTHORS, { name: "Ann" }, { name: "Ana" });
       const post = await inBoth(
