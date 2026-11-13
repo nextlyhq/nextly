@@ -619,7 +619,7 @@ The Direct API exposes auth operations as methods on the root `nextly` object. T
 
 ### login
 
-Verify credentials and issue a signed JWT. The token expiry is 30 days, and it ends earlier, within ten seconds, if the account is deactivated or an administrator sets its password, wherever it is read through `getSession` or `requireAuth` ([Authentication](/docs/guides/authentication)). `verifyAccessToken` alone checks only its signature. The Direct API does **not** set cookies — that responsibility belongs to your route handler / server action wrapper.
+Verify credentials and issue a signed JWT. The token is valid for 24 hours. It ends earlier, within ten seconds, if the account is deactivated or an administrator sets its password, wherever it is read through `getSession` or `requireAuth` ([Authentication](/docs/guides/authentication)). That includes a change made while the login is running, after the password was checked. `verifyAccessToken` alone checks only its signature. The Direct API does **not** set cookies — that responsibility belongs to your route handler / server action wrapper.
 
 ```typescript
 const result = await nextly.login({
@@ -635,6 +635,12 @@ result.exp; // unix timestamp
 **Returns:** `LoginResult` — `{ user, token, exp }`. Throws `NextlyError` (`AUTH_INVALID_CREDENTIALS`) on bad credentials.
 
 The credentials are checked the way the login endpoint checks them: a wrong password counts toward the account lockout, and an account that is locked, deactivated, or must replace an admin-set password is refused with the same `AUTH_INVALID_CREDENTIALS` error, so the caller cannot tell which applied. An account that has not verified its email is refused with `EMAIL_NOT_VERIFIED` once the password is proven correct, unless an administrator deactivated it, and with `AUTH_INVALID_CREDENTIALS` otherwise.
+
+The token carries the account's roles in force when it was signed, so `getSession` reads it with them, and it ends no later than the first of those roles expires. A role that has already expired is not carried.
+
+Every call is recorded on the audit trail, like a sign-in at the login page: a `login-succeeded` row naming the account, or a `login-failed` row naming none. Both carry `metadata.strategy: "password"` and `metadata.via: "direct-api"`, which tells them apart from sign-ins at the login page.
+
+A token from a release before 24-hour tokens keeps the 30 days it was signed with, and still ends when the account's sessions do. A server that signed in once a month signs in once a day now; a machine caller that needs a longer-lived credential uses an [API key](/docs/guides/authentication#api-key-authentication).
 
 `login` is for trusted server code. It runs no plugin login hooks and no second-factor challenge, so do not use it to sign a person in on their behalf; send them through the admin login page, which does both.
 
