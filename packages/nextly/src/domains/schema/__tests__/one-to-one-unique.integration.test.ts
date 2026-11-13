@@ -691,6 +691,68 @@ describeEachDialect(
       120_000
     );
 
+    it("refuses filling an earlier one-to-one's empty entries with one person as it is made Required, changing nothing", async () => {
+      const t = await boot(dialect, "oneToOne", { legacy: true });
+      const ada = await aPerson(t, "Ada");
+      await aProfile(t, null);
+      await aProfile(t, null);
+
+      const refused = await builder(
+        "applySchemaChanges",
+        { collectionName: PROFILES },
+        {
+          fields: await asTheEditorSendsIt({ required: true }),
+          confirmed: true,
+          schemaVersion: await schemaVersion(t),
+          resolutions: { person: { action: "provide_default", value: ada } },
+        }
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [expect.objectContaining({ code: "FILL_ON_UNIQUE_FIELD" })],
+        },
+      });
+      expect((await storedPersonField(t))?.required).not.toBe(true);
+    }, 120_000);
+
+    it.skipIf(writerCannotRebuildEarlierKey)(
+      "keeps a stored relationship's key's delete action through a rename sent to the update route as read",
+      async () => {
+        const t = await boot(dialect, "oneToOne", {
+          legacy: true,
+          onDelete: "cascade",
+        });
+        const read = (await (
+          (await builder(
+            "getCollection",
+            { collectionName: PROFILES },
+            undefined
+          )) as Response
+        ).json()) as { fields: Record<string, unknown>[] };
+        const fields = read.fields.map(field =>
+          field.name === "person" ? { ...field, name: "owner" } : field
+        );
+
+        await builder(
+          "updateCollection",
+          { collectionName: PROFILES },
+          {
+            fields,
+          }
+        );
+
+        expect(await keyOn(t, "owner")).toEqual({
+          referencesTable: `dc_${PEOPLE}`,
+          onDelete: "cascade",
+        });
+      },
+      120_000
+    );
+
     it.skipIf(writerCannotRebuildEarlierKey)(
       "keeps a stored relationship's options and its key's delete action through a rename",
       async () => {
@@ -897,6 +959,40 @@ describeEachDialect(
 
     // The relationship's key needs an index on MySQL, and the Unique mark replaces the plain one
     // with a unique one as the field leaves translation: the unique one is made first.
+    it("makes a many-to-one renamed and marked Unique in one save unique under its new name", async () => {
+      const t = await boot(dialect, "manyToOne");
+      const ada = await aPerson(t, "Ada");
+      await aProfile(t, ada);
+
+      await apply(
+        t,
+        [
+          { name: "title", type: "text" },
+          { ...person("manyToOne"), name: "owner", unique: true },
+        ],
+        undefined,
+        [
+          {
+            tableName: PROFILES_TABLE,
+            fromColumn: "person",
+            toColumn: "owner",
+            choice: "rename",
+          },
+        ]
+      );
+
+      const second = await t.nextly
+        .create({
+          collection: PROFILES,
+          data: { title: "another", owner: ada },
+        })
+        .then(
+          () => undefined,
+          (error: unknown) => error
+        );
+      expect(NextlyError.is(second) && second.code).toBe("DUPLICATE");
+    }, 120_000);
+
     it("keeps a many-to-one marked Unique unique as translation is turned off", async () => {
       const markedUnique = (localized: boolean) => [
         { name: "title", type: "text" },
