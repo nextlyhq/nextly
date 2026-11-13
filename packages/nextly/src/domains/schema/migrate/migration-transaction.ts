@@ -38,6 +38,7 @@ import {
   withSqliteForeignKeysOff,
   type SqliteForeignKeySession,
 } from "./sqlite-foreign-keys";
+import { uniqueIndexCheckpoint } from "./unique-column-guard";
 
 /**
  * What a migration's work runs through.
@@ -543,7 +544,17 @@ async function runUnitStatements(
   // A column made required after an earlier statement of the unit filled its rows is counted at
   // its statement, after the fill, through the handle the statements run on; undefined when the
   // unit has no such column, so this costs nothing.
-  const checkpoint = requiredColumnCheckpoint(statements, dialect, unit);
+  // A unique index over a table an earlier statement wrote is judged at its statement the same
+  // way (`uniqueIndexCheckpoint`).
+  const required = requiredColumnCheckpoint(statements, dialect, unit);
+  const unique = uniqueIndexCheckpoint(statements, dialect, unit);
+  const checkpoint =
+    required === undefined && unique === undefined
+      ? undefined
+      : async (db: unknown, index: number) => {
+          await required?.(db, index);
+          await unique?.(db, index);
+        };
   // Each statement is marked with the lock's claim on the servers, where a run taking over a
   // lapsed lock looks for an earlier holder's statements still running. SQLite runs one writer at
   // a time, so a taker cannot start while a statement of the holder runs, and its adapter reads a

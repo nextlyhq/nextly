@@ -1,0 +1,1339 @@
+/**
+ * `nextly migrate` making a column unique, on every dialect, through the real command core
+ * (`migrateCore`) and a migrations folder of the test's own.
+ *
+ * - A file creating a unique index on a collection's column whose entries repeat a value is
+ *   refused before any statement, naming the collection, the field and each repeated value with
+ *   how many entries hold it. Nothing is applied and the ledger records nothing.
+ * - A file creating one over a column whose only repeats are entries holding no value is applied,
+ *   and the column then refuses a repeat.
+ * - A one-to-one an earlier release left without its uniqueness is made unique by the run, after
+ *   its files, and then refuses a repeat; while any one-to-one repeats a value the run refuses,
+ *   naming each, and makes none unique; a run stopped part-way is finished by the next, which
+ *   adds only what is missing.
+ * - A later file creating the uniqueness the run already made is applied, its index left out:
+ *   MySQL, with no `IF NOT EXISTS`, would refuse the duplicate name.
+ * - A translated one-to-one is made unique within each language, on its translations table, and
+ *   refused while two documents in one language point at one person, naming the language; a
+ *   Single's one-to-one is made unique as a collection's is.
+ * - An upgrade run with nothing pending changes nothing in the database but the one-to-one's
+ *   uniqueness, and with a repeat changes nothing at all: the one-to-one case of the gate that
+ *   holds an upgrade to the operations it is allowed.
+ *
+ * The tables come from the production generators and the index statement from the production
+ * template, in a file written by `migrate:create`'s own formatter. Each test runs on a database
+ * of its own, because each runs the whole command.
+ */
+import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { migrateCore, runPluginPhase } from "../../../../cli/commands/migrate";
+import {
+  downDatabaseDeps,
+  migrateDownCore,
+} from "../../../../cli/commands/migrate-down";
+import { createLogger } from "../../../../cli/utils/logger";
+import { NextlyError } from "../../../../errors/nextly-error";
+import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
+import { companionUniqueIndexName } from "../../../i18n/migration/companion-unique-indexes";
+import { ensureCompanionTable } from "../../../i18n/runtime/companion-io";
+import { resolveSingleTableName } from "../../../singles/services/resolve-single-table-name";
+import { ensureSchemaEventsTable } from "../../events/schema-events-ddl";
+import { SchemaEventsRepository } from "../../events/schema-events-repository";
+import { SchemaOwnersRepository } from "../../ownership/schema-owners-repository";
+import { buildCollectionMetadataUpsert } from "../../ui-schema/metadata-sql";
+import { withMigrateLock } from "../../pipeline/locks";
+import { formatMigrationFile } from "../../migrate-create/format-file";
+import { diffSnapshots } from "../../pipeline/diff/diff";
+import {
+  introspectLiveColumns,
+  introspectLiveSnapshot,
+} from "../../pipeline/diff/introspect-live";
+import {
+  readIndexUniqueness,
+  readUniqueColumns,
+  uniqueIndexNames,
+} from "../../pipeline/live-table-facts";
+import {
+  LOCK_DIALECTS,
+  lockWorld,
+  type LockWorld,
+} from "../../pipeline/__tests__/helpers/schema-lock-world";
+import { createIndexSql } from "../../pipeline/sql-templates/create-index";
+import { splitStatements } from "../../pipeline/sql-statement-utils";
+import { uniqueIndexNameForColumn } from "../../services/index-name";
+import { NO_CONSENT, resolveDataLossConsent } from "../data-loss-consent";
+import {
+  migrationChecksum,
+  type MigrationContent,
+} from "../plugin/plugin-migration";
+import {
+  adoptUniqueIndexesAlreadyThere,
+  readRepeatedValues,
+} from "../unique-column-guard";
+
+const logger = createLogger({ quiet: true });
+const NAME = "20261111_000001_unique_column";
+const FILE = `${NAME}.sql`;
+
+const PEOPLE = "dc_people";
+const PROFILES = "dc_profiles";
+const NOTES = "dc_notes";
+const NOTES_LOCALES = `${NOTES}_locales`;
+const SETTINGS = resolveSingleTableName({ slug: "settings" });
+const UNIQUE = uniqueIndexNameForColumn(PROFILES, "person");
+
+/** A relationship of the profiles to a person, as the earlier Builder stored it. */
+const relationship = (
+  name: string,
+  relationType: "manyToOne" | "oneToOne"
+) => ({
+  name,
+  type: "relationship",
+  options: { target: "people", relationType },
+});
+
+describe.each(LOCK_DIALECTS)(
+  "nextly migrate making a column unique on %s",
+  dialect => {
+    let world: LockWorld;
+    let adapter: DrizzleAdapter;
+    let migrationsDir: string;
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+
+    beforeEach(async () => {
+      world = await lockWorld(dialect, { fresh: true });
+      adapter = await world.connect();
+      migrationsDir = mkdtempSync(join(tmpdir(), "nextly-unique-column-"));
+      // Nextly's own tables, the registry among them, so the file is all a run has left to do.
+      await migrate();
+      await seedEntities();
+    }, 120_000);
+
+    afterEach(async () => {
+      await adapter.disconnect();
+      rmSync(migrationsDir, { recursive: true, force: true });
+      await world.dispose();
+    }, 60_000);
+
+    /** `nextly migrate`, with `--step` when given, and with `--accept-data-loss` when asked. */
+    function migrate(step?: number, acceptDataLoss = false) {
+      return migrateCore({
+        ...(step === undefined ? {} : { step }),
+        extensionSchema: undefined,
+        dialect,
+        db: adapter.getDrizzle(),
+        adapter: adapter as never,
+        migrationsDir,
+        logger,
+        lockMode: "wait",
+        lockWaitMs: 30_000,
+        ensureLedger: () => ensureSchemaEventsTable(adapter),
+        consent: acceptDataLoss
+          ? resolveDataLossConsent({ flag: true, env: {} })
+          : NO_CONSENT,
+      });
+    }
+
+    async function run(statements: string[]): Promise<void> {
+      for (const statement of statements) await adapter.executeQuery(statement);
+    }
+
+    /**
+     * People, and profiles each pointing at a person by two relationships the earlier Builder made
+     * without uniqueness: their tables from the production generators, and their registry rows.
+     */
+    async function seedEntities(): Promise<void> {
+      const tables = new DynamicCollectionSchemaService(undefined, dialect);
+      const profileFields = [
+        relationship("person", "manyToOne"),
+        relationship("partner", "manyToOne"),
+      ];
+      await run(
+        splitStatements([
+          tables.generateMigrationSQL(PEOPLE, [
+            { name: "name", type: "text" },
+          ] as never),
+          tables.generateMigrationSQL(PROFILES, profileFields as never),
+        ])
+      );
+      for (const [slug, tableName, fields] of [
+        ["people", PEOPLE, [{ name: "name", type: "text" }]],
+        ["profiles", PROFILES, profileFields],
+      ] as const) {
+        await adapter.insert("dynamic_collections", {
+          // The registries key rows by UUID on PostgreSQL.
+          id: randomUUID(),
+          slug,
+          labels: { singular: slug, plural: slug },
+          tableName,
+          fields,
+          source: "ui",
+          locked: false,
+          schemaHash: "test",
+          schemaVersion: 1,
+          migrationStatus: "applied",
+        } as never);
+      }
+      await run(
+        ["ada", "bob"].map(
+          id =>
+            `INSERT INTO ${q(PEOPLE)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('${id}', '${id}', '${id}')`
+        )
+      );
+    }
+
+    /** A profile pointing at `person`, or at no one, and at `partner`, or at no one. */
+    function profile(
+      id: string,
+      person: string | null,
+      partner: string | null = null
+    ): string {
+      const value = (v: string | null) => (v === null ? "NULL" : `'${v}'`);
+      return `INSERT INTO ${q(PROFILES)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("person")}, ${q("partner")}) VALUES ('${id}', '${id}', '${id}', ${value(person)}, ${value(partner)})`;
+    }
+
+    /**
+     * The profiles' relationships recorded as one-to-ones, as the registry holds a one-to-one the
+     * earlier Builder added to an existing collection: its column left without uniqueness.
+     */
+    async function recordOneToOnes(...names: string[]): Promise<void> {
+      const fields = ["person", "partner"].map(name =>
+        relationship(name, names.includes(name) ? "oneToOne" : "manyToOne")
+      );
+      await adapter.executeQuery(
+        `UPDATE ${q("dynamic_collections")} SET ${q("fields")} = '${JSON.stringify(fields)}' WHERE ${q("slug")} = 'profiles'`
+      );
+    }
+
+    async function isUnique(column: string): Promise<boolean> {
+      return (
+        await readUniqueColumns(adapter.getDrizzle(), dialect, PROFILES)
+      ).has(column);
+    }
+
+    /** The file as `migrate:create` writes it: the unique index the generators write. */
+    function writeUniqueFile(): void {
+      writeFileAs(NAME, [
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ]);
+    }
+
+    /** A file named `name` holding `statements`, as `migrate:create`'s formatter writes it. */
+    function writeFileAs(name: string, statements: string[]): void {
+      writeFileSync(
+        join(migrationsDir, `${name}.sql`),
+        formatMigrationFile({
+          name,
+          dialect,
+          sqlStatements: statements,
+          downSqlStatements: [],
+          collections: [],
+          singles: [],
+          components: [],
+          hasUserExt: false,
+        }),
+        "utf8"
+      );
+    }
+
+    async function refusal(): Promise<NextlyError> {
+      const error = await migrate().then(
+        () => undefined,
+        (thrown: unknown) => thrown
+      );
+      expect(NextlyError.is(error)).toBe(true);
+      return error as NextlyError;
+    }
+
+    async function ledger(): Promise<string[]> {
+      const rows = await new SchemaEventsRepository(
+        adapter.getDrizzle(),
+        dialect
+      ).findFileApplies(FILE);
+      return rows.map(row => row.status);
+    }
+
+    async function personIsUnique(): Promise<boolean> {
+      return (
+        await readUniqueColumns(adapter.getDrizzle(), dialect, PROFILES)
+      ).has("person");
+    }
+
+    async function refusedAsRepeat(statement: string): Promise<boolean> {
+      return adapter.executeQuery(statement).then(
+        () => false,
+        () => true
+      );
+    }
+
+    it("refuses a file making a column unique over entries that repeat a value, naming each value; nothing applied", async () => {
+      await run([
+        profile("p1", "ada"),
+        profile("p2", "ada"),
+        profile("p3", "ada"),
+        profile("p4", "bob"),
+        profile("p5", "bob"),
+        profile("p6", null),
+      ]);
+      writeUniqueFile();
+
+      const error = await refusal();
+
+      expect(error.publicMessage).toBe(
+        `${FILE} was not applied. Collection 'profiles': field 'person' cannot become unique while 2 values repeat: "ada" (3 entries), "bob" (2 entries). Give each entry its own value, or clear the repeats, then run \`nextly migrate\` again.`
+      );
+      expect(await personIsUnique()).toBe(false);
+      expect(await ledger()).toEqual([]);
+    }, 120_000);
+
+    it("applies a file making a column unique whose only repeats hold no value, which then refuses a repeat", async () => {
+      await run([
+        profile("p1", "ada"),
+        profile("p2", null),
+        profile("p3", null),
+      ]);
+      writeUniqueFile();
+
+      await migrate();
+
+      expect(await personIsUnique()).toBe(true);
+      expect(await refusedAsRepeat(profile("p4", "ada"))).toBe(true);
+    }, 120_000);
+
+    it("makes a one-to-one an earlier release left without uniqueness unique, which then refuses a repeat", async () => {
+      await recordOneToOnes("person");
+      await run([
+        profile("p1", "ada"),
+        profile("p2", "bob"),
+        profile("p3", null),
+        profile("p4", null),
+      ]);
+
+      await migrate();
+
+      expect(await isUnique("person")).toBe(true);
+      // A many-to-one is left as it is.
+      expect(await isUnique("partner")).toBe(false);
+      expect(await refusedAsRepeat(profile("p5", "ada"))).toBe(true);
+      expect(await refusedAsRepeat(profile("p6", null))).toBe(false);
+    }, 120_000);
+
+    it("refuses while a one-to-one repeats a value, naming each, and makes none unique", async () => {
+      await recordOneToOnes("person", "partner");
+      await run([
+        profile("p1", "ada", "ada"),
+        profile("p2", "ada", "bob"),
+        profile("p3", "bob", null),
+      ]);
+
+      const error = await refusal();
+
+      expect(error.publicMessage).toBe(
+        `Making one-to-one relationships unique was not applied. Collection 'profiles': field 'person' cannot become unique while 1 value repeats: "ada" (2 entries). Give each entry its own value, or clear the repeats, then run \`nextly migrate\` again.`
+      );
+      expect(await isUnique("person")).toBe(false);
+      expect(await isUnique("partner")).toBe(false);
+    }, 120_000);
+
+    it("finishes a run stopped part-way, adding only the uniqueness still missing", async () => {
+      await recordOneToOnes("person", "partner");
+      await run([profile("p1", "ada", "bob"), profile("p2", "bob", "ada")]);
+      // As a run stopped after its first index leaves it.
+      await run([
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ]);
+
+      await migrate();
+      await migrate();
+
+      expect(await isUnique("person")).toBe(true);
+      expect(await isUnique("partner")).toBe(true);
+      expect(await refusedAsRepeat(profile("p3", null, "bob"))).toBe(true);
+    }, 120_000);
+
+    it("applies a later file creating the uniqueness the run already made, leaving its index out", async () => {
+      await recordOneToOnes("person");
+      await run([profile("p1", "ada"), profile("p2", "bob")]);
+      await migrate();
+      expect(await isUnique("person")).toBe(true);
+
+      writeUniqueFile();
+      await migrate();
+
+      expect(await ledger()).toEqual(["applied"]);
+      expect(await isUnique("person")).toBe(true);
+      expect(await refusedAsRepeat(profile("p3", "ada"))).toBe(true);
+    }, 120_000);
+
+    /**
+     * Notes, translated, each pointing at a person by a translated relationship the earlier
+     * Builder made without uniqueness, recorded now as a one-to-one: the main table from the
+     * production generator and the translations table as the runtime creates it.
+     */
+    async function seedTranslatedNotes(
+      /** Whether the translations table has `person` yet, or only another translated field's column. */
+      personOnTranslations = true
+    ): Promise<void> {
+      const tables = new DynamicCollectionSchemaService(undefined, dialect);
+      await run(
+        splitStatements([tables.generateMigrationSQL(NOTES, [] as never)])
+      );
+      const person = (relationType: "manyToOne" | "oneToOne") => ({
+        ...relationship("person", relationType),
+        localized: true,
+      });
+      await ensureCompanionTable(adapter as never, {
+        builtBy: "collection",
+        slug: "notes",
+        tableName: NOTES,
+        fields: (personOnTranslations
+          ? [person("manyToOne")]
+          : [{ name: "summary", type: "text", localized: true }]) as never,
+        dialect,
+      });
+      await adapter.insert("dynamic_collections", {
+        id: randomUUID(),
+        slug: "notes",
+        labels: { singular: "notes", plural: "notes" },
+        tableName: NOTES,
+        fields: [person("oneToOne")],
+        localized: true,
+        source: "ui",
+        locked: false,
+        schemaHash: "test",
+        schemaVersion: 1,
+        migrationStatus: "applied",
+      } as never);
+      await run(
+        ["n1", "n2", "n3"].map(
+          id =>
+            `INSERT INTO ${q(NOTES)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('${id}', '${id}', '${id}')`
+        )
+      );
+    }
+
+    /** A note's person in one language. */
+    function noteIn(note: string, language: string, person: string): string {
+      return `INSERT INTO ${q(NOTES_LOCALES)} (${q("_parent")}, ${q("_locale")}, ${q("person")}) VALUES ('${note}', '${language}', '${person}')`;
+    }
+
+    async function notesPersonIsUniquePerLanguage(): Promise<boolean> {
+      return uniqueIndexNames(
+        await readIndexUniqueness(adapter.getDrizzle(), dialect, NOTES_LOCALES)
+      ).has(companionUniqueIndexName(NOTES_LOCALES, "person"));
+    }
+
+    it("makes a translated one-to-one unique within each language", async () => {
+      await seedTranslatedNotes();
+      await run([
+        noteIn("n1", "en", "ada"),
+        noteIn("n2", "en", "bob"),
+        noteIn("n1", "de", "bob"),
+      ]);
+
+      await migrate();
+
+      expect(await notesPersonIsUniquePerLanguage()).toBe(true);
+      expect(await refusedAsRepeat(noteIn("n3", "en", "ada"))).toBe(true);
+      expect(await refusedAsRepeat(noteIn("n3", "de", "ada"))).toBe(false);
+    }, 120_000);
+
+    it("refuses while two documents in one language point at one person, naming the language", async () => {
+      await seedTranslatedNotes();
+      await run([noteIn("n1", "en", "ada"), noteIn("n2", "en", "ada")]);
+
+      const error = await refusal();
+
+      expect(error.publicMessage).toBe(
+        `Making one-to-one relationships unique was not applied. Collection 'notes': field 'person' cannot become unique while 1 value repeats: "ada" (2 entries in "en"). Give each entry its own value, or clear the repeats, then run \`nextly migrate\` again.`
+      );
+      expect(await notesPersonIsUniquePerLanguage()).toBe(false);
+    }, 120_000);
+
+    /**
+     * A concurrent unique build of `name` on `table` over `column` that fails on a repeat the
+     * caller seeded, leaving its index behind, marked invalid; then the repeat removed by
+     * `clear`. PostgreSQL only.
+     */
+    async function failedConcurrentBuild(
+      name: string,
+      table: string,
+      columns: string[],
+      clear: string
+    ): Promise<void> {
+      const failed = await run([
+        `CREATE UNIQUE INDEX CONCURRENTLY ${q(name)} ON ${q(table)} (${columns.map(q).join(", ")})`,
+      ]).then(
+        () => false,
+        () => true
+      );
+      expect(failed).toBe(true);
+      await run([clear]);
+      const [row] = await adapter.executeQuery<{ valid: boolean }>(
+        `SELECT indisvalid AS ${q("valid")} FROM pg_index WHERE indexrelid = to_regclass('${name}')`
+      );
+      expect(row?.valid).toBe(false);
+    }
+
+    it.runIf(dialect === "postgresql")(
+      "makes a one-to-one unique past an index a failed concurrent build left under its name",
+      async () => {
+        await recordOneToOnes("person");
+        await run([profile("p1", "ada"), profile("p2", "ada")]);
+        await failedConcurrentBuild(
+          UNIQUE,
+          PROFILES,
+          ["person"],
+          `DELETE FROM ${q(PROFILES)} WHERE ${q("id")} = 'p2'`
+        );
+
+        await migrate();
+
+        expect(await refusedAsRepeat(profile("p3", "ada"))).toBe(true);
+      },
+      120_000
+    );
+
+    it("refuses, changing nothing, a one-to-one whose index name an index of another kind on its table holds", async () => {
+      await recordOneToOnes("person");
+      await run([
+        `CREATE INDEX ${q(UNIQUE)} ON ${q(PROFILES)} (${q("person")})`,
+        profile("p1", "ada"),
+      ]);
+
+      const error = await refusal();
+
+      expect(error.publicMessage).toContain(
+        `profiles.person (its index ${UNIQUE} is the name of`
+      );
+      expect(
+        (
+          await readIndexUniqueness(adapter.getDrizzle(), dialect, PROFILES)
+        ).get(UNIQUE)
+      ).toEqual({ unique: false });
+      expect(await refusedAsRepeat(profile("p2", "ada"))).toBe(false);
+    }, 120_000);
+
+    it.runIf(dialect === "postgresql")(
+      "makes a translated one-to-one unique within each language past an index a failed concurrent build left under its name",
+      async () => {
+        await seedTranslatedNotes();
+        await run([noteIn("n1", "en", "ada"), noteIn("n2", "en", "ada")]);
+        await failedConcurrentBuild(
+          companionUniqueIndexName(NOTES_LOCALES, "person"),
+          NOTES_LOCALES,
+          ["person", "_locale"],
+          `DELETE FROM ${q(NOTES_LOCALES)} WHERE ${q("_parent")} = 'n2'`
+        );
+
+        await migrate();
+
+        expect(await refusedAsRepeat(noteIn("n3", "en", "ada"))).toBe(true);
+      },
+      120_000
+    );
+
+    // A translated relationship naming several collections stores one `{ relationTo, value }`
+    // reference, which MySQL keeps as JSON and cannot key with a unique index.
+    it.runIf(dialect === "mysql")(
+      "leaves a translated one-to-one whose column MySQL cannot index as it is, and finishes the run",
+      async () => {
+        const tables = new DynamicCollectionSchemaService(undefined, dialect);
+        await run(
+          splitStatements([tables.generateMigrationSQL(NOTES, [] as never)])
+        );
+        const person = (relationType: "manyToOne" | "oneToOne") => ({
+          name: "person",
+          type: "relationship",
+          relationTo: ["people", "profiles"],
+          options: { relationType },
+          localized: true,
+        });
+        await ensureCompanionTable(adapter as never, {
+          builtBy: "collection",
+          slug: "notes",
+          tableName: NOTES,
+          fields: [person("manyToOne")] as never,
+          dialect,
+        });
+        await adapter.insert("dynamic_collections", {
+          id: randomUUID(),
+          slug: "notes",
+          labels: { singular: "notes", plural: "notes" },
+          tableName: NOTES,
+          fields: [person("oneToOne")],
+          localized: true,
+          source: "ui",
+          locked: false,
+          schemaHash: "test",
+          schemaVersion: 1,
+          migrationStatus: "applied",
+        } as never);
+
+        const error = await migrate().then(
+          () => undefined,
+          (thrown: unknown) => thrown
+        );
+
+        expect(error).toBeUndefined();
+        expect(await notesPersonIsUniquePerLanguage()).toBe(false);
+      },
+      120_000
+    );
+
+    // A plugin's tables follow the plugin's own migration modules, which would read an index made
+    // here as drift.
+    it("leaves a plugin's one-to-one to the plugin's own migrations", async () => {
+      await recordOneToOnes("person");
+      await run([
+        `UPDATE ${q("dynamic_collections")} SET ${q("source")} = 'plugin:acme' WHERE ${q("slug")} = 'profiles'`,
+        profile("p1", "ada"),
+      ]);
+
+      await migrate();
+
+      expect(await isUnique("person")).toBe(false);
+    }, 120_000);
+
+    it("makes a Single's one-to-one unique", async () => {
+      const tables = new DynamicCollectionSchemaService(undefined, dialect);
+      await run(
+        splitStatements([
+          tables.generateMigrationSQL(
+            SETTINGS,
+            [relationship("owner", "manyToOne")] as never,
+            { isSingle: true }
+          ),
+        ])
+      );
+      await adapter.insert("dynamic_singles", {
+        id: randomUUID(),
+        slug: "settings",
+        label: "settings",
+        tableName: SETTINGS,
+        fields: [relationship("owner", "oneToOne")],
+        source: "ui",
+        locked: false,
+        schemaHash: "test",
+        schemaVersion: 1,
+        migrationStatus: "applied",
+      } as never);
+
+      await migrate();
+
+      expect(
+        (await readUniqueColumns(adapter.getDrizzle(), dialect, SETTINGS)).has(
+          "owner"
+        )
+      ).toBe(true);
+    }, 120_000);
+
+    /** Every table of the database, as introspection reads it. */
+    async function wholeDatabase() {
+      const tables = await (
+        adapter as unknown as { listTables(): Promise<string[]> }
+      ).listTables();
+      return introspectLiveSnapshot(adapter.getDrizzle(), dialect, tables);
+    }
+
+    it("plans nothing on an upgrade with nothing pending but the one-to-one's uniqueness", async () => {
+      await recordOneToOnes("person");
+      await run([profile("p1", "ada"), profile("p2", "bob")]);
+      const before = await wholeDatabase();
+
+      await migrate();
+
+      const changes = diffSnapshots(before, await wholeDatabase());
+      expect(
+        changes.map(change =>
+          change.type === "add_index"
+            ? `${change.type} ${change.tableName}.${change.index.name}`
+            : change.type
+        )
+      ).toEqual([`add_index ${PROFILES}.${UNIQUE}`]);
+    }, 120_000);
+
+    it("changes nothing on an upgrade with nothing pending while the one-to-one repeats a value", async () => {
+      await recordOneToOnes("person");
+      await run([profile("p1", "ada"), profile("p2", "ada")]);
+      const before = await wholeDatabase();
+
+      await refusal();
+
+      expect(diffSnapshots(before, await wholeDatabase())).toEqual([]);
+    }, 120_000);
+
+    it("leaves a one-to-one's uniqueness gone when a file makes it many-to-one and records it so", async () => {
+      await recordOneToOnes("person");
+      await migrate();
+      expect(await isUnique("person")).toBe(true);
+      // As `migrate:create` writes the change: the index dropped, and the registry row the file
+      // carries for the collection whose table it changes.
+      writeFileAs(NAME, [
+        dialect === "mysql"
+          ? `DROP INDEX ${q(UNIQUE)} ON ${q(PROFILES)}`
+          : `DROP INDEX IF EXISTS ${q(UNIQUE)}`,
+        buildCollectionMetadataUpsert(
+          {
+            slug: "profiles",
+            labels: { singular: "profiles", plural: "profiles" },
+            fields: [
+              relationship("person", "manyToOne"),
+              relationship("partner", "manyToOne"),
+            ],
+          } as never,
+          dialect
+        ).replace(/;\s*$/, ""),
+      ]);
+      await run([profile("p1", "ada")]);
+
+      await migrate();
+
+      expect(await isUnique("person")).toBe(false);
+      expect(await refusedAsRepeat(profile("p2", "ada"))).toBe(false);
+    }, 120_000);
+
+    it("refuses a plugin's module making its table's column unique over repeats, before its first statement", async () => {
+      const notes = "plugin_notes_unique";
+      await run([
+        `CREATE TABLE ${q(notes)} (${q("id")} varchar(36) PRIMARY KEY, ${q("code")} varchar(64))`,
+        `INSERT INTO ${q(notes)} (${q("id")}, ${q("code")}) VALUES ('n1', 's3cr3t-token'), ('n2', 's3cr3t-token')`,
+      ]);
+      await new SchemaOwnersRepository(adapter.getDrizzle(), dialect).upsert([
+        {
+          tableName: notes,
+          ownerKind: "plugin",
+          ownerId: "ucx",
+          migratedBy: "plugin:ucx",
+          ownerVersion: "1.0.0",
+          schemaVersion: 1,
+          state: "active",
+        },
+      ]);
+      const up = [
+        `ALTER TABLE ${q(notes)} ADD COLUMN ${q("extra")} varchar(255)`,
+        createIndexSql(
+          notes,
+          { name: "uq_plugin_notes_code", columns: ["code"], unique: true },
+          dialect,
+          q
+        ),
+      ];
+      const none = { tables: [] };
+      const sides = { postgresql: none, mysql: none, sqlite: none };
+      const content: MigrationContent = {
+        name: "20261111_000002_unique_code",
+        schemaVersion: 1,
+        dialects: {
+          postgresql: { up, down: [] },
+          mysql: { up, down: [] },
+          sqlite: { up, down: [] },
+        },
+        snapshot: sides,
+        before: sides,
+      };
+
+      const error = await runPluginPhase({
+        extensionSchema: undefined,
+        dialect,
+        db: adapter.getDrizzle(),
+        adapter: adapter as never,
+        migrationsDir,
+        logger,
+        pluginMigrationSets: [
+          {
+            pluginName: "ucx",
+            pluginVersion: "1.0.0",
+            migrations: [{ ...content, checksum: migrationChecksum(content) }],
+          },
+        ],
+      }).then(
+        () => undefined,
+        (thrown: unknown) => thrown
+      );
+
+      expect(NextlyError.is(error)).toBe(true);
+      // Its values may be anything, a secret included: only how many repeat is said, and logged.
+      expect((error as NextlyError).publicMessage).toContain(
+        `Table '${notes}': column 'code' cannot become unique while 1 value repeats, the most repeated one in 2 entries.`
+      );
+      expect(
+        JSON.stringify((error as NextlyError).publicMessage)
+      ).not.toContain("s3cr3t-token");
+      expect(JSON.stringify((error as NextlyError).logContext)).not.toContain(
+        "s3cr3t-token"
+      );
+      const live = await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
+        notes,
+      ]);
+      expect(live.tables[0]?.columns.map(c => c.name)).not.toContain("extra");
+    }, 120_000);
+
+    it.skipIf(dialect === "mysql")(
+      "adopts no unique index the database holds over part of the column only",
+      async () => {
+        await run([
+          `CREATE UNIQUE INDEX ${q(UNIQUE)} ON ${q(PROFILES)} (${q("person")}) WHERE ${q("person")} <> 'ada'`,
+        ]);
+        const statement = createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        );
+
+        const adoption = await adoptUniqueIndexesAlreadyThere(
+          adapter.getDrizzle(),
+          dialect,
+          [statement]
+        );
+
+        expect(adoption).toEqual({ statements: [statement], adopted: [] });
+      },
+      120_000
+    );
+
+    it.runIf(dialect === "postgresql")(
+      "adopts no unique index a failed concurrent build left the database unable to use",
+      async () => {
+        await run([profile("p1", "ada"), profile("p2", "ada")]);
+        // A file's concurrent build over a repeat fails and leaves its index behind, marked
+        // invalid; the same statement is what the file holds when it is run again.
+        const statement = `CREATE UNIQUE INDEX CONCURRENTLY ${q(UNIQUE)} ON ${q(PROFILES)} (${q("person")})`;
+        const failed = await run([statement]).then(
+          () => false,
+          () => true
+        );
+        expect(failed).toBe(true);
+        await run([`DELETE FROM ${q(PROFILES)} WHERE ${q("id")} = 'p2'`]);
+        // The live snapshot still reads it as the unique index the file creates.
+        const live = await introspectLiveSnapshot(
+          adapter.getDrizzle(),
+          dialect,
+          [PROFILES]
+        );
+        expect(
+          live.tables[0]?.indexes?.some(
+            index => index.name === UNIQUE && index.unique
+          )
+        ).toBe(true);
+
+        const adoption = await adoptUniqueIndexesAlreadyThere(
+          adapter.getDrizzle(),
+          dialect,
+          [statement]
+        );
+
+        expect(adoption).toEqual({ statements: [statement], adopted: [] });
+      },
+      120_000
+    );
+
+    it("counts no blank as a repeat where the index leaves blanks out", async () => {
+      const codes = "dc_unique_codes";
+      await run([
+        `CREATE TABLE ${q(codes)} (${q("id")} varchar(36) PRIMARY KEY, ${q("code")} varchar(64), ${q("_locale")} varchar(20))`,
+        `INSERT INTO ${q(codes)} (${q("id")}, ${q("code")}, ${q("_locale")}) VALUES ('c1', '', 'en'), ('c2', '', 'en'), ('c3', 'x', 'en'), ('c4', 'x', 'en')`,
+      ]);
+
+      const asIndexed = await readRepeatedValues(
+        adapter.getDrizzle(),
+        dialect,
+        codes,
+        "code",
+        "_locale",
+        true
+      );
+
+      expect(asIndexed).toEqual([{ value: "x", entries: 2, language: "en" }]);
+    }, 120_000);
+
+    it("judges a file's unique index over the values its earlier statements leave, refusing one they make repeat", async () => {
+      await run([profile("p1", "ada"), profile("p2", "bob")]);
+      writeFileAs(NAME, [
+        `UPDATE ${q(PROFILES)} SET ${q("person")} = 'ada' WHERE ${q("id")} = 'p2'`,
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ]);
+
+      const error = await refusal();
+
+      expect(error.publicMessage).toContain(
+        `field 'person' cannot become unique while 1 value repeats, the most repeated one in 2 entries.`
+      );
+      expect(await personIsUnique()).toBe(false);
+      // The check runs before the index's statement, inside the file's transaction, so the
+      // update is rolled back with the refusal on every dialect.
+      const rows = await adapter.executeQuery<{ person: string }>(
+        `SELECT ${q("person")} AS ${q("person")} FROM ${q(PROFILES)} WHERE ${q("id")} = 'p2'`
+      );
+      expect(rows[0]?.person).toBe("bob");
+    }, 120_000);
+
+    it("applies a file whose earlier statements clear the repeats its unique index would meet", async () => {
+      await run([profile("p1", "ada"), profile("p2", "ada")]);
+      writeFileAs(NAME, [
+        `UPDATE ${q(PROFILES)} SET ${q("person")} = NULL WHERE ${q("id")} = 'p2'`,
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ]);
+
+      await migrate();
+
+      expect(await personIsUnique()).toBe(true);
+    }, 120_000);
+
+    it("adopts no unique index an earlier statement of the file may take away with its column", async () => {
+      await run([
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ]);
+      const statements = [
+        `ALTER TABLE ${q(PROFILES)} DROP COLUMN ${q("partner")}`,
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ];
+
+      const adoption = await adoptUniqueIndexesAlreadyThere(
+        adapter.getDrizzle(),
+        dialect,
+        statements
+      );
+
+      expect(adoption).toEqual({ statements, adopted: [] });
+    }, 120_000);
+
+    it("judges at its statement a unique index after an earlier update whose table is not read, refusing the repeat it makes", async () => {
+      await run([profile("p1", "ada"), profile("p2", "bob")]);
+      writeFileAs(NAME, [
+        // An alias: the statement's table is not read, so it counts as writing every table.
+        `UPDATE ${q(PROFILES)} AS p SET ${q("person")} = 'ada' WHERE p.${q("id")} = 'p2'`,
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ]);
+
+      const error = await refusal();
+
+      // At its statement the values are what the statements before it left, which need not be a
+      // relationship's ids any more, so only how many repeat is told, in the refusal and the log.
+      expect(error.publicMessage).toContain(
+        `field 'person' cannot become unique while 1 value repeats, the most repeated one in 2 entries.`
+      );
+      expect(error.publicMessage).not.toContain('"ada"');
+      expect(JSON.stringify(error.logContext)).not.toContain('"ada"');
+      expect(await personIsUnique()).toBe(false);
+    }, 120_000);
+
+    it("adopts no unique index after an earlier statement drops its table under a qualified name", async () => {
+      await run([
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ]);
+      const statements = [
+        `DROP TABLE ${q(await ownSchema())}.${q(PROFILES)}`,
+        `CREATE TABLE ${q(PROFILES)} (${q("id")} varchar(36) PRIMARY KEY, ${q("person")} varchar(36))`,
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ];
+
+      const adoption = await adoptUniqueIndexesAlreadyThere(
+        adapter.getDrizzle(),
+        dialect,
+        statements
+      );
+
+      expect(adoption).toEqual({ statements, adopted: [] });
+    }, 120_000);
+
+    it.runIf(dialect === "mysql")(
+      "adopts no unique index after an earlier statement renames the table away",
+      async () => {
+        await run([
+          createIndexSql(
+            PROFILES,
+            { name: UNIQUE, columns: ["person"], unique: true },
+            dialect,
+            q
+          ),
+        ]);
+        const statements = [
+          `RENAME TABLE ${q(PROFILES)} TO ${q("dc_profiles_old")}`,
+          createIndexSql(
+            PROFILES,
+            { name: UNIQUE, columns: ["person"], unique: true },
+            dialect,
+            q
+          ),
+        ];
+
+        const adoption = await adoptUniqueIndexesAlreadyThere(
+          adapter.getDrizzle(),
+          dialect,
+          statements
+        );
+
+        expect(adoption).toEqual({ statements, adopted: [] });
+      },
+      120_000
+    );
+
+    // MySQL names an index per table, so nothing elsewhere can hold one of its names.
+    it.skipIf(dialect === "mysql")(
+      "refuses to make a one-to-one unique while another object holds its index's name, creating nothing",
+      async () => {
+        await recordOneToOnes("person");
+        await run([`CREATE TABLE ${q(UNIQUE)} (${q("id")} varchar(36))`]);
+
+        const error = await refusal();
+
+        expect(error.publicMessage).toContain(
+          `profiles.person (its index ${UNIQUE} is the name of the table ${UNIQUE})`
+        );
+        expect(await isUnique("person")).toBe(false);
+      },
+      120_000
+    );
+
+    it("makes a one-to-one unique on a run whose step limits nothing", async () => {
+      await recordOneToOnes("person");
+      await run([profile("p1", "ada")]);
+
+      await migrate(0);
+
+      expect(await isUnique("person")).toBe(true);
+    }, 120_000);
+
+    it("applies a file whose earlier WITH statement clears the repeats its unique index would meet", async () => {
+      await run([profile("p1", "ada"), profile("p2", "ada")]);
+      writeFileAs(NAME, [
+        // A writer whose reach is not read: it counts as writing every table.
+        `WITH ${q("gone")} AS (SELECT 1 AS ${q("x")}) DELETE FROM ${q(PROFILES)} WHERE ${q("id")} = 'p2'`,
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ]);
+
+      // A writer whose reach is not read may delete rows, so the run asks consent for it.
+      await migrate(undefined, true);
+
+      expect(await personIsUnique()).toBe(true);
+    }, 120_000);
+
+    it("refuses a DOWN that recreates a unique index over values that repeat since its UP, before it runs", async () => {
+      await run([
+        createIndexSql(
+          PROFILES,
+          { name: UNIQUE, columns: ["person"], unique: true },
+          dialect,
+          q
+        ),
+      ]);
+      // An UP that lets the column repeat, whose DOWN makes it unique again.
+      const up =
+        dialect === "mysql"
+          ? `DROP INDEX ${q(UNIQUE)} ON ${q(PROFILES)}`
+          : `DROP INDEX IF EXISTS ${q(UNIQUE)}`;
+      writeFileSync(
+        join(migrationsDir, FILE),
+        formatMigrationFile({
+          name: NAME,
+          dialect,
+          sqlStatements: [up],
+          downSqlStatements: [
+            createIndexSql(
+              PROFILES,
+              { name: UNIQUE, columns: ["person"], unique: true },
+              dialect,
+              q
+            ),
+          ],
+          collections: [],
+          singles: [],
+          components: [],
+          hasUserExt: false,
+        }),
+        "utf8"
+      );
+      await migrate();
+      await run([profile("p1", "ada"), profile("p2", "ada")]);
+
+      const error = await migrateDownCore({
+        ...(await downDatabaseDeps({ adapter, dialect })),
+        nodeEnv: "test",
+        logger,
+        options: { step: 1, allowDataLoss: true, yes: true, dryRun: false },
+        fileExists: () => Promise.resolve(true),
+        readDownSql: () =>
+          Promise.resolve({
+            sql: `${createIndexSql(
+              PROFILES,
+              { name: UNIQUE, columns: ["person"], unique: true },
+              dialect,
+              q
+            )};`,
+            transaction: true,
+          }),
+        withLock: withMigrateLock,
+      }).then(
+        () => undefined,
+        (thrown: unknown) => thrown
+      );
+
+      expect(NextlyError.is(error)).toBe(true);
+      expect((error as NextlyError).publicMessage).toContain(
+        `field 'person' cannot become unique while 1 value repeats: "ada" (2 entries)`
+      );
+      expect(await personIsUnique()).toBe(false);
+      expect(await ledger()).toEqual(["applied"]);
+    }, 120_000);
+
+    it("leaves a translated one-to-one whose column the translations table does not have yet to the run that adds it", async () => {
+      await seedTranslatedNotes(false);
+
+      await migrate();
+
+      expect(await notesPersonIsUniquePerLanguage()).toBe(false);
+    }, 120_000);
+
+    it("refuses a file that renames a table and then makes its column unique over repeats, before the rename runs", async () => {
+      await run([profile("p1", "ada"), profile("p2", "ada")]);
+      const renamed = "dc_members";
+      writeFileAs(NAME, [
+        `ALTER TABLE ${q(PROFILES)} RENAME TO ${q(renamed)}`,
+        createIndexSql(
+          renamed,
+          {
+            name: uniqueIndexNameForColumn(renamed, "person"),
+            columns: ["person"],
+            unique: true,
+          },
+          dialect,
+          q
+        ),
+      ]);
+
+      const error = await refusal();
+
+      expect(error.publicMessage).toContain(
+        `${FILE} was not applied. Collection 'profiles': field 'person' cannot become unique while 1 value repeats: "ada" (2 entries)`
+      );
+      // Nothing ran: the table keeps its name.
+      expect(await personIsUnique()).toBe(false);
+      expect(await ledger()).toEqual([]);
+    }, 120_000);
+
+    it("refuses a file that adds a column with one constant for every row and makes it unique, before the column is added", async () => {
+      await run([profile("p1", "ada"), profile("p2", "bob")]);
+      writeFileAs(NAME, [
+        `ALTER TABLE ${q(PROFILES)} ADD COLUMN ${q("code")} varchar(20) DEFAULT 'x'`,
+        createIndexSql(
+          PROFILES,
+          {
+            name: uniqueIndexNameForColumn(PROFILES, "code"),
+            columns: ["code"],
+            unique: true,
+          },
+          dialect,
+          q
+        ),
+      ]);
+
+      const error = await refusal();
+
+      expect(error.publicMessage).toContain(
+        `${FILE} was not applied. Collection 'profiles': field 'code' cannot become unique while 1 value repeats, the most repeated one in 2 entries.`
+      );
+      const live = await introspectLiveColumns(adapter.getDrizzle(), dialect, [
+        PROFILES,
+      ]);
+      expect(live.tables[0]?.columns.map(c => c.name)).not.toContain("code");
+      expect(await ledger()).toEqual([]);
+    }, 120_000);
+
+    // Only PostgreSQL adds a column under IF NOT EXISTS.
+    it.runIf(dialect === "postgresql")(
+      "applies a file that adds under IF NOT EXISTS, with a constant default, a column the table already holds distinct values in",
+      async () => {
+        await run([profile("p1", "ada"), profile("p2", "bob")]);
+        writeFileAs(NAME, [
+          `ALTER TABLE ${q(PROFILES)} ADD COLUMN IF NOT EXISTS ${q("person")} varchar(36) DEFAULT 'x'`,
+          createIndexSql(
+            PROFILES,
+            { name: UNIQUE, columns: ["person"], unique: true },
+            dialect,
+            q
+          ),
+        ]);
+
+        await migrate();
+
+        expect(await personIsUnique()).toBe(true);
+      },
+      120_000
+    );
+
+    // Only PostgreSQL drops an index by its name alone, here qualified by its schema.
+    it.runIf(dialect === "postgresql")(
+      "keeps the create of a unique index an earlier schema-qualified drop takes away, leaving the column unique",
+      async () => {
+        await run([
+          profile("p1", "ada"),
+          createIndexSql(
+            PROFILES,
+            { name: UNIQUE, columns: ["person"], unique: true },
+            dialect,
+            q
+          ),
+        ]);
+        writeFileAs(NAME, [
+          `DROP INDEX ${q("public")}.${q(UNIQUE)}`,
+          createIndexSql(
+            PROFILES,
+            { name: UNIQUE, columns: ["person"], unique: true },
+            dialect,
+            q
+          ),
+        ]);
+
+        // The data-loss check reads no qualified name either, and asks for consent first.
+        await migrate(undefined, true);
+
+        expect(await personIsUnique()).toBe(true);
+      },
+      120_000
+    );
+
+    // Only PostgreSQL renames an index by its own statement.
+    it.runIf(dialect === "postgresql")(
+      "keeps the create of a unique index whose name an earlier statement renames away, leaving the column unique",
+      async () => {
+        await run([
+          profile("p1", "ada"),
+          createIndexSql(
+            PROFILES,
+            { name: UNIQUE, columns: ["person"], unique: true },
+            dialect,
+            q
+          ),
+        ]);
+        writeFileAs(NAME, [
+          `ALTER INDEX ${q(UNIQUE)} RENAME TO ${q("uq_old")}`,
+          createIndexSql(
+            PROFILES,
+            { name: UNIQUE, columns: ["person"], unique: true },
+            dialect,
+            q
+          ),
+          `DROP INDEX ${q("uq_old")}`,
+        ]);
+
+        await migrate();
+
+        expect(await personIsUnique()).toBe(true);
+      },
+      120_000
+    );
+
+    /** The schema an unqualified name reaches on this connection. */
+    async function ownSchema(): Promise<string> {
+      if (dialect === "sqlite") return "main";
+      const [row] = await adapter.executeQuery<{ s: string }>(
+        dialect === "postgresql"
+          ? `SELECT current_schema() AS ${q("s")}`
+          : `SELECT DATABASE() AS ${q("s")}`
+      );
+      return String(row?.s);
+    }
+
+    it("judges a unique index on its table qualified by the connection's own schema, refusing the repeat", async () => {
+      await run([profile("p1", "ada"), profile("p2", "ada")]);
+      writeFileAs(NAME, [
+        `CREATE UNIQUE INDEX ${q(UNIQUE)} ON ${q(await ownSchema())}.${q(PROFILES)} (${q("person")})`,
+      ]);
+
+      // The data-loss check cannot read a qualified name either, and asks for consent first.
+      const error = await migrate(undefined, true).then(
+        () => undefined,
+        (thrown: unknown) => thrown
+      );
+      expect(NextlyError.is(error)).toBe(true);
+      if (!NextlyError.is(error)) return;
+
+      expect(error.publicMessage).toContain(`${FILE} at statement 1`);
+      expect(error.publicMessage).toContain(
+        `field 'person' cannot become unique while 1 value repeats, the most repeated one in 2 entries.`
+      );
+      expect(await personIsUnique()).toBe(false);
+    }, 120_000);
+
+    it("leaves to the database a unique index on a table another schema qualifies", async () => {
+      await run([profile("p1", "ada"), profile("p2", "ada")]);
+      writeFileAs(NAME, [
+        `CREATE UNIQUE INDEX ${q(UNIQUE)} ON ${q("nextly_elsewhere")}.${q(PROFILES)} (${q("person")})`,
+      ]);
+
+      const error = await migrate(undefined, true).then(
+        () => undefined,
+        (thrown: unknown) => thrown
+      );
+
+      // The database refuses the schema it does not have, at the index's statement; the profiles'
+      // repeats were not read.
+      expect(error).toBeDefined();
+      const told = NextlyError.is(error)
+        ? `${error.publicMessage} ${error.logMessage ?? ""}`
+        : String(error);
+      expect(told).not.toContain("cannot become unique");
+      expect(told).not.toContain("Deleting data needs consent");
+      expect(await personIsUnique()).toBe(false);
+    }, 120_000);
+  }
+);

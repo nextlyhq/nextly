@@ -366,9 +366,10 @@ Specific examples:
 4. Discovers pending `.sql` files in your `migrations/` directory (sorted by filename timestamp). A pending file whose snapshot an earlier release's `migrate:create` wrote, without the registry metadata, is refused before anything applies when it comes after a migration that carries the metadata, or once the database has its registry record; see [The first `nextly migrate` on this release](#the-first-nextly-migrate-on-this-release).
 5. Applies each pending file in one transaction on one connection (on MySQL each DDL statement still commits as it runs; see [database support](/docs/database/support) for MySQL caveats). What a file may contain is below.
 6. Records each applied file in `nextly_schema_events` as a `file_apply` event, opened with `started_at`, `filename` and `sha256` and closed with `ended_at` and `statements_executed`. Once a file is recorded, it marks as no longer declared each permission that file's snapshot drops, keeping every grant of it, and clears the mark of one it declares again; see [A permission your build no longer declares](#a-permission-your-build-no-longer-declares).
-7. Adds the permissions and roles the database lacks, and sets the preset roles' grants, under the same lock and after the registry rows are written. It adds Nextly's own permissions, each registered collection's and Single's (with the ones an attached workflow's steps add), the ones your config declares and each plugin's, and the roles your plugins declare. A declared role that bundles a permission which does not exist yet is not created until it does, and the run says so. Then it brings each preset role (Admin, Editor, Author, Viewer) to the permissions its preset grants, adding and removing only what differs, so a database set up by `nextly migrate` alone has an Admin role that holds them before the first start. It makes the built-in Public role, the one visitors are judged by, and grants it `read-media`, the read of each collection and Single whose read rule answers a visitor `true`, and what your plugins declare for it, each once, so a grant you take away on the Roles screen stays away (see [Permissions](/docs/permissions)). A plugin's install does the same for that plugin. It sets every preset role's grants in one transaction with a record of the Nextly release that set them, and a run from an older release leaves them as they are (see [The preset grants and the release that set them](#the-preset-grants-and-the-release-that-set-them)). When it changes a grant, it records every collection's and Single's cache tags as expired in the database, so running instances stop serving cached content that the change no longer allows. A run that finds nothing to add or change writes nothing to these tables. This step never marks a permission as no longer declared (step 6 does, from the migrations), and it keeps every grant of one already marked. If a permission can't be written, the run fails after its migrations have applied; run `nextly migrate` again to finish.
-8. Names [where the registry and the tables disagree](#where-the-registry-and-the-tables-disagree), once everything above has run. It changes nothing.
-9. Counts the accounts holding a password stored as typed, and when there are any, names the command that clears them. It changes nothing; see [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed).
+7. Makes each one-to-one relationship's column unique where an earlier release left it without its uniqueness, once no file is pending, after checking it for repeated values (see [One-to-one relationships made unique](#one-to-one-relationships-made-unique)).
+8. Adds the permissions and roles the database lacks, and sets the preset roles' grants, under the same lock and after the registry rows are written. It adds Nextly's own permissions, each registered collection's and Single's (with the ones an attached workflow's steps add), the ones your config declares and each plugin's, and the roles your plugins declare. A declared role that bundles a permission which does not exist yet is not created until it does, and the run says so. Then it brings each preset role (Admin, Editor, Author, Viewer) to the permissions its preset grants, adding and removing only what differs, so a database set up by `nextly migrate` alone has an Admin role that holds them before the first start. It makes the built-in Public role, the one visitors are judged by, and grants it `read-media`, the read of each collection and Single whose read rule answers a visitor `true`, and what your plugins declare for it, each once, so a grant you take away on the Roles screen stays away (see [Permissions](/docs/permissions)). A plugin's install does the same for that plugin. It sets every preset role's grants in one transaction with a record of the Nextly release that set them, and a run from an older release leaves them as they are (see [The preset grants and the release that set them](#the-preset-grants-and-the-release-that-set-them)). When it changes a grant, it records every collection's and Single's cache tags as expired in the database, so running instances stop serving cached content that the change no longer allows. A run that finds nothing to add or change writes nothing to these tables. This step never marks a permission as no longer declared (step 6 does, from the migrations), and it keeps every grant of one already marked. If a permission can't be written, the run fails after its migrations have applied; run `nextly migrate` again to finish.
+9. Names [where the registry and the tables disagree](#where-the-registry-and-the-tables-disagree), once everything above has run. It changes nothing.
+10. Counts the accounts holding a password stored as typed, and when there are any, names the command that clears them. It changes nothing; see [Clearing passwords stored as typed](#clearing-passwords-stored-as-typed).
 
 | Exit code | Meaning                                                                  |
 | --------- | ------------------------------------------------------------------------ |
@@ -376,6 +377,42 @@ Specific examples:
 | 1         | A migration failed during execution                                      |
 | 2         | `MIGRATION_TAMPERED`. Abort before running any.                          |
 | 3         | `MIGRATION_MISSING`. Abort; file referenced in DB but missing from disk. |
+
+### One-to-one relationships made unique
+
+A one-to-one relationship lets each target be pointed at by one entry at most, and its column
+carries a unique index that says so: `uq_<table>_<column>`, or, for a translated relationship, one
+per language on the translations table. An earlier release gave that index only to a one-to-one
+created with its collection, so one added to an existing collection, or made one-to-one later,
+took repeats.
+
+The first `nextly migrate` after the upgrade adds each missing index, once its files have run.
+Before it adds any, it checks every such column, and if entries already repeat a target it adds
+none and stops, naming each field and the repeated values (the first 20 per field; the full list
+is in the log):
+
+```text
+Making one-to-one relationships unique was not applied. Collection 'profiles': field 'person'
+cannot become unique while 1 value repeats: "ada" (2 entries). Give each entry its own value,
+or clear the repeats, then run `nextly migrate` again.
+```
+
+Point each of those entries at its own target, or clear the field on all but one, then run
+`nextly migrate` again. A run stopped part-way is finished by the next one, which adds only the
+indexes still missing. A run limited by `--step` leaves this to one that runs every file. A
+migration file `migrate:create` writes later for the same uniqueness is applied without its index,
+which is already there.
+
+A migration file that makes any column unique is checked the same way, and refused with the same
+message while the column's entries repeat a value. The check runs before any of the file's
+statements, or just before the index's own statement when an earlier statement of the file changes
+the column's values (writes the table, adds the column, renames in a way that can't be followed
+with certainty) or when the index's statement carries something Nextly does not read (an index
+option, a schema-qualified table). On MySQL, and in a file marked `-- nextly:no-transaction`, the
+statements before it have then run and stay applied, and the refusal says so. A column the file
+adds with one constant default for every row is refused before anything runs once the table holds
+two rows. An index with a `WHERE` clause, one over an expression, or one on a table qualified by
+another schema than the connection's own is left to the database.
 
 ### A build older than the database
 
@@ -488,7 +525,7 @@ starting, and seed the permissions and the preset grants. Whichever build starte
 decided what the database said, an older one or a preview of another branch included, and the
 start ran a few statements for every collection, Single and permission. A production start now
 runs the same number of statements however many entities your site has. The bookkeeping arrives
-only through `nextly migrate` (step 7 above, and its registry phase) and a plugin's install and
+only through `nextly migrate` (step 8 above, and its registry phase) and a plugin's install and
 uninstall, all under the migrate lock.
 
 So **run `nextly migrate` before serving a new build**. The scaffolded `build` script already runs

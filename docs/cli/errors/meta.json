@@ -204,6 +204,8 @@
     "ui-schema-not-json",
     "ui-schema-unreadable",
     "unexpected-error",
+    "unique-column-has-repeats",
+    "unique-index-name-taken",
     "upgrade-backup-not-confirmed",
     "upgrade-cancelled",
     "upgrade-events-table-taken",
