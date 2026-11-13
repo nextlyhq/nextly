@@ -52,7 +52,7 @@ import {
   restore,
   type ScratchDatabase,
 } from "./database";
-import { BASELINE_DIR, type BaselineMeta } from "./record";
+import { BASELINE_DIR, siteEnvironment, type BaselineMeta } from "./record";
 
 const run = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -110,21 +110,11 @@ describe.each(dialects())(
         { recursive: true }
       );
       before = await readCatalog(dialect, database.url);
-      // The playground as a site runs it: none of the browser suites'
-      // switches, and the plugins the release's playground was recorded with.
-      environment = {
-        ...Object.fromEntries(
-          Object.entries(process.env).filter(
-            ([key]) =>
-              key !== "DB_DIALECT" &&
-              !key.startsWith("NEXTLY_E2E_") &&
-              key !== "NEXTLY_SPEED_EXTRA_COLLECTIONS"
-          )
-        ),
-        NODE_ENV: "development",
-        DATABASE_URL: database.url,
-        NEXTLY_PLAYGROUND_PLUGINS: meta.playgroundPlugins,
-      };
+      // The playground as the recorder ran it (`siteEnvironment`).
+      environment = siteEnvironment(process.env, {
+        databaseUrl: database.url,
+        playgroundPlugins: meta.playgroundPlugins,
+      });
     });
 
     afterAll(async () => {

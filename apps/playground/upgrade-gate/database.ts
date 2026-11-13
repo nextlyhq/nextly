@@ -164,10 +164,22 @@ function dumpSqlite(url: string): string {
         ? ["sqlite_sequence"]
         : []),
     ]) {
-      const rows = db.prepare(`SELECT * FROM "${table}"`).raw().all();
+      // The columns a row stores and an insert may write: a generated
+      // column is computed again by the restore, and refuses a value.
+      const writable = (
+        db.prepare(`PRAGMA table_xinfo("${table}")`).all() as {
+          name: string;
+          hidden: number | bigint;
+        }[]
+      )
+        // Read with safe integers, so `hidden` may be a bigint.
+        .filter(column => Number(column.hidden) === 0)
+        .map(column => `"${column.name.replaceAll('"', '""')}"`)
+        .join(", ");
+      const rows = db.prepare(`SELECT ${writable} FROM "${table}"`).raw().all();
       for (const row of rows as unknown[][]) {
         lines.push(
-          `INSERT INTO "${table}" VALUES(${row.map(sqliteLiteral).join(",")});`
+          `INSERT INTO "${table}" (${writable}) VALUES(${row.map(sqliteLiteral).join(",")});`
         );
       }
     }
@@ -431,7 +443,7 @@ function sqliteColumns(
   table: string,
   sql: string
 ): Record<string, string> {
-  const generated = generatedExpressions(sql);
+  const clauses = columnClauses(sql);
   const columns = db.prepare(`PRAGMA table_xinfo("${table}")`).all() as {
     name: string;
     type: string;
@@ -448,10 +460,13 @@ function sqliteColumns(
         column.notnull ? "not null" : "null",
         column.dflt_value !== null && `default ${column.dflt_value}`,
         column.pk > 0 && `primary key ${column.pk}`,
+        // BINARY is the collation a column has when it names none.
+        (clauses.get(column.name)?.collation ?? "BINARY").toUpperCase() !==
+          "BINARY" && `collate ${clauses.get(column.name)?.collation}`,
         // 2 is a virtual generated column and 3 a stored one; each is stated
         // with its expression, so a change to either is an operation.
         column.hidden >= 2 &&
-          `${generated.get(column.name) ?? "as (?)"} ${column.hidden === 3 ? "stored" : "virtual"}`
+          `${clauses.get(column.name)?.generated ?? "as (?)"} ${column.hidden === 3 ? "stored" : "virtual"}`
       ),
     ])
   );
@@ -497,28 +512,55 @@ function indexKeyTexts(sql: string): string[] {
   return on === null ? [] : listItems(sql, on.index + on[0].length - 1);
 }
 
-/**
- * Each generated column's expression in a CREATE TABLE statement, by column
- * name, since no pragma lists it: `as (<expression>)`.
- */
-function generatedExpressions(sql: string): Map<string, string> {
-  const expressions = new Map<string, string>();
-  const open = sql.indexOf("(");
-  if (open < 0) return expressions;
-  for (const item of listItems(sql, open)) {
-    const name = /^(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|(\w+))/.exec(item);
-    const as = /\bAS\s*\(/i.exec(item);
-    if (name === null || as === null) continue;
-    const start = as.index + as[0].length - 1;
-    const column = name.slice(1).find(part => part !== undefined);
-    if (column !== undefined) {
-      expressions.set(
-        column,
-        `as ${item.slice(start, pastParenthesised(item, start))}`
-      );
-    }
+/** `text` with every quoted and parenthesised part emptied, so a word in it is the item's own. */
+function outerText(text: string): string {
+  let outer = "";
+  let at = 0;
+  while (at < text.length) {
+    const char = text[at];
+    const end = QUOTES.has(char)
+      ? pastQuoted(text, at)
+      : char === "("
+        ? pastParenthesised(text, at)
+        : at + 1;
+    outer += end === at + 1 ? char : " ";
+    at = end;
   }
-  return expressions;
+  return outer;
+}
+
+/** What a column's definition says that no pragma lists. */
+interface ColumnClauses {
+  /** A generated column's expression, as `as (<expression>)`. */
+  generated?: string;
+  /** Its collation, where it names one. */
+  collation?: string;
+}
+
+/**
+ * Each column's generated expression and collation in a CREATE TABLE
+ * statement, by column name. A COLLATE inside an expression or a string is
+ * not the column's own, so only the definition's outer text is searched.
+ */
+function columnClauses(sql: string): Map<string, ColumnClauses> {
+  const clauses = new Map<string, ColumnClauses>();
+  const open = sql.indexOf("(");
+  if (open < 0) return clauses;
+  for (const item of listItems(sql, open)) {
+    const named = /^(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|(\w+))/.exec(item);
+    const column = named?.slice(1).find(part => part !== undefined);
+    if (column === undefined) continue;
+    const found: ColumnClauses = {};
+    const as = /\bAS\s*\(/i.exec(item);
+    if (as !== null) {
+      const start = as.index + as[0].length - 1;
+      found.generated = `as ${item.slice(start, pastParenthesised(item, start))}`;
+    }
+    const collate = /\bCOLLATE\s+["`[]?(\w+)/i.exec(outerText(item));
+    if (collate !== null) found.collation = collate[1];
+    clauses.set(column, found);
+  }
+  return clauses;
 }
 
 /**

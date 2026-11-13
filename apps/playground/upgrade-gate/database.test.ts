@@ -11,7 +11,13 @@ import Sqlite from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 
 import { operationsBetween } from "./catalog";
-import { readCatalog, restorablePostgresDump, sqliteChecks } from "./database";
+import {
+  dump,
+  readCatalog,
+  restorablePostgresDump,
+  restore,
+  sqliteChecks,
+} from "./database";
 
 describe("restorablePostgresDump", () => {
   const dumped = [
@@ -192,5 +198,61 @@ describe("the SQLite catalog's generated columns", () => {
     ).toEqual([
       'change column t.total: integer null as ("price" * "quantity") virtual -> integer null as ("price" * "quantity") stored',
     ]);
+  });
+});
+
+describe("the SQLite catalog's column collations", () => {
+  it("reads a column whose collation changed as a change", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "upgrade-gate-collate-"));
+    try {
+      const read = async (name: string, ddl: string) => {
+        const file = join(scratch, `${name}.sqlite`);
+        const db = new Sqlite(file);
+        db.exec(ddl);
+        db.close();
+        return readCatalog("sqlite", `file:${file}`);
+      };
+      expect(
+        operationsBetween(
+          await read("before", `CREATE TABLE "t" ("email" text)`),
+          await read("after", `CREATE TABLE "t" ("email" text COLLATE NOCASE)`)
+        )
+      ).toEqual([
+        "change column t.email: text null -> text null collate NOCASE",
+      ]);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("a SQLite dump", () => {
+  it("restores a table with a generated column, writing only what is stored", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "upgrade-gate-sqlite-dump-"));
+    try {
+      const from = join(scratch, "from.sqlite");
+      const db = new Sqlite(from);
+      db.exec(
+        `CREATE TABLE "t" ("price" integer, "quantity" integer, "total" integer GENERATED ALWAYS AS ("price" * "quantity") STORED);
+         INSERT INTO "t" ("price", "quantity") VALUES (2, 3);`
+      );
+      db.close();
+      const to = join(scratch, "to.sqlite");
+      await restore(
+        "sqlite",
+        `file:${to}`,
+        await dump("sqlite", `file:${from}`)
+      );
+      const restored = new Sqlite(to);
+      try {
+        expect(restored.prepare(`SELECT * FROM "t"`).all()).toEqual([
+          { price: 2, quantity: 3, total: 6 },
+        ]);
+      } finally {
+        restored.close();
+      }
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   });
 });

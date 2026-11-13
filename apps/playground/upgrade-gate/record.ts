@@ -59,6 +59,33 @@ export interface BaselineMeta {
   playgroundPlugins: string;
 }
 
+/**
+ * The environment the playground's `nextly` runs in, when the baseline is
+ * recorded and when the gate upgrades it: the playground as a site runs it,
+ * with none of the browser suites' switches (each registers entities of its
+ * own), the plugins the baseline was recorded with, and the dialect read from
+ * the database's URL. One function for both, so the two runs build the same
+ * site.
+ */
+export function siteEnvironment(
+  base: NodeJS.ProcessEnv,
+  site: { databaseUrl: string; playgroundPlugins: string }
+): NodeJS.ProcessEnv {
+  return {
+    ...Object.fromEntries(
+      Object.entries(base).filter(
+        ([key]) =>
+          key !== "DB_DIALECT" &&
+          !key.startsWith("NEXTLY_E2E_") &&
+          key !== "NEXTLY_SPEED_EXTRA_COLLECTIONS"
+      )
+    ),
+    NODE_ENV: "development",
+    DATABASE_URL: site.databaseUrl,
+    NEXTLY_PLAYGROUND_PLUGINS: site.playgroundPlugins,
+  };
+}
+
 async function git(...args: string[]): Promise<string> {
   const { stdout } = await run("git", ["-C", repository, ...args], {
     maxBuffer: 64 * 1024 * 1024,
@@ -249,14 +276,10 @@ async function main(): Promise<void> {
       "_upgrade_record"
     );
     try {
-      const env: NodeJS.ProcessEnv = {
-        ...Object.fromEntries(
-          Object.entries(process.env).filter(([key]) => key !== "DB_DIALECT")
-        ),
-        NODE_ENV: "development",
-        DATABASE_URL: database.url,
-        NEXTLY_PLAYGROUND_PLUGINS: playgroundPlugins,
-      };
+      const env = siteEnvironment(process.env, {
+        databaseUrl: database.url,
+        playgroundPlugins,
+      });
       await nextly(
         playground,
         cwd,

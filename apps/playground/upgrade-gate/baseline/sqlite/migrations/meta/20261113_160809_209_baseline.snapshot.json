@@ -2036,7 +2036,7 @@
       }
     }
   },
-  "migrationHash": "8bb6efe4b7090e0ca8a1f5a60b140d3e9836bd245600906d6e591237fb564a58",
+  "migrationHash": "02f54236b7a7641168a639c800f5c520dd187d135cc1db617a0e44b3a81a1a5f",
   "permissions": {
     "app": {},
     "collections": {
@@ -3177,18 +3177,18 @@
           {
             "name": "_component_type",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "0",
             "name": "_order",
             "nullable": true,
-            "type": "int4"
+            "type": "integer"
           },
           {
             "name": "_parent_field",
             "nullable": false,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_parent_id",
@@ -3198,13 +3198,13 @@
           {
             "name": "_parent_table",
             "nullable": false,
-            "type": "varchar"
+            "type": "text"
           },
           {
-            "default": "NOW()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": false,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
@@ -3213,17 +3213,16 @@
             "type": "text"
           },
           {
-            "holdsSingleReference": true,
             "name": "og_image",
             "nullable": true,
             "referenceShape": "one",
             "type": "text"
           },
           {
-            "default": "NOW()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": false,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -3263,7 +3262,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -3273,36 +3272,35 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
             "name": "article_count",
             "nullable": true,
-            "type": "int4"
+            "type": "integer"
           },
           {
-            "holdsSingleReference": true,
             "name": "avatar",
             "nullable": true,
             "referenceShape": "one",
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
@@ -3312,7 +3310,7 @@
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
@@ -3329,7 +3327,7 @@
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "title",
@@ -3337,10 +3335,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -3385,7 +3383,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -3395,29 +3393,29 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
             "name": "content",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
@@ -3427,7 +3425,7 @@
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
@@ -3444,7 +3442,7 @@
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "title",
@@ -3452,10 +3450,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -3488,7 +3486,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -3498,24 +3496,24 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
@@ -3549,10 +3547,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -3585,7 +3583,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -3595,18 +3593,18 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
             "name": "area",
@@ -3621,13 +3619,13 @@
           {
             "name": "content",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
@@ -3642,7 +3640,7 @@
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
@@ -3659,7 +3657,7 @@
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "title",
@@ -3667,10 +3665,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -3703,7 +3701,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -3713,24 +3711,24 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
@@ -3740,12 +3738,12 @@
           {
             "name": "data",
             "nullable": false,
-            "type": "jsonb"
+            "type": "text"
           },
           {
             "name": "edited_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "edited_by",
@@ -3753,7 +3751,6 @@
             "type": "text"
           },
           {
-            "holdsSingleReference": true,
             "name": "form",
             "nullable": true,
             "referenceShape": "one",
@@ -3798,7 +3795,7 @@
           {
             "name": "submitted_at",
             "nullable": false,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "title",
@@ -3806,10 +3803,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "user_agent",
@@ -3876,7 +3873,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -3886,18 +3883,18 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
             "name": "closed_message",
@@ -3905,10 +3902,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
@@ -3923,7 +3920,7 @@
           {
             "name": "fields",
             "nullable": false,
-            "type": "jsonb"
+            "type": "text"
           },
           {
             "name": "id",
@@ -3939,12 +3936,12 @@
           {
             "name": "notifications",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
             "name": "settings",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
             "name": "slug",
@@ -3962,15 +3959,15 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "went_live_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -4003,7 +4000,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -4013,29 +4010,29 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
             "name": "areas",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
@@ -4050,7 +4047,7 @@
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
@@ -4067,7 +4064,7 @@
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "title",
@@ -4075,10 +4072,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -4111,7 +4108,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -4121,18 +4118,18 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
             "name": "blocked_by",
@@ -4145,10 +4142,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
@@ -4202,10 +4199,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -4280,7 +4277,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -4290,18 +4287,18 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
             "name": "class_id",
@@ -4309,10 +4306,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
@@ -4361,10 +4358,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "variant",
@@ -4416,7 +4413,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -4426,18 +4423,18 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
             "name": "component_id",
@@ -4445,10 +4442,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
@@ -4487,10 +4484,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -4537,7 +4534,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -4547,18 +4544,18 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
             "name": "component_id",
@@ -4566,10 +4563,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
@@ -4623,10 +4620,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "variant",
@@ -4678,7 +4675,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -4688,24 +4685,24 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
@@ -4739,10 +4736,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -4789,7 +4786,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -4799,29 +4796,29 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
             "name": "content",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
@@ -4831,7 +4828,7 @@
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
@@ -4840,7 +4837,6 @@
             "type": "text"
           },
           {
-            "holdsSingleReference": true,
             "name": "layout",
             "nullable": true,
             "referenceShape": "one",
@@ -4849,7 +4845,7 @@
           {
             "name": "no_header_footer",
             "nullable": true,
-            "type": "bool"
+            "type": "integer"
           },
           {
             "name": "slug",
@@ -4860,7 +4856,7 @@
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "title",
@@ -4868,10 +4864,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -4911,7 +4907,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -4921,18 +4917,18 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
             "name": "category",
@@ -4942,13 +4938,13 @@
           {
             "name": "content",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
@@ -4963,7 +4959,7 @@
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "granularity",
@@ -4990,7 +4986,7 @@
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "title",
@@ -4998,10 +4994,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5034,7 +5030,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -5044,25 +5040,24 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
-            "holdsReferenceList": true,
             "name": "categories",
             "nullable": true,
             "referenceShape": "list",
-            "type": "jsonb"
+            "type": "text"
           },
           {
             "name": "content",
@@ -5070,10 +5065,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
@@ -5096,7 +5091,6 @@
             "type": "text"
           },
           {
-            "holdsSingleReference": true,
             "name": "featured_image",
             "nullable": true,
             "referenceShape": "one",
@@ -5105,7 +5099,7 @@
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
@@ -5126,17 +5120,17 @@
           {
             "name": "published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "sections",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
             "name": "settings",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
             "name": "slug",
@@ -5147,14 +5141,13 @@
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar"
+            "type": "text"
           },
           {
-            "holdsReferenceList": true,
             "name": "tags",
             "nullable": true,
             "referenceShape": "list",
-            "type": "jsonb"
+            "type": "text"
           },
           {
             "name": "title",
@@ -5162,10 +5155,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5205,7 +5198,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -5215,24 +5208,24 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
@@ -5261,10 +5254,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5297,7 +5290,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -5307,18 +5300,18 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
             "name": "address",
@@ -5333,13 +5326,13 @@
           {
             "name": "content",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
@@ -5364,7 +5357,7 @@
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "forked_from",
@@ -5386,7 +5379,7 @@
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "title",
@@ -5394,10 +5387,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5465,7 +5458,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -5475,18 +5468,18 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
             "name": "campaign",
@@ -5494,15 +5487,15 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
@@ -5519,7 +5512,7 @@
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "title",
@@ -5527,10 +5520,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5561,7 +5554,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -5571,24 +5564,24 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
@@ -5599,7 +5592,7 @@
           {
             "name": "layout",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
             "name": "slug",
@@ -5612,10 +5605,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5641,7 +5634,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -5651,34 +5644,34 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "hero",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
             "name": "id",
@@ -5695,7 +5688,7 @@
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "title",
@@ -5703,10 +5696,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5732,7 +5725,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -5742,27 +5735,26 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
-            "holdsSingleReference": true,
             "name": "default_layout",
             "nullable": true,
             "referenceShape": "one",
@@ -5780,7 +5772,6 @@
             "type": "text"
           },
           {
-            "holdsSingleReference": true,
             "name": "seeded_layout",
             "nullable": true,
             "referenceShape": "one",
@@ -5797,10 +5788,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5840,7 +5831,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -5850,23 +5841,23 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
             "name": "body",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
             "name": "body_source",
@@ -5879,15 +5870,15 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "head",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
             "name": "head_source",
@@ -5911,10 +5902,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5940,7 +5931,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -5950,24 +5941,24 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
@@ -5991,10 +5982,10 @@
             "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -6024,7 +6015,7 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
@@ -6034,39 +6025,39 @@
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int4"
+            "type": "integer"
           },
           {
             "name": "breakpoints",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
             "name": "classes",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "fonts",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
             "name": "id",
@@ -6087,13 +6078,13 @@
           {
             "name": "tokens",
             "nullable": true,
-            "type": "jsonb"
+            "type": "text"
           },
           {
-            "default": "now()",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
