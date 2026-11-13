@@ -21,6 +21,7 @@ import {
   type FieldNameSurface,
   isCollectionOnlyFieldName,
 } from "../domains/dynamic-collections/field-name-rule";
+import { fieldProducesColumn } from "../domains/schema/services/field-column-descriptor";
 import { NextlyError } from "../errors/nextly-error";
 import { uiSchemaFieldSchema } from "../schemas/_zod/ui-schema";
 import { pluginFieldOptionIssues } from "../shared/lib/plugin-field-options";
@@ -162,10 +163,13 @@ export interface FieldNamesEntity {
   lifecycleEnabled?: boolean;
 }
 
-/** A field as its name and nested fields are read here. */
+/** A field as its name, nested fields and storage are read here. */
 interface FieldName {
   name?: unknown;
   fields?: unknown;
+  type?: unknown;
+  options?: unknown;
+  virtual?: unknown;
 }
 
 /** The fields of a list read as `FieldName`s, skipping anything that is not one. */
@@ -211,6 +215,8 @@ export function assertBuilderFieldNames(
             surface: entity.surface,
             nested: path !== "",
             lifecycleEnabled: entity.lifecycleEnabled,
+            // Asked of the field by the one predicate that says whether it has a column.
+            producesColumn: fieldProducesColumn(field),
           })
         : null;
     if (problem !== null) {

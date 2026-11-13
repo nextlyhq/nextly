@@ -153,6 +153,34 @@ describe("the panel's check and the save's rule", () => {
   });
 });
 
+describe("a field that becomes no column", () => {
+  // A field-group reference keeps its values in the field group's own table, so a name past the
+  // longest column a database keeps whole names no column, and both the rule and the save take it.
+  it("takes a top-level name longer than a column may be, where only a column would break", () => {
+    const long = "a".repeat(64);
+    expect(
+      fieldNameProblem(long, {
+        surface: "single",
+        nested: false,
+        producesColumn: false,
+      })
+    ).toBeNull();
+    expect(() =>
+      assertValidFieldsPayload(
+        [{ name: long, type: "component", component: "card" }],
+        { kind: "single", stored: [] }
+      )
+    ).not.toThrow();
+    // The same name on a field with a column is refused, so the exemption is the storage's.
+    expect(() =>
+      assertValidFieldsPayload([{ name: long, type: "text" }], {
+        kind: "single",
+        stored: [],
+      })
+    ).toThrow();
+  });
+});
+
 describe("the collection create road's own check", () => {
   it("refuses every Builder-spelled name the panel refuses at a collection's top level", () => {
     const builderSpelled = NAMES.filter(name => /^[a-z][a-z0-9_]*$/.test(name));

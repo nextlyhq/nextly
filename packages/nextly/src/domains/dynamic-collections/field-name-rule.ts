@@ -47,6 +47,13 @@ export interface FieldNamePlace {
    */
   lifecycleEnabled?: boolean;
   /**
+   * Whether the field becomes a column of the entity's table. A field-group reference, a
+   * many-to-many relationship or a virtual field keeps its values elsewhere, so no column carries
+   * its name and the column's length does not reach it. Absent is a column, the safe assumption
+   * for a field whose storage is not known.
+   */
+  producesColumn?: boolean;
+  /**
    * How a name may be spelled. `builder`, the default, is the snake case the Builder gives every
    * name it creates. `declared` also takes the camelCase a plugin or the API may declare, for the
    * roads that accept one.
@@ -128,7 +135,7 @@ function reservedProblem(name: string): FieldNameProblem {
  *
  * The rules, in the order they are asked:
  * - the spelling (`^[a-z][a-z0-9_]*$` for a name the Builder creates);
- * - at the top level, a column longer than every database keeps whole;
+ * - at the top level, for a field that becomes a column, one longer than every database keeps whole;
  * - a system column's name in either spelling (`id`, `created_at`, `updated_at`), at any depth;
  * - at a collection's top level, its owner column (`created_by`);
  * - at the top level of a collection or a Single whose lifecycle is on, the lifecycle's own names
@@ -152,7 +159,11 @@ export function fieldNameProblem(
     };
   }
   // The column is the name in snake case, as every road writes it.
-  if (!place.nested && toSnakeCase(name).length > MAX_FIELD_COLUMN_LENGTH) {
+  if (
+    !place.nested &&
+    place.producesColumn !== false &&
+    toSnakeCase(name).length > MAX_FIELD_COLUMN_LENGTH
+  ) {
     return {
       kind: "column-too-long",
       code: "INVALID_FIELD_NAME",
