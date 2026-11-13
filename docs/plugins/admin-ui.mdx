@@ -6,9 +6,9 @@ description: Contribute admin menu items, pages, settings, and collection-view o
 A plugin can extend the Nextly admin in two complementary ways:
 
 - **`contributes.admin`.** The _declarative_ surface: menu entries, custom pages,
-  a settings panel, and per-collection view overrides (D19–D23).
+  a settings panel, and per-collection view overrides.
 - **`admin`** (on the plugin definition) — _placement & appearance_: where the
-  plugin's items sit in the sidebar and how they look (D20).
+  plugin's items sit in the sidebar and how they look.
 
 Both are `@public`. Admin **dashboard widgets** are declared with `defineWidget` under
 `contributes.dashboard`, and are rendered on the admin dashboard today, but the contract
@@ -38,7 +38,7 @@ registerComponents({
 ```
 
 An app loads these through its **component map**, two generated files beside its generated
-types (D60):
+types:
 
 - `plugin-admin-imports.generated.ts` imports and registers every plugin admin component, and
   the app's admin page imports it. That includes the views a collection names for its own
@@ -126,7 +126,7 @@ assume the default types location (`./src/types/generated/`); use the folder you
 ## UI building blocks (`@nextlyhq/ui`)
 
 Build your admin components out of the shared **plugin UI kit**, `@nextlyhq/ui` — the
-semver-protected surface of React primitives the admin itself is built from (D68/D53).
+semver-protected surface of React primitives the admin itself is built from.
 The host provides it (and React) as a **peer dependency**, so you and the admin share one
 version and one theme:
 
@@ -248,21 +248,21 @@ can never leak into the host page and always theme correctly. Use `--nx-*` token
 ```ts
 contributes: {
   admin: {
-    // Sidebar entries (D20). One level of children is supported.
+    // Sidebar entries. One level of children is supported.
     menu: [
       { label: "Reports", to: "/admin/plugins/reports", icon: "BarChart",
         order: 10, requiredPermission: "read-reports" },
     ],
-    // Custom pages, namespaced under /admin/plugins/<slug>/<path>, RBAC-gated (D21).
+    // Custom pages, namespaced under /admin/plugins/<slug>/<path>, RBAC-gated.
     pages: [
       { path: "summary", component: "@acme/nextly-plugin-reports/admin#ReportsView",
         requiredPermission: "read-reports",
         // Read as the page opens, in the admin's first request (experimental).
         startupReads: [{ path: "/summary/totals" }] },
     ],
-    // A settings panel rendered at /admin/plugins/<slug> (D21).
+    // A settings panel rendered at /admin/plugins/<slug>.
     settings: { component: "@acme/nextly-plugin-reports/admin#ReportsSettings" },
-    // Per-collection view overrides + injection points, keyed by slug (D23).
+    // Per-collection view overrides + injection points, keyed by slug.
     views: {
       posts: {
         beforeList: "@acme/nextly-plugin-reports/admin#PostsBanner",
@@ -1340,7 +1340,7 @@ Everything else on this page is `@public` today.
 
 ## Placement & appearance
 
-The plugin's own `admin` field controls where its items live (D20):
+The plugin's own `admin` field controls where its items live:
 
 ```ts
 import { definePlugin } from "@nextlyhq/plugin-sdk";
@@ -1444,7 +1444,7 @@ environment. It also reports a count or badge reading an attention item gated on
 `collections` that are all hidden from the navigation: Needs your attention leaves hidden
 collections out, so that item is shown to nobody and its number is always 0.
 
-## Host overrides (D49)
+## Host overrides
 
 An integrator can override a plugin's placement without forking it, via
 `defineConfig({ admin: { pluginOverrides } })` — keyed by the plugin's admin slug: its

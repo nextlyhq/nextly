@@ -44,6 +44,8 @@ const uploadUrlRequestSchema = z.object({
   filename: z.string().min(1, "filename is required"),
   mimeType: z.string().min(1, "mimeType is required"),
   collection: z.string().min(1, "collection is required"),
+  /** The file's exact size in bytes: the signed URL accepts only a body of this length. */
+  size: z.number().int().positive(),
   expiresIn: z.number().int().positive().optional(),
 });
 
@@ -56,7 +58,13 @@ const uploadUrlRequestSchema = z.object({
  * - filename: string - Original filename
  * - mimeType: string - File MIME type
  * - collection: string - Collection slug
+ * - size: number - The file's exact size in bytes
  * - expiresIn?: number - Optional URL expiry in seconds
+ *
+ * The claim is judged before anything is signed, by the same checks and
+ * settings as every upload (name, extension, type allowlist, size caps); an
+ * SVG is never signed, and the extension must name the type. The URL binds
+ * the type and the exact size, so storage refuses any other file.
  *
  * Requires create-media, matching the media-handlers upload route: a
  * pre-signed URL is a grant to write into the site's storage, so it
@@ -108,7 +116,7 @@ export const POST = withErrorHandler(
       throw err;
     }
 
-    const { filename, mimeType, collection } = validated;
+    const { filename, mimeType, collection, size, expiresIn } = validated;
 
     const storage = getMediaStorage();
 
@@ -190,7 +198,8 @@ export const POST = withErrorHandler(
       uploadData = await storage.getClientUploadUrl(
         filename,
         mimeType,
-        collection
+        collection,
+        { size, expiresIn }
       );
     } catch (err) {
       // Vercel Blob-style adapters require a different upload flow

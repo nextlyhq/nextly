@@ -352,3 +352,36 @@ describe("kitRouteConstraintStatements", () => {
     });
   });
 });
+
+describe("a key moved to another target, on the kit route", () => {
+  const moved: ForeignKeySpec = {
+    ...shelfKey,
+    name: "fk_cx__items_shelf_id_to_cx__racks",
+    referencesTable: "cx__racks",
+  };
+  const ops: Operation[] = [
+    { type: "add_foreign_key", tableName: "cx__items", foreignKey: moved },
+    {
+      type: "drop_foreign_key",
+      tableName: "cx__items",
+      foreignKey: shelfKey,
+      afterReplacement: true,
+    },
+  ];
+
+  it.each(["mysql", "postgresql"] as const)(
+    "adds the new key before dropping the old one, both after the kit (%s)",
+    dialect => {
+      const { before, after } = kitRouteConstraintStatements(
+        ops,
+        [items, shelves],
+        dialect
+      );
+      expect(before).toEqual([]);
+      expect(after).toHaveLength(2);
+      expect(after[0]).toContain("fk_cx__items_shelf_id_to_cx__racks");
+      expect(after[1]).toMatch(/DROP (FOREIGN KEY|CONSTRAINT)/);
+      expect(after[1]).toContain("fk_cx__items_shelf_id");
+    }
+  );
+});

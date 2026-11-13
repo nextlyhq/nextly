@@ -15,6 +15,8 @@
  */
 
 import type { CredentialDeps } from "../../auth/credentials/verify-credentials";
+import type { SessionRoles } from "../../auth/session/session-roles";
+import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import type { ApiKeyService } from "../../domains/auth/services/api-key-service";
 import type { AuthService } from "../../domains/auth/services/auth-service";
 import type { PermissionService } from "../../domains/auth/services/permission-service";
@@ -36,6 +38,19 @@ import type { UserService } from "../../services/users/user-service";
 import type { DirectAPIConfig } from "../types/index";
 
 /**
+ * What the Direct API's `login` needs besides the password check: the roles
+ * the token carries, and the audit trail every sign-in is recorded on.
+ *
+ * @internal
+ */
+export interface DirectLoginDeps {
+  /** The account's roles in force, and the soonest moment one lapses. */
+  fetchSessionRoles(userId: string): Promise<SessionRoles>;
+  /** The same writer the login endpoint records its sign-ins with. */
+  auditLog: AuditLogWriter;
+}
+
+/**
  * Services and config exposed to namespace modules by the `Nextly` core class.
  *
  * @internal
@@ -50,6 +65,7 @@ export interface NextlyContext {
   /** @internal */ readonly singleRegistryService: SingleRegistryService;
   /** @internal */ readonly authService: AuthService;
   /** @internal */ readonly passwordCredentialDeps: CredentialDeps;
+  /** @internal */ readonly directLoginDeps: DirectLoginDeps;
   /** @internal */ readonly userAccountService: UserAccountService;
   /** @internal */ readonly userService: UserService;
   /** @internal */ readonly mediaService: MediaService;

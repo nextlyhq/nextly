@@ -11,6 +11,7 @@ import {
   clearActivePostgresSchema,
   createSchemaSql,
   DEFAULT_POSTGRES_SCHEMA,
+  refuseMovedInstallation,
   resolvePostgresSchema,
   setActivePostgresSchema,
   validatePostgresSchema,
@@ -54,33 +55,20 @@ describe("the configured PostgreSQL schema", () => {
     expect(validatePostgresSchema("a".repeat(63))).toHaveLength(63);
   });
 
-  it("refuses any schema but public on PostgreSQL, for now", () => {
-    // drizzle-kit reads every desired table as `public`; reconciling another
-    // schema creates nothing and proposes dropping that schema. Refused with
-    // the code that says it is unsupported, not that the name is malformed.
+  it("honours a named schema on PostgreSQL", () => {
+    // Every table is created and migrated in it, so the name is resolved as
+    // given rather than refused or replaced with the default.
     for (const name of ["cms", "tenant_42"]) {
-      let caught: unknown;
-      try {
-        resolvePostgresSchema(name, "postgresql");
-      } catch (error) {
-        caught = error;
-      }
-      expect(
-        NextlyError.isCode(caught, "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED")
-      ).toBe(true);
-      expect((caught as NextlyError).publicMessage).toContain(`"${name}"`);
-      expect((caught as NextlyError).publicMessage).toContain(
-        "not supported yet"
-      );
+      expect(resolvePostgresSchema(name, "postgresql")).toBe(name);
     }
     // Explicit `public` and absent are the two ways of saying the default.
     expect(resolvePostgresSchema("public", "postgresql")).toBe("public");
     expect(resolvePostgresSchema(undefined, "postgresql")).toBe("public");
   });
 
-  it("names a malformed schema as invalid before calling it unsupported", () => {
-    // The shape check runs first, so a name that could never be used is
-    // reported as such rather than as merely not supported yet.
+  it("refuses a malformed schema name as invalid", () => {
+    // A name PostgreSQL could never use is refused when the config is read,
+    // naming the setting, rather than at the first query.
     expect(() => resolvePostgresSchema("Cms", "postgresql")).toThrow(
       expect.objectContaining({ code: "VALIDATION_ERROR" })
     );
@@ -185,4 +173,51 @@ describe("an adapter the application supplied", () => {
       }
     }
   );
+});
+
+describe("an installation the setting moved away from", () => {
+  /** What the refusal throws, or `undefined` when it lets the start through. */
+  function refusal(
+    configured: string,
+    holding: string[],
+    allow = false
+  ): NextlyError | undefined {
+    try {
+      refuseMovedInstallation(configured, holding, allow);
+      return undefined;
+    } catch (error) {
+      return error as NextlyError;
+    }
+  }
+
+  it("refuses a named schema while the installation is in public, naming both", () => {
+    const error = refusal("cms", ["public"]);
+    expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(
+      true
+    );
+    expect(error?.publicMessage).toContain('db.postgres.schema is "cms"');
+    expect(error?.publicMessage).toContain('installation is in "public"');
+    expect(error?.publicMessage).toContain("remove db.postgres.schema");
+    expect(error?.publicMessage).toContain(
+      "NEXTLY_POSTGRES_SCHEMA_NEW_INSTALL=1"
+    );
+  });
+
+  it("refuses public while the installation is in a named schema, naming both", () => {
+    const error = refusal("public", ["cms"]);
+    expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(
+      true
+    );
+    expect(error?.publicMessage).toContain(
+      'db.postgres.schema is not set (so "public")'
+    );
+    expect(error?.publicMessage).toContain('set db.postgres.schema to "cms"');
+  });
+
+  it("lets a first install, the ordinary start and an allowed new installation through", () => {
+    expect(refusal("cms", [])).toBeUndefined();
+    expect(refusal("cms", ["cms"])).toBeUndefined();
+    expect(refusal("cms", ["cms", "public"])).toBeUndefined();
+    expect(refusal("cms", ["public"], true)).toBeUndefined();
+  });
 });

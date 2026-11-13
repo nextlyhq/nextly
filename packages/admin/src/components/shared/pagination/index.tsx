@@ -12,6 +12,7 @@ import { PAGINATION } from "@admin/constants/pagination";
 import { useT } from "@admin/lib/i18n/I18nProvider";
 import { cn } from "@admin/lib/utils";
 
+import { PAGER_BUTTON_SIZE, PAGER_CONTROLS, PAGER_FRAME } from "./pager-layout";
 import type { PaginationProps } from "./types";
 
 /**
@@ -193,7 +194,10 @@ function PageNumbers({
             key={slot.key}
             // Square corners: the ellipsis sits inside the same
             // overlapped-border strip as the page buttons.
-            className="flex h-10 w-10 items-center justify-center rounded-none  border border-border-strong bg-background text-muted-foreground text-xs -ml-px"
+            className={cn(
+              PAGER_BUTTON_SIZE,
+              "flex items-center justify-center rounded-none  border border-border-strong bg-background text-muted-foreground text-xs -ml-px"
+            )}
             aria-hidden="true"
           >
             ...
@@ -206,7 +210,8 @@ function PageNumbers({
             className={cn(
               // Square corners: page buttons overlap their borders (-ml-px)
               // into one continuous strip, which a radius would break apart.
-              "flex h-10 w-10 items-center justify-center rounded-none text-xs z-10 -ml-px transition-colors focus:outline-none focus:border-primary cursor-pointer",
+              PAGER_BUTTON_SIZE,
+              "flex items-center justify-center rounded-none text-xs z-10 -ml-px transition-colors focus:outline-none focus:border-primary cursor-pointer",
               currentPage === slot.page
                 ? "bg-primary! text-primary-foreground border-primary! z-20"
                 : "bg-background  border border-border-strong hover-unified disabled:opacity-50 disabled:cursor-not-allowed"
@@ -345,7 +350,10 @@ function PagerButtons({
       <button
         onClick={() => onPageChange(0)}
         disabled={!canGoPrevious || isLoading}
-        className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        className={cn(
+          PAGER_BUTTON_SIZE,
+          "hidden @md/content:flex items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        )}
         aria-label={t("nextly.pagination.first")}
       >
         <ChevronsLeft className="h-4 w-4" />
@@ -355,7 +363,10 @@ function PagerButtons({
       <button
         onClick={() => onPageChange(currentPage - 1)}
         disabled={!canGoPrevious || isLoading}
-        className="flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        className={cn(
+          PAGER_BUTTON_SIZE,
+          "flex items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        )}
         aria-label={t("nextly.pagination.previous")}
       >
         <ChevronLeft className="h-4 w-4" />
@@ -368,7 +379,10 @@ function PagerButtons({
       <button
         onClick={() => onPageChange(currentPage + 1)}
         disabled={!canGoNext || isLoading}
-        className="flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        className={cn(
+          PAGER_BUTTON_SIZE,
+          "flex items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        )}
         aria-label={t("nextly.pagination.next")}
       >
         <ChevronRight className="h-4 w-4" />
@@ -378,7 +392,10 @@ function PagerButtons({
       <button
         onClick={() => onPageChange(totalPages - 1)}
         disabled={!canGoLast || isLoading}
-        className="hidden @md/content:flex h-10 w-10 items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        className={cn(
+          PAGER_BUTTON_SIZE,
+          "hidden @md/content:flex items-center justify-center rounded-md  border border-border-strong bg-background hover-unified disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:border-primary z-10 cursor-pointer"
+        )}
         aria-label={t("nextly.pagination.last")}
       >
         <ChevronsRight className="h-4 w-4" />
@@ -635,10 +652,7 @@ export const Pagination: React.ForwardRefExoticComponent<
         ref={ref}
         aria-label={landmarkName(ariaLabel, t)}
         onKeyDown={handleKeyDown}
-        className={cn(
-          "flex flex-col @2xl/content:flex-row w-full items-center justify-between gap-4 text-xs @md/content:text-sm text-muted-foreground p-4 border-t border-border bg-[var(--nx-table-header-bg)]",
-          className
-        )}
+        className={cn(PAGER_FRAME, className)}
       >
         {/* Left: Info */}
         <PaginationSummary
@@ -652,7 +666,7 @@ export const Pagination: React.ForwardRefExoticComponent<
         />
 
         {/* Right: Controls */}
-        <div className="flex flex-wrap items-center justify-center gap-4 @md/content:gap-6 @4xl/content:gap-8 order-1 @2xl/content:order-2">
+        <div className={PAGER_CONTROLS}>
           {/* Page size selector */}
           {showPageSizeSelector && onPageSizeChange && (
             <PageSizeSelect

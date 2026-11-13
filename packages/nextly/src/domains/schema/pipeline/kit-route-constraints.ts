@@ -93,8 +93,14 @@ function isPreKitConstraintDrop(
   pairedDrops: ReadonlySet<DropCheckOp>
 ): boolean {
   if (op.type === "drop_check") return !pairedDrops.has(op);
-  // A key ahead of a conversion is the pre-resolution pass's to drop, before the conversion.
-  return op.type === "drop_foreign_key" && op.beforeConversion !== true;
+  // A key a replacement on the same columns supersedes goes after that replacement is added, so its
+  // columns are never left unkeyed (MySQL commits each statement as it runs). A key ahead of a
+  // conversion is the pre-resolution pass's to drop, before the conversion.
+  return (
+    op.type === "drop_foreign_key" &&
+    op.afterReplacement !== true &&
+    op.beforeConversion !== true
+  );
 }
 
 function postKitConstraintOps(
@@ -108,6 +114,8 @@ function postKitConstraintOps(
     case "add_foreign_key":
     case "change_foreign_key_action":
       return [op];
+    case "drop_foreign_key":
+      return op.afterReplacement === true ? [op] : [];
     case "add_table":
       return dialect === "postgresql" ? tableConstraintOps(op.table) : [];
     default:

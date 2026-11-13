@@ -32,6 +32,7 @@
 
 import { isDeepStrictEqual } from "node:util";
 
+import { readFieldGroupType } from "../../domains/field-groups/storage/field-group-type-key";
 import { NextlyError } from "../../errors";
 
 import { detachData } from "./detach";
@@ -175,19 +176,26 @@ export async function resolvePromotedDocument(
   const denied = collectDenied(input, [
     [input.before, permittedBefore],
     [input.live, permittedLive],
-    [input.pending, permittedPending],
   ]);
-  const refusals = [...denied].flatMap(path =>
-    refusedLeaves(input, path, credited)
-  );
-  if (refusals.length > 0) refuse(input, refusals);
-
-  return restoreDenied(
+  // The document this publish writes: what the rules allow of `before`, and every value they deny
+  // back at live.
+  const persisted = restoreDenied(
     input.before,
     permittedBefore,
     input.live,
     permittedLive
   ) as Record<string, unknown>;
+  // The pending change judged on its own, with one exemption (`allowedAsProduced`): a plain value
+  // the document the publish writes allows, though the draft's own siblings denied it.
+  if (input.pending && permittedPending) {
+    await addPendingDenials(input, permittedPending, persisted, denied);
+  }
+  const refusals = [...denied].flatMap(path =>
+    refusedLeaves(input, path, credited)
+  );
+  if (refusals.length > 0) refuse(input, refusals);
+
+  return persisted;
 }
 
 /**
@@ -517,6 +525,111 @@ function isRefusal(
   if (pathExists(credited, leaf)) return false;
   const promoted = input.pending ?? input.before;
   return !sameStoredValue(valueAt(promoted, leaf), valueAt(input.live, leaf));
+}
+
+/**
+ * Add to `denied` every path the pending change is denied on its own, except one the document
+ * the publish writes allows (`allowedAsProduced`).
+ */
+async function addPendingDenials(
+  input: PromotionAccessInput,
+  permittedPending: Record<string, unknown>,
+  persisted: Record<string, unknown>,
+  denied: Set<string>
+): Promise<void> {
+  for (const path of deniedPaths(input.pending, permittedPending, "")) {
+    if (denied.has(path)) continue;
+    // A pending value the row already holds changes nothing, so no refusal can come of it, and
+    // judging it again would cost a pass of the rules over the whole document for nothing.
+    const unchanged = sameStoredValue(
+      valueAt(input.pending, path),
+      valueAt(input.live, path)
+    );
+    if (!unchanged && (await allowedAsProduced(input, persisted, path))) {
+      continue;
+    }
+    denied.add(path);
+  }
+}
+
+/**
+ * Whether a path the pending change is denied on its own is allowed by the document the publish
+ * produces, holding the pending value there.
+ *
+ * A rule reads the document's other fields. Judged on the pending change alone, a value is judged
+ * against the draft's siblings, and a publish that sets a sibling the rule reads (a `kind` the rule
+ * asks for) is refused though the document it writes allows the value. So such a value is judged
+ * once more, on the document the publish writes (`persisted`: every value the rules deny already
+ * back at live, so a sibling the rule reads is the one that persists) with the pending value put at
+ * its path. Only a plain value is
+ * judged so: a container, a value inside a list, a value whose containers the produced document
+ * lacks, or a path through a name an object inherits, stays denied, as before. A pending change can
+ * add or delete inside a container in ways the produced document does not show, so those keep the
+ * pending change's own judgment.
+ */
+async function allowedAsProduced(
+  input: PromotionAccessInput,
+  persisted: Record<string, unknown>,
+  path: string
+): Promise<boolean> {
+  const value = valueAt(input.pending, path);
+  if (path.includes("[") || isRecord(value) || Array.isArray(value)) {
+    return false;
+  }
+  // A component's field rules are chosen by its type, so a value whose component the publish
+  // replaces with another type would be judged by the other type's rules, or by none.
+  if (!sameComponentsAlong(input.pending, persisted, path)) return false;
+  const produced = detachData(persisted);
+  if (!putOwnPath(produced, path, detachData(value))) return false;
+  const judged = detachData(produced);
+  await input.applyRules(judged);
+  return !deniedPaths(produced, judged, "").some(
+    denied => denied === path || path.startsWith(`${denied}.`)
+  );
+}
+
+/**
+ * Whether every container on the way to `path` is the same component (or none) in the pending
+ * change and in the document the publish writes.
+ */
+function sameComponentsAlong(
+  pending: Record<string, unknown> | undefined,
+  persisted: Record<string, unknown>,
+  path: string
+): boolean {
+  const steps = path.split(".");
+  for (let depth = 1; depth < steps.length; depth++) {
+    const prefix = steps.slice(0, depth).join(".");
+    if (
+      readFieldGroupType(valueAt(pending, prefix)) !==
+      readFieldGroupType(valueAt(persisted, prefix))
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Put `value` at a dotted path of named fields, through containers the document holds as its OWN
+ * plain records only; false, writing nothing, where one is missing or the path names
+ * `__proto__`, so nothing can reach an inherited object.
+ */
+function putOwnPath(
+  root: Record<string, unknown>,
+  path: string,
+  value: unknown
+): boolean {
+  const steps = path.split(".");
+  if (steps.includes("__proto__")) return false;
+  let current: Record<string, unknown> = root;
+  for (const step of steps.slice(0, -1)) {
+    const next = hasOwn(current, step) ? current[step] : undefined;
+    if (!isRecord(next)) return false;
+    current = next;
+  }
+  assign(current, steps[steps.length - 1], value);
+  return true;
 }
 
 /** Refuse the promotion, naming every field at fault, in a stable order. */
