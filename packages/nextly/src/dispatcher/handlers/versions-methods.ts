@@ -807,18 +807,27 @@ export async function restoreVersionForDocument(
     });
   }
 
+  // The request and hook context the restore carries, handed to the read
+  // gates as the caller's own read of the document hands them, so a read hook
+  // that gates on either judges the caller asking.
+  const hookInputs = {
+    ...(args.request ? { request: args.request } : {}),
+    ...(args.context ? { context: args.context } : {}),
+  };
   await assertVersionDocumentReadable(
     args.scopeKind,
     args.slug,
     args.entryId,
     args.user,
-    readAuthenticatedScope()
+    readAuthenticatedScope(),
+    hookInputs
   );
   // A restore reads the version's snapshot back into its own language, so
   // the caller must be able to read that language before anything is written.
   await assertVersionLanguageReadable(
     { ...args, authenticatedScope: readAuthenticatedScope() },
-    args.versionNo
+    args.versionNo,
+    hookInputs
   );
 
   return restoreVersion({

@@ -615,6 +615,34 @@ describe.each(getConfiguredTestDialects())(
       expect(seen).toContain("restored-false");
     }, 120_000);
 
+    it("judges a checked restore's reads with the hook context the call carries", async () => {
+      const id = await publishedTwice();
+      // A read hook that lets a read through only where the call says so.
+      const gate = (ctx: {
+        context?: { historyAllowed?: unknown };
+        data?: unknown;
+      }) => {
+        if (ctx.context?.historyAllowed !== true) {
+          throw new Error("this read is not allowed here");
+        }
+        return ctx.data;
+      };
+      registerHook("beforeRead", POSTS, gate as never);
+      try {
+        const restored = await versions().restore({
+          collection: POSTS,
+          id,
+          versionNo: 1,
+          _overwrite: true,
+          ...asUser(editorId),
+          context: { historyAllowed: true },
+        });
+        expect(restored.item.restoredFrom).toBe(1);
+      } finally {
+        unregisterHook("beforeRead", POSTS, gate as never);
+      }
+    }, 120_000);
+
     it("marks a version seen on a trusted call, for a person the read rules would refuse", async () => {
       const created = await handler().createEntry(
         { collectionName: PRIVATE, overrideAccess: true },
