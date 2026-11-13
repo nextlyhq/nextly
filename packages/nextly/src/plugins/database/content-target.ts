@@ -12,7 +12,8 @@
  * @module plugins/database/content-target
  */
 import type { AnyColumn, SQL, Table } from "drizzle-orm";
-import { eq, getColumns } from "drizzle-orm";
+import { eq, getColumns, is } from "drizzle-orm";
+import { getTableConfig, SQLiteTable } from "drizzle-orm/sqlite-core";
 
 import type { EntityOwner } from "../../domains/schema/extension/build-extension-schema";
 import { getNextlyLogger } from "../../observability/logger";
@@ -108,11 +109,29 @@ function parentColumns(
   if (runtime === undefined || runtime === null) return undefined;
   const columns = Object.values(getColumns(runtime as Table));
   const named = (name: string) => columns.find(column => column.name === name);
-  const key = columns.find(column => column.primary);
+  const key = keyColumn(runtime as Table, columns);
   const parentTable = named(STORAGE_FORMAT.columns.parentTable);
   const parentId = named(STORAGE_FORMAT.columns.parentId);
   if (!key || !parentTable || !parentId) return undefined;
   return { key, parentTable, parentId };
+}
+
+/**
+ * A table's one key column: declared on the column, or as the table's own
+ * one-column primary key. SQLite's field-group table declares it on the table,
+ * since drizzle-kit drops NOT NULL from a column-level key there.
+ */
+function keyColumn(
+  runtime: Table,
+  columns: readonly AnyColumn[]
+): AnyColumn | undefined {
+  const own = columns.find(column => column.primary);
+  if (own !== undefined || !is(runtime, SQLiteTable)) return own;
+  const keys = getTableConfig(runtime).primaryKeys;
+  const [key] = keys;
+  return keys.length === 1 && key.columns.length === 1
+    ? key.columns[0]
+    : undefined;
 }
 
 /** The parent a read row names, when it names a table and a row of it. */

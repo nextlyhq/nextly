@@ -111,6 +111,12 @@ const indexColumns = (table: string) =>
     ).map(column => column.name),
   ]);
 
+/** Whether each column is NOT NULL, by column name. */
+const notNullOf = (table: string): Record<string, number> =>
+  Object.fromEntries(
+    columnsOf(table).map(column => [column.name, column.notnull])
+  );
+
 const columnsOf = (table: string) =>
   sqlite
     .prepare(`SELECT name, "notnull" FROM pragma_table_info(?)`)
@@ -257,6 +263,8 @@ describe("a SQLite push through drizzle-kit on a database with unrelated drift",
     // same columns, however the rebuild spells their statements.
     expect(storedSql(LEGACY_GROUP)).not.toBe(legacyBefore);
     expect(defaultsOf(LEGACY_GROUP)).toEqual(defaultsOf(CURRENT_GROUP));
+    // Every column as NOT NULL as this release's table has it, the id among them.
+    expect(notNullOf(LEGACY_GROUP)).toEqual(notNullOf(CURRENT_GROUP));
     expect(columnNames(LEGACY_GROUP)).toEqual(columnNames(CURRENT_GROUP));
     expect(indexColumns(LEGACY_GROUP)).toEqual(legacyIndexColumns);
     // The control: before the push, the two tables' defaults differed.
@@ -267,5 +275,22 @@ describe("a SQLite push through drizzle-kit on a database with unrelated drift",
         .get() as { note: string } | undefined;
       expect(row?.note).toBe("kept");
     }
+  });
+
+  it("changes nothing on a second push of the same schema", async () => {
+    await existingDatabase();
+    expect((await push()).success).toBe(true);
+    const tables = [POSTS, LEGACY_GROUP, CURRENT_GROUP];
+    const after = tables.map(table => [storedSql(table), indexesOf(table)]);
+
+    // What the first push wrote is what the desired schema describes, so the
+    // same schema pushed again finds nothing to rebuild.
+    const again = await push();
+
+    expect(again.error?.message).toBeUndefined();
+    expect(again.success).toBe(true);
+    expect(tables.map(table => [storedSql(table), indexesOf(table)])).toEqual(
+      after
+    );
   });
 });
