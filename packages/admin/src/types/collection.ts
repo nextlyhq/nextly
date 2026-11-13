@@ -266,6 +266,12 @@ export interface Collection extends RemovedFromCodeMark {
    */
   draftsEnabled?: boolean;
   /**
+   * Why drafts are off, when the configuration asked for them. With
+   * `localized-component`, a draft saved before the rule may still be held,
+   * and the editor reads it (`readsHeldDraft`).
+   */
+  draftsDisabledReason?: string;
+  /**
    * Resolved cache-revalidation config, or null/absent when revalidation is on
    * with no override. The server normalizes the Schema Builder's on/off switch
    * into this shape (off → `{ disable: true }`), so reads carry the object while
@@ -370,6 +376,8 @@ export interface CreateCollectionPayload {
    *  versioned collection). Derived server-side; read-only. Only code-first
    *  collections enable it — the Schema Builder always resolves drafts off. */
   draftsEnabled?: boolean;
+  /** Why drafts are off, when the configuration asked for them; see `readsHeldDraft`. */
+  draftsDisabledReason?: string;
   /** Whether writes bust cache tags. Default true; false opts the collection out. */
   revalidate?: boolean;
   /** Whether writes are recorded to the webhook outbox. Default true; false
