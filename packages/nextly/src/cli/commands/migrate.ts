@@ -1852,6 +1852,7 @@ async function assertPluginPrefixesHold(deps: MigrateCoreDeps): Promise<void> {
   ]);
   await assertRecordedPluginPrefixesKept({
     prefixes,
+    declared: deps.extensionSchema?.owners,
     readOwners: () => new OwnersRepo(deps.db, deps.dialect).read(),
     registryExists: () =>
       schemaOwnersTableExists(

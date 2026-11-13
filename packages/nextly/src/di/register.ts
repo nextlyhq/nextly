@@ -2986,6 +2986,7 @@ async function assertBootPluginInstallStates(
   );
   await assertRecordedPluginPrefixesKept({
     prefixes: bootExtensionSchema?.pluginPrefixes,
+    declared: bootExtensionSchema?.owners,
     readOwners: () =>
       new SchemaOwnersRepository(adapterDrizzleDb, adapter.dialect).read(),
     registryExists: () => schemaOwnersTableExists(adapter),
