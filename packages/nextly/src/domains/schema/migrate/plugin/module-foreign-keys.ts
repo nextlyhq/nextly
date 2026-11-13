@@ -43,6 +43,14 @@ export interface AssertModuleForeignKeysResolveOptions {
    * is in view and only the chain's own order can be judged.
    */
   availableTables?: ReadonlySet<string>;
+  /**
+   * Whether a module is still to run. Only such a module's keys are judged
+   * against `availableTables`: an applied module's key to another owner's
+   * table is history, which a later module may have dropped before the owner
+   * dropped its target. Absent, every module is judged. The chain's own order
+   * is judged over every module either way.
+   */
+  pending?: (migration: PluginMigration) => boolean;
 }
 
 /** One key a module answers for, with the table it is declared on. */
@@ -76,12 +84,10 @@ export function assertModuleForeignKeysResolve(
   const dialects =
     options?.dialect !== undefined ? [options.dialect] : DIALECTS;
   for (const dialect of dialects) {
-    resolveChainPerDialect(
-      pluginName,
-      migrations,
-      dialect,
-      options?.availableTables
-    );
+    resolveChainPerDialect(pluginName, migrations, dialect, {
+      availableTables: options?.availableTables,
+      pending: options?.pending ?? (() => true),
+    });
   }
 }
 
@@ -90,7 +96,10 @@ function resolveChainPerDialect(
   pluginName: string,
   migrations: readonly PluginMigration[],
   dialect: SupportedDialect,
-  availableTables: ReadonlySet<string> | undefined
+  external: {
+    availableTables: ReadonlySet<string> | undefined;
+    pending: (migration: PluginMigration) => boolean;
+  }
 ): void {
   const everOwned = new Set<string>(
     migrations.flatMap(migration => [
@@ -118,7 +127,14 @@ function resolveChainPerDialect(
           path,
         });
       }
-      refuseExternalTargetMissing(migration, judged, availableTables, path);
+      if (external.pending(migration)) {
+        refuseExternalTargetMissing(
+          migration,
+          judged,
+          external.availableTables,
+          path
+        );
+      }
     }
     previous = after;
   }

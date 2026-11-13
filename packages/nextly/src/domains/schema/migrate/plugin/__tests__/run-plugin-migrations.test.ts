@@ -539,6 +539,47 @@ describe("runPluginMigrations", () => {
       expect(h.started).toEqual(["plugin:b/001"]);
     });
 
+    it("leaves an applied module's key alone once a later module dropped it and its target went", async () => {
+      // 001 (applied) keyed the dependency's table; 002 drops the key; the
+      // dependency has since dropped its table. 001 never runs again, so its
+      // historical key is not judged against today's tables.
+      const unkeyed: TableSpec = { ...keyedToDependency, foreignKeys: [] };
+      const applied = module({
+        name: "001",
+        schemaVersion: 1,
+        before: [],
+        target: [keyedToDependency],
+      });
+      const dropsKey = module({
+        name: "002",
+        schemaVersion: 2,
+        before: [keyedToDependency],
+        target: [unkeyed],
+        up: ['ALTER TABLE "fx__child" ADD "note" text'],
+      });
+      const sets = [
+        {
+          pluginName: "b",
+          pluginVersion: "1.0.0",
+          migrations: [applied, dropsKey],
+        },
+      ];
+      const h = deps({
+        appliedShas: new Map([["plugin:b/001", applied.checksum]]),
+        existingTables: async () => new Set<string>(),
+      });
+      h.live.set("fx__child", [keyedToDependency]);
+      await runPluginMigrations(sets, h.deps);
+      expect(h.started).toEqual(["plugin:b/002"]);
+
+      // Control: with 001 still to run, its key is judged and refused.
+      const fresh = deps({ existingTables: async () => new Set<string>() });
+      await expect(runPluginMigrations(sets, fresh.deps)).rejects.toSatisfy(
+        saying(/neither exists before the run/)
+      );
+      expect(fresh.started).toEqual([]);
+    });
+
     it("is refused before anything runs when the target is nowhere", async () => {
       const h = deps({ existingTables: async () => new Set<string>() });
       await expect(runPluginMigrations(installing(), h.deps)).rejects.toSatisfy(

@@ -313,7 +313,12 @@ export async function runPluginMigrations(
   // executes; a target no module of the owner names is another owner's or
   // one the database already held, judged for reach at the declaration
   // compile rather than by arrival.
-  await assertStreamKeysResolve(sets, deps.dialect, deps.existingTables);
+  await assertStreamKeysResolve(
+    sets,
+    deps.dialect,
+    deps.existingTables,
+    deps.appliedShas
+  );
   // And for what the server itself can hold: a module generated for every
   // dialect had no one server to be judged against, so pending modules are
   // judged here, against the one about to run them — before any module of any
@@ -370,13 +375,16 @@ export function pendingPluginModules(
  * Refuse, before any module runs, a module whose key reaches a table that
  * neither exists before the run nor is created earlier in it: by core, by a
  * plugin ordered before this one, or by this plugin's own earlier modules
- * (`assertModuleForeignKeysResolve`). A run and its preview ask this one
- * question, so a dry run refuses what the run would.
+ * (`assertModuleForeignKeysResolve`). Only modules the ledger does not record
+ * as applied are judged for that; the chain's own order is judged over all of
+ * them. A run and its preview ask this one question, so a dry run refuses what
+ * the run would.
  */
 async function assertStreamKeysResolve(
   sets: readonly PluginMigrationSet[],
   dialect: SupportedDialect,
-  existingTables: (() => Promise<ReadonlySet<string>>) | undefined
+  existingTables: (() => Promise<ReadonlySet<string>>) | undefined,
+  appliedShas: { has(key: string): boolean }
 ): Promise<void> {
   const available = new Set<string>(CORE_TABLE_NAMES);
   for (const name of (await existingTables?.()) ?? []) available.add(name);
@@ -385,6 +393,10 @@ async function assertStreamKeysResolve(
     assertModuleForeignKeysResolve(set.pluginName, ordered, {
       availableTables: available,
       dialect,
+      // Only a module still to run reaches a table now; an applied one's key
+      // may name a table its owner has since dropped, after a later module
+      // took the key away.
+      pending: migration => isPending(set, migration, { appliedShas }),
     });
     for (const table of ordered.at(-1)?.snapshot[dialect]?.tables ?? []) {
       available.add(table.name);
@@ -552,7 +564,12 @@ export async function previewPluginMigrations(
     appliedShas,
     declaredPlugins: args.declaredPlugins,
   });
-  await assertStreamKeysResolve(sets, args.dialect, args.existingTables);
+  await assertStreamKeysResolve(
+    sets,
+    args.dialect,
+    args.existingTables,
+    appliedShas
+  );
   if (args.serverConstructs !== undefined) {
     refusePendingConstructsTheServerCannotHold(sets, {
       dialect: args.dialect,
