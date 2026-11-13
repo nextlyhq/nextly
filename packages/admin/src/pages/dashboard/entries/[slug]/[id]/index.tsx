@@ -54,9 +54,9 @@ import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
-import { usePlaceStartupReads } from "@admin/hooks/queries/usePluginRoute";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
 import { useEntry } from "@admin/hooks/queries/useEntry";
+import { usePlaceStartupReads } from "@admin/hooks/queries/usePluginRoute";
 import {
   useStoredEntry,
   useWithStoredReferences,
@@ -186,12 +186,18 @@ export default function EditEntryPage({
   // What the parts plugins add to this page read as they open, started as
   // the page first renders, beside its own reads rather than after them; the
   // editor waits a moment for them, so their parts are drawn in place.
-  const partsStartup = usePlaceStartupReads(
-    "collection.edit",
-    slug !== undefined && id !== undefined
-      ? { collection: slug, entryId: id }
-      : null
-  );
+  // The page's own place, and the form inside its editor.
+  const known = slug !== undefined && id !== undefined;
+  const partsStartup = usePlaceStartupReads([
+    {
+      place: "collection.edit",
+      ids: known ? { collection: slug, entryId: id } : null,
+    },
+    {
+      place: "entry.form",
+      ids: known ? { kind: "collection", slug, entryId: id } : null,
+    },
+  ]);
 
   // The panel folded, where the collection's plugin says its document
   // screens start so, as the frame's outline of this address was drawn.

@@ -151,8 +151,10 @@ export function usePluginRoute<T extends object | null>({
     // the mark is let go below, when this mount goes.
     ...(staleTime === 0
       ? {
-          refetchOnMount: () =>
-            startedReads.has(route) ? false : ("always" as const),
+          refetchOnMount: (query: {
+            state: { fetchStatus: string; dataUpdatedAt: number };
+          }) =>
+            takesStartedRead(route, query.state) ? false : ("always" as const),
         }
       : {}),
   });
@@ -219,6 +221,30 @@ async function readPluginRouteBody<T extends object | null>(
  * fresh-on-mount read always has.
  */
 const startedReads = new Set<string>();
+
+/**
+ * How long after its answer a started read is handed to a part's first
+ * mount: about as long as the editor holds its reveal for its claim, with
+ * room to draw. A part that first mounts later than this (a panel opened
+ * after the page) was not drawn with the page, and reads afresh.
+ */
+export const STARTED_READ_HANDOFF_MS = 2_000;
+
+/**
+ * Whether a part mounting now takes the started read of `route` rather than
+ * reading afresh: one was started for this page, and it is still on its way
+ * or answered a moment ago.
+ */
+function takesStartedRead(
+  route: string,
+  state: { fetchStatus: string; dataUpdatedAt: number }
+): boolean {
+  if (!startedReads.has(route)) return false;
+  return (
+    state.fetchStatus === "fetching" ||
+    Date.now() - state.dataUpdatedAt <= STARTED_READ_HANDOFF_MS
+  );
+}
 
 /**
  * What the cache holds for a route that answered with no body.
@@ -299,6 +325,15 @@ function startupRoutesOf(
   });
 }
 
+/**
+ * One place on a page whose parts' reads the page starts, with the page's
+ * ids for it, or `null` while the page does not know them yet.
+ */
+export interface PlaceStart {
+  place: AdminPlaceId;
+  ids: Readonly<Record<string, string | null | undefined>> | null;
+}
+
 /** What a page's started reads report. */
 export interface PlaceStartupReads {
   /** Whether any of them is still on its way. */
@@ -306,9 +341,9 @@ export interface PlaceStartupReads {
 }
 
 /**
- * Start the reads the contributions at `place` declare they make as they
- * open, as the page first renders, with the page's own ids (`null` while the
- * page does not know them yet): before the page's own reads have answered and
+ * Start the reads the contributions at each of `starts`' places declare they
+ * make as they open, as the page first renders, with the page's own ids for
+ * that place (`null` while the page does not know them yet): before the page's own reads have answered and
  * its contributions have mounted, rather than after, a round sooner. Each is
  * started under the key and with the read `usePluginRoute` uses, so a
  * component's first read takes the started one and sends no request of its
@@ -321,24 +356,20 @@ export interface PlaceStartupReads {
  * settles it has not arrived, at the cost of one quick read.
  */
 export function usePlaceStartupReads(
-  place: AdminPlaceId,
-  ids: Readonly<Record<string, string | null | undefined>> | null
+  starts: readonly PlaceStart[]
 ): PlaceStartupReads {
   const { contributions } = useBranding();
   const queryClient = useQueryClient();
-  const delivered = contributions?.[place];
-  // By value: a page passes its ids as a fresh object on every render.
-  const idsKey = ids === null ? null : JSON.stringify(ids);
-  const routes = useMemo(
-    () =>
-      idsKey === null
+  // By value: a page passes its places and ids afresh on every render.
+  const startsKey = JSON.stringify(starts);
+  const routes = useMemo(() => {
+    const each = (JSON.parse(startsKey) as PlaceStart[]).flatMap(start =>
+      start.ids === null
         ? []
-        : placeStartupRoutes(
-            delivered,
-            JSON.parse(idsKey) as Record<string, string | null>
-          ),
-    [delivered, idsKey]
-  );
+        : placeStartupRoutes(contributions?.[start.place], start.ids)
+    );
+    return [...new Set(each)];
+  }, [contributions, startsKey]);
   const startedKey = useRef<string | null>(null);
   const key = JSON.stringify(routes);
   if (startedKey.current !== key) {
@@ -371,5 +402,12 @@ export function usePlaceStartupReads(
       enabled: false,
     })),
   });
-  return { pending: watched.some(read => read.status === "pending") };
+  // On its way, whatever the cache already holds: on a revisit the kept
+  // answer is shown as success while the started read refreshes it, and the
+  // page waits for the refreshed one, which may draw a part or take one away.
+  return {
+    pending: watched.some(
+      read => read.status === "pending" || read.fetchStatus === "fetching"
+    ),
+  };
 }
