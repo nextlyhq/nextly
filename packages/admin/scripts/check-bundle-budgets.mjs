@@ -7,7 +7,7 @@
  * - The shipped total — every browser-loaded chunk the package emits — stays
  *   at most 3,560 KB minified.
  * - The shell every route shares (the first screen's set) stays at most
- *   162 KB gzipped.
+ *   155 KB gzipped.
  * - Each route's own code — what its direct visit adds to the shell — stays
  *   at most its pinned size plus 10% (at least 2 KB). The pins live in
  *   `route-budgets.json`, measured when they were last set; a route with no
@@ -50,12 +50,13 @@ export const BUDGETS = {
   // and email setup screens, editors loaded on demand, and no unused code left
   // to remove, so the limit sits just above that measurement.
   totalMinifiedKB: 3740,
-  // The shared shell, measured at 147.1 KB gzipped on 2026-11-13 once the
+  // The shared shell, measured at 140.3 KB gzipped on 2026-11-13 once the
   // root entry exported only what an application mounts (it was 331 KB), the
-  // shell stopped importing the form library, and its two validators moved
-  // to `zod/mini`, plus the 10% a route's own code may grow above its pin.
-  // Held close to the measurement so the room is not spent without a decision.
-  shellGzipKB: 162,
+  // form library and zod's classic API left it, and the packages
+  // `@nextlyhq/ui` ships stayed with the application, plus the 10% a route's
+  // own code may grow above its pin. Held close to the measurement so the
+  // room is not spent without a decision.
+  shellGzipKB: 155,
   // Spec R-3: each route's own code may grow this share above its pin...
   routeHeadroom: 0.1,
   // ...or this many KB, whichever is more, so a route that adds almost
