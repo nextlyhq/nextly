@@ -35,6 +35,32 @@ type Tables = Pick<
 >;
 
 /**
+ * Store a proven password again, hashed with the app's hasher, in place of
+ * the bcrypt value core stored before the app configured it.
+ *
+ * Not a new password: only the hash is written, so when the password was set
+ * and the sessions it signed stand. Conditional on the stored value still
+ * being `from`, the one just proven, so a password another request set
+ * meanwhile is never replaced by this older one. Core sign-in and the users
+ * service's `authenticate` both write it here.
+ */
+export async function storeRehashedPassword(
+  db: PasswordWriteTx,
+  tables: Pick<Tables, "users">,
+  change: { userId: string; from: string; to: string }
+): Promise<void> {
+  await db
+    .update(tables.users)
+    .set({ passwordHash: change.to })
+    .where(
+      and(
+        eq(tables.users.id, change.userId),
+        eq(tables.users.passwordHash, change.from)
+      )
+    );
+}
+
+/**
  * The columns every password write sets, whoever chose the password.
  *
  * A new password satisfies any admin-set must-change requirement, so the
