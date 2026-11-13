@@ -10,10 +10,12 @@
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { asWritten } from "../../../__tests__/helpers/statement-as-written";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import { buildFullDesiredSchema } from "../../../dispatcher/helpers/desired-schema";
+import { clearCachedSnapshot } from "../../../init/schema-snapshot-cache";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import { RealClassifier } from "../../schema/pipeline/classifier/classifier";
 import { RealPreCleanupExecutor } from "../../schema/pipeline/pre-cleanup/executor";
@@ -23,8 +25,10 @@ import {
   noopNotifier,
   noopPreRenameExecutor,
 } from "../../schema/pipeline/pushschema-pipeline-stubs";
+import type { PromptDispatcher } from "../../schema/pipeline/pushschema-pipeline-interfaces";
 import { RegexRenameDetector } from "../../schema/pipeline/rename-detector";
 import { DrizzleStatementExecutor } from "../../schema/services/drizzle-statement-executor";
+import { setPerLanguageStorage } from "../per-language-storage";
 import {
   createTestNextly,
   type TestDialect,
@@ -420,9 +424,11 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     const id = await seedCollection();
     const dialog = PATHS.find(p => p.path.includes("schema dialog"));
     if (!dialog) throw new Error("the collection dialog path is missing");
+    // Matched anywhere in the statement: on PostgreSQL and MySQL a schema
+    // statement carries the run's lock claim ahead of it (`markedForSchemaLock`).
     const injected = failStatementsMatching(
       statement =>
-        statement.startsWith("INSERT INTO") &&
+        statement.includes("INSERT INTO") &&
         statement.includes("dc_posts_locales")
     );
 
@@ -482,21 +488,41 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     const id = await seedCollection();
     const dialog = PATHS.find(p => p.path.includes("schema dialog"));
     if (!dialog) throw new Error("the collection dialog path is missing");
-    // The registry write after the apply is refused, once.
-    const adapter = current.adapter as unknown as {
-      update(...args: unknown[]): Promise<unknown>;
-    };
-    const original = adapter.update.bind(adapter);
+    // The registry write after the apply is refused, once. It runs on the
+    // transaction it shares with the stored schema version, so the refusal
+    // sits on that transaction's `update` of the registry row.
+    const adapter = current.adapter;
+    const original = adapter.transaction.bind(adapter);
     let refusedOnce = false;
-    const injected = vi
-      .spyOn(adapter, "update")
-      .mockImplementation((...args: unknown[]) => {
-        if (!refusedOnce && args[0] === "dynamic_collections") {
-          refusedOnce = true;
-          return Promise.reject(new Error("injected registry failure"));
-        }
-        return original(...args);
-      });
+    const injected = vi.spyOn(adapter, "transaction").mockImplementation(((
+      work: Parameters<typeof original>[0],
+      options?: Parameters<typeof original>[1]
+    ) =>
+      original(
+        tx =>
+          work(
+            new Proxy(tx, {
+              get(target, property) {
+                const value: unknown = Reflect.get(target, property);
+                if (property !== "update" || typeof value !== "function") {
+                  return typeof value === "function"
+                    ? (value as (...a: unknown[]) => unknown).bind(target)
+                    : value;
+                }
+                return (...args: Parameters<typeof tx.update>) => {
+                  if (!refusedOnce && args[0] === "dynamic_collections") {
+                    refusedOnce = true;
+                    return Promise.reject(
+                      new Error("injected registry failure")
+                    );
+                  }
+                  return tx.update(...args);
+                };
+              },
+            })
+          ),
+        options
+      )) as typeof original);
 
     // The registry write is not fatal to the apply, so it reports the change made.
     await dialog.change(TRANSLATED).catch(() => undefined);
@@ -510,36 +536,53 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect(await readCollection(id)).toBe("Hello");
   });
 
+  /** A developer at the prompt who confirms every drop. */
+  const confirmEveryDrop: PromptDispatcher = {
+    dispatch: ({ events }) =>
+      Promise.resolve({
+        confirmedRenames: [],
+        resolutions: events.map(event => ({
+          kind: "confirm_drop" as const,
+          eventId: event.id,
+        })),
+        proceed: true,
+      }),
+  };
+
   /**
    * A code-first apply (`next dev`, a config reload, `db:sync`) of the collection `posts` with
    * `fields`: the pipeline gets the desired schema and nothing else, and a developer confirms
-   * every drop at the prompt.
+   * every drop at the prompt. With `localized: false`, `posts` is applied as a collection that is
+   * not translated, alone, so a site-wide storage setting reaches no other entity.
    */
-  async function applyCodeFirst(fields: unknown[]) {
+  async function applyCodeFirst(
+    fields: unknown[],
+    {
+      localized = true,
+      promptDispatcher = confirmEveryDrop,
+    }: { localized?: boolean; promptDispatcher?: PromptDispatcher } = {}
+  ) {
     const desired = await buildFullDesiredSchema();
     const posts = desired.collections.posts;
     if (!posts) throw new Error("the collection posts is missing");
-    desired.collections.posts = {
+    const applied = {
       ...posts,
       fields: fields as typeof posts.fields,
-      localized: true,
+      localized,
     };
+    if (localized) {
+      desired.collections.posts = applied;
+    } else {
+      desired.collections = { posts: applied };
+      desired.singles = {};
+      desired.components = {};
+    }
     const db = current.adapter.getDrizzle();
     const pipeline = new PushSchemaPipeline({
       executor: new DrizzleStatementExecutor(dialect, db),
       renameDetector: new RegexRenameDetector(),
       classifier: new RealClassifier(),
-      promptDispatcher: {
-        dispatch: ({ events }) =>
-          Promise.resolve({
-            confirmedRenames: [],
-            resolutions: events.map(event => ({
-              kind: "confirm_drop" as const,
-              eventId: event.id,
-            })),
-            proceed: true,
-          }),
-      },
+      promptDispatcher,
       preRenameExecutor: noopPreRenameExecutor,
       preCleanupExecutor: new RealPreCleanupExecutor(),
       migrationJournal: noopMigrationJournal,
@@ -607,6 +650,115 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect(await columnsOf("dc_posts_locales")).not.toContain("heading");
   });
 
+  // An integer moved into a float column is stored as a floating-point number, which keeps no
+  // integer past 2^53: SQLite would copy 9007199254740993 as 9007199254740992, and no other dialect
+  // counts the change as a widening either.
+  // A fixed-point column given more digits copies every value as it is: applied, and the value
+  // becomes the default language's.
+  it("applies a code-first apply that widens a decimal as it becomes translated, keeping its value", async () => {
+    const price = (precision: number) => ({
+      name: "price",
+      type: "number",
+      dbType: "decimal",
+      precision,
+      scale: 2,
+    });
+    const created = await handler().createCollection({
+      name: "posts",
+      label: "Post",
+      localized: true,
+      fields: [
+        { name: "heading", type: "text", localized: false },
+        { ...price(10), localized: false },
+      ],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const entry = await handler()
+      .getEntryService()
+      .createEntry(
+        { collectionName: "posts", overrideAccess: true, locale: "en" },
+        { heading: "Hello", price: 12345678.91 }
+      );
+    expect(entry.success, JSON.stringify(entry)).toBe(true);
+
+    const applied = await applyCodeFirst([
+      { name: "heading", type: "text", localized: false },
+      { ...price(12), localized: true },
+    ]);
+
+    expect(applied.success, JSON.stringify(applied)).toBe(true);
+    const [row] = await query<{ price: unknown }>(
+      `SELECT CAST(${quote(dialect, "price")} AS ${dialect === "mysql" ? "CHAR" : "TEXT"}) AS price FROM ${quote(dialect, "dc_posts_locales")} WHERE ${quote(dialect, "_locale")} = 'en'`
+    );
+    expect(Number(row?.price)).toBe(12345678.91);
+  });
+
+  it("refuses a code-first apply that makes an integer a float as it becomes translated, and changes nothing", async () => {
+    const id = await seedCollection();
+    // SQLite's INTEGER holds 64 bits; elsewhere the column is a 32-bit integer and keeps the 7 seeded.
+    const views = dialect === "sqlite" ? "9007199254740993" : "7";
+    if (dialect === "sqlite") {
+      await query(
+        `UPDATE ${quote(dialect, "dc_posts")} SET ${quote(dialect, "views")} = ${views} WHERE ${quote(dialect, "id")} = '${id}'`
+      );
+    }
+
+    const applied = await applyCodeFirst([
+      { name: "heading", type: "text", localized: false },
+      {
+        name: "views",
+        type: "number",
+        localized: true,
+        options: { format: "float" },
+      },
+    ]);
+
+    expect(applied.success).toBe(false);
+    expect(JSON.stringify(applied)).toMatch(/RESHAPED_FIELD_JOINS_TRANSLATION/);
+    expect(await columnsOf("dc_posts_locales")).not.toContain("views");
+    const [row] = await query<{ views: unknown }>(
+      // Read as text: a JavaScript number keeps no integer past 2^53 either.
+      `SELECT CAST(${quote(dialect, "views")} AS ${dialect === "mysql" ? "CHAR" : "TEXT"}) AS views FROM ${quote(dialect, "dc_posts")} WHERE ${quote(dialect, "id")} = '${id}'`
+    );
+    expect(String(row?.views)).toBe(views);
+  });
+
+  it("refuses a code-first apply that makes a float an integer as it becomes translated, and changes nothing", async () => {
+    // SQLite would keep 1.5 as it is in an INTEGER column, a value the whole-number field refuses;
+    // PostgreSQL and MySQL would round it.
+    const created = await handler().createCollection({
+      name: "posts",
+      label: "Post",
+      localized: true,
+      fields: [
+        { name: "heading", type: "text", localized: false },
+        { name: "views", type: "number", options: { format: "float" } },
+      ],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const entry = await handler()
+      .getEntryService()
+      .createEntry(
+        { collectionName: "posts", overrideAccess: true, locale: "en" },
+        { heading: "Hello", views: 1.5 }
+      );
+    expect(entry.success, JSON.stringify(entry)).toBe(true);
+    const id = String((entry.data as { id: unknown }).id);
+
+    const applied = await applyCodeFirst([
+      { name: "heading", type: "text", localized: false },
+      { name: "views", type: "number", localized: true },
+    ]);
+
+    expect(applied.success).toBe(false);
+    expect(JSON.stringify(applied)).toMatch(/RESHAPED_FIELD_JOINS_TRANSLATION/);
+    expect(await columnsOf("dc_posts_locales")).not.toContain("views");
+    const [row] = await query<{ views: unknown }>(
+      `SELECT ${quote(dialect, "views")} AS views FROM ${quote(dialect, "dc_posts")} WHERE ${quote(dialect, "id")} = '${id}'`
+    );
+    expect(Number(row?.views)).toBe(1.5);
+  });
+
   // SQLite keeps no length on a text column, so a narrower bound changes nothing it stores.
   it.skipIf(dialect === "sqlite")(
     "refuses a code-first apply that narrows a field's length as it becomes translated, and changes nothing",
@@ -653,6 +805,85 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     }
   );
 
+  /**
+   * A code-first apply of an untranslated `posts` on a site that keeps every translatable field
+   * per language (`experimental.perLanguageStorage`), at a prompt that answers nothing: every
+   * question the apply asks is recorded, and refused. The setting is put back as the harness
+   * booted it, and the cached last apply is cleared, as the setting is not part of what it keys.
+   */
+  async function applyPerLanguage(fields: unknown[]) {
+    const asked: string[] = [];
+    const refuseEveryQuestion: PromptDispatcher = {
+      dispatch: ({ candidates, events }) => {
+        asked.push(
+          ...events.map(e => `${e.kind} ${e.tableName}.${e.columnName}`),
+          ...candidates.map(c => `rename ${c.tableName}.${c.fromColumn}`)
+        );
+        return Promise.resolve({
+          confirmedRenames: [],
+          resolutions: [],
+          proceed: false,
+        });
+      },
+    };
+    clearCachedSnapshot();
+    setPerLanguageStorage(true);
+    try {
+      const applied = await applyCodeFirst(fields, {
+        localized: false,
+        promptDispatcher: refuseEveryQuestion,
+      });
+      return { applied, asked };
+    } finally {
+      setPerLanguageStorage(false);
+    }
+  }
+
+  /** An untranslated collection whose `heading` is translatable by type, with one entry. */
+  async function seedUntranslatedCollection(): Promise<string> {
+    const created = await handler().createCollection({
+      name: "posts",
+      label: "Post",
+      fields: TRANSLATED,
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const entry = await handler()
+      .getEntryService()
+      .createEntry(
+        { collectionName: "posts", overrideAccess: true },
+        { heading: "Hello", views: 7 }
+      );
+    expect(entry.success, JSON.stringify(entry)).toBe(true);
+    return String((entry.data as { id: unknown }).id);
+  }
+
+  it("moves an untranslated collection's translatable value per language under per-language storage, asking nothing", async () => {
+    // The desired main table leaves `heading` off, as the site keeps it per language; its value
+    // moves to the default language's row before the drop, so the drop is no deletion to consent to.
+    const id = await seedUntranslatedCollection();
+
+    const { applied, asked } = await applyPerLanguage(TRANSLATED);
+
+    expect(asked).toEqual([]);
+    expect(applied.success, JSON.stringify(applied)).toBe(true);
+    expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
+    expect(await columnsOf("dc_posts")).not.toContain("heading");
+  });
+
+  it("still asks before dropping a translatable column whose field the config removed under per-language storage", async () => {
+    // Nothing moves a field the entity no longer declares, so its column's drop deletes its values
+    // and is asked about; refused, nothing changes.
+    const id = await seedUntranslatedCollection();
+
+    const { applied, asked } = await applyPerLanguage([
+      { name: "views", type: "number" },
+    ]);
+
+    expect(asked).toEqual(["destructive_drop dc_posts.heading"]);
+    expect(applied.success).toBe(false);
+    expect(await mainHeading("dc_posts", id)).toBe("Hello");
+  });
+
   /** `heading` as the main table holds it, or undefined when the column is gone. */
   async function mainHeading(table: string, id: string): Promise<unknown> {
     const rows = await query<{ heading: unknown }>(
@@ -670,9 +901,15 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       getDrizzle(...args: unknown[]): unknown;
     };
     const realGetDrizzle = adapter.getDrizzle.bind(adapter);
-    const textOf = (query: unknown) =>
-      ((query as { queryChunks?: { value?: unknown }[] }).queryChunks ?? [])
-        .map(chunk => (Array.isArray(chunk.value) ? chunk.value.join("") : ""))
+    // The text of a Drizzle query, nested queries included: a statement marked with the lock's
+    // comment is the marker followed by the statement as a query of its own.
+    const textOf = (query: unknown): string =>
+      ((query as { queryChunks?: unknown[] }).queryChunks ?? [])
+        .map(chunk => {
+          const { value } = chunk as { value?: unknown };
+          if (Array.isArray(value)) return value.join("");
+          return textOf(chunk);
+        })
         .join("");
     const wrap = (db: object): object =>
       new Proxy(db, {
@@ -681,7 +918,9 @@ describeEachDialect("a shared field that becomes translated", dialect => {
           if (typeof value !== "function") return value;
           if (property === "execute" || property === "run") {
             return (query: unknown, ...rest: unknown[]) => {
-              if (matches(textOf(query))) {
+              // Judged as written: a schema apply under the lock sends each statement behind
+              // the lock's comments.
+              if (matches(asWritten(textOf(query)))) {
                 throw new Error("injected copy failure");
               }
               return Reflect.apply(value, target, [query, ...rest]);

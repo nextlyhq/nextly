@@ -11,7 +11,7 @@
  * @since 1.0.0
  */
 
-import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
+import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import type React from "react";
 import { useEffect, useState } from "react";
 
@@ -35,6 +35,7 @@ import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
+import { EditorOutline } from "@admin/components/shared/loading-frame/outlines";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
@@ -45,7 +46,6 @@ import {
   type CustomEditViewProps,
 } from "@admin/lib/plugins/component-registry";
 import { editViewHasPages } from "@admin/lib/plugins/document-view-registry";
-import { cn } from "@admin/lib/utils";
 import { getCollectionFields } from "@admin/types/collection";
 
 // ============================================================================
@@ -92,55 +92,15 @@ function CreateEntryBreadcrumbs({
  * Loading skeleton for the create entry page.
  */
 function CreateEntryPageSkeleton() {
+  // The editor's outline, the one the frame drew for this address while the
+  // session was checked: the bar's controls at once, then the fields and the
+  // side panel at the editor's own geometry.
   return (
-    <PageContainer type="editor">
-      {/* Accessibility: Announce loading state to screen readers */}
-      <div className="sr-only" role="status" aria-live="polite">
-        Loading collection...
-      </div>
-
-      {/* An Editor page has no padding, as the editor that replaces this
-          does: its banners and panel start directly under the bar. */}
-      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-var(--admin-bar-height))] items-stretch">
-        {/* Main Content */}
-        {/* `min-w-0` as the editor that replaces this carries it: without it
-            this pane will not shrink and pushes the rail past the column. */}
-        <div
-          className={cn(
-            "flex-1 min-w-0 space-y-6 pt-6 lg:pt-8 mx-auto w-full",
-            // The editor's field column inset, so nothing moves sideways when
-            // the editor replaces this.
-            DOCUMENT_COLUMN_INSET
-          )}
-          // The form that replaces this bounds its FIELD column, not the
-          // page, so a skeleton bounded at the page moves every field
-          // sideways the moment data arrives.
-          style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
-        >
-          {/* Breadcrumbs skeleton */}
-          <div className="mb-6">
-            <Skeleton className="h-5 w-64" />
-          </div>
-
-          {/* Header skeleton */}
-          <div className="mb-8">
-            <Skeleton className="w-48 mb-2" />
-            <Skeleton className="h-5 w-96" />
-          </div>
-
-          <div className="bg-card  border border-border rounded-lg p-6">
-            <div className="space-y-6">
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-32 w-full" />
-            </div>
-          </div>
-        </div>
-
-        {/* Sidebar */}
-      </div>
-    </PageContainer>
+    <EditorOutline
+      sideWidth={320}
+      columnClassName={DOCUMENT_COLUMN_INSET}
+      columnStyle={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+    />
   );
 }
 
@@ -263,6 +223,10 @@ export default function CreateEntryPage({
   }
 
   const collectionLabel = collection.label || collection.name || slug;
+  // The trail's step leads to the collection's list, so it says what the
+  // list and the default editor's trail say: the plural ("Submissions"),
+  // not the one-entry label a collection may also answer as `label`.
+  const listLabel = collection.labels?.plural || collectionLabel;
 
   // A collection removed from code refuses every create, so no form is
   // offered: the notice says why and what to do, with the way back to its
@@ -329,7 +293,7 @@ export default function CreateEntryPage({
           breadcrumbs={
             <CreateEntryBreadcrumbs
               collectionSlug={slug}
-              collectionLabel={collectionLabel}
+              collectionLabel={listLabel}
             />
           }
         >

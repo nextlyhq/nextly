@@ -12,14 +12,24 @@
  * - `better-sqlite3`: each prepared statement's `run`, `get`, `all` and
  *   `iterate`, and the database's `exec`, so a statement prepared once and run
  *   many times is recorded each time it runs, with the values it ran with.
+ *
+ * A statement is recorded as its caller wrote it (`asWritten`): the comments a
+ * run holding the schema lock puts in front of it on PostgreSQL and MySQL are
+ * left out, so a test that judges a statement by how it starts reads the same
+ * text on every dialect.
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { TestDialect } from "../../plugins/test-nextly";
 
-/** One statement as the driver was handed it. */
+import { asWritten } from "./statement-as-written";
+
+/** One statement the driver was handed. */
 export interface RecordedStatement {
+  /** The statement as its caller wrote it, without a schema-lock holder's comments (`asWritten`). */
   text: string;
+  /** The statement exactly as the driver was handed it, those comments included. */
+  sent: string;
   /** Its bound values, where the call carried any. */
   values: readonly unknown[];
   /**
@@ -34,7 +44,7 @@ export interface RecordedStatement {
 
 /** What a recorder has seen so far, and how to take it off. */
 export interface StatementRecorder {
-  /** Each statement's text, in the order the driver was handed them. */
+  /** Each statement as its caller wrote it, in the order the driver was handed them. */
   readonly statements: string[];
   /** Each statement with its values, in the same order. */
   readonly calls: RecordedStatement[];
@@ -65,7 +75,10 @@ function statementValues(args: readonly unknown[]): unknown[] {
 }
 
 /** The prototype in `start`'s chain that defines `method` itself. */
-function ownerOf(start: object, method: string): Record<string, unknown> {
+export function ownerOf(
+  start: object,
+  method: string
+): Record<string, unknown> {
   let proto: object | null = start;
   while (proto && !Object.prototype.hasOwnProperty.call(proto, method)) {
     proto = Object.getPrototypeOf(proto) as object | null;
@@ -75,7 +88,7 @@ function ownerOf(start: object, method: string): Record<string, unknown> {
 }
 
 /** Where each dialect's driver takes statements: the object and its methods. */
-async function driverEntryPoints(
+export async function driverEntryPoints(
   adapter: DrizzleAdapter,
   dialect: TestDialect
 ): Promise<Array<{ instance: object; methods: string[]; sqlite?: boolean }>> {
@@ -147,13 +160,15 @@ export async function recordStatements(
       const original = owner[method] as (...args: unknown[]) => unknown;
       owner[method] = function (this: unknown, ...args: unknown[]): unknown {
         // A SQLite statement carries its own text; its arguments are values.
-        const text = sqlite
+        const sent = sqlite
           ? (this as { source?: string }).source
           : statementText(args[0]);
-        if (text !== undefined) {
+        if (sent !== undefined) {
+          const text = asWritten(sent);
           statements.push(text);
           calls.push({
             text,
+            sent,
             values: sqlite ? args : statementValues(args),
             ...(options.stacks === true ? { stack: new Error().stack } : {}),
             ...(options.context ? { context: options.context() } : {}),

@@ -43,7 +43,11 @@ export interface SpamCheckConfig {
   };
 
   /**
-   * reCAPTCHA configuration (for future implementation).
+   * Not read here: a form's bot check (reCAPTCHA or Turnstile) is verified
+   * with its provider where the submission is stored, from the plugin's
+   * `spamProtection` options. Kept so a caller passing it still type-checks.
+   *
+   * @deprecated Configure bot checks in the plugin's `spamProtection` options.
    */
   recaptcha?: {
     enabled: boolean;
@@ -77,7 +81,7 @@ export interface SpamCheckResult {
   isSpam: boolean;
 
   /** Reason for spam detection (for logging, not exposed to user) */
-  reason?: "honeypot" | "rate_limit" | "recaptcha";
+  reason?: "honeypot" | "rate_limit" | "recaptcha" | "turnstile";
 
   /** Additional details (for logging) */
   details?: string;
@@ -93,7 +97,9 @@ export interface SpamCheckResult {
  * Performs multiple spam checks based on configuration:
  * 1. Honeypot field detection
  * 2. Rate limiting by IP/form
- * 3. reCAPTCHA verification (future)
+ *
+ * A form's bot check (reCAPTCHA or Turnstile) is verified with its provider
+ * where the submission is stored (`handlers/bot-check`), not here.
  *
  * @param options - Spam check options
  * @returns Spam check result
@@ -215,13 +221,26 @@ function checkHoneypot(data: Record<string, unknown>): SpamCheckResult {
  * would lock out every visitor behind an untrusted proxy. The caller decides
  * what to do about an unidentifiable client; this counts only identified ones.
  */
+/**
+ * Count one request under `key` against `max` per `windowMs`, in the
+ * deployment's shared rate-limit store: whether it is allowed, and when the
+ * window resets. The plugin's one door to the limiter, for submissions and
+ * uploads alike.
+ */
+export async function countAgainstLimit(
+  key: string,
+  max: number,
+  windowMs: number
+): Promise<{ allowed: boolean; resetAt: Date }> {
+  return new RateLimiter(resolveRateLimitStore()).check(key, max, windowMs);
+}
+
 async function checkRateLimit(
   ipAddress: string,
   formSlug: string,
   config: { maxSubmissions: number; windowMs: number }
 ): Promise<SpamCheckResult> {
-  const limiter = new RateLimiter(resolveRateLimitStore());
-  const result = await limiter.check(
+  const result = await countAgainstLimit(
     `form-submit:${formSlug}:${ipAddress}`,
     config.maxSubmissions,
     config.windowMs
@@ -232,27 +251,4 @@ async function checkRateLimit(
     reason: "rate_limit",
     details: `Rate limit exceeded: ${config.maxSubmissions} per ${config.windowMs}ms`,
   };
-}
-
-// ============================================================
-// reCAPTCHA Support (Future Implementation)
-// ============================================================
-
-/**
- * Verify reCAPTCHA v3 token.
- *
- * Note: This is a placeholder for future implementation.
- * reCAPTCHA verification requires server-side API calls to Google.
- *
- * @param data - Form data containing reCAPTCHA token
- * @param config - reCAPTCHA configuration
- * @returns Spam check result
- */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars, @typescript-eslint/require-await -- declared return type is `Promise<SpamCheckResult>`; placeholder for unimplemented Google siteverify fetch
-async function verifyRecaptcha(
-  _data: Record<string, unknown>,
-  _config: { secretKey?: string; scoreThreshold?: number }
-): Promise<SpamCheckResult> {
-  // Placeholder - always pass for now
-  return { isSpam: false };
 }

@@ -22,7 +22,7 @@ import {
 } from "nextly/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ADDRESS_RECORD_SLUG } from "../../address-record/collection";
+import { noteRows } from "../../address-record/__tests__/record-tables";
 import { seoPlugin } from "../../plugin";
 import { PRODUCTION_ADDRESSES_ENV } from "../../canonical";
 
@@ -77,17 +77,12 @@ async function publish(t: TestNextly, collection: string, slug: string) {
 }
 
 /** The site's standing as the record holds it, once the start has decided it. */
-async function standing(t: TestNextly): Promise<unknown> {
+async function standing(_t: TestNextly): Promise<unknown> {
   for (let tries = 0; tries < 50; tries++) {
-    const { items } = await t.nextly.find({
-      collection: ADDRESS_RECORD_SLUG,
-      where: { kind: { equals: "meta" } },
-      limit: 50,
-    });
-    const row = (items as Record<string, unknown>[]).find(
-      item => item.path === "listable" || item.path === "guarded"
+    const row = (await noteRows()).find(
+      item => item.value === "listable" || item.value === "guarded"
     );
-    if (row !== undefined) return row.path;
+    if (row !== undefined) return row.value;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   return undefined;

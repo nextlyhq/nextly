@@ -96,3 +96,101 @@ test("System health says how the install stands, fact by fact, and opens Details
   await page.keyboard.press("Escape");
   await expect(details).toBeHidden();
 });
+
+test("Copy diagnostics copies the report Details shows, with no address or email in it", async ({
+  page,
+  context,
+}) => {
+  // The suite runs in Chromium alone, which lets a test read the clipboard back.
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await gotoAdmin(page, "/");
+  await placeSystemHealth(page);
+  await gotoAdmin(page, "/");
+
+  const card = page.getByTestId(`widget-cell-${CARD}`);
+  await card.getByRole("button", { name: "Copy diagnostics" }).click();
+  await expect(
+    page.getByText(
+      "Diagnostics copied. No passwords, keys or addresses are in it."
+    )
+  ).toBeVisible();
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  expect(copied).toMatch(
+    /^Nextly diagnostics, \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\n/
+  );
+  expect(copied).toMatch(/^Database: SQLite [\d.]+ · \d+ ms round trip$/m);
+  expect(copied).toMatch(/^Content: \d+ collections? · /m);
+  expect(copied).not.toMatch(/@[\w-]+\./);
+  expect(copied).not.toMatch(/:\/\//);
+
+  // Details shows the same report, line for line but its first.
+  await card.getByRole("button", { name: "Details" }).click();
+  const report = page.getByTestId("system-health-report");
+  await expect(report).toContainText("Nextly diagnostics, ");
+  const shown = (await report.textContent()) ?? "";
+  expect(shown.split("\n").slice(1, 4)).toEqual(copied.split("\n").slice(1, 4));
+});
+
+test("a refused copy opens Details with the report selected", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const refuse = () =>
+      Promise.reject(new DOMException("No", "NotAllowedError"));
+    Object.defineProperty(navigator, "clipboard", {
+      value: { write: refuse, writeText: refuse },
+      configurable: true,
+    });
+  });
+  await gotoAdmin(page, "/");
+  await placeSystemHealth(page);
+  await gotoAdmin(page, "/");
+
+  const card = page.getByTestId(`widget-cell-${CARD}`);
+  await card.getByRole("button", { name: "Copy diagnostics" }).click();
+  await expect(
+    page.getByText(
+      "Couldn't copy here. The report is selected in Details: press Ctrl+C or ⌘C."
+    )
+  ).toBeVisible();
+  const report = page.getByTestId("system-health-report");
+  await expect(report).toBeFocused();
+  const selected = await page.evaluate(() => window.getSelection()?.toString());
+  expect(selected).toBe(await report.textContent());
+  expect(selected).toMatch(/^Nextly diagnostics, /);
+});
+
+test("copying from Details says so above the drawer's footer, clear of its Copy diagnostics button", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await gotoAdmin(page, "/");
+  await placeSystemHealth(page);
+  await gotoAdmin(page, "/");
+
+  const card = page.getByTestId(`widget-cell-${CARD}`);
+  await card.getByRole("button", { name: "Details" }).click();
+  await expect(page.getByTestId("system-health-report")).toBeVisible();
+  const copy = page.getByTestId("system-health-details-copy");
+  await copy.click();
+  const said = page
+    .locator("[data-sonner-toast]")
+    .filter({ hasText: "Diagnostics copied." });
+  await expect(said).toBeVisible();
+  // Read once it has finished sliding in.
+  await page.waitForFunction(() =>
+    document
+      .getAnimations()
+      .every(
+        animation =>
+          animation.playState !== "running" ||
+          animation.effect?.getTiming().iterations === Number.POSITIVE_INFINITY
+      )
+  );
+  const toast = await said.boundingBox();
+  const button = await copy.boundingBox();
+  if (toast === null || button === null) throw new Error("not drawn");
+  // The toast ends above the footer's button: it covers none of it.
+  expect(toast.y + toast.height).toBeLessThanOrEqual(button.y);
+});

@@ -22,6 +22,7 @@ import type {
   SchemaEventStatus,
   SchemaEventType,
 } from "../../../schemas/schema-events/types";
+import { assertSchemaLockHeld } from "../pipeline/schema-lock";
 
 import { pluginOfLedgerRow } from "./ledger-scope";
 import { standingOf } from "./migration-state";
@@ -211,6 +212,8 @@ export class SchemaEventsRepository {
 
   /** Insert an in_progress event and return its generated id. */
   async recordStart(input: RecordStartInput): Promise<string> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     const id = crypto.randomUUID();
     const values: Record<string, unknown> = {
       id,
@@ -240,6 +243,8 @@ export class SchemaEventsRepository {
    * not "now".
    */
   async insertEvent(values: Record<string, unknown>): Promise<string> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     const id = (values.id as string | undefined) ?? crypto.randomUUID();
     const startedAt =
       values.startedAt ??
@@ -269,6 +274,8 @@ export class SchemaEventsRepository {
    * in `migrate:status`). Without `uniqueFilename` it always applies.
    */
   async markApplied(id: string, input: MarkAppliedInput): Promise<boolean> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     const set: Record<string, unknown> = {
       status: "applied",
       endedAt: new Date(),
@@ -330,6 +337,8 @@ export class SchemaEventsRepository {
    * that has reached any other status is left as it is.
    */
   async discardAttempt(id: string): Promise<void> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     await this.db
       .delete(this.table)
       .where(and(eq(this.table.id, id), eq(this.table.status, "in_progress")));
@@ -337,6 +346,8 @@ export class SchemaEventsRepository {
 
   /** Transition a row to failed. */
   async markFailed(id: string, input: MarkFailedInput): Promise<void> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     await this.db
       .update(this.table)
       .set({
@@ -379,6 +390,8 @@ export class SchemaEventsRepository {
     supersededEventIds: string[];
     byEventId: string;
   }): Promise<void> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     await this.db
       .update(this.table)
       .set({ supersededEventIds: args.supersededEventIds })
@@ -405,6 +418,8 @@ export class SchemaEventsRepository {
     retentionDays: number;
     now: Date;
   }): Promise<string[]> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     const rows = (await this.db
       .select()
       .from(this.table)) as unknown as SchemaEventRow[];
@@ -437,6 +452,8 @@ export class SchemaEventsRepository {
    * reads stays.
    */
   async deletePluginModuleRows(pluginName: string): Promise<void> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     const rows = (await this.db
       .select()
       .from(this.table)
@@ -570,6 +587,8 @@ export class SchemaEventsRepository {
     sha256: string,
     note: string
   ): Promise<void> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     const row = await this.findById(id);
     if (!row) return;
     await this.db
@@ -603,6 +622,8 @@ export class SchemaEventsRepository {
     id: string,
     input: { note?: string | null } = {}
   ): Promise<void> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
     const row = await this.findById(id);
     if (!row) return;
     const set: Record<string, unknown> = { status: "rolled_back" };

@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * The foot of the icon rail: the reader's Inbox (notifications, with the
- * unread count) and their account menu.
+ * The foot of the icon rail: plugins' own items placed there, the reader's
+ * Inbox (notifications, with the unread count) and their account menu.
  *
  * They lived at the right end of the top bar on every page. At the rail's
  * foot they stay in one place whatever the page, and the bar is left to the
@@ -24,10 +24,14 @@ import { cn } from "@admin/lib/utils";
 import {
   computeHiddenHeaderButtons,
   headerControlsSettled,
+  pluginHeaderItems,
+  pluginUserMenuItems,
   type HeaderAnswersPending,
 } from "../header/header-visibility";
 import { shellAnswersMarker } from "../lib/shell-answers";
 
+import { RailFootGhost } from "./RailColumn";
+import { RailFootPluginPlace } from "./RailFootPluginItems";
 import { useNextDevOverlay } from "./use-next-dev-overlay";
 import { UserProfileDropdown } from "./UserProfileDropdown";
 
@@ -118,6 +122,41 @@ const ACCOUNT_LAYOUT = {
   }
 >;
 
+/**
+ * The class of the foot's own box in `placement`: its flow, and in the rail
+ * the space kept clear for Next.js's development badge (bottom-left), which
+ * Next.js draws over the rail's foot while the host runs `next dev`. One
+ * answer for the foot and for its outline drawn before the session is
+ * confirmed, so the outline's shapes stand exactly where the foot lands.
+ */
+function useAccountFrameClass(
+  placement: AccountPlacement,
+  className: string | undefined
+): string {
+  const devOverlay = useNextDevOverlay();
+  const { flow, devSpace } = ACCOUNT_LAYOUT[placement];
+  return cn(flow, devOverlay && devSpace, className);
+}
+
+/**
+ * The rail's foot before the reader is known: the Inbox's and the avatar's
+ * shapes, in the foot's own box, so the real foot replaces them in place.
+ */
+export function RailAccountOutline({
+  className,
+}: {
+  className?: string;
+}): JSX.Element {
+  return (
+    <div
+      className={useAccountFrameClass("rail", className)}
+      data-testid="rail-account-outline"
+    >
+      <RailFootGhost />
+    </div>
+  );
+}
+
 function RailAccountItems({
   className,
   placement,
@@ -137,18 +176,33 @@ function RailAccountItems({
   // Drawn only once every answer it depends on is in, so neither the bell nor
   // the avatar arrives after the rest and moves the foot.
   const settled = headerControlsSettled(pending, bellOffered);
-  // Next.js draws its development badge in the bottom-left corner, over the
-  // rail's foot, while the host runs `next dev`.
-  const devOverlay = useNextDevOverlay();
-  const { flow, side, devSpace, testId } = ACCOUNT_LAYOUT[placement];
+  const { flow, side, testId } = ACCOUNT_LAYOUT[placement];
+  const inRail = placement === "rail";
+  const footItemsShown = railFootItemsShown(
+    placement,
+    settled,
+    branding?.plugins
+  );
+  const frameClass = useAccountFrameClass(
+    placement,
+    // The space above the foot is the items' box's while it shows; the gap
+    // under it is the foot's own gap between items. The account's box is
+    // held to the bottom, so its margin moves nothing.
+    cn(className, footItemsShown && "mt-0")
+  );
 
-  return (
+  const account = (
     <div
-      className={cn(flow, devOverlay && devSpace, className)}
+      className={frameClass}
       data-testid={testId}
       data-shell-answers={shellAnswersMarker(settled)}
     >
+      {/* In the rail, the Inbox's and the avatar's shapes hold the foot
+          until both can be drawn, so the rail never reads as missing them. */}
+      {!settled && inRail ? <RailFootGhost /> : null}
       <div hidden={!settled} className={settled ? flow : undefined}>
+        {/* Plugins' own items in the bar, before the Inbox. */}
+        {!inRail && <RailFootPluginPlace />}
         {bellOffered && (
           <NotificationBell
             journalOffered={journalOffered}
@@ -162,10 +216,61 @@ function RailAccountItems({
             void logout();
           }}
           hidden={hidden}
+          pluginItems={pluginUserMenuItems(branding?.plugins)}
           side={side}
           align="end"
         />
       </div>
+    </div>
+  );
+  return inRail ? (
+    <>
+      <RailFootPluginBox shown={footItemsShown} />
+      {account}
+    </>
+  ) : (
+    account
+  );
+}
+
+/**
+ * Whether the rail's box for plugins' foot items shows: in the rail, once the
+ * answers are in, and only where a plugin places an item there.
+ *
+ * The items get a box of their own above the account's because the rail's
+ * foot is held to the window's bottom: an item added inside the account's box
+ * grew that box upwards, its top moving by an item's height as the answers
+ * arrived, which the browser records as the shell moving, though the Inbox and
+ * the avatar stayed where their shapes stood. A box of its own appears whole
+ * instead, and the account's box keeps the size and the place its outline drew.
+ */
+function railFootItemsShown(
+  placement: AccountPlacement,
+  settled: boolean,
+  plugins: Parameters<typeof pluginHeaderItems>[0]
+): boolean {
+  return (
+    placement === "rail" &&
+    settled &&
+    pluginHeaderItems(plugins, "rail-foot").length > 0
+  );
+}
+
+/**
+ * Plugins' own items at the rail's foot, above the Inbox. Kept mounted while
+ * hidden, so an item that only registers what a page needs runs before the
+ * answers are in.
+ */
+function RailFootPluginBox({ shown }: { shown: boolean }): JSX.Element {
+  return (
+    <div
+      hidden={!shown}
+      data-testid="rail-foot-plugin-box"
+      className={
+        shown ? cn(ACCOUNT_LAYOUT.rail.flow, "mt-4 mb-2 shrink-0") : undefined
+      }
+    >
+      <RailFootPluginPlace />
     </div>
   );
 }

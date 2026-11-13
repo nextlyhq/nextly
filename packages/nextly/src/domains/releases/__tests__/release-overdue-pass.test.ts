@@ -7,9 +7,8 @@
  * between must not be told it missed a time it no longer has. And one
  * release that cannot be told must not keep every one after it untold.
  */
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { loadDialectTables } from "../../../database/dialect-tables";
 import {
   getNextlyLogger,
   setNextlyLogger,
@@ -24,10 +23,6 @@ import { noticeDedupeKey } from "../../notices/notices-service";
 import { RELEASE_OVERDUE_NOTICE } from "../release-overdue-notice";
 import { RELEASES_TABLE } from "../release-tables";
 import { ReleasesRepository, type ReleasesDbApi } from "../releases-repository";
-
-// The email job is written through the jobs table's Drizzle model, which is
-// the loaded dialect's.
-beforeAll(() => loadDialectTables("postgresql"));
 
 const saved = getNextlyLogger();
 afterEach(() => {
@@ -101,9 +96,7 @@ function overdue(
           recorded.push(releaseId);
           return { id: row.id };
         },
-        getDrizzle: () => ({
-          insert: () => ({ values: async () => undefined }),
-        }),
+        insert: async () => undefined,
       };
       return work(tx);
     },

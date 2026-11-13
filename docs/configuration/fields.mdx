@@ -173,6 +173,44 @@ richText({
 
 **Gotchas:** the value is a JSON object (`{ root: { children: […] } }`) — not an HTML string. Use the REST endpoint's `?richTextFormat=html` query param if you want pre-rendered HTML.
 
+#### Styling rich text HTML
+
+Rendered HTML carries Nextly's own look as inline styles by default. Ask for
+`richTextStyles: "none"` (Direct API) or `?richTextStyles=none` (REST) and it carries classes
+only, so your stylesheet decides the look: an inline style would outrank it. Styles an author
+chose in the editor are kept, as the author's content: a text colour stays on a `span`, and a
+button keeps the colours picked for it.
+
+| Element                   | Class                                                                                              |
+| ------------------------- | -------------------------------------------------------------------------------------------------- |
+| Paragraph                 | `nextly-rich-text-paragraph`                                                                       |
+| Heading                   | `nextly-rich-text-h1` to `nextly-rich-text-h6`                                                     |
+| Alignment, on any block   | `nextly-rich-text-align-left`, `-center`, `-right`, `-justify`, `-start`, `-end`                   |
+| Bold, italic, underline   | `nextly-rich-text-bold`, `nextly-rich-text-italic`, `nextly-rich-text-underline`                   |
+| Strikethrough             | `nextly-rich-text-strikethrough`                                                                   |
+| Subscript, superscript    | `nextly-rich-text-subscript`, `nextly-rich-text-superscript`                                       |
+| Inline code, highlight    | `nextly-rich-text-code`, `nextly-rich-text-highlight`                                              |
+| Quote                     | `nextly-rich-text-blockquote`                                                                      |
+| List                      | `nextly-rich-text-list`, with `nextly-rich-text-ul` or `nextly-rich-text-ol`                       |
+| Checklist                 | `nextly-rich-text-checklist`, on the list                                                          |
+| List item                 | `nextly-rich-text-list-item`                                                                       |
+| Checklist item            | `nextly-rich-text-list-item--checked` or `--unchecked`, and `nextly-rich-text-checkbox`            |
+| Link                      | `nextly-rich-text-link`                                                                            |
+| Code block                | `nextly-rich-text-code-block`; its tokens keep `nextly-code-token nextly-code-token--<type>`       |
+| Horizontal rule           | `nextly-rich-text-hr`                                                                              |
+| Image                     | `nextly-rich-text-image`, inside `nextly-rich-text-figure`                                         |
+| Caption                   | `nextly-rich-text-caption`                                                                         |
+| Video                     | `nextly-rich-text-video`, around `nextly-rich-text-video-frame`                                    |
+| Button                    | `nextly-rich-text-button`, with `--filled` or `--outline` and `--sm`, `--md` or `--lg`             |
+| Lone button, button group | `nextly-rich-text-button-link`, `nextly-rich-text-button-group`, with an alignment class           |
+| Gallery                   | `nextly-rich-text-gallery`, `nextly-rich-text-gallery--cols-<n>`, `nextly-rich-text-gallery-image` |
+| Collapsible section       | `nextly-rich-text-collapsible`, `-collapsible-title`, `-collapsible-content`                       |
+| Table                     | `nextly-rich-text-table`, `nextly-rich-text-table-row`, `nextly-rich-text-table-cell`              |
+| Header cell               | `nextly-rich-text-table-header-cell`, beside `nextly-rich-text-table-cell`                         |
+
+The class list is the contract: a class Nextly writes is named here, and a new element adds its
+own rather than reusing one.
+
 ---
 
 ### email

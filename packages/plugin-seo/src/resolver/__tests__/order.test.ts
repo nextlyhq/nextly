@@ -162,8 +162,7 @@ describe("visibility and the canonical", () => {
     });
   });
 
-  it("takes code's word on neither", () => {
-    // Code supplies a title, description and social values only.
+  it("takes code's word on neither listing a page nor its canonical", () => {
     const answer = resolveOrder({
       ...none,
       code: { title: "From code" },
@@ -171,6 +170,26 @@ describe("visibility and the canonical", () => {
     });
     expect(answer.robots.from).toBe("site");
     expect(answer.canonical).toEqual({ value: "/about", from: "address" });
+  });
+
+  it("is hidden where the route's code hides the page, and code shows none a person hid", () => {
+    expect(resolveOrder({ ...none, code: { hidden: true } }).robots).toEqual({
+      value: { index: false, follow: true },
+      from: "code",
+    });
+    // A person's own choice, or the type's, is named as the reason first.
+    expect(
+      resolveOrder({ ...none, page: { hidden: true }, code: { hidden: true } })
+        .robots.from
+    ).toBe("page");
+    expect(
+      resolveOrder({ ...none, code: { hidden: false }, page: { hidden: true } })
+        .robots
+    ).toEqual({ value: { index: false, follow: true }, from: "page" });
+    expect(
+      resolveOrder({ ...none, code: { hidden: true }, typeHidden: true }).robots
+        .from
+    ).toBe("type");
   });
 
   it("is the page's declared address, unless one is typed under Advanced", () => {

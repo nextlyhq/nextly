@@ -52,7 +52,9 @@ import type {
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { AddressKind } from "../../../shared/address-rule";
+import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
+import { mainTableFields } from "../../i18n/per-language-storage";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { checksumOf } from "../migrate/applied-checksums";
 import {
@@ -711,6 +713,12 @@ function resolutionNotice({ column, rows, resolution }: SettledRows): string {
  * the database cannot key (an unbounded MySQL TEXT): the generator leaves such
  * an index out, so the save would claim a uniqueness nothing enforces. The
  * Builder's own DDL refuses it with the same error.
+ *
+ * Only the fields whose columns are on the main table are judged here. A
+ * translated field kept per language has its column in the companion, where
+ * its uniqueness is a per-language index on an expression rather than on the
+ * column, so a MySQL TEXT there can carry it; whether the server can create
+ * that index is judged by `refuseUnindexableTranslatedUnique`.
  */
 function refuseUnenforceableUniques(
   deps: CollectionSaveDeps,
@@ -718,7 +726,9 @@ function refuseUnenforceableUniques(
   table: string
 ): void {
   const dialect = deps.adapter.getCapabilities().dialect;
-  for (const field of save.entity?.fields ?? []) {
+  const entity = save.entity;
+  if (entity === null) return;
+  for (const field of mainTableFields(entity, entity.fields)) {
     // A group with no name only lays fields out and has no column to key.
     const name = field.name;
     if (field.unique !== true || name === undefined) continue;
@@ -1134,6 +1144,12 @@ async function generateFor(
     previousMetadataUpserts: inputs.previousMetadataUpserts,
     appStream: inputs.appStream,
     defaultLocale: deps.config.localization?.defaultLocale,
+    // The site's order, which decides the value a field leaving translation keeps, from the same
+    // source the save's own push reads (`appLanguageOrder`: the configuration's where it declares
+    // the languages, Settings' otherwise), the configuration's where that has no answer.
+    languageOrder:
+      appLanguageOrder() ??
+      deps.config.localization?.locales.map(locale => locale.code),
     onWarning: message => deps.logger.warn(message),
     scope: {
       kind: kindOf(args.save).kind,
@@ -1299,7 +1315,11 @@ function renamesOf(
   );
   return candidates.map(candidate => ({
     candidate,
-    accepted: pairs.has(`${candidate.fromColumn}\u0000${candidate.toColumn}`),
+    // A renamed field group's rows are moved by the save's own statements (`writerRelations`,
+    // from the detector the push runs too), so the generator is told not to move them again.
+    accepted:
+      candidate.fieldGroupTables === undefined &&
+      pairs.has(`${candidate.fromColumn}\u0000${candidate.toColumn}`),
   }));
 }
 

@@ -40,6 +40,8 @@ export type {
   FindByIDArgs,
   CreateArgs,
   UpdateArgs,
+  PublishArgs,
+  PublishResult,
   DeleteArgs,
   CountArgs,
   GroupArgs,
@@ -162,6 +164,7 @@ export type {
   QueueTemplateEmailArgs,
   QueuedEmail,
   QueuedEmailState,
+  CancelQueuedEmailArgs,
 } from "./email";
 
 export type {

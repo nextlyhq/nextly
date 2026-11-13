@@ -13,11 +13,13 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { copiesEveryValue } from "../../schema/pipeline/classifier/type-widening";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 
+import { ddlType } from "./ddl-types";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import type { CompanionFieldLike } from "./reconcile-companion";
-import type { LocalizedColumnSpec } from "./types";
+import type { LocalizedColumnKind, LocalizedColumnSpec } from "./types";
 
 /** A field as a schema change describes it, with the flags the rules read. */
 export type LeavingFieldLike = CompanionFieldLike & {
@@ -64,6 +66,22 @@ type Surface = TranslationSurface;
 type Constraint = "required" | "unique";
 
 /**
+ * Whether the database holds a field's values in a different column type under two descriptions
+ * of it, as this dialect renders each (`ddlType`). Two kinds can name one type: a translated
+ * unique field that states no width is unbounded text and its shared column a bounded string,
+ * which is `TEXT` against `VARCHAR(255)` on MySQL but `TEXT` both ways on PostgreSQL and SQLite.
+ * No description of either side is no difference, since there is nothing to judge.
+ */
+function rendersDifferently(
+  before: LocalizedColumnSpec | null | undefined,
+  after: LocalizedColumnSpec | null | undefined,
+  dialect: SupportedDialect
+): boolean {
+  if (!before || !after) return false;
+  return ddlType(before, dialect) !== ddlType(after, dialect);
+}
+
+/**
  * Whether a field's storage differs between two descriptions of its column: its kind, or its
  * bounds (length, precision, scale). No description of the column before is no difference, since
  * there is nothing to judge.
@@ -79,26 +97,64 @@ export function storageDiffers(
   return before !== undefined && shape(before) !== shape(after);
 }
 
+/** The kinds a field may move between as it joins translation, each family's: text, or number. */
+const STORAGE_FAMILY: Partial<Record<LocalizedColumnKind, string>> = {
+  text: "text",
+  shortText: "text",
+  longText: "text",
+  integer: "number",
+  double: "number",
+  decimal: "number",
+};
+
+/** A field's column as a judge of a move into the translations table has it. */
+export interface MovedColumn {
+  /** The declared type, with any length or precision spelled inside it. */
+  type: string;
+  /** The field's column kind, known to a judge that has the field; a judge with only types has none. */
+  kind?: LocalizedColumnKind;
+  /** The column's length, given with the kind. */
+  length?: number;
+}
+
 /**
- * Whether a field stored as `after` describes holds every value it held as `before` describes:
- * the same kind, no shorter a length, and as many digits on each side of a decimal point. A bound
- * that is not stated is no bound.
+ * Whether every value of a field stored in `from` survives a move into a column stored as `to`:
+ * the one answer every judge of a field joining translation, or of a retry of that move, asks.
+ * Where both kinds are known, they are one kind or kinds of one family, since a field changing
+ * family (a number made text, a checkbox made a number) changes what it is, whatever the database
+ * would keep of its values. Then the copy keeps each value as it is, within what the new type
+ * allows (`copiesEveryValue`): a widening, never a narrowing.
+ *
+ * A judge with only the database's types has no kinds, and on one dialect two kinds or two bounds
+ * can share a declared type (SQLite stores a checkbox and a number both as `integer`, and keeps no
+ * text's length or decimal's precision); such a judge sees no change there, where the database
+ * holds each value as it was.
  */
-export function storageHolds(
-  after: LocalizedColumnSpec,
-  before: LocalizedColumnSpec
+export function moveKeepsEveryValue(
+  from: MovedColumn,
+  to: MovedColumn,
+  dialect: SupportedDialect
 ): boolean {
-  if (after.kind !== before.kind) return false;
-  const length = (spec: LocalizedColumnSpec) => spec.length ?? Infinity;
-  if (length(after) < length(before)) return false;
-  if (after.precision === undefined || before.precision === undefined) {
-    return true;
+  if (from.kind !== undefined && to.kind !== undefined) {
+    const family = STORAGE_FAMILY[from.kind];
+    const sameFamily =
+      from.kind === to.kind ||
+      (family !== undefined && family === STORAGE_FAMILY[to.kind]);
+    if (!sameFamily) return false;
+    // SQLite's TEXT keeps no length, so a short text's declared maximum is the only bound there:
+    // its values must already be within it, as PostgreSQL and MySQL require of the column.
+    if (
+      dialect === "sqlite" &&
+      to.kind === "shortText" &&
+      to.length !== undefined &&
+      (from.kind !== "shortText" ||
+        from.length === undefined ||
+        from.length > to.length)
+    ) {
+      return false;
+    }
   }
-  const scale = (spec: LocalizedColumnSpec) => spec.scale ?? 0;
-  return (
-    scale(after) >= scale(before) &&
-    after.precision - scale(after) >= before.precision - scale(before)
-  );
+  return copiesEveryValue(from.type, to.type, dialect);
 }
 
 /**
@@ -149,8 +205,27 @@ export function leavingFieldConstraints(
 
 function reshapedRefusal(
   name: string,
-  surface: Surface
+  surface: Surface,
+  /** Its shared column is bounded where its translated one is not: a unique field with no width. */
+  boundedOnceShared = false
 ): LeavingTranslationRefusal {
+  if (boundedOnceShared) {
+    return refusal(
+      `fields.${name}`,
+      "RESHAPED_FIELD_LEAVES_TRANSLATION",
+      `"${name}" is unique and states no width, so stored shared its column is bounded to be ` +
+        "keyed whole, where translated it is not: its values cannot leave translation as they are.",
+      surface === "builder"
+        ? [
+            "Give the field a maximum length and save.",
+            "Or turn off Unique and save, before it stops being translated.",
+          ]
+        : [
+            "Give the field a `maxLength` and run `nextly migrate:create`.",
+            "Or set `unique: false` and run it, before it stops being translated.",
+          ]
+    );
+  }
   return refusal(
     `fields.${name}`,
     "RESHAPED_FIELD_LEAVES_TRANSLATION",
@@ -175,6 +250,9 @@ function reshapedRefusal(
  *   without the conversion and confirmation such a change goes through on its own. Judged against
  *   the column the values sit in now, described by `oldFields` or, where the caller has no old
  *   definition, by `previousColumns`; a field neither describes is not judged.
+ *
+ * - A field whose shared column is shaped otherwise than its translated one: a unique text field
+ *   that states no width is bounded on MySQL to be keyed whole, where translated it is not.
  *
  * A Required or Unique field is not refused here: every surface creates its shared column without
  * the setting and applies it after the copy (`withoutLeavingConstraints`), and whether the values
@@ -210,6 +288,16 @@ export function refusalsForFieldsLeavingTranslation(args: {
     if (!args.leaving.has(field.name)) continue;
     if (storageDiffers(previousColumnOf(field), columnOf(field))) {
       refusals.push(reshapedRefusal(field.name, args.surface));
+    } else if (
+      rendersDifferently(
+        columnOf(field),
+        fieldToLocalizedColumnSpec(field, args.dialect, args.builtBy, "shared"),
+        args.dialect
+      )
+    ) {
+      // The same field shaped differently once shared: a unique field that states no width is a
+      // bounded column on MySQL, which its translated values may not fit.
+      refusals.push(reshapedRefusal(field.name, args.surface, true));
     }
   }
   return refusals;

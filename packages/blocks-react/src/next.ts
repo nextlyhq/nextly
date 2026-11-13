@@ -51,6 +51,7 @@ import {
   cacheComponentsEnabled,
   cachedFind,
   contentPageMetadata,
+  contentPageStructuredData,
   createContentRoute,
   createPublicContentRoute,
   createPublicReader,
@@ -418,8 +419,16 @@ export interface BlocksPageConfig
   resolveComponents?: ComponentSource;
   /** Resolve a media id yourself, instead of reading the media collection. */
   resolveMedia?: (id: string) => Promise<ResolvedMedia | null>;
-  /** Resolve an entry reference to a path, instead of reading its slug. */
-  resolveEntryPath?: (collection: string, id: string) => Promise<string | null>;
+  /**
+   * Resolve an entry reference to a path, instead of reading its slug. Handed
+   * the language the page is drawn in, where it has one, so the path is the
+   * one the target is served at in that language.
+   */
+  resolveEntryPath?: (
+    collection: string,
+    id: string,
+    locale?: string
+  ) => Promise<string | null>;
   /**
    * How a page's lists read, as a function from the route's public reader to
    * a data provider.
@@ -1183,6 +1192,11 @@ export interface DerivedPageSeo extends Omit<BlockSeoContribution, "image"> {
    */
   image?: string;
   /**
+   * The title a shared link shows, where the document's own metadata gives
+   * one; the page's title otherwise. Blocks offer none.
+   */
+  socialTitle?: string;
+  /**
    * The path the page renders at, for a canonical URL.
    *
    * Absent when the stored slug is not addressable — one holding a `.`/`..`
@@ -1195,7 +1209,7 @@ export interface DerivedPageSeo extends Omit<BlockSeoContribution, "image"> {
 
 /**
  * What a page's blocks offer for its head, as a page-metadata provider takes
- * it: the title, description and picture. The canonical is left out, since
+ * it: the title, description, shared title and picture. The canonical is left out, since
  * the provider works out the page's address itself and is never told one by
  * the content.
  */
@@ -1205,6 +1219,9 @@ function metadataValuesOf(derived: DerivedPageSeo): PageMetadataValues {
     ...(derived.description === undefined
       ? {}
       : { description: derived.description }),
+    ...(derived.socialTitle === undefined
+      ? {}
+      : { socialTitle: derived.socialTitle }),
     ...(derived.image === undefined ? {} : { image: { url: derived.image } }),
   };
 }
@@ -1374,6 +1391,7 @@ async function derivePageSeo(
     ...derived,
     ...(own.title === undefined ? {} : { title: own.title }),
     ...(own.description === undefined ? {} : { description: own.description }),
+    ...(own.socialTitle === undefined ? {} : { socialTitle: own.socialTitle }),
   };
   const imageCandidates =
     own.image === undefined ? blockImages : [own.image, ...(blockImages ?? [])];
@@ -2514,17 +2532,39 @@ function entryKey(collection: string, id: string): string {
 }
 
 /**
- * Resolve a referenced entry to the path it renders at.
+ * The language a render's links are formed in: the one the request is read
+ * in, said to come from a `[locale]` segment where it is not the language
+ * the route was configured with. A segment's request is served at the
+ * address the site's language rule forms, so its links are too; a route the
+ * site mounts for one language serves its paths as they are.
  *
- * Uses the route's own `slugField`, so a link points where this route would
- * resolve it. The alternative is a second opinion about where content lives,
- * and a link that 404s while the page it names renders fine.
+ * Only the render's language is known here, not whether a segment named it,
+ * so a segment naming the configured language is read as the configured one:
+ * its links are left as the route's own paths.
+ */
+function linkLanguageOf(
+  configured: string | undefined,
+  read: string | undefined
+): RequestLanguage {
+  if (read === undefined) return { fromSegment: false };
+  return { locale: read, fromSegment: read !== configured };
+}
+
+/**
+ * Resolve a referenced entry to the address it is served at in the
+ * request's language: read in that language, and formed by the rule the
+ * route serves its own addresses by (`servedAddress`), so a German page
+ * links to the German page at its German address.
+ *
+ * A site's own `resolveEntryPath` is handed the language and answers the
+ * whole address itself.
  */
 function entryPathResolver(
   config: BlocksPageConfig,
   isPublic: boolean,
   reader: NextlyContentReader,
-  budget: QueryBudget
+  budget: QueryBudget,
+  language: RequestLanguage
 ): EntryPathReads {
   if (config.resolveEntryPath) {
     const custom = config.resolveEntryPath;
@@ -2537,13 +2577,56 @@ function entryPathResolver(
     return {
       resolve: async (collection, id, claim) => {
         if (!budget.take({ ...claim, kind: "link" })) return null;
-        return custom(collection, id);
+        return custom(collection, id, language.locale);
       },
       // Nothing is read ahead, so the reads ahead stop here: each of these
       // links reads as it is drawn, before a later block's read.
       ahead: () => Promise.resolve(false),
     };
   }
+  const paths = slugPathResolver(
+    // Read in the request's language, so a localized slug is the one this
+    // language's page is found by.
+    language.locale === undefined
+      ? config
+      : { ...config, locale: language.locale },
+    isPublic,
+    reader,
+    budget
+  );
+  // One answer per path for the render: every link to one entry names it.
+  const formed = new Map<string, Promise<string>>();
+  const served = (path: string): Promise<string> => {
+    let address = formed.get(path);
+    if (address === undefined) {
+      address = servedAddress(path, language);
+      formed.set(path, address);
+    }
+    return address;
+  };
+  return {
+    resolve: async (collection, id, claim) => {
+      const path = await paths.resolve(collection, id, claim);
+      return path === null ? null : await served(path);
+    },
+    ahead: paths.ahead,
+  };
+}
+
+/**
+ * Resolve a referenced entry to the path it renders at, read in the
+ * config's language.
+ *
+ * Uses the route's own `slugField`, so a link points where this route would
+ * resolve it. The alternative is a second opinion about where content lives,
+ * and a link that 404s while the page it names renders fine.
+ */
+function slugPathResolver(
+  config: BlocksPageConfig,
+  isPublic: boolean,
+  reader: NextlyContentReader,
+  budget: QueryBudget
+): EntryPathReads {
   const slugField = config.slugField ?? "slug";
   const routeCollections = [...new Set(config.collections)];
   // A route mounted behind the app's own auth (`draft: true`) serves drafts
@@ -3874,8 +3957,10 @@ function blocksRouteConfig(
     resolveEntryPath: _resolveEntryPath,
     layouts: _layouts,
     timeZone: _timeZone,
+    notFound,
     ...routeConfig
   } = config;
+  const missHandler = perRequestNotFound(notFound, isPublic);
   if (data !== undefined && typeof data !== "function") {
     throw new Error(
       "createBlocksPage: `data` takes a function from the route's public reader " +
@@ -3985,6 +4070,7 @@ function blocksRouteConfig(
 
   return {
     ...routeConfig,
+    ...(missHandler === undefined ? {} : { notFound: missHandler }),
     // The page is tagged for the records its BLOCKS read, not only for the
     // collection it was resolved from. The media and entry-path resolvers read
     // through plain `findByID`, which contributes no tag, so without this a
@@ -4158,7 +4244,9 @@ function blocksRouteConfig(
         config,
         isPublic,
         readerFor(config),
-        budget
+        budget,
+        // Links are formed in the language the page is drawn in.
+        linkLanguageOf(config.locale, context.locale)
       );
 
       // `isWorkingDraft` is surfaced, not acted on: the renderer draws the
@@ -4308,22 +4396,30 @@ function blocksRouteConfig(
         ...(page.prepared === null ? {} : { prepared: page.prepared }),
       };
 
+      // The structured data the route worked out for this page, from the
+      // same answer as its head, placed with the page it describes.
       if (regions.length === 0) {
-        return createElement(PageRenderer, {
-          ...pageProps,
-          ...(siteStyles === undefined ? {} : { siteStyles }),
-        });
+        return withStructuredData(
+          createElement(PageRenderer, {
+            ...pageProps,
+            ...(siteStyles === undefined ? {} : { siteStyles }),
+          }),
+          context.structuredData
+        );
       }
-      return createElement(
-        Fragment,
-        null,
-        ...drawWithRegions({
-          regions,
-          page: pageProps,
-          shared,
-          siteStyles,
-          definitions: regionDefinitions,
-        })
+      return withStructuredData(
+        createElement(
+          Fragment,
+          null,
+          ...drawWithRegions({
+            regions,
+            page: pageProps,
+            shared,
+            siteStyles,
+            definitions: regionDefinitions,
+          })
+        ),
+        context.structuredData
       );
     },
   };
@@ -4446,10 +4542,18 @@ export interface BlocksSinglePageConfig
  * absent key, because the route's own defaults are what an absent key selects.
  */
 function singlePassthrough(
-  config: BlocksSinglePageConfig
+  config: BlocksSinglePageConfig,
+  isPublic: boolean
 ): Partial<SingleRouteConfig<ReactElement>> {
-  const { locale, depth, nextly, revalidate, draft, trustedCollections } =
-    config;
+  const {
+    locale,
+    depth,
+    nextly,
+    revalidate,
+    draft,
+    trustedCollections,
+    notFound,
+  } = config;
   return {
     ...(locale === undefined ? {} : { locale }),
     ...(depth === undefined ? {} : { depth }),
@@ -4460,6 +4564,9 @@ function singlePassthrough(
     // `createPublicSinglePage` inherits that rather than restating it.
     ...(draft === undefined ? {} : { draft }),
     ...(trustedCollections === undefined ? {} : { trustedCollections }),
+    ...(perRequestNotFound(notFound, isPublic) === undefined
+      ? {}
+      : { notFound }),
   };
 }
 
@@ -4513,6 +4620,10 @@ function blocksSingleConfig(
       collection: slug,
       slug,
       ...(context.locale === undefined ? {} : { locale: context.locale }),
+      // Carried to the page render, which places it in the Single's HTML.
+      ...(context.structuredData === undefined
+        ? {}
+        : { structuredData: context.structuredData }),
     };
     converted.set(context, made);
     return made;
@@ -4520,7 +4631,7 @@ function blocksSingleConfig(
 
   return {
     slug,
-    ...singlePassthrough(config),
+    ...singlePassthrough(config, isPublic),
     // The media tag comes from the page route's own tag set, which is computed
     // for a collection this route does not have. Taking it from there rather
     // than recomputing keeps one answer to "what does a blocks page depend on".
@@ -4556,6 +4667,21 @@ function blocksSingleConfig(
  */
 function underCacheComponents(): boolean {
   return cacheComponentsEnabled(process.env.__NEXT_CACHE_COMPONENTS);
+}
+
+/**
+ * The site's `notFound` for a route, where the route answers its misses per
+ * request: always for an access-enforced route, and for a public one only
+ * under Cache Components. Without them a public route renders a path once
+ * (at build, or on its first request) and keeps the answer, and Next.js
+ * refuses a render it keeps that reads the request, so the handler, which
+ * may read it, is left out there and the miss is answered by `notFound()`.
+ */
+function perRequestNotFound<H>(
+  handler: H | undefined,
+  isPublic: boolean
+): H | undefined {
+  return isPublic && !underCacheComponents() ? undefined : handler;
 }
 
 /**
@@ -4792,6 +4918,17 @@ export interface ContentPageConfig {
     id: string,
     locale: string | undefined
   ) => Promise<string | null>;
+  /**
+   * How the route answers a path it has nothing for, in place of Next.js's
+   * `notFound()`, for a page and an entry alike: a site passes its own to do
+   * something for each miss, such as logging the address. The page and
+   * `generateMetadata` may both call it for one request. A handler that
+   * returns is followed by Next.js's `notFound()`; without one the route
+   * answers as before. `pages.notFound` is used where this is absent.
+   *
+   * @experimental Its name and shape may change before 1.0.
+   */
+  readonly notFound?: () => never | Promise<never>;
 }
 
 /**
@@ -4853,10 +4990,42 @@ function listPageSegments(
   return page <= 1 ? segments : [...segments, LIST_PAGE_SEGMENT, String(page)];
 }
 
-/** Answer not found, through the App Router's own boundary. */
-async function contentNotFound(): Promise<never> {
+/**
+ * Answer not found: with the route's own `notFound` where the site passed
+ * one, then through the App Router's own boundary, so a handler that returns
+ * still leaves the request answered not found.
+ */
+async function contentNotFound(
+  handler: ContentPageConfig["notFound"]
+): Promise<never> {
+  if (handler !== undefined) await handler();
   const { notFound } = await import("next/navigation");
   return notFound();
+}
+
+/**
+ * The page with its structured data placed before it, as the body of one
+ * JSON-LD script element, so it is in the HTML a crawler receives; the page
+ * as it is where the route handed none.
+ *
+ * The text is placed exactly as handed: the content and Single routes write
+ * it so that no value can end its element, and a second escaping here would
+ * change what it says.
+ */
+function withStructuredData(
+  page: ReactElement,
+  structuredData: string | undefined
+): ReactElement {
+  if (structuredData === undefined || structuredData === "") return page;
+  return createElement(
+    Fragment,
+    null,
+    createElement("script", {
+      type: "application/ld+json",
+      dangerouslySetInnerHTML: { __html: structuredData },
+    }),
+    page
+  );
 }
 
 /** Redirect permanently to `path`, through the App Router. */
@@ -4871,6 +5040,14 @@ function buildContentRoute(
 ): StaticContentRoute<ReactElement> {
   const { templates } = config;
   const entryPath = config.entryPath;
+  /**
+   * How the route answers a miss: the site's handler, where it passed one
+   * and the route answers misses per request.
+   */
+  const notFound = perRequestNotFound(
+    config.notFound ?? config.pages.notFound,
+    isPublic
+  );
   /**
    * The tags a cached read of the address store carries: every collection
    * whose writes change who holds an address (the pages', the templates', and
@@ -4918,16 +5095,27 @@ function buildContentRoute(
       ? config.pages
       : {
           ...config.pages,
-          resolveEntryPath: async (collection, id) => {
+          resolveEntryPath: async (collection, id, drawnIn) => {
+            // Read in the language the page is drawn in: a target is
+            // published, and holds its address, per language.
+            const locale = drawnIn ?? config.pages.locale;
             // A read the public is refused outright (a collection it may not
             // read at all, or one that no longer exists) is no target either:
             // a link resolver answers null where there is no path to draw.
-            const target = await publicRead(collection, id, ["id"]).catch(
-              () => null
-            );
+            const target = await publicRead(
+              collection,
+              id,
+              ["id"],
+              locale
+            ).catch(() => null);
             if (target === null) return null;
-            const locale = config.pages.locale;
-            const read = () => entryPath(collection, id, locale);
+            // The path the store holds, at the address the route serves it
+            // at in that language, as the route's own redirects and head are.
+            const language = linkLanguageOf(config.pages.locale, drawnIn);
+            const read = async () => {
+              const path = await entryPath(collection, id, locale);
+              return path === null ? null : await servedAddress(path, language);
+            };
             if (!isPublic) return await read();
             return await cachedFind(read, {
               tags: await addressTags(),
@@ -4935,6 +5123,8 @@ function buildContentRoute(
                 "nextly-content-entry-path",
                 config.pages.cacheScope ?? "",
                 locale ?? "",
+                // Formed for a segment's request, or left as the path.
+                language.fromSegment ? "formed" : "",
                 collection,
                 id,
               ],
@@ -4947,11 +5137,17 @@ function buildContentRoute(
   // A page is served by the pages route itself, so it is drawn exactly as
   // `createBlocksPage` draws it: its draft gate, its list's later pages, its
   // tags and metadata.
+  //
+  // Its misses are answered as the route's own are, by the one handler.
+  const pagesConfig: BlocksPageConfig =
+    notFound === undefined ? pages : { ...pages, notFound };
   const pagesRoute: ContentRoute<ReactElement> &
     Partial<Pick<StaticContentRoute<ReactElement>, "generateStaticParams">> =
     isPublic
-      ? createPublicContentRoute<ReactElement>(blocksRouteConfig(pages, true))
-      : createContentRoute<ReactElement>(blocksRouteConfig(pages, false));
+      ? createPublicContentRoute<ReactElement>(
+          blocksRouteConfig(pagesConfig, true)
+        )
+      : createContentRoute<ReactElement>(blocksRouteConfig(pagesConfig, false));
   const pageCollections = new Set(pages.collections);
   const mountPath = pages.mountPath ?? "";
   const mountSegments = mountPath.split("/").filter(part => part !== "");
@@ -5292,7 +5488,9 @@ function buildContentRoute(
     const language = await requestLanguage(
       params.locale,
       pages.locale,
-      pages.nextly === undefined ? undefined : async () => pages.nextly
+      pages.nextly === undefined
+        ? undefined
+        : () => Promise.resolve(pages.nextly)
     );
     if (language === null) return null;
     return {
@@ -5318,28 +5516,53 @@ function buildContentRoute(
     return (await confirmedLanguage(language)) ? found : null;
   }
 
-  async function ContentPage(args: ContentRouteArgs): Promise<ReactElement> {
+  /**
+   * What a request is served as, with its path, language and params; not
+   * found, through the route's handler, where it names nothing the route
+   * serves. The page and its head ask alike: a crawler is answered once its
+   * head is ready, so the head answering not found is what gives it a 404
+   * rather than a 200 carrying a not-found body.
+   */
+  async function servedFor(args: ContentRouteArgs): Promise<{
+    found: ContentAnswer;
+    segments: string[];
+    language: RequestLanguage;
+    params: { slug: string[]; locale?: string };
+  }> {
     const request = await requestOf(args);
-    if (request === null) return await contentNotFound();
-    const { segments, language, params } = request;
-    const found = await answered(segments, language);
-    if (found === null) return await contentNotFound();
+    if (request === null) return await contentNotFound(notFound);
+    const found = await answered(request.segments, request.language);
+    if (found === null) return await contentNotFound(notFound);
+    return { ...request, found };
+  }
+
+  async function ContentPage(args: ContentRouteArgs): Promise<ReactElement> {
+    const { found, segments, language, params } = await servedFor(args);
     if (found.kind === "page") {
       return await pagesRoute.ContentPage({ params });
     }
     if (found.kind === "redirect") return await contentRedirect(found.path);
-    return await found.route.render(found.entry, found.context);
+    // An entry is served here rather than by a content route, so its
+    // structured data is asked as its head is (`generateMetadata` below),
+    // at the address it was served at, and handed to the render as a
+    // content route hands it.
+    const structuredData = await contentPageStructuredData(
+      found.route,
+      found.entry,
+      found.context,
+      await servedAddress(pathOf(segments), language)
+    );
+    return await found.route.render(
+      found.entry,
+      structuredData === undefined
+        ? found.context
+        : { ...found.context, structuredData }
+    );
   }
 
   async function generateMetadata(args: ContentRouteArgs): Promise<Metadata> {
-    const request = await requestOf(args);
-    if (request === null) return await contentNotFound();
-    const { segments, language, params } = request;
-    const found = await answered(segments, language);
-    // Not found here as in the page: a crawler is answered once its head is
-    // ready, so this is what gives it a 404 rather than a 200 carrying a
-    // not-found body.
-    if (found === null) return await contentNotFound();
+    // Not found here as in the page (`servedFor`).
+    const { found, segments, language, params } = await servedFor(args);
     // A redirect's metadata is never read: the page answers with it.
     if (found.kind === "redirect") return {};
     if (found.kind === "page") {
@@ -5368,7 +5591,9 @@ function buildContentRoute(
     const language = await requestLanguage(
       (await args?.params)?.locale,
       pages.locale,
-      pages.nextly === undefined ? undefined : async () => pages.nextly
+      pages.nextly === undefined
+        ? undefined
+        : () => Promise.resolve(pages.nextly)
     );
     if (language === null) return own;
     const held = await config.addresses(language.locale, limit, mountSegments);
@@ -5432,6 +5657,50 @@ export function createPublicContentPage(
   config: ContentPageConfig
 ): StaticContentRoute<ReactElement> {
   return contentWithinBoundary(buildContentRoute(config, true));
+}
+
+/**
+ * What one entry's page says about itself through its blocks: the title,
+ * description and image a Page Builder route hands a page-metadata provider
+ * as the page's design level, asked outside a route.
+ *
+ * Worked out by the route's own derivation, so an admin screen or a check
+ * that asks reads the same values the published page is answered with:
+ * `field` names the entry's own blocks field a page draws, or `document` is
+ * the design drawing the entry (its collection's template, or its own
+ * design), as `createContentPage` draws one. The page is read as an
+ * access-enforced route reads it, through `config.nextly`.
+ *
+ * @experimental Settles with the page-metadata contract.
+ */
+export async function designMetadataFor(args: {
+  readonly config: Omit<BlocksPageConfig, "collections" | "field">;
+  readonly collection: string;
+  readonly entry: ContentEntry;
+  readonly locale?: string;
+  readonly field?: string;
+  readonly document?: unknown;
+}): Promise<PageMetadataValues> {
+  const drawsDesign = args.document !== undefined;
+  const field = drawsDesign ? TEMPLATE_DOCUMENT_KEY : args.field;
+  if (field === undefined) return {};
+  const route = blocksRouteConfig(
+    { ...args.config, collections: [args.collection], field },
+    false
+  );
+  // The design handed to the shared derivation under the key no field can
+  // take, as the content route hands an entry's design to its render.
+  const entry = drawsDesign
+    ? { ...args.entry, [TEMPLATE_DOCUMENT_KEY]: args.document }
+    : args.entry;
+  const slug = args.entry.slug;
+  return (
+    (await route.derivedMetadata?.(entry, {
+      collection: args.collection,
+      slug: typeof slug === "string" ? slug : "",
+      ...(args.locale === undefined ? {} : { locale: args.locale }),
+    })) ?? {}
+  );
 }
 
 /**

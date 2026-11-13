@@ -47,6 +47,8 @@ export const SYSTEM_RESOURCES_IN_DISPLAY_ORDER = [
   "settings",
   "email-providers",
   "email-templates",
+  // Queued and sent email: cancelling one, or having it sent again.
+  "email-deliveries",
   "api-keys",
   "webhooks",
   // Operational rather than content: running the background job queue by hand.

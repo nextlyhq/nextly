@@ -11,6 +11,7 @@ import { container } from "../di/container";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { PermissionSeedService } from "../domains/auth/services/permission-seed-service";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
+import type { PublishPartsRequest } from "../domains/collections/services/publish-parts";
 import { DynamicCollectionService } from "../domains/dynamic-collections";
 import { collectionMetadataFetcher } from "../domains/dynamic-collections/services/collection-metadata-fetcher";
 import type { ResolvedEmailRetentionConfig } from "../domains/email/retention-config";
@@ -31,9 +32,13 @@ import {
   draftSplitResponseFields,
   schemaDraftSplit,
 } from "../domains/versions/draft-split-eligibility";
+import type { FieldSources } from "../domains/versions/restored-from";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retention-config";
-import type { RichTextOutputFormat } from "../lib/rich-text-html";
+import type {
+  RichTextOutputFormat,
+  RichTextStyles,
+} from "../lib/rich-text-html";
 import type { CacheRevalidator } from "../revalidation/types";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { ValidationIssue } from "../shared/lib/entry-validation";
@@ -82,6 +87,11 @@ type EveryLanguageLifecycleHandlerParams = {
   authenticatedScope?: AuthenticatedScope;
   /** Acting identity from the transport, forwarded to the recorded event. */
   actor?: RequestActor;
+  /**
+   * Skip cache revalidation for this move (the outbox drain still runs), for a caller that owns
+   * its cache strategy.
+   */
+  disableRevalidate?: boolean;
   /**
    * The version the move was made from: `_rev` and `_overwrite`, judged as a
    * save's are (see the entry service).
@@ -570,6 +580,14 @@ export class CollectionsHandler {
     this.fileManager.invalidateSchemaForSlug(slug);
   }
 
+  // Drop every Drizzle table the FileManager built from registry rows, so each
+  // collection's next read builds it from the rows as they are now: the
+  // registry changed in a way this process did not make (another server
+  // copy's save, a migration), and any cached table may predate it.
+  forgetCollectionSchemas(): void {
+    this.fileManager.forgetBuiltSchemas();
+  }
+
   /**
    * Register dynamic schemas with the file manager.
    * @param schemas - Map of schema names to schema objects
@@ -783,6 +801,8 @@ export class CollectionsHandler {
      * - "both": Return object with both { json, html } properties
      */
     richTextFormat?: RichTextOutputFormat;
+    /** How rich text HTML is styled: `"none"` for classes only. */
+    richTextStyles?: RichTextStyles;
     /**
      * Sort order for results.
      * Prefix with `-` for descending.
@@ -922,6 +942,8 @@ export class CollectionsHandler {
      * - "both": Return object with both { json, html } properties
      */
     richTextFormat?: RichTextOutputFormat;
+    /** How rich text HTML is styled: `"none"` for classes only. */
+    richTextStyles?: RichTextStyles;
     /** User context for access control */
     user?: UserContext;
     /** When true, bypass all access control checks */
@@ -1127,6 +1149,18 @@ export class CollectionsHandler {
        */
       sourceVersionNo?: number;
       /**
+       * The fields this write restored, and the version each came from,
+       * recorded per field on the version it captures (see `restored-from`).
+       *
+       * @experimental
+       */
+      restoredFrom?: FieldSources;
+      /**
+       * Set when this write restores a version: held as the working draft, and
+       * refused where the document cannot hold one rather than written live.
+       */
+      requireHeldDraft?: boolean;
+      /**
        * The caller's authenticated scope. For a scoped API-key REST write, the
        * publish/unpublish transition gate judges the key's OWN grants.
        */
@@ -1148,6 +1182,11 @@ export class CollectionsHandler {
         // a silently dropped lineage marker would leave a restore
         // indistinguishable from an ordinary edit.
         sourceVersionNo: params.sourceVersionNo,
+        // Named for the same reason: dropped, a restore's fields would record
+        // no source.
+        restoredFrom: params.restoredFrom,
+        // Named for the same reason: dropped, a restore could write live.
+        requireHeldDraft: params.requireHeldDraft,
         // The API-key scope gates the publish transition; naming it explicitly
         // (like sourceVersionNo) keeps it from being silently dropped.
         authenticatedScope: params.authenticatedScope,
@@ -1163,6 +1202,22 @@ export class CollectionsHandler {
    */
   async publishAllLocales(params: EveryLanguageLifecycleHandlerParams) {
     return this.entryService.publishAllLocales(this.resolveUserParam(params));
+  }
+
+  /**
+   * Publish or unpublish the parts of an entry `request` chooses: some of its languages, or every
+   * one, and its shared part, or say what doing so would do.
+   *
+   * @experimental
+   */
+  async publishParts(
+    params: EveryLanguageLifecycleHandlerParams,
+    request: PublishPartsRequest
+  ) {
+    return this.entryService.publishParts(
+      this.resolveUserParam(params),
+      request
+    );
   }
 
   /**

@@ -5,16 +5,18 @@
  * Core's address answers are stood in for: each type's declared address and
  * the language rule (every language but the default under its code).
  */
-import { createHash } from "node:crypto";
-
 import {
   NextlyError,
+  pluginCacheTag,
   type PageMetadataInput,
   type PluginContext,
   type PublicAddressType,
 } from "@nextlyhq/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { keepRecord } from "../../address-record/__tests__/record-double";
+import { ADDRESS_RECORD_CACHE_PART } from "../../address-record/store";
+import { SEO_PLUGIN_NAME } from "../../settings/contract";
 import { fillPattern } from "../../settings/patterns";
 import { seoSettingsCacheTags } from "../../settings/single";
 import type { SiteRules } from "../page-levels";
@@ -46,57 +48,33 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   }),
 }));
 
+// The address record, as `context` keeps it.
+vi.mock("../../address-record/store", async importOriginal => ({
+  ...(await importOriginal()),
+  ...(await import("../../address-record/__tests__/record-double"))
+    .recordDouble,
+}));
+
 /**
  * A plugin context with the one service the resolver uses: media by id,
  * answering a missing id as the media service does, and `failing` ids with
  * a fault that is not about the image at all.
  */
-/** The record's unique key of the address `path` in `locale`. */
-function addressKey(locale: string, path: string): string {
-  return createHash("sha256")
-    .update(`address:${locale}|${path}`, "utf8")
-    .digest("hex");
-}
 
 function context(
   media: Record<string, Record<string, unknown>> = {},
   failing: readonly string[] = [],
   holders: Record<string, { collection: string; id: string }> = {}
 ) {
-  return {
+  const ctx = {
     self: { collections: {} },
     config: {},
     publicAddresses: { defaultLanguage: async () => "en" },
+    cache: {
+      tags: (...parts: string[]) =>
+        parts.map(part => pluginCacheTag(SEO_PLUGIN_NAME, part)),
+    },
     services: {
-      // The address record: who holds each path in English, read by the
-      // rows' unique keys as the record stores them.
-      ownCollections: {
-        listEntries: async (
-          _slug: string,
-          options: { where?: { claimKey?: { in?: string[] } } }
-        ) => {
-          const keys = options.where?.claimKey?.in ?? [];
-          const path = Object.keys(holders).find(held =>
-            keys.includes(addressKey("en", held))
-          );
-          const held = path === undefined ? undefined : holders[path];
-          return {
-            data:
-              held === undefined
-                ? []
-                : [
-                    {
-                      id: "r1",
-                      kind: "address",
-                      locale: "en",
-                      path,
-                      holderCollection: held.collection,
-                      holderId: held.id,
-                    },
-                  ],
-          };
-        },
-      },
       media: {
         findById: async (id: string) => {
           if (failing.includes(id)) throw new Error("connection reset");
@@ -109,6 +87,17 @@ function context(
       },
     },
   } as unknown as PluginContext;
+  // The address record: who holds each path in English.
+  keepRecord(
+    ctx,
+    Object.entries(holders).map(([path, held]) => ({
+      locale: "en",
+      path,
+      holderCollection: held.collection,
+      holderId: held.id,
+    }))
+  );
+  return ctx;
 }
 
 function entryInput(
@@ -544,7 +533,11 @@ describe("the canonical a page is given, with addresses from the environment", (
     const tags = seoPageMetadata(context()).tags?.(
       entryInput("pages", { slug: "a" })
     );
-    expect(tags).toEqual(expect.arrayContaining(["nextly:nx_seo_addresses"]));
+    expect(tags).toEqual(
+      expect.arrayContaining([
+        pluginCacheTag(SEO_PLUGIN_NAME, ADDRESS_RECORD_CACHE_PART),
+      ])
+    );
   });
 });
 

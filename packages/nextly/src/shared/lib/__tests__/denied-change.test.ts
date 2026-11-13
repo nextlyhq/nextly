@@ -12,9 +12,11 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { NextlyError } from "../../../errors";
 import {
   declaredFieldNames,
   keepDeniedAtStored,
+  keepPendingWhereDenied,
   resolvePromotedDocument,
   storedProvenance,
 } from "../denied-change";
@@ -666,35 +668,112 @@ describe("keepDeniedAtStored", () => {
   });
 });
 
-  it("storedProvenance marks the restored paths, with the values the row holds", async () => {
-    const { kept, permitted } = await keepDeniedAtStored({
-      update: { meta: { label: "edited" }, rows: [{ id: "b", n: 2 }] },
-      stored: {
-        meta: { label: "kept", rating: 2.5 },
-        rows: [
-          { id: "a", n: 2.5 },
-          { id: "b", n: 2 },
-        ],
-      },
-      applyRules: document => {
-        const meta = document.meta as Record<string, unknown> | undefined;
-        if (meta) delete meta.rating;
-        const rows = document.rows as
-          | Array<Record<string, unknown>>
-          | undefined;
-        if (rows) {
-          document.rows = rows.filter(row => row.id !== "a");
-        }
-        return Promise.resolve();
+it("storedProvenance marks the restored paths, with the values the row holds", async () => {
+  const { kept, permitted } = await keepDeniedAtStored({
+    update: { meta: { label: "edited" }, rows: [{ id: "b", n: 2 }] },
+    stored: {
+      meta: { label: "kept", rating: 2.5 },
+      rows: [
+        { id: "a", n: 2.5 },
+        { id: "b", n: 2 },
+      ],
+    },
+    applyRules: document => {
+      const meta = document.meta as Record<string, unknown> | undefined;
+      if (meta) delete meta.rating;
+      const rows = document.rows as Array<Record<string, unknown>> | undefined;
+      if (rows) {
+        document.rows = rows.filter(row => row.id !== "a");
+      }
+      return Promise.resolve();
+    },
+  });
+  const { paths, values } = storedProvenance(kept, permitted);
+  expect(paths.has("meta.rating")).toBe(true);
+  expect(values.get("meta.rating")).toBe(2.5);
+  // The restored row among kept ones is its own path; the kept row is
+  // not marked — it is the caller's own.
+  expect(paths.has("rows[0]")).toBe(true);
+  expect(values.get("rows[0]")).toEqual({ id: "a", n: 2.5 });
+  expect(paths.has("rows[1]")).toBe(false);
+  expect(paths.has("meta.label")).toBe(false);
+});
+
+// A save held over another writer's pending change keeps that change's value of each field the
+// writer may not write, and refuses a value there that neither the live row nor the change holds.
+describe("keepPendingWhereDenied", () => {
+  const live = { note: "live-note", runbook: "live-runbook" };
+  const pending = { ops: { note: "live-note", runbook: "author-runbook" } };
+  const run = (sentRunbook: string | undefined) => {
+    const sent: Record<string, unknown> = {
+      ops:
+        sentRunbook === undefined
+          ? { note: "editor-note" }
+          : { note: "editor-note", runbook: sentRunbook },
+    };
+    // As the rules leave the held save: the denied child at the live value.
+    const document = { ops: { note: "editor-note", runbook: live.runbook } };
+    keepPendingWhereDenied({
+      slug: "posts",
+      document,
+      pending,
+      kept: {
+        paths: new Set(["ops.runbook"]),
+        values: new Map([["ops.runbook", live.runbook]]),
+        sent,
       },
     });
-    const { paths, values } = storedProvenance(kept, permitted);
-    expect(paths.has("meta.rating")).toBe(true);
-    expect(values.get("meta.rating")).toBe(2.5);
-    // The restored row among kept ones is its own path; the kept row is
-    // not marked — it is the caller's own.
-    expect(paths.has("rows[0]")).toBe(true);
-    expect(values.get("rows[0]")).toEqual({ id: "a", n: 2.5 });
-    expect(paths.has("rows[1]")).toBe(false);
-    expect(paths.has("meta.label")).toBe(false);
+    return document;
+  };
+
+  it("keeps the pending value where the save sent the pending one, the live one, or none", () => {
+    for (const sentRunbook of ["author-runbook", "live-runbook", undefined]) {
+      expect(run(sentRunbook)).toEqual({
+        ops: { note: "editor-note", runbook: "author-runbook" },
+      });
+    }
   });
+
+  it("refuses a value that neither the live row nor the pending change holds", () => {
+    let refused: unknown;
+    try {
+      run("editor-runbook");
+    } catch (error) {
+      refused = error;
+    }
+    expect(NextlyError.isValidation(refused)).toBe(true);
+    expect(
+      (
+        refused as {
+          publicData?: { errors?: { path: string; code: string }[] };
+        }
+      ).publicData?.errors
+    ).toEqual([
+      expect.objectContaining({ path: "ops.runbook", code: "FORBIDDEN" }),
+    ]);
+  });
+
+  it("leaves a path inside a list, and one the pending change does not hold, at the live value", () => {
+    const document = {
+      rows: [{ secret: "live" }],
+      ops: { runbook: "live-runbook" },
+    };
+    keepPendingWhereDenied({
+      slug: "posts",
+      document,
+      pending: { rows: [{ secret: "pending" }] },
+      kept: {
+        paths: new Set(["rows[0].secret", "ops.runbook"]),
+        values: new Map<string, unknown>([
+          ["rows[0].secret", "live"],
+          ["ops.runbook", "live-runbook"],
+        ]),
+        sent: {},
+      },
+    });
+    expect(document).toEqual({
+      rows: [{ secret: "live" }],
+      ops: { runbook: "live-runbook" },
+    });
+  });
+});

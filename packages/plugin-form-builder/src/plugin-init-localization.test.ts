@@ -8,19 +8,71 @@ import { formBuilder } from "./plugin";
  * `getCollection` is supplied per boot so a lookup can succeed once and fail
  * the next time, which is the sequence the reset exists for.
  */
-function bootContext(getCollection: (slug: string) => Promise<unknown>) {
+function bootContext(
+  getCollection: (slug: string) => Promise<unknown>,
+  declared: readonly Record<string, unknown>[] = []
+) {
   return {
     self: { collections: {} as Record<string, string> },
-    services: { collections: { getCollection } },
+    // The collections the site's code declares, as `ctx.config` carries them.
+    config: { collections: declared },
+    services: {
+      collections: { getCollection },
+      // `init` subscribes send history to changes in its queued emails.
+      email: { onQueuedEmailChange: vi.fn() },
+    },
     logger: { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
     // `init` also subscribes the submission-notification hook. Stubbed
     // because this file is about what it RECORDS, not what it subscribes.
     hooks: { on: vi.fn(), off: vi.fn(), onInTransaction: vi.fn() },
+    security: { digests: { prepare: vi.fn(), digest: vi.fn() } },
     events: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
   } as never;
 }
 
 describe("what init records about each redirect target", () => {
+  it("answers a declared collection from the configuration, asking no registry", async () => {
+    // The configuration already says whether a code-declared collection is
+    // localized; reading the registry for it costs a start a round trip.
+    const { plugin, config } = formBuilder({
+      redirectRelationships: { pages: "/{slug}", posts: "/blog/{slug}" },
+    });
+    const getCollection = vi.fn(async () => {
+      throw new Error("the registry was asked");
+    });
+
+    await plugin.init?.(
+      bootContext(getCollection, [
+        { slug: "pages", localized: true },
+        { slug: "posts" },
+      ])
+    );
+
+    expect(config.redirectTargetLocalization).toEqual({
+      pages: true,
+      posts: false,
+    });
+    expect(getCollection).not.toHaveBeenCalled();
+  });
+
+  it("asks the registry only for a collection the configuration does not declare", async () => {
+    // One made in the Schema Builder: its registry row is its only declaration.
+    const { plugin, config } = formBuilder({
+      redirectRelationships: { pages: "/{slug}", landing: "/l/{slug}" },
+    });
+    const getCollection = vi.fn(async () => ({ localized: true }));
+
+    await plugin.init?.(
+      bootContext(getCollection, [{ slug: "pages", localized: false }])
+    );
+
+    expect(config.redirectTargetLocalization).toEqual({
+      pages: false,
+      landing: true,
+    });
+    expect(getCollection.mock.calls).toEqual([["landing", {}]]);
+  });
+
   it("records the collection's own localized setting", async () => {
     const { plugin, config } = formBuilder({
       redirectRelationships: { pages: "/{slug}" },

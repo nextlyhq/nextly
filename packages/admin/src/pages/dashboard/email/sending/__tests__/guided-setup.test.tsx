@@ -9,7 +9,7 @@
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, within } from "@admin/__tests__/utils";
 import type {
   EmailProviderDescriptor,
   EmailProviderRecord,
@@ -232,7 +232,7 @@ describe("adding a provider", () => {
       },
       expect.anything()
     );
-    expect(navigateTo).toHaveBeenCalledWith("/admin/email/sending");
+    expect(navigateTo).toHaveBeenCalledWith("/admin/settings/email/sending");
   });
 
   it("explains a refused test and lets the person send again in place", async () => {
@@ -327,7 +327,7 @@ describe("adding a provider", () => {
 
     await user.click(screen.getByRole("button", { name: "Done" }));
     expect(update).not.toHaveBeenCalled();
-    expect(navigateTo).toHaveBeenCalledWith("/admin/email/sending");
+    expect(navigateTo).toHaveBeenCalledWith("/admin/settings/email/sending");
   });
 
   it("asks for a new choice when a refresh takes the chosen type away", async () => {
@@ -376,5 +376,40 @@ describe("adding a provider", () => {
     expect(
       await screen.findByText("The test email was logged, not sent.")
     ).toBeTruthy();
+  });
+});
+
+describe("the setup's steps", () => {
+  /** Each step's list item, in order, as the admin's shared stepper draws it. */
+  function steps(): HTMLElement[] {
+    return within(screen.getByRole("list", { name: "Steps" })).getAllByRole(
+      "listitem"
+    );
+  }
+
+  it("say which step is current, and that the one before it is done", async () => {
+    const user = userEvent.setup();
+    render(<CreateEmailProviderPage />);
+    expect(steps().map(step => step.textContent)).toEqual([
+      "1Choose",
+      "2Connect",
+      "3Send a test",
+    ]);
+    expect(steps().map(step => step.dataset.state)).toEqual([
+      "current",
+      "upcoming",
+      "upcoming",
+    ]);
+    expect(steps()[0]).toHaveAttribute("aria-current", "step");
+
+    await user.click(screen.getByRole("radio", { name: /SMTP/ }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    expect(steps().map(step => step.dataset.state)).toEqual([
+      "complete",
+      "current",
+      "upcoming",
+    ]);
+    expect(steps()[0]).toHaveTextContent("Choose (done)");
+    expect(steps()[1]).toHaveAttribute("aria-current", "step");
   });
 });

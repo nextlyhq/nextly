@@ -17,21 +17,40 @@ import { readdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import type { EntitySettingsRecord } from "../migrate-create/entity-settings";
-import { parseSnapshotFile } from "../migrate-create/snapshot-io";
+import {
+  carriesRegistryMetadata,
+  isOlderFormatSnapshot,
+  parseSnapshotFile,
+} from "../migrate-create/snapshot-io";
 
 import { ledgerNameOfSnapshot, type IsAppliedFn } from "./snapshot-source";
 
 /** The registry source at the newest applied point, or why there is none. */
 export type RegistrySource =
-  | { kind: "snapshot"; file: string; entities: EntitySettingsRecord }
+  | {
+      kind: "snapshot";
+      file: string;
+      entities: EntitySettingsRecord;
+      /**
+       * The applied records up to this one, oldest first, ending with
+       * `entities`: each applied snapshot before it back to the first that
+       * records nothing or cannot be read, which ends it. What the
+       * migrations changed is judged along it (`registry-history.ts`).
+       * Absent where the source is not read from the migrations (a first
+       * run's configuration).
+       */
+      chain?: readonly EntitySettingsRecord[];
+    }
   | {
       kind: "none";
       /**
        * `no-snapshot`: no applied migration has one. `no-record`: the newest
-       * applied snapshot predates recorded declarations. `unreadable`: it
-       * could not be read, so nothing is written from it.
+       * applied snapshot predates recorded declarations. `older-format`: it
+       * is a template's, in the older shape (`isOlderFormatSnapshot`), whose
+       * rows are added where absent. `unreadable`: it could not be read, so
+       * nothing is written from it.
        */
-      reason: "no-snapshot" | "no-record" | "unreadable";
+      reason: "no-snapshot" | "no-record" | "older-format" | "unreadable";
       file?: string;
     };
 
@@ -67,24 +86,52 @@ export async function readRegistrySource(args: {
     .filter(name => name.endsWith(SNAPSHOT_SUFFIX))
     .sort()
     .reverse();
+  const applied: string[] = [];
   for (const file of newestFirst) {
-    if (!(await args.isApplied(ledgerNameOfSnapshot(file)))) continue;
-    return sourceIn(join(metaDir, file), file);
+    if (await args.isApplied(ledgerNameOfSnapshot(file))) applied.push(file);
   }
-  return { kind: "none", reason: "no-snapshot" };
+  const [newest, ...older] = applied;
+  if (newest === undefined) return { kind: "none", reason: "no-snapshot" };
+  const source = await sourceIn(join(metaDir, newest), newest);
+  if (source.kind !== "snapshot") return source;
+  // Older applied records, newest first, until one records nothing.
+  const chain = [source.entities];
+  for (const file of older) {
+    const earlier = await sourceIn(join(metaDir, file), file);
+    if (earlier.kind !== "snapshot") break;
+    chain.push(earlier.entities);
+  }
+  return { ...source, chain: chain.reverse() };
 }
 
 /** The source one snapshot file gives: its recorded declarations, or none. */
 async function sourceIn(path: string, file: string): Promise<RegistrySource> {
-  let entities: EntitySettingsRecord | undefined;
+  let parsed: ReturnType<typeof parseSnapshotFile>;
   try {
-    entities = parseSnapshotFile(await readFile(path, "utf-8"), file).entities;
+    const content = await readFile(path, "utf-8");
+    // A template's older-format snapshot is read as what it is, not as a
+    // snapshot that failed to parse: the rows it lists are still added.
+    if (isOlderFormatSnapshot(parseJson(content))) {
+      return { kind: "none", reason: "older-format", file };
+    }
+    parsed = parseSnapshotFile(content, file);
   } catch {
     // Written from nothing is safer than written from a guess: the rows stay
     // as they are, and the run says why.
     return { kind: "none", reason: "unreadable", file };
   }
-  return entities === undefined
-    ? { kind: "none", reason: "no-record", file }
-    : { kind: "snapshot", file, entities };
+  // Judged by the one reading of "carries registry metadata", which the
+  // first run's record also asks of each migration.
+  return carriesRegistryMetadata(parsed)
+    ? { kind: "snapshot", file, entities: parsed.entities }
+    : { kind: "none", reason: "no-record", file };
+}
+
+/** `content` parsed as JSON, or undefined where it is not JSON. */
+function parseJson(content: string): unknown {
+  try {
+    return JSON.parse(content) as unknown;
+  } catch {
+    return undefined;
+  }
 }

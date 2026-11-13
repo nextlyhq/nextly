@@ -140,6 +140,7 @@ export type {
   JsonValue,
   PluginAdminContributions,
   PluginAdminPage,
+  PluginPageStartupRead,
   PluginCollectionView,
   OverridableDocumentAction,
   PluginDocumentActionOverride,
@@ -159,7 +160,18 @@ export type {
   PluginListFilterDeclaration,
   PluginListFilterOption,
   PluginMenuItem,
+  PluginMenuItemFields,
   PluginNavSection,
+  PluginAdminPanel,
+  PluginPanelGroup,
+  PluginItemCount,
+  PluginHeaderContributions,
+  PluginHeaderSlotContributions,
+  PluginHeaderUserMenuContributions,
+  PluginItemPlace,
+  PluginUserMenuAction,
+  PluginUserMenuItem,
+  PluginUserMenuLink,
 } from "./admin-contributions";
 export type { RowPredicate, RowPredicateValue } from "./row-predicate";
 export type { AdminContributionKind } from "./admin-places";

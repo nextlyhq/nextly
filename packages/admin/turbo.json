@@ -8,13 +8,14 @@
       // this hash keeps them: a class used only in a test still lands in the
       // compiled sheet, and leaving it out would replay a stale sheet.
       //
-      // The sheet also scans two plugins' admin components, which this
+      // The sheet also scans three plugins' admin components, which this
       // package does not depend on, so their directories are named here.
       "inputs": [
         "$TURBO_DEFAULT$",
         ".env*",
         "$TURBO_ROOT$/packages/plugin-form-builder/src/admin/**",
-        "$TURBO_ROOT$/packages/plugin-page-builder/src/admin/**"
+        "$TURBO_ROOT$/packages/plugin-page-builder/src/admin/**",
+        "$TURBO_ROOT$/packages/plugin-seo/src/admin/**"
       ],
       // ANALYZE only turns on the size report the build prints; the files it
       // writes are the same either way, so it reaches the build without

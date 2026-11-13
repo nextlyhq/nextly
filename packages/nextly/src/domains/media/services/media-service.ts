@@ -92,7 +92,7 @@ import {
   type Media as LegacyMedia,
 } from "../../../types/media";
 import type { MediaLibraryCounts } from "../media-library-query";
-import type { DeleteClaim } from "../pending-delete";
+import type { DeleteClaim, PendingMediaDeletes } from "../pending-delete";
 import { withMediaRevalidationBatch } from "../revalidate-media";
 import type { MediaFilesRecord } from "../stored-files";
 import type {
@@ -716,6 +716,19 @@ export class MediaService {
   }
 
   /**
+   * @experimental Whether anything uses the item: a document's field, or an
+   * avatar or logo that keeps its address. In use whenever that cannot be
+   * known yet (no usage record, or one not built for older content), so a
+   * caller deleting unused items never deletes on a guess.
+   */
+  // Reached through the plugin facade's read list (`PLUGIN_MEDIA_READS`),
+  // picked by name, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async isInUse(mediaId: string): Promise<boolean> {
+    return this.legacyMediaService.isInUse(mediaId);
+  }
+
+  /**
    * Update media file metadata
    *
    * @param mediaId - Media file ID
@@ -835,6 +848,33 @@ export class MediaService {
 
     // The delete committed a media.deleted outbox row; drain and prune it.
     await this.afterWrite();
+  }
+
+  /**
+   * Delete a media file now and remove its stored files durably: {@link delete},
+   * with the files recorded as left to remove in the delete's own
+   * transaction and the finalising job queued there, so a removal storage
+   * refuses, or one a stopped worker never started, is tried again until the
+   * files are gone (`PendingMediaDeletes.deleteNow`). What a plugin's
+   * `ctx.services.media.delete` runs.
+   *
+   * @throws NextlyError if deletion fails, not-found for an item already gone.
+   */
+  async deleteDurably(
+    mediaId: string,
+    context: RequestContext,
+    actor?: RequestActor
+  ): Promise<void> {
+    // Loaded when an item is deleted, not with the service.
+    const { bootedPendingDeletes } = await import("../booted-pending-deletes");
+    // Named by its type, the class whose method is called below.
+    const pending: PendingMediaDeletes = bootedPendingDeletes();
+    await pending.deleteNow(
+      mediaId,
+      actorForWrite(actor, context.user),
+      // The files go once the delete is durable, as an ordinary delete's do.
+      effect => this.legacyMediaService.whenCommitted(effect)
+    );
   }
 
   /**

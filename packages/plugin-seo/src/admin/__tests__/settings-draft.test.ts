@@ -4,8 +4,16 @@ import type { SeoContentType } from "../../settings/contract";
 import {
   attentionItems,
   changesOf,
+  isHidden,
+  mappingOf,
+  missingDetails,
+  structuredTypeOf,
+  withDetailField,
+  withHidden,
+  withStructuredType,
   draftOf,
   networkOf,
+  rebasedDraft,
   patternOf,
   patternProblem,
   previewOf,
@@ -32,6 +40,7 @@ const stored = {
   ],
   patterns: { posts: { title: "{Title} | {Site name}" } },
   setupStep: 1,
+  plainTextCopies: true,
   setupDismissed: false,
 };
 
@@ -43,6 +52,7 @@ const posts: SeoContentType = {
     title: "Surfer SEO vs Rext AI",
     values: { category: "Comparisons" },
   },
+  mappableFields: [],
   public: true,
 };
 
@@ -68,6 +78,11 @@ describe("the form's values, from the stored settings", () => {
       patterns: { posts: { title: "{Title} | {Site name}" } },
       setupStep: 1,
       setupDismissed: false,
+      hiddenTypes: [],
+      structuredData: {},
+      indexNow: false,
+      llmsTxt: false,
+      plainTextCopies: true,
     });
   });
 
@@ -87,6 +102,11 @@ describe("the form's values, from the stored settings", () => {
       patterns: {},
       setupStep: 0,
       setupDismissed: false,
+      hiddenTypes: [],
+      structuredData: {},
+      indexNow: false,
+      llmsTxt: false,
+      plainTextCopies: false,
     });
   });
 });
@@ -272,11 +292,21 @@ describe("what setup ends on", () => {
       logo: "m1",
     };
     expect(attentionItems(withLogo, [posts])).toEqual([
-      { text: "No share image yet", fix: "Add a share image", tab: "general" },
+      { text: "No share image yet", fix: "Add a share image", tab: "images" },
     ]);
     expect(
       attentionItems({ ...withLogo, logo: null, image: "m2" }, [posts])
     ).toEqual([{ text: "No logo yet", fix: "Add a logo", tab: "brand" }]);
+  });
+
+  it("asks for no saved address where the server names one", () => {
+    expect(
+      attentionItems(
+        { ...empty, logo: "m1", image: "m2" },
+        [posts],
+        ["https://acme.com"]
+      )
+    ).toEqual([]);
   });
 
   it("is empty for a site with everything set", () => {
@@ -291,5 +321,331 @@ describe("what setup ends on", () => {
         [posts]
       )
     ).toEqual([]);
+  });
+});
+
+describe("hiding a whole content type", () => {
+  const empty = { id: "s1", updatedAt: "" };
+
+  it("shows the plugin's own hidden types until the site chooses, and saves the whole list once changed", () => {
+    const draft = draftOf(empty, { hiddenTypes: ["tags"] });
+    expect(isHidden(draft, "tags")).toBe(true);
+    expect(changesOf(empty, draft, { hiddenTypes: ["tags"] })).toBeNull();
+
+    const shown = withHidden(draft, "tags", false);
+    const hidden = withHidden(shown, "posts", true);
+    expect(changesOf(empty, hidden, { hiddenTypes: ["tags"] })).toEqual({
+      hiddenTypes: ["posts"],
+      _overwrite: true,
+    });
+  });
+});
+
+describe("a content type's structured data", () => {
+  const withFields: SeoContentType = {
+    ...posts,
+    mappableFields: [
+      { name: "byline", label: "Byline" },
+      { name: "publishedAt", label: "Published at" },
+      { name: "cover", label: "Cover" },
+    ],
+  };
+
+  it("is automatic until a type is chosen, and saves the choice", () => {
+    const draft = draftOf(stored);
+    expect(structuredTypeOf(draft, "posts")).toBeUndefined();
+
+    const chosen = withStructuredType(draft, "posts", "article");
+    expect(structuredTypeOf(chosen, "posts")).toBe("article");
+    expect(changesOf(stored, chosen)).toEqual({
+      structuredData: { posts: { type: "article" } },
+      _rev: "4",
+    });
+    expect(
+      structuredTypeOf(withStructuredType(chosen, "posts", undefined), "posts")
+    ).toBeUndefined();
+  });
+
+  it("names the details no field holds yet, counting a field named like one as holding it", () => {
+    // `publishedAt` is named like the date published, so it is found; nothing
+    // is named like the author. The image is the page's share image until a
+    // field is chosen, so it is never missing.
+    expect(missingDetails(draftOf(stored), withFields, "article")).toEqual([
+      "author",
+    ]);
+  });
+
+  it("finds a detail by name only among the entry's own fields, as the markup does", () => {
+    const nested: SeoContentType = {
+      ...posts,
+      // Only the field inside the group: the group itself, named `start`,
+      // would be found by its name as the markup finds it.
+      mappableFields: [{ name: "start.date", label: "Start › Date" }],
+    };
+    // `start.date` reads like the start date, but the markup never looks
+    // inside a group by itself, so the date is missing until it is chosen.
+    expect(missingDetails(draftOf(stored), nested, "event")).toEqual([
+      "startDate",
+      "location",
+    ]);
+  });
+
+  it("names a detail mapped to a field the type no longer has, keeping a path into one it has", () => {
+    const stale = withDetailField(
+      draftOf(stored),
+      "posts",
+      "article",
+      "author",
+      "removed"
+    );
+    expect(missingDetails(stale, withFields, "article")).toEqual(["author"]);
+    const path = withDetailField(
+      draftOf(stored),
+      "posts",
+      "article",
+      "author",
+      "byline.name"
+    );
+    expect(missingDetails(path, withFields, "article")).toEqual([]);
+    // Inside a group whose fields are known, the path must be one of them.
+    const event: SeoContentType = {
+      ...posts,
+      mappableFields: [
+        { name: "event", label: "Event" },
+        { name: "event.startsAt", label: "Event › Starts at" },
+      ],
+    };
+    const renamed = withDetailField(
+      draftOf(stored),
+      "posts",
+      "event",
+      "startDate",
+      "event.startedAt"
+    );
+    expect(missingDetails(renamed, event, "event")).toContain("startDate");
+  });
+
+  it("shows the plugin's own choice until the site chooses, and saves only what differs from it", () => {
+    const defaults = {
+      structuredData: {
+        posts: {
+          type: "article" as const,
+          details: { article: { author: "byline" } },
+        },
+      },
+    };
+    const draft = draftOf(stored, defaults);
+    expect(structuredTypeOf(draft, "posts")).toBe("article");
+    expect(mappingOf(draft, "posts", "article")).toEqual({ author: "byline" });
+    expect(changesOf(stored, draft, defaults)).toBeNull();
+
+    // Another type's choice saves alone, leaving the plugin's in force.
+    const other = withStructuredType(draft, "cases", "webPage");
+    expect(changesOf(stored, other, defaults)).toEqual({
+      structuredData: { cases: { type: "webPage" } },
+      _rev: "4",
+    });
+
+    // A new type keeps the plugin's mapping, and Automatic over the
+    // plugin's choice is saved, so the page's markup is automatic.
+    const howTo = withStructuredType(draft, "posts", "blogPosting");
+    expect(changesOf(stored, howTo, defaults)).toEqual({
+      structuredData: {
+        posts: {
+          details: { article: { author: "byline" } },
+          type: "blogPosting",
+        },
+      },
+      _rev: "4",
+    });
+    const automatic = withStructuredType(
+      withDetailField(draft, "posts", "article", "author", ""),
+      "posts",
+      undefined
+    );
+    expect(structuredTypeOf(automatic, "posts")).toBeUndefined();
+    expect(changesOf(stored, automatic, defaults)).toEqual({
+      structuredData: { posts: {} },
+      _rev: "4",
+    });
+  });
+
+  it("saves the field a detail is read from, and forgets it when unchosen", () => {
+    const mapped = withDetailField(
+      draftOf(stored),
+      "posts",
+      "article",
+      "author",
+      "byline"
+    );
+    expect(mappingOf(mapped, "posts", "article")).toEqual({ author: "byline" });
+    expect(missingDetails(mapped, withFields, "article")).toEqual([]);
+    expect(changesOf(stored, mapped)).toEqual({
+      structuredData: { posts: { details: { article: { author: "byline" } } } },
+      _rev: "4",
+    });
+    const unmapped = withDetailField(mapped, "posts", "article", "author", "");
+    expect(mappingOf(unmapped, "posts", "article")).toEqual({});
+  });
+});
+
+describe("a draft moved onto newer settings", () => {
+  const before = draftOf({
+    id: "s1",
+    siteName: "Acme",
+    description: "Old",
+    patterns: { posts: { title: "{Title}" }, pages: { title: "{Title}" } },
+    hiddenTypes: ["tags"],
+  });
+
+  it("keeps what was edited here and takes every other value as stored now", () => {
+    const draft = {
+      ...before,
+      description: "Edited here",
+      patterns: { ...before.patterns, posts: { title: "{Title} | Blog" } },
+      hiddenTypes: ["tags", "authors"],
+    };
+    const after = draftOf({
+      id: "s1",
+      siteName: "Acme Ltd",
+      description: "Old",
+      patterns: {
+        posts: { title: "{Title}" },
+        pages: { title: "{Title} | Docs" },
+      },
+      hiddenTypes: ["tags", "cases"],
+    });
+
+    const rebased = rebasedDraft(draft, before, after);
+    expect(rebased.siteName).toBe("Acme Ltd");
+    expect(rebased.description).toBe("Edited here");
+    // One type's pattern edited here, another's changed elsewhere: both kept.
+    expect(rebased.patterns).toEqual({
+      posts: { title: "{Title} | Blog" },
+      pages: { title: "{Title} | Docs" },
+    });
+    expect(rebased.hiddenTypes).toEqual(["tags", "authors", "cases"]);
+  });
+
+  it("moves the addresses and profiles item by item, keeping one added elsewhere", () => {
+    const listed = draftOf({
+      id: "s1",
+      productionAddresses: ["https://a.example"],
+      socialProfiles: [{ network: "x", url: "https://x.com/acme" }],
+    });
+    // Here: the address replaced, a profile added.
+    const draft = {
+      ...listed,
+      productionAddresses: ["https://b.example"],
+      socialProfiles: [
+        ...listed.socialProfiles,
+        { network: "github", url: "https://github.com/acme" },
+      ],
+    };
+    // Elsewhere meanwhile: an address and a profile added.
+    const after = draftOf({
+      id: "s1",
+      productionAddresses: ["https://a.example", "https://c.example"],
+      socialProfiles: [
+        { network: "x", url: "https://x.com/acme" },
+        { network: "linkedin", url: "https://linkedin.com/company/acme" },
+      ],
+    });
+
+    const rebased = rebasedDraft(draft, listed, after);
+    expect(rebased.productionAddresses).toEqual([
+      "https://b.example",
+      "https://c.example",
+    ]);
+    expect(rebased.socialProfiles).toEqual([
+      { network: "x", url: "https://x.com/acme" },
+      { network: "github", url: "https://github.com/acme" },
+      { network: "linkedin", url: "https://linkedin.com/company/acme" },
+    ]);
+  });
+
+  it("keeps the order edited here, so the first address stays the main one", () => {
+    const listed = draftOf({
+      id: "s1",
+      siteName: "Acme",
+      productionAddresses: ["https://old.example", "https://fr.example"],
+    });
+    const draft = {
+      ...listed,
+      productionAddresses: ["https://new.example", "https://fr.example"],
+    };
+    // Only the site name changed elsewhere.
+    const after = { ...listed, siteName: "Acme Ltd" };
+    expect(rebasedDraft(draft, listed, after).productionAddresses).toEqual([
+      "https://new.example",
+      "https://fr.example",
+    ]);
+  });
+
+  it("keeps a main address changed elsewhere first while one is added here", () => {
+    const listed = draftOf({
+      id: "s1",
+      productionAddresses: ["https://old.example", "https://fr.example"],
+    });
+    const draft = {
+      ...listed,
+      productionAddresses: [
+        "https://old.example",
+        "https://fr.example",
+        "https://de.example",
+      ],
+    };
+    const after = {
+      ...listed,
+      productionAddresses: ["https://new.example", "https://fr.example"],
+    };
+    expect(rebasedDraft(draft, listed, after).productionAddresses).toEqual([
+      "https://new.example",
+      "https://fr.example",
+      "https://de.example",
+    ]);
+  });
+
+  it("keeps a new order made here where the list wasn't changed elsewhere", () => {
+    const listed = draftOf({
+      id: "s1",
+      siteName: "Acme",
+      productionAddresses: ["https://a.example", "https://b.example"],
+    });
+    // Here, the second address made the main one.
+    const draft = {
+      ...listed,
+      productionAddresses: ["https://b.example", "https://a.example"],
+    };
+    const after = { ...listed, siteName: "Acme Ltd" };
+    expect(rebasedDraft(draft, listed, after).productionAddresses).toEqual([
+      "https://b.example",
+      "https://a.example",
+    ]);
+  });
+
+  it("takes the newer list as it is, in its order, where it wasn't edited here", () => {
+    const listed = draftOf({
+      id: "s1",
+      productionAddresses: ["https://old.example", "https://fr.example"],
+    });
+    const draft = { ...listed, description: "Edited here" };
+    // Elsewhere, the main address changed.
+    const after = {
+      ...listed,
+      productionAddresses: ["https://new.example", "https://fr.example"],
+    };
+    expect(rebasedDraft(draft, listed, after).productionAddresses).toEqual([
+      "https://new.example",
+      "https://fr.example",
+    ]);
+  });
+
+  it("takes out a type's entry taken out here, and a hidden type shown again", () => {
+    const { pages: _pages, ...rest } = before.patterns;
+    const draft = { ...before, patterns: rest, hiddenTypes: [] };
+    const rebased = rebasedDraft(draft, before, before);
+    expect(rebased.patterns).toEqual({ posts: { title: "{Title}" } });
+    expect(rebased.hiddenTypes).toEqual([]);
   });
 });

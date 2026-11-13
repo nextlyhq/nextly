@@ -6,11 +6,12 @@
  * Translatable badge both read: the field's own setting when it has one, else
  * the server's default for its type (text-like fields translate by default).
  * A field-group field holds no value of its own, so it is never translated
- * itself; the fields inside its field group are.
+ * itself; the fields inside its field group are. Nor is a password or virtual
+ * field.
  *
  * @module lib/builder/field-localized
  */
-import { defaultLocalizedForType } from "nextly/config";
+import { defaultLocalizedForType, neverTranslatable } from "nextly/config";
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 
 import type { BuilderField } from "@admin/components/features/schema-builder/types";
@@ -19,5 +20,8 @@ export function fieldLocalized(
   field: Pick<BuilderField, "type" | "advanced">
 ): boolean {
   if (isFieldGroupFieldType(field.type)) return false;
+  // A password or virtual field is never translated, whatever a legacy setting says: the server
+  // refuses `localized: true` on one.
+  if (neverTranslatable({ type: field.type })) return false;
   return field.advanced?.localized ?? defaultLocalizedForType(field.type);
 }

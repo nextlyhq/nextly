@@ -137,7 +137,8 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           password({ name: "pin", required: true }),
         ],
       }),
-      // A component placed directly in a component, which nothing stores.
+      // A component placed directly in a component, required there: stored as
+      // a row of its own, beneath the row of the instance that holds it.
       defineFieldGroup({
         slug: "shell",
         fields: [
@@ -881,7 +882,7 @@ describe.each(getConfiguredTestDialects())(
         title: "vault",
         status: "draft",
         secured: { label: "front door", pin: "1234" },
-        shell: { label: "wrapper" },
+        shell: { label: "wrapper", core: card("inside") },
       });
       ids.aside = await created(t, "asides", {
         title: "aside",
@@ -1224,9 +1225,9 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
-    it("publishes an instance whose required password is stored, and whose unstored direct component is absent", async () => {
-      // A stored password reads back as absent, and a component placed
-      // directly in a component is never stored: neither is a missing value.
+    it("publishes an instance whose required password is stored, and whose required direct component is stored beneath it", async () => {
+      // A stored password reads back as absent, which is not a missing value;
+      // a component placed directly in a component is read from its own row.
       const result = await publish(t, "vaults", ids.vault);
 
       expect(result.success, JSON.stringify(result)).toBe(true);

@@ -62,6 +62,7 @@ import { reachesRelationStorage } from "../../domains/schema/pipeline/recorded-s
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { refuseRenamedFieldOntoTakenColumn } from "../../domains/schema/rename-target";
+import { writeRegistryRows } from "../../domains/schema/schema-version";
 import {
   applyCollectionSchemaChange,
   recordedFieldsOf,
@@ -114,6 +115,7 @@ import {
   isTruthyParam,
   parseCountParam,
   parseRichTextFormat,
+  parseRichTextStyles,
   parseSelectParam,
   parseStatusParam,
   parseWhereParam,
@@ -122,7 +124,11 @@ import {
   readClientWhere,
   toNumber,
 } from "../helpers/validation";
-import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
+import {
+  restoreFieldsOf,
+  versionInputOf,
+  versionInputOfQuery,
+} from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
 import { readListOwner, slugListsForOwner } from "./list-owner";
@@ -240,6 +246,66 @@ function allLocalesLifecycle(
 }
 
 /**
+ * The body of a publish or unpublish of an entry's chosen parts: the languages, or `"all"`, whether
+ * the shared part is chosen too, and whether to only say what it would do. The version fields
+ * (`_rev`, `_overwrite`) are read beside it, as for every lifecycle move.
+ */
+const PublishPartsBody = z
+  .object({
+    locales: z.union([
+      z.literal("all"),
+      z.array(z.string().min(1).max(64)).max(500),
+    ]),
+    shared: z.boolean().optional(),
+    describe: z.boolean().optional(),
+  })
+  .passthrough();
+
+/**
+ * Publishing or unpublishing the parts of one entry the body chooses (@experimental). Forwarded as
+ * the every-language moves forward theirs: the caller's identity and scope, `routeAuthorized`
+ * false, and the version the move was made from.
+ */
+function partsLifecycle(
+  direction: "publish" | "unpublish",
+  successMessage: string
+): MethodHandler<CollectionsHandlerType> {
+  return {
+    execute: async (svc, p, body, request) => {
+      const collectionName = requireParam(p, "collectionName");
+      const entryId = requireParam(p, "entryId");
+      let parts: z.infer<typeof PublishPartsBody>;
+      try {
+        parts = PublishPartsBody.parse(body ?? {});
+      } catch (error) {
+        if (error instanceof z.ZodError) throw nextlyValidationFromZod(error);
+        throw error;
+      }
+      const result = await svc.publishParts(
+        {
+          request,
+          collectionName,
+          entryId,
+          actor: readAuthenticatedActor(),
+          ...callerUser(),
+          routeAuthorized: false,
+          authenticatedScope: readAuthenticatedScope(),
+          data: versionInputOf(body),
+        },
+        {
+          direction,
+          locales: parts.locales,
+          shared: parts.shared,
+          describe: parts.describe,
+        }
+      );
+      const entry = unwrapServiceResult(result, { collectionName, entryId });
+      return respondMutation(result.message ?? successMessage, entry);
+    },
+  };
+}
+
+/**
  * The `together` query parameter of a collection delete: slugs separated by
  * commas, each spelled as a slug is. Absent or empty means none.
  */
@@ -350,6 +416,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         request,
         // The version the restore was made from, judged as its update is.
         version: versionInputOf(body),
+        // The fields chosen; every field the version holds when none are.
+        fields: restoreFieldsOf(body),
       });
       return respondAction("Version restored.", result);
     },
@@ -1081,25 +1149,29 @@ const COLLECTIONS_METHODS: Record<
           const newSchemaVersion = currentVersion + 1;
           let versionPersisted = true;
           try {
-            await adapter.update(
-              "dynamic_collections",
-              {
-                fields: JSON.stringify(storedFields),
-                schema_version: newSchemaVersion,
-                // Written but not run outside development: `nextly migrate`
-                // applies it on deploy.
-                ...(written !== undefined && !written.applied
-                  ? { migration_status: "pending" }
-                  : {}),
-                // i18n: persist the state this apply actually ran with (mirrors
-                // the singles apply). The DDL above already performed any
-                // false→true transition, so leaving the stored flag behind would
-                // make the settings write that follows read another false→true
-                // transition and reconcile the companion a second time.
-                localized: isLocalized,
-                updated_at: new Date(),
-              },
-              { and: [{ column: "slug", op: "=", value: p.collectionName }] }
+            // The row and the stored schema version in one transaction, so the
+            // version's count moves with the save it records (`writeRegistryRows`).
+            await writeRegistryRows(adapter, tx =>
+              tx.update(
+                "dynamic_collections",
+                {
+                  fields: JSON.stringify(storedFields),
+                  schema_version: newSchemaVersion,
+                  // Written but not run outside development: `nextly migrate`
+                  // applies it on deploy.
+                  ...(written !== undefined && !written.applied
+                    ? { migration_status: "pending" }
+                    : {}),
+                  // i18n: persist the state this apply actually ran with (mirrors
+                  // the singles apply). The DDL above already performed any
+                  // false→true transition, so leaving the stored flag behind would
+                  // make the settings write that follows read another false→true
+                  // transition and reconcile the companion a second time.
+                  localized: isLocalized,
+                  updated_at: new Date(),
+                },
+                { and: [{ column: "slug", op: "=", value: p.collectionName }] }
+              )
             );
             // Written past the registry services, so the cached rows are cleared
             // here: a read during the save may have cached the row from before it.
@@ -1289,6 +1361,8 @@ const COLLECTIONS_METHODS: Record<
         select: parseSelectParam(p.select),
         where: parseWhereParam(p.where, p.whereBrackets),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
+        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+        richTextStyles: parseRichTextStyles(p.richTextStyles),
         sort,
         status,
         // i18n M4: `?locale=` + `?fallback-locale=` select the content language.
@@ -1419,6 +1493,8 @@ const COLLECTIONS_METHODS: Record<
           p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
         select: parseSelectParam(p.select),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
+        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+        richTextStyles: parseRichTextStyles(p.richTextStyles),
         status,
         // `?draft=true` overlays the pending working draft in place of the live
         // row (draft/published split), matching Payload's read-side `draft`
@@ -1485,6 +1561,8 @@ const COLLECTIONS_METHODS: Record<
     "unpublishAllLocales",
     "All languages unpublished."
   ),
+  publishParts: partsLifecycle("publish", "Published."),
+  unpublishParts: partsLifecycle("unpublish", "Unpublished."),
 
   previewPublishAllLocales: {
     // What publishing every language would do, language by language, without

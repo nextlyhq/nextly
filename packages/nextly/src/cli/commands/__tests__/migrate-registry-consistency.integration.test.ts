@@ -260,6 +260,10 @@ describe.each(getConfiguredTestDialects())(
 
     it("migrate names each disagreement when it finishes", async () => {
       const t = instance!;
+      // A database past its first run on this release, whose registry rows
+      // come from the migrations alone: a first run would write the lost rows
+      // from the configuration instead of naming them.
+      await runMigrate({ cwd: dir }, command().context);
       await disagree(t, dialect);
 
       const { context, said } = command();

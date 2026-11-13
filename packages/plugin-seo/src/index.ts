@@ -6,6 +6,11 @@
 export { seoPlugin } from "./plugin";
 export type { SeoPluginOptions } from "./plugin";
 export { defaultSeoFields } from "./fields";
+// Pages with no entry: the one line a page built in code adds so the SEO set
+// for its address on Pages reaches its head, and
+// its structured data from the same answer.
+export { seoMetadata, seoStructuredData } from "./code-pages/metadata";
+export type { RouteMetadata, SeoMetadataOptions } from "./code-pages/metadata";
 export {
   buildSitemapUrls,
   serializeSitemap,
@@ -19,13 +24,6 @@ export type {
   SitemapServices,
   UrlForEntry,
 } from "./sitemap";
-export {
-  issuesFor,
-  checksFor,
-  reportableIssues,
-  ISSUE_SCAN_ROW_BUDGET,
-} from "./widget-source";
-export type { IssueChecks } from "./widget-source";
 // The listing every address-listing output reads, as the plugin's
 // `listedPages` service hands it out, and the AI crawler choices robots.txt
 // answers.
@@ -35,6 +33,13 @@ export type {
   ListingProblem,
 } from "./outputs/listing";
 export type { AiCrawlerChoice } from "./outputs/robots";
+// Languages: the code each of the site's languages is named by in language
+// links and why one is left out, and a page's links to its other languages.
+export { hreflangCodes, hreflangOf } from "./languages/hreflang";
+export type { Hreflang, LanguageCodeProblem } from "./languages/hreflang";
+export { pageLanguageLinks } from "./languages/head";
+export type { PageLanguageLinks } from "./languages/head";
+export type { LanguageLink } from "./languages/links";
 export type {
   CollectionReads,
   EntriesPage,
@@ -105,8 +110,10 @@ export type {
 export { shareImageProblems } from "./social/problems";
 export type { ShareImageProblem, ShareImageReaders } from "./social/problems";
 export type { SocialCardOptions } from "./social/card";
-// Logs the address a not-found page was asked for, from the site's
-// not-found page. Redirects themselves reach requests through the site's
-// Proxy, which `seoPlugin` contributes a handler to.
+// Logs the address a request was not found at, from its headers. A route
+// that answers not found calls `notFoundLogged` from
+// `@nextlyhq/plugin-seo/next`, which calls this. Redirects themselves reach
+// requests through the site's Proxy, which `seoPlugin` contributes a handler
+// to.
 export { logNotFound } from "./not-found/report";
 export type { HeaderReader } from "./not-found/report";

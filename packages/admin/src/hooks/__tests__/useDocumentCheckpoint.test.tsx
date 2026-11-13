@@ -31,6 +31,8 @@ function inDocument(
     /** `null` means the document has never been saved, so there is no id. */
     documentId?: string | null;
     locale?: string;
+    /** The editor's reading of the autosave setting; omitted, it said nothing. */
+    keepsRecoveryPoints?: boolean;
   } = {}
 ) {
   const {
@@ -38,6 +40,7 @@ function inDocument(
     slug = "posts",
     documentId = "e1",
     locale,
+    keepsRecoveryPoints,
   } = options;
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
@@ -46,6 +49,7 @@ function inDocument(
         collectionSlug={slug}
         entryId={documentId ?? undefined}
         isCreateMode={false}
+        keepsRecoveryPoints={keepsRecoveryPoints}
       >
         <EntryLocaleProvider
           value={{
@@ -237,6 +241,47 @@ describe("what switches recording off", () => {
           debounceMs: DEBOUNCE,
         }),
       { wrapper: inDocument() }
+    );
+
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+
+    await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(1));
+  });
+
+  it("records nothing where the editor says the document keeps no recovery points", async () => {
+    // Autosave off: the server refuses every recording, so a field that kept
+    // scheduling them would fill the session with refused requests.
+    const { result } = renderHook(
+      () =>
+        useDocumentCheckpoint({
+          snapshot: { title: "Hi" },
+          debounceMs: DEBOUNCE,
+        }),
+      { wrapper: inDocument({ keepsRecoveryPoints: false }) }
+    );
+
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE * 3));
+    // Settles any recording a timer started, so its absence is real.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(saveSpy).not.toHaveBeenCalled();
+    expect(result.current.status).toBe("idle");
+  });
+
+  it("records where the editor says the document keeps them", async () => {
+    // The same setup with the answer flipped, so the case above fails for the
+    // reason it names and not because nothing could record here at all.
+    const { result } = renderHook(
+      () =>
+        useDocumentCheckpoint({
+          snapshot: { title: "Hi" },
+          debounceMs: DEBOUNCE,
+        }),
+      { wrapper: inDocument({ keepsRecoveryPoints: true }) }
     );
 
     act(() => result.current.schedule());
