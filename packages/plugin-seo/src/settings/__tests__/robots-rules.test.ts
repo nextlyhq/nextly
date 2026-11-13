@@ -139,13 +139,13 @@ describe("readOwnRules: warnings and notes", () => {
     expect(read.refused).toBe(false);
   });
 
-  it("explains a group that names an AI crawler, without refusing it", () => {
+  it("explains a group that names an AI crawler as joined with the AI choice, without refusing it", () => {
     expect(readOwnRules("User-agent: GPTBot\nAllow: /docs/").findings).toEqual([
       {
         line: 1,
         level: "note",
         message:
-          "Line 1 names GPTBot, so for GPTBot this rule replaces the AI tools choice above: it may read /docs/.",
+          "Line 1 names GPTBot, so GPTBot follows this rule joined with what the AI tools choice above asks of it, and no longer the rules for every crawler: it may read /docs/. A page the choice keeps it from opens only with an Allow line.",
       },
     ]);
   });

@@ -197,7 +197,9 @@ function canonicalProblem(facts: PageFacts): Problem[] {
  */
 function robotsBlockedProblem(facts: PageFacts): Problem[] {
   const block = facts.robotsBlock;
-  if (block === undefined) return [];
+  // A page whose canonical names another address is left out of the
+  // sitemap, by the rule `canonicalIsOwn` decides, so it is no conflict.
+  if (block === undefined || !facts.canonicalIsOwn) return [];
   const by =
     block.line === undefined
       ? "Nextly's own robots.txt rule"

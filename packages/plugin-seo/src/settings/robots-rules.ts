@@ -9,7 +9,8 @@
  * robots.txt does not keep a page out of Google's index and Hide from search
  * does; a line no crawler reads is warned about; a line that is not a
  * standard rule is kept with a note; a group naming a crawler by name is
- * said to replace the rules that crawler would otherwise follow.
+ * said to join or take the place of the rules that crawler would otherwise
+ * follow.
  *
  * It imports only the crawler list, so the settings screen reads it without
  * server code.
@@ -503,9 +504,10 @@ function rulesSaid(group: RuleGroup): string {
 }
 
 /**
- * What is said about a group naming a crawler: one the AI tools choice
- * speaks for has its choice replaced; any other named crawler follows only
- * its own group, so it skips the rules for every crawler, the plugin's
+ * What is said about a group naming a crawler. A crawler joins every group
+ * naming it, so one the AI tools choice speaks for follows these rules with
+ * the choice's own group for it, and only an Allow opens what the choice
+ * closes; any named crawler skips the rules for every crawler, the plugin's
  * included.
  */
 function namedFindings(groups: readonly RuleGroup[]): RuleFinding[] {
@@ -515,14 +517,11 @@ function namedFindings(groups: readonly RuleGroup[]): RuleFinding[] {
       if (agent === "*") continue;
       const ai = AI_NAMES.get(agent);
       if (ai !== undefined) {
-        const these =
-          group.rules.length === 1
-            ? "this rule replaces"
-            : "these rules replace";
+        const these = group.rules.length === 1 ? "this rule" : "these rules";
         findings.push({
           line,
           level: "note",
-          message: `Line ${line} names ${ai}, so for ${ai} ${these} the AI tools choice above${rulesSaid(group)}.`,
+          message: `Line ${line} names ${ai}, so ${ai} follows ${these} joined with what the AI tools choice above asks of it, and no longer the rules for every crawler${rulesSaid(group)}. A page the choice keeps it from opens only with an Allow line.`,
         });
       } else {
         findings.push({

@@ -487,9 +487,10 @@ Each line is read as you type, the way crawlers read robots.txt:
   problem list while the rule stands.
 - A misspelt rule (`Dissalow`) is warned about. A line that is not a standard rule, such as
   `Content-Signal`, is kept with a note that crawlers may ignore it.
-- A group naming an AI crawler, such as `User-agent: GPTBot`, replaces the AI tools choice for
-  that crawler, and the screen says so. A group naming any other crawler, such as Googlebot,
-  is followed by that crawler instead of the rules for every crawler, Nextly's own included.
+- A group naming a crawler is followed by that crawler instead of the rules for every crawler,
+  Nextly's own included. For an AI crawler, such as `User-agent: GPTBot`, it is joined with the
+  group the AI tools choice writes for it, so a page the choice keeps it from opens only with an
+  `Allow` line; the screen says so.
 - A rule needs a `User-agent` line above it, and a line holding a control character is
   refused, so nothing in the box can start a group of its own you did not write.
 

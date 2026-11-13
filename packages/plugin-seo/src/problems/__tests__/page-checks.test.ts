@@ -411,3 +411,19 @@ describe("a page robots.txt blocks", () => {
     expect(kinds(pageProblems(hidden))).toEqual([]);
   });
 });
+
+describe("a page robots.txt blocks, whose canonical names another address", () => {
+  it("is no sitemap conflict, since the sitemap leaves such a page out", () => {
+    const problems = pageProblems(
+      facts({
+        robotsBlock: { line: 3, rule: "Disallow: /blog" },
+        canonicalIsOwn: false,
+        answer: {
+          ...facts().answer,
+          canonical: { value: "/original", from: "address" },
+        },
+      })
+    );
+    expect(kinds(problems)).not.toContain("robotsBlocked");
+  });
+});
