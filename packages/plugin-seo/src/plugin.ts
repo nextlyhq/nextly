@@ -739,9 +739,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // settings route as through the plugin's.
     settingsPermission: MANAGE_SEO_PERMISSION,
     // The events the address record announces once a save commits: each
-    // page's addresses, which IndexNow takes its notes from, and that
-    // redirects changed, which the Proxy's kept addresses are dropped on.
-    events: [{ name: ADDRESSES_MOVED }, { name: REDIRECTS_CHANGED }],
+    // page's addresses, which IndexNow takes its notes from; that redirects
+    // changed, which the Proxy's kept addresses are dropped on; and that who
+    // holds an address changed, which expires the page heads built from it.
+    events: [
+      { name: ADDRESSES_MOVED },
+      { name: REDIRECTS_CHANGED },
+      { name: ADDRESS_RECORD_CHANGED },
+    ],
     // The site-wide SEO settings: name, defaults, patterns and brand facts.
     singles: [seoSettingsSingle()],
     // The SEO settings screen, for whoever may read the settings, told what
