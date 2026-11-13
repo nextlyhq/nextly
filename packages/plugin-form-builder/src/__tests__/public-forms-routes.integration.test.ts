@@ -240,6 +240,30 @@ describe("POST /api/forms/:slug/submit", () => {
     expect(body.submissionId).toEqual(expect.any(String));
   });
 
+  it("keeps the page it was sent from, without its query", async () => {
+    const handlers = await bootWithForm(CONTACT);
+
+    const res = await handlers.POST(
+      new Request("http://localhost/api/forms/contact/submit", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          referer: "https://acme.test/contact?ref=ana%40mail.test#form",
+        },
+        body: JSON.stringify({ data: { message: "hello" } }),
+      }),
+      params("forms", "contact", "submit")
+    );
+
+    expect(res.status).toBe(201);
+    const { submissionId } = (await res.json()) as { submissionId: string };
+    const stored = (await current!.nextly.findByID({
+      collection: "form-submissions",
+      id: submissionId,
+    })) as { page?: string | null };
+    expect(stored.page).toBe("https://acme.test/contact");
+  });
+
   it("answers 400 when the body carries no data object", async () => {
     const handlers = await bootWithForm(CONTACT);
 

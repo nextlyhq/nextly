@@ -4,9 +4,10 @@
  *
  * Run through `tsx` by the takeover suite. Arguments: the dialect, the database URL, the lease in
  * seconds and a table prefix. It takes the lock, prints `held`, sends
- * `ALTER TABLE <prefix>_busy ADD COLUMN late integer` through the migration runner (marked with
- * its claim, outside a transaction), and prints `sent` just after sending it. The suite then
- * pauses or kills it while the statement waits; it prints `done` only if the statement landed.
+ * `ALTER TABLE <prefix>_busy ADD COLUMN late varchar(64) DEFAULT '<a literal>'` through the
+ * migration runner as `0007_late value.sql` (marked with its claim, outside a transaction), and
+ * prints `sent` just after sending it. The suite then pauses or kills it while the statement
+ * waits; it prints `done` only if the statement landed.
  */
 import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
@@ -16,6 +17,11 @@ import { installRegistryResolver } from "../../../../../cli/utils/registry-resol
 import { loadDialectTables } from "../../../../../database/dialect-tables";
 import { runMigrationStatements } from "../../../migrate/migration-transaction";
 import { withSchemaLock } from "../../schema-lock";
+
+import {
+  HOLDER_LITERAL,
+  HOLDER_UNIT,
+} from "./schema-lock-statement-holder-names";
 
 const [dialect, url, lease, prefix] = process.argv.slice(2);
 if (!dialect || !url || !lease || !prefix) {
@@ -40,8 +46,11 @@ await withSchemaLock(
     process.stdout.write("held\n");
     const sending = runMigrationStatements(
       adapter,
-      [`ALTER TABLE ${prefix}_busy ADD COLUMN late integer`],
-      { source: "late.sql", transaction: false }
+      // A literal a refusal must never print, in a file whose name needs encoding to be carried.
+      [
+        `ALTER TABLE ${prefix}_busy ADD COLUMN late varchar(64) DEFAULT '${HOLDER_LITERAL}'`,
+      ],
+      { source: HOLDER_UNIT, transaction: false }
     );
     process.stdout.write("sent\n");
     await sending;

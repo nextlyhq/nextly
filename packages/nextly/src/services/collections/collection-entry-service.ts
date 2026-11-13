@@ -20,7 +20,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { HookRegistry } from "@nextly/hooks/hook-registry";
-import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
+import type {
+  RichTextOutputFormat,
+  RichTextStyles,
+} from "@nextly/lib/rich-text-html";
 
 import {
   everyLanguageOf,
@@ -34,6 +37,7 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { assertWellFormedFilter } from "../../domains/collections/query/filter-shape";
+import type { LifecycleParts } from "../../domains/collections/services/all-locales-lifecycle";
 import { CollectionAccessService } from "../../domains/collections/services/collection-access-service";
 import { CollectionBulkService } from "../../domains/collections/services/collection-bulk-service";
 import { CollectionHookService } from "../../domains/collections/services/collection-hook-service";
@@ -47,8 +51,18 @@ import type {
   BulkOperationOptions,
   BulkUpdateEntry,
 } from "../../domains/collections/services/collection-types";
+import {
+  publishGate,
+  type PublishCaller,
+} from "../../domains/collections/services/publish-gate";
+import {
+  publishParts,
+  publishValueRefusal,
+  type PublishPartsRequest,
+} from "../../domains/collections/services/publish-parts";
 import type { DynamicCollectionService } from "../../domains/dynamic-collections";
 import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/types";
+import { EVERY_LOCALE } from "../../domains/i18n/locale-selector";
 import {
   type LocalizationSource,
   localizationNow,
@@ -118,6 +132,27 @@ function refusedFilter<T>(where: unknown): CollectionServiceResult<T> | null {
   }
 }
 
+/**
+ * Who asks a publish of chosen parts to move, as its gate is told: trusted code, an API key on its
+ * own grants (with the owner the request carries), a person, or a visitor with neither.
+ */
+function publishCallerOf(params: {
+  overrideAccess?: boolean;
+  user?: UserContext;
+  authenticatedScope?: AuthenticatedScope;
+}): PublishCaller {
+  if (params.overrideAccess === true) return { kind: "trusted" };
+  const userId = params.user?.id;
+  if (params.authenticatedScope?.actorType === "apiKey") {
+    return {
+      kind: "api-key",
+      ...(userId === undefined ? {} : { userId }),
+      scope: params.authenticatedScope,
+    };
+  }
+  return userId === undefined ? { kind: "visitor" } : { kind: "user", userId };
+}
+
 /** What publishing or unpublishing every language of an entry takes. */
 type EveryLanguageLifecycleParams = {
   collectionName: string;
@@ -156,6 +191,8 @@ type EveryLanguageLifecycleParams = {
   request?: Request;
   /** Seeds the context every hook of this transition shares. */
   context?: Record<string, unknown>;
+  /** The parts the transition moves, where fewer than all; see `LifecycleParts`. */
+  parts?: LifecycleParts;
 };
 
 /**
@@ -307,6 +344,8 @@ export class CollectionEntryService extends BaseService {
       select?: Record<string, boolean>;
       where?: WhereFilter;
       richTextFormat?: RichTextOutputFormat;
+      /** How rich text HTML is styled: `"none"` for classes only. */
+      richTextStyles?: RichTextStyles;
       /** Draft/Published lifecycle scope; forwarded to the query service. */
       status?: "published" | "draft" | "all";
       overrideAccess?: boolean;
@@ -457,6 +496,8 @@ export class CollectionEntryService extends BaseService {
     depth?: number;
     select?: Record<string, boolean>;
     richTextFormat?: RichTextOutputFormat;
+    /** How rich text HTML is styled: `"none"` for classes only. */
+    richTextStyles?: RichTextStyles;
     overrideAccess?: boolean;
     /**
      * Which collections a trusted read may reach as relationships are expanded.
@@ -929,6 +970,18 @@ export class CollectionEntryService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ) {
+    // A save that publishes is judged by the value rules a publish of chosen languages applies,
+    // with the save's own values counted in the language it writes: they go live with it.
+    if (body.status === "published") {
+      const refusal = await this.valueRuleRefusal(
+        params,
+        params.locale === EVERY_LOCALE
+          ? "all"
+          : [params.locale ?? this.localization?.defaultLocale ?? ""],
+        params.locale === EVERY_LOCALE ? undefined : body
+      );
+      if (refusal) return refusal;
+    }
     const result = await withRuleLanguage(
       writeLanguagesFor(this.localization, params.locale),
       () => this.mutationService.updateEntry(params, body, depth)
@@ -937,14 +990,81 @@ export class CollectionEntryService extends BaseService {
     return result;
   }
 
-  /** i18n M7: publish every language of an entry at once (spec §10). */
+  /**
+   * i18n M7: publish every language of an entry at once (spec §10). Refused first where a
+   * language going live breaks a value rule a publish of chosen languages applies, so the two
+   * ways of publishing every language agree.
+   */
   async publishAllLocales(params: EveryLanguageLifecycleParams) {
+    const refusal = await this.valueRuleRefusal(params, "all");
+    if (refusal) return refusal;
+    return this.transitionEveryLanguage(params);
+  }
+
+  /** The transition of every language (or of `params.parts`), judged by its own rules alone. */
+  private async transitionEveryLanguage(params: EveryLanguageLifecycleParams) {
     const result = await withRuleLanguage(
       everyLanguageOf(this.localization),
       () => this.mutationService.publishAllLocales(params)
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
+  }
+
+  /**
+   * Why the value rules refuse putting `locales` of an entry live, or null: read as a publish of
+   * chosen parts reads the entry, with `written`'s translated values laid over the one language
+   * written, since a save that publishes puts them live. Null too where the entry cannot be read:
+   * the write itself answers that.
+   */
+  private async valueRuleRefusal(
+    params: Pick<
+      EveryLanguageLifecycleParams,
+      | "collectionName"
+      | "entryId"
+      | "user"
+      | "overrideAccess"
+      | "authenticatedScope"
+    >,
+    locales: readonly string[] | "all",
+    written?: Readonly<Record<string, unknown>>
+  ): Promise<CollectionServiceResult | null> {
+    // Nothing to read where no value rule could refuse: most collections.
+    if (
+      !(await this.mutationService.valueRulesCanRefuse(params.collectionName))
+    ) {
+      return null;
+    }
+    // The publish rule is asked too: in each language written, or, for every language, in every
+    // language. A caller it refuses is answered by the write's own access refusal, never told
+    // what the entry holds.
+    const read = await this.mutationService.publishPartsReads(params, {
+      action: "publish",
+      locales: locales === "all" ? [] : locales,
+      shared: locales === "all",
+    });
+    if ("answer" in read) return null;
+    if (read.sharedRefusal !== null || read.languageRefusals.size > 0) {
+      return null;
+    }
+    const { state } = read;
+    if (written === undefined || locales === "all") {
+      return publishValueRefusal(state, locales);
+    }
+    const languages = new Map(state.languages);
+    for (const locale of locales) {
+      const stored = languages.get(locale);
+      const own = Object.fromEntries(
+        state.fields
+          .filter(field => field.translatable && field.name in written)
+          .map(field => [field.name, written[field.name]])
+      );
+      languages.set(locale, {
+        live: stored?.live ?? false,
+        values: { ...stored?.values, ...own },
+      });
+    }
+    return publishValueRefusal({ ...state, languages }, locales);
   }
 
   /**
@@ -959,6 +1079,40 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
+   * Publish or unpublish the parts of an entry the request chooses: some of its languages, or
+   * every one, and its shared part, or say what doing so would do.
+   *
+   * @experimental
+   */
+  publishParts(
+    params: EveryLanguageLifecycleParams,
+    request: PublishPartsRequest
+  ) {
+    return publishParts(params.entryId, request, {
+      reads: ask =>
+        withRuleLanguage(everyLanguageOf(this.localization), async () => {
+          const read = await this.mutationService.publishPartsReads(params, {
+            action: request.direction,
+            ...ask,
+          });
+          return "answer" in read ? read.answer : read;
+        }),
+      gate: publishGate(),
+      collection: params.collectionName,
+      caller: publishCallerOf(params),
+      // The transition of every language, told which parts it moves.
+      move: (direction, parts, describe) => {
+        const scoped = parts === undefined ? params : { ...params, parts };
+        if (describe) return this.previewPublishAllLocales(scoped);
+        // The value rules were judged above, with the rest of the request.
+        return direction === "publish"
+          ? this.transitionEveryLanguage(scoped)
+          : this.unpublishAllLocales(scoped);
+      },
+    });
+  }
+
+  /**
    * Take every language of an entry down at once.
    *
    * The counterpart publishing has had since i18n M7 and withdrawing never did.
@@ -966,8 +1120,12 @@ export class CollectionEntryService extends BaseService {
    * have to learn a different call to reverse it.
    */
   async unpublishAllLocales(params: EveryLanguageLifecycleParams) {
+    // Asked of the languages it takes down: every one, or the chosen ones where a request
+    // chooses some, as the request was judged before the transition.
     const result = await withRuleLanguage(
-      everyLanguageOf(this.localization),
+      params.parts === undefined
+        ? everyLanguageOf(this.localization)
+        : { locales: [...params.parts.locales] },
       () => this.mutationService.unpublishAllLocales(params)
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);

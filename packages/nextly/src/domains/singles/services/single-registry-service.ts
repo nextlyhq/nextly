@@ -49,10 +49,10 @@ import {
 import type { Logger } from "../../../shared/types";
 import type { SingleConfig } from "../../../singles/config/types";
 import {
+  fieldSettingsChanged,
   withUnsaidKept,
   type RecordedWriteOptions,
 } from "../../collections/services/collection-registry-service";
-import { dashboardPinsPresent } from "../../dashboard/dashboard-pins";
 import { clearRegistryRowCache } from "../../dynamic-collections/services/collection-row-cache";
 import {
   moveWebhookRecording,
@@ -65,10 +65,6 @@ import {
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
 import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
-import {
-  deleteEntityRegistryRow,
-  mediaUsageTablePresent,
-} from "../../versions/entity-teardown";
 import { resolveVersionsConfig } from "../../versions/resolve-config";
 import { storedWebhookRecording } from "../../webhooks/builder-webhooks";
 import {
@@ -503,10 +499,10 @@ export class SingleRegistryService extends BaseRegistryService<
    * Every Single's slug and label, read without the rest of its record: what
    * a screen naming every Single needs.
    */
-  async getAllLabels(): Promise<
-    Array<Pick<DynamicSingleRecord, "slug" | "label">>
-  > {
-    const records = await this.getAllRecordsWithColumns(["label"]);
+  async getAllLabels(
+    options: { forWrite?: boolean } = {}
+  ): Promise<Array<Pick<DynamicSingleRecord, "slug" | "label">>> {
+    const records = await this.getAllRecordsWithColumns(["label"], options);
     return records.map(({ slug, label }) => ({ slug, label }));
   }
 
@@ -527,6 +523,18 @@ export class SingleRegistryService extends BaseRegistryService<
     options?: ListSinglesOptions
   ): Promise<DynamicSingleRecord[]> {
     return this.getAllRecords(options);
+  }
+
+  /**
+   * Every Single, oldest first, from the registry cache outside a transaction
+   * (`getAllRecordsForRead`): for a read that decides no write, such as a
+   * screen or a widget listing the Singles. A write decides from
+   * `getAllSingles`, which reads them as stored.
+   */
+  // Reached only through the DI container, which the dead-code gate cannot trace.
+  // fallow-ignore-next-line unused-class-member
+  async getAllSinglesForRead(): Promise<DynamicSingleRecord[]> {
+    return this.getAllRecordsForRead();
   }
 
   async listSingles(options?: ListSinglesOptions): Promise<ListSinglesResult> {
@@ -621,10 +629,13 @@ export class SingleRegistryService extends BaseRegistryService<
     const record = this.buildInsertRecord(data, fieldsJson, schemaHash);
 
     try {
-      const result = await this.adapter.insert<DynamicSingleRecord>(
-        this.registryTableName,
-        record,
-        { returning: "*" }
+      // With the stored schema version's count (`writeRegistry`).
+      const result = await this.writeRegistry(() =>
+        this.adapter.insert<DynamicSingleRecord>(
+          this.registryTableName,
+          record,
+          { returning: "*" }
+        )
       );
       // The cached registry row is now out of date.
       clearRegistryRowCache();
@@ -680,6 +691,8 @@ export class SingleRegistryService extends BaseRegistryService<
       record,
       { returning: "*" }
     );
+    // The stored schema version's count moves in the caller's transaction.
+    await this.countWriteOn(tx);
     // The cached registry row is now out of date.
     clearRegistryRowCache();
 
@@ -885,14 +898,18 @@ export class SingleRegistryService extends BaseRegistryService<
 
     try {
       // A slug different from the stored one is a rename, written with
-      // everything keyed by the old slug in one transaction.
+      // everything keyed by the old slug in one transaction. Either moves the
+      // stored schema version's count with it (`writeRegistry`, and
+      // `renameEntity`'s own).
       const results =
         targetSlug === slug
-          ? await this.adapter.update<DynamicSingleRecord>(
-              this.registryTableName,
-              updateData,
-              this.whereEq("slug", slug),
-              { returning: "*" }
+          ? await this.writeRegistry(() =>
+              this.adapter.update<DynamicSingleRecord>(
+                this.registryTableName,
+                updateData,
+                this.whereEq("slug", slug),
+                { returning: "*" }
+              )
             )
           : await this.renameSingleRow(
               { id: existing.id, slug, tableName: existing.tableName },
@@ -1158,16 +1175,12 @@ export class SingleRegistryService extends BaseRegistryService<
       //
       // What is swept, and what is deliberately kept, is for
       // `deleteEntityRegistryRow` to say.
-      // Asked before the transaction opens: see `DashboardTables`.
-      const tables = {
-        dashboardPinsPresent: await dashboardPinsPresent(this.adapter),
-        mediaUsagePresent: await mediaUsageTablePresent(this.adapter),
-      };
-      const { deleted: count, expire } = await this.adapter.transaction(
-        async tx => deleteEntityRegistryRow(tx, "single", slug, tables)
+      // The row, its sweep and the stored schema version's count in one
+      // transaction (`deleteEntityRow`).
+      const { deleted: count, expire } = await this.deleteEntityRow(
+        "single",
+        slug
       );
-      // The cached registry row is now out of date.
-      clearRegistryRowCache();
 
       if (count === 0) {
         // §13.8: generic "Not found." — slug in logContext only.
@@ -1246,6 +1259,9 @@ export class SingleRegistryService extends BaseRegistryService<
         existing,
         !schemaHashesMatch(schemaHash, existing.schemaHash)
       ) ||
+      // Field settings the hash omits (help text, placeholder, hidden): the
+      // stored field list carries them, so a change to one alone rewrites it.
+      fieldSettingsChanged(config.fields, existing.fields) ||
       // A Single's physical table, which a changed `dbName` moves: the row
       // follows it, or reads address a table that is gone.
       declaredSingleTable(config) !== existing.tableName
@@ -1285,7 +1301,7 @@ export class SingleRegistryService extends BaseRegistryService<
         : options.existing;
     const config =
       options.leavesUnsaid === true
-        ? withUnsaidKept(recorded, existing)
+        ? withUnsaidKept(recorded, existing, options.cleared)
         : recorded;
     const decision = this.codeFirstSyncStep(config, existing);
     const { schemaHash } = decision;

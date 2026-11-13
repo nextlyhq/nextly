@@ -36,6 +36,7 @@ import {
   real as sqliteReal,
   numeric as sqliteNumeric,
   index as sqliteIndex,
+  primaryKey as sqlitePrimaryKey,
 } from "drizzle-orm/sqlite-core";
 
 import {
@@ -79,6 +80,7 @@ import {
   getComponentRowColumnDescriptor,
   usesJunctionTable,
   type ColumnDescriptor,
+  type ColumnOrigin,
 } from "../../schema/services/field-column-descriptor";
 import {
   MAX_INDEX_NAME_LENGTH,
@@ -223,7 +225,17 @@ export class FieldGroupSchemaService {
   private readonly dialect: SupportedDialect;
   private readonly q: string;
 
-  constructor(dialect?: SupportedDialect) {
+  /**
+   * @param builtBy The column rule of whoever owns the field group's table: the Schema Builder's
+   *   (`fieldGroup`, the default) or the code's (`codeFirst`), as `builtByFor` names them. A text
+   *   field states no width the same way to both: unbounded for a Builder field group, 255 for a
+   *   code-first one, so a table described with the other rule reads as needing a change it does
+   *   not, or hides one it does.
+   */
+  constructor(
+    dialect?: SupportedDialect,
+    private readonly builtBy: ColumnOrigin = "fieldGroup"
+  ) {
     this.dialect = dialect || env.DB_DIALECT || "postgresql";
     this.q = QUOTE_CHAR[this.dialect];
   }
@@ -615,7 +627,12 @@ export class FieldGroupSchemaService {
     contributed: readonly ExtensionColumn[]
   ): unknown {
     const columns: Record<string, unknown> = {
-      id: sqliteText("id").primaryKey(),
+      // NOT NULL, with the key declared on the table below rather than on the
+      // column. On SQLite a primary key that is not an INTEGER takes NULL
+      // unless it says NOT NULL, as the CREATE above does, and drizzle-kit
+      // drops NOT NULL from a column-level key: a push that rebuilt this
+      // table wrote an id that takes NULL. A table-level key keeps it.
+      id: sqliteText("id").notNull(),
       _parent_id: sqliteText(STORAGE_FORMAT.columns.parentId).notNull(),
       _parent_table: sqliteText(STORAGE_FORMAT.columns.parentTable).notNull(),
       _parent_field: sqliteText(STORAGE_FORMAT.columns.parentField).notNull(),
@@ -640,6 +657,8 @@ export class FieldGroupSchemaService {
       columns as Record<string, never>,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle table column accessor is dialect-typed
       (table: any) => ({
+        // Unnamed, so drizzle-kit names it as it reads the live table's key.
+        pk: sqlitePrimaryKey({ columns: [table.id] }),
         parentIdx: sqliteIndex(
           `${STORAGE_FORMAT.indexPrefix}${tableName}_parent`
         ).on(table._parent_id, table._parent_table, table._parent_field),
@@ -851,7 +870,7 @@ export class FieldGroupSchemaService {
    * An icon's and a text field's columns are read from the descriptor for the SQL and the Drizzle
    * table alike, so they are the columns the desired schema and the diff compare against on every
    * dialect. An icon is `text` on PostgreSQL and SQLite and `varchar(255)` on MySQL; a text field is
-   * bounded by its own `maxLength` and unbounded without one, by the descriptor's field-group rule.
+   * bounded by its own `maxLength`, and without one by the rule of whoever owns the table (`builtBy`).
    * Mapped here a second time, the Drizzle table once declared a MySQL text field `varchar(255)`,
    * and a save that reached drizzle-kit narrowed the TEXT column the CREATE had made.
    */
@@ -859,7 +878,7 @@ export class FieldGroupSchemaService {
     if (!field.name || !(isIconField(field) || isTextField(field))) {
       return null;
     }
-    return getComponentRowColumnDescriptor(field, this.dialect, "fieldGroup");
+    return getComponentRowColumnDescriptor(field, this.dialect, this.builtBy);
   }
 
   /**

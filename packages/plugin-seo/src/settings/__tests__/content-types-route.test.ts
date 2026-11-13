@@ -12,7 +12,10 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   publicAddressOf: async () => ({ status: "resolved", path: "/blog/a" }),
 }));
 
-import { contentTypesRoute } from "../content-types-route";
+import {
+  contentTypesRoute,
+  settingsDocumentRoute,
+} from "../content-types-route";
 
 /**
  * A context for someone holding site-wide SEO, whose one collection keeps
@@ -72,5 +75,53 @@ describe("the content types route", () => {
     expect(body.items[0]?.fields).toEqual([
       { name: "byline", token: "Byline" },
     ]);
+  });
+});
+
+describe("the settings document route", () => {
+  /** What the route answers, its body as the screen reads it. */
+  async function answer(): Promise<{
+    single?: string;
+    serverAddresses?: unknown;
+  }> {
+    const ctx = {
+      ...context(),
+      self: { singles: { "seo-settings": "site-seo" } },
+    } as unknown as PluginRouteContext;
+    const response = await settingsDocumentRoute().handler(
+      new Request("http://x/"),
+      ctx
+    );
+    const json = (await (response as Response).json()) as {
+      data?: unknown;
+    } & Record<string, unknown>;
+    return (json.data ?? json) as {
+      single?: string;
+      serverAddresses?: unknown;
+    };
+  }
+
+  it("names the production addresses the server sets, which win over saved ones", async () => {
+    vi.stubEnv(
+      "NEXTLY_PRODUCTION_ADDRESSES",
+      "https://example.com, https://de.example.com/"
+    );
+    try {
+      expect(await answer()).toEqual({
+        single: "site-seo",
+        serverAddresses: ["https://example.com", "https://de.example.com"],
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("names none where the server sets none", async () => {
+    vi.stubEnv("NEXTLY_PRODUCTION_ADDRESSES", "");
+    try {
+      expect((await answer()).serverAddresses).toEqual([]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

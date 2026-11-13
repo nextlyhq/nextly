@@ -15,8 +15,9 @@
  *   just before the first such migration applies; the rest of the run is an
  *   ordinary one.
  * - None carries it: once the pending migrations apply, the rows from the
- *   configuration, the permissions and grants, and the record with those
- *   rows as its baseline, in one transaction.
+ *   configuration (with those a template's older-format snapshot lists that
+ *   the registry still lacks), the permissions and grants, and the record
+ *   with those rows as its baseline, in one transaction.
  *
  * A migration with no snapshot (hand-written, or a translations companion)
  * says nothing either way and is passed over, as the registry source passes

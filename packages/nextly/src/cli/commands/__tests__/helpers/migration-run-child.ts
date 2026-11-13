@@ -31,6 +31,7 @@ import { createMySqlAdapter } from "@nextlyhq/adapter-mysql";
 import { createPostgresAdapter } from "@nextlyhq/adapter-postgres";
 import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 
+import { asWritten } from "../../../../__tests__/helpers/statement-as-written";
 import { loadDialectTables } from "../../../../database/dialect-tables";
 import { ensureSchemaEventsTable } from "../../../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../../../domains/schema/events/schema-events-repository";
@@ -92,7 +93,7 @@ async function watch<T>(statement: unknown, run: () => Promise<T>): Promise<T> {
   const isWatched =
     !paused &&
     typeof statement === "string" &&
-    statement.trimStart().startsWith(watched as string);
+    asWritten(statement).startsWith(watched as string);
   if (isWatched && when === "before") await pause();
   const result = await run();
   if (isWatched && when === "after") await pause();

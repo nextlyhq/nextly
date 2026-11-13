@@ -102,6 +102,9 @@ export function requiresAuthOnly(service: string, method: string): boolean {
 const ALL_LOCALES_ENTRY_ROUTES: Record<string, string> = {
   "publish-all": "publishAllLocales",
   "unpublish-all": "unpublishAllLocales",
+  // The chosen languages and the shared part, named in the body (@experimental).
+  publish: "publishParts",
+  unpublish: "unpublishParts",
 };
 
 /**
@@ -2880,6 +2883,7 @@ const DASHBOARD_ROUTES: Readonly<
 > = {
   GET: {
     stats: { operation: "list", method: "getDashboardStats" },
+    content: { operation: "list", method: "getDashboardContent" },
     "recent-entries": {
       operation: "list",
       method: "getDashboardRecentEntries",
@@ -2912,6 +2916,7 @@ const DASHBOARD_ROUTES: Readonly<
  * Parse dashboard-related routes.
  *
  *   GET  /api/dashboard/stats          → getDashboardStats
+ *   GET  /api/dashboard/content        → getDashboardContent
  *   GET  /api/dashboard/recent-entries → getDashboardRecentEntries
  *   GET  /api/dashboard/activity       → getDashboardActivity
  *   GET  /api/dashboard/layout         → getWidgetLayout

@@ -21,6 +21,7 @@ export { registerSingleServices } from "./register-singles";
 export { registerUserServices } from "./register-users";
 export { registerVersionServices } from "./register-versions";
 export { registerWebhookServices } from "./register-webhooks";
+export { registerWorkflowComparisonBaselines } from "./register-workflow-baselines";
 export { registerWorkflowNoticeKinds } from "./register-workflow-notices";
 export { resetWidgetRegistries } from "./register-widgets";
 export type { RegistrationContext } from "./types";

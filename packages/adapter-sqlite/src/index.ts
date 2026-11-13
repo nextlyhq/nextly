@@ -35,6 +35,7 @@
  */
 
 import { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 // F17: connect-time DB version check shared across all adapters.
 import {
   createDatabaseError,
@@ -72,9 +73,23 @@ import {
   drizzle,
   type BetterSQLite3Database,
 } from "drizzle-orm/better-sqlite3";
-import { getTableConfig, type SQLiteTable } from "drizzle-orm/sqlite-core";
+import {
+  getTableConfig,
+  integer,
+  sqliteTable,
+  type SQLiteTable,
+} from "drizzle-orm/sqlite-core";
 
 import { registerSqliteFunctions } from "./sql-functions";
+
+/**
+ * A date field's column as the schema generator declares it on SQLite:
+ * `integer` in timestamp mode. Its encoder writes unix seconds, which is what
+ * a `Date` bound to an undeclared key is spelled as.
+ */
+const DATE_FIELD_COLUMN = sqliteTable("nextly_date_field", {
+  at: integer("at", { mode: "timestamp" }),
+}).at;
 
 // Re-export types for convenience
 export type {
@@ -301,7 +316,23 @@ export class SqliteAdapter extends DrizzleAdapter {
       // a fresh clone with `DATABASE_URL=file:./data/app.db` reliably
       // hits this on first run. Create the dir lazily so DATABASE_URL
       // can point anywhere without a separate setup step.
-      if (dbPath !== ":memory:" && !this.config.readonly) {
+      //
+      // Not in `next build`, which writes nothing to the database: there a
+      // file that is not there yet is a database nobody has migrated, and
+      // opening it would create it. The build refuses instead, naming the
+      // command that sets it up, and opens an existing file as it is.
+      const building = isNextBuildPhase();
+      if (building && dbPath !== ":memory:") {
+        const fs = await import("node:fs");
+        if (!fs.existsSync(dbPath)) {
+          throw createDatabaseError({
+            kind: "connection",
+            message:
+              `The SQLite database file ${dbPath} does not exist. ` +
+              "Run `nextly migrate` before `next build`.",
+          });
+        }
+      } else if (dbPath !== ":memory:" && !this.config.readonly) {
         const fs = await import("node:fs");
         const path = await import("node:path");
         const dir = path.dirname(path.resolve(dbPath));
@@ -311,6 +342,7 @@ export class SqliteAdapter extends DrizzleAdapter {
       // Create database instance
       this.db = new Database(dbPath, {
         readonly: this.config.readonly ?? false,
+        fileMustExist: building,
         timeout: this.config.busyTimeout ?? DEFAULT_CONFIG.busyTimeout,
       });
 
@@ -318,11 +350,14 @@ export class SqliteAdapter extends DrizzleAdapter {
       // case call here, whose absence would refuse every such statement.
       registerSqliteFunctions(this.db);
 
-      // Configure WAL mode for better concurrency (unless in-memory or readonly)
+      // Configure WAL mode for better concurrency (unless in-memory or
+      // readonly). Not in `next build`: the journal mode is kept in the file,
+      // so setting it is a write, and the first start after the build sets it.
       if (
         (this.config.wal ?? DEFAULT_CONFIG.wal) &&
         dbPath !== ":memory:" &&
-        !this.config.readonly
+        !this.config.readonly &&
+        !building
       ) {
         this.db.pragma("journal_mode = WAL");
       }
@@ -856,6 +891,13 @@ export class SqliteAdapter extends DrizzleAdapter {
   /**
    * Creates a TransactionContext for the given database connection.
    */
+  /** A `Date` on an undeclared key is spelled as a date field's column spells it. */
+  protected override undeclaredDateColumn(): {
+    mapToDriverValue(value: unknown): unknown;
+  } {
+    return DATE_FIELD_COLUMN;
+  }
+
   /** A table-level `primaryKey({ columns })`, read through the SQLite table config. */
   protected override compositePrimaryKey(
     tableObj: Record<string, unknown>
@@ -1029,16 +1071,18 @@ export class SqliteAdapter extends DrizzleAdapter {
 
       // Adapter-built, as `insert` above is; `transactionUpdate` says why.
       // A column the model does not declare binds as every other value on
-      // this path does, through `sanitizeSqliteValue`. `all` only when the
-      // statement carries RETURNING: better-sqlite3 throws on `all` for a
-      // statement that returns no rows, and on `run` for one that does.
+      // this path does, through `sanitizeSqliteValue`, with a `Date` spelled
+      // first as a date field's column spells it, as the insert's is. `all`
+      // only when the statement carries RETURNING: better-sqlite3 throws on
+      // `all` for a statement that returns no rows, and on `run` for one that
+      // does.
       update: this.transactionUpdate(
         txDb,
         (statement, returnsRows) =>
           returnsRows
             ? txDb().all<Record<string, unknown>>(statement)
             : (txDb().run(statement), undefined),
-        sanitizeSqliteValue
+        value => sanitizeSqliteValue(this.encodeUndeclaredDate(value))
       ),
 
       ...this.createTransactionForwarders(txDb),

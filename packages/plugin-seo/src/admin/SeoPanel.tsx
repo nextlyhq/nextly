@@ -10,12 +10,17 @@
  *
  * @module admin/SeoPanel
  */
-import { navigateTo } from "@nextlyhq/plugin-sdk/admin";
-import { Input, Textarea } from "@nextlyhq/ui";
+import {
+  Alert,
+  AlertDescription,
+  Input,
+  navigateTo,
+  Textarea,
+} from "@nextlyhq/plugin-sdk/admin";
 import { EyeOff, Lock } from "lucide-react";
 import { useId, type ReactNode, type Ref } from "react";
 
-import type { SeoLevel, Sourced } from "../resolver/order";
+import type { Sourced } from "../resolver/order";
 import type { SeoTabContext } from "../tab/contract";
 import {
   characters,
@@ -26,9 +31,9 @@ import {
 
 import { AdvancedSection } from "./advanced";
 import {
-  AutomaticSource,
   CharacterCount,
   Chip,
+  EmptyUses,
   inSentence,
   LinkAction,
   Note,
@@ -36,6 +41,7 @@ import {
   type SourceNames,
 } from "./parts";
 import { PreviewCard } from "./previews";
+import { copyFixes, useMakeFailure, type MakeFailure } from "./share-image-row";
 import {
   isTyped,
   typedText,
@@ -86,47 +92,13 @@ export interface SeoPanelProps {
   documentKey?: string;
 }
 
-/**
- * Why the page stays hidden from search whatever its own switch says: its
- * whole type is hidden, or its route's code hides it. Nothing otherwise.
- */
-function HiddenNote({
-  from,
-  typeLabel,
-}: {
-  from: SeoLevel | undefined;
-  typeLabel: string;
-}): ReactNode {
-  if (from === "type") {
-    return (
-      <Note icon={<EyeOff className="size-4" />}>
-        <b className="font-semibold">
-          Every {inSentence(typeLabel)} page is hidden from search.
-        </b>{" "}
-        This page stays hidden whatever its own switch says. People can still
-        share it.
-      </Note>
-    );
-  }
-  if (from === "code") {
-    return (
-      <Note icon={<EyeOff className="size-4" />}>
-        <b className="font-semibold">
-          Hidden from search by the page&apos;s code.
-        </b>{" "}
-        Its route asks search engines to leave it out, so it stays hidden until
-        a developer changes that. People can still share it.
-      </Note>
-    );
-  }
-  return null;
-}
-
 /** The values whose problems the Advanced section holds. */
 const ADVANCED_VALUES: readonly string[] = ["structuredData", "image"];
 
 export function SeoPanel(props: SeoPanelProps): ReactNode {
   const { context, answers, problems, values, writable, errors, onSet } = props;
+  // Whether the last share image copy asked for from the notices failed.
+  const makeFailure = useMakeFailure(values.ogImage);
   const names: SourceNames = {
     typeLabel: context?.typeLabel ?? "page",
     fieldLabels: context?.fieldLabels ?? {},
@@ -142,12 +114,20 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
           who manages the site's SEO to change it.
         </Note>
       ) : null}
-      <HiddenNote from={answer?.robots.from} typeLabel={names.typeLabel} />
-      <PreviewCard
-        answer={answer}
-        site={context?.site}
-        status={props.status}
-        sharedTitleTyped={isTyped(values.socialTitle)}
+      {answer?.robots.from === "type" ? (
+        <Note icon={<EyeOff className="size-4" />}>
+          <b className="font-semibold">
+            Every {inSentence(names.typeLabel)} page is hidden from search.
+          </b>{" "}
+          This page stays hidden whatever its own switch says. People can still
+          share it.
+        </Note>
+      ) : null}
+      <PreviewCard answer={answer} site={context?.site} status={props.status} />
+      <ProblemNotices
+        problems={problems}
+        onMake={makerOf(props, makeFailure.track)}
+        makeFailed={makeFailure.failed}
       />
       <PageTextField
         label="Title on Google"
@@ -202,6 +182,70 @@ export function SeoPanel(props: SeoPanelProps): ReactNode {
       {props.receivedHref === undefined ? null : (
         <ReceivedLink href={props.receivedHref} />
       )}
+    </div>
+  );
+}
+
+/**
+ * Each problem the page has, as the admin's notice, under the previews: what
+ * is wrong in one sentence, and for a share image networks can't show, the
+ * one action that makes a copy that they can.
+ */
+/**
+ * What makes a share image of the right size from the notices, where the
+ * page's image is one a copy fixes and the person may change the page.
+ */
+function makerOf(
+  props: SeoPanelProps,
+  track: MakeFailure["track"]
+): (() => void) | undefined {
+  const make = props.onMakeShareImage;
+  const fixable = copyFixes(props.context?.shareImage?.problems);
+  // Only where the group declares a share image, as the Advanced row is.
+  const declared = props.context?.fields.includes("ogImage") ?? true;
+  if (!props.writable || make === undefined || !fixable || !declared) {
+    return undefined;
+  }
+  // A copy that could not be made answers with no image: said beside the
+  // notice, so trying again is a choice rather than a silent repeat.
+  return () => track(make());
+}
+
+function ProblemNotices({
+  problems,
+  onMake,
+  makeFailed,
+}: {
+  problems: readonly SeoProblem[];
+  /** Makes a share image networks can show, where one would fix it. */
+  onMake: (() => void) | undefined;
+  /** Whether the last copy asked for could not be made. */
+  makeFailed: boolean;
+}): ReactNode {
+  if (problems.length === 0) return null;
+  return (
+    <div className="grid gap-2">
+      {problems.map((problem, index) => (
+        <Alert
+          key={`${problem.id}-${index}`}
+          variant="warning"
+          role="status"
+          className="items-center px-3.5 py-2.5"
+        >
+          <AlertDescription className="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[13px]">
+            <span>{problem.text}</span>
+            {problem.id === "share-image" && onMake !== undefined ? (
+              <LinkAction onClick={onMake}>Make a share image</LinkAction>
+            ) : null}
+            {problem.id === "share-image" && makeFailed ? (
+              <span className="basis-full font-medium text-danger-text">
+                The share image couldn&apos;t be made. Try again, or choose
+                another image under Advanced.
+              </span>
+            ) : null}
+          </AlertDescription>
+        </Alert>
+      ))}
     </div>
   );
 }
@@ -265,7 +309,9 @@ function FieldSource({
   if (automatic !== undefined) {
     return (
       <SourceRow id={id}>
-        <AutomaticSource sourced={automatic} value={value} names={names} />
+        <span>
+          <EmptyUses sourced={automatic} value={value} names={names} />
+        </span>
       </SourceRow>
     );
   }
@@ -296,6 +342,12 @@ export interface SeoTextFieldProps {
   multiline?: boolean;
   /** The most characters the field takes, where it takes no more. */
   maxLength?: number;
+  /**
+   * Drawn as the SEO tab draws its two fields: "· optional" after the label,
+   * the sentence read out but not shown, and no count, since the problems
+   * above the fields say when a value is too long.
+   */
+  quiet?: boolean;
   inputRef?: Ref<HTMLInputElement>;
   /** Sets the value; `null` returns it to automatic. */
   onChange: (next: string | null) => void;
@@ -345,6 +397,37 @@ function FieldError({
   );
 }
 
+/** A field's label, with "· optional" beside it where it is drawn quiet. */
+function FieldLabel({
+  id,
+  label,
+  optional,
+}: {
+  id: string;
+  label: string;
+  optional: boolean;
+}): ReactNode {
+  return (
+    <span className="text-sm">
+      <label htmlFor={id} className="font-medium text-foreground">
+        {label}
+      </label>
+      {/* Beside the label rather than in it, so the field is named by its
+          label alone. */}
+      {optional ? (
+        <span className="text-muted-foreground"> · optional</span>
+      ) : null}
+    </span>
+  );
+}
+
+/** The sentence under a label: shown, or only read out where drawn quiet. */
+function helpClass(quiet: boolean): string {
+  return quiet
+    ? "sr-only"
+    : "m-0 text-[12.5px] leading-[1.45] text-muted-foreground";
+}
+
 /**
  * A page's title or description: a count of what will be used, one plain
  * sentence, the field with the automatic value as its placeholder, and the
@@ -365,6 +448,7 @@ export function SeoTextField({
   maxLength,
   inputRef,
   onChange,
+  quiet = false,
 }: SeoTextFieldProps): ReactNode {
   const id = useId();
   const field = controlProps(id, value, placeholder, writable, error, onChange);
@@ -372,18 +456,10 @@ export function SeoTextField({
   return (
     <div className="grid gap-1.5">
       <div className="flex items-baseline justify-between gap-2.5">
-        <label
-          htmlFor={id}
-          className="text-[13px] font-semibold text-foreground"
-        >
-          {label}
-        </label>
-        <CharacterCount count={count} limit={limit} />
+        <FieldLabel id={id} label={label} optional={quiet} />
+        {quiet ? null : <CharacterCount count={count} limit={limit} />}
       </div>
-      <p
-        id={`${id}-help`}
-        className="m-0 text-[12.5px] leading-[1.45] text-muted-foreground"
-      >
+      <p id={`${id}-help`} className={helpClass(quiet)}>
         {help}
       </p>
       {multiline ? (
@@ -443,6 +519,7 @@ function PageTextField({
       writable={writable}
       multiline={multiline}
       onChange={onChange}
+      quiet
       source={id => (
         <FieldSource
           id={id}

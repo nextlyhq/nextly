@@ -581,8 +581,11 @@ export default defineConfig({
       // The two-instance suite and its fixture app read runtime harness flags
       // no turbo task builds against, as the playground does: the driver sets
       // them for the processes it starts, Next.js sets NEXT_RUNTIME, and the
-      // suite runs through pnpm rather than turbo.
-      files: ["e2e/multi-instance/**"],
+      // suite runs through pnpm rather than turbo. The admin speed check is
+      // the same: `node e2e/admin-speed/measure.mjs` sets its port and its
+      // preload's statement log and delay for the server it starts, and no
+      // turbo task runs it.
+      files: ["e2e/multi-instance/**", "e2e/admin-speed/**"],
       rules: { "turbo/no-undeclared-env-vars": "off" },
     },
     {

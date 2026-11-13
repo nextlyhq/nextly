@@ -155,6 +155,14 @@ const globalForInit = globalThis as unknown as {
 };
 
 /**
+ * Run `task` once the current turn of the event loop, the rest of the start
+ * included, has finished: background work the start does not wait for.
+ */
+function afterThisStart(task: () => Promise<void>): Promise<void> {
+  return new Promise<void>(resolve => setImmediate(resolve)).then(task);
+}
+
+/**
  * Settles once the work the newest `getNextly()` start left running after it
  * resolved has finished: the post-initialisation tasks it does not wait for.
  * Never rejects, since each task catches its own errors. Internal, for tests
@@ -187,6 +195,8 @@ function buildNextlyInstance(
     findByID: directAPI.findByID.bind(directAPI),
     create: directAPI.create.bind(directAPI),
     update: directAPI.update.bind(directAPI),
+    publish: directAPI.publish.bind(directAPI),
+    unpublish: directAPI.unpublish.bind(directAPI),
     delete: directAPI.delete.bind(directAPI),
     count: directAPI.count.bind(directAPI),
     group: directAPI.group.bind(directAPI),
@@ -600,8 +610,11 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // and the like) run in the background so that getNextly() returns as
         // soon as the database is ready. Each is idempotent and catches its own
         // errors.
-        // Kept, so `startSettled` can tell when this work has finished.
-        globalForInit.__nextly_postInitTasks = runPostInitTasks();
+        // Kept, so `startSettled` can tell when this work has finished. Begun
+        // once this start has handed its instance over, not inside it: on
+        // SQLite, whose driver blocks, a task begun here would run its first
+        // statements before getNextly() resolved, on the start's own time.
+        globalForInit.__nextly_postInitTasks = afterThisStart(runPostInitTasks);
       } else {
         // Registered by the request-path boot, which may still be seeding: wait
         // for it, so this boot does not serve before the roles are written.

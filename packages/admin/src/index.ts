@@ -366,7 +366,80 @@ export type {
   CellRendererDefinition,
   RowAction,
   BulkAction,
+  DataTableGroup,
+  DataTableGrouping,
+  DataTableRowDetail,
 } from "./components/ui/table/data-table";
+
+// The list surface around that table — search, filters, the columns menu, the
+// empty state and the slots above and below — and the hooks that remember a
+// reader's column choice. Re-exported by `@nextlyhq/plugin-sdk/admin` so a
+// plugin's list page is the admin's own list, not a copy of its look.
+export {
+  ListView,
+  ListToolbar,
+  ListColumnsMenu,
+  ListEmptyState,
+  useListColumns,
+  useTableColumns,
+} from "./components/ui/table/list-view";
+export type {
+  ListViewProps,
+  ListToolbarProps,
+  ListColumnsControl,
+  ListEmpty,
+  ListSearch,
+  ListSlots,
+  UseListColumnsOptions,
+  UseTableColumnsOptions,
+  UseTableColumnsResult,
+} from "./components/ui/table/list-view";
+
+// The trail a page draws in the top bar, the segmented control, the checklist
+// with progress and the grouped settings row: the admin's own building blocks,
+// re-exported by `@nextlyhq/plugin-sdk/admin` for a plugin's pages.
+export { Breadcrumbs } from "./components/shared/breadcrumbs";
+export type {
+  BreadcrumbItem,
+  BreadcrumbsProps,
+} from "./components/shared/breadcrumbs";
+export { SegmentedChoice } from "./components/ui/segmented-choice";
+export type {
+  SegmentedChoiceProps,
+  SegmentedChoiceSize,
+  SegmentedOption,
+} from "./components/ui/segmented-choice";
+export {
+  Checklist,
+  ChecklistItem,
+  ChecklistMark,
+  ChecklistProgress,
+} from "./components/shared/checklist";
+export type {
+  ChecklistProps,
+  ChecklistItemProps,
+  ChecklistMarkProps,
+  ChecklistProgressProps,
+  ChecklistStatus,
+  ChecklistDoneStyle,
+} from "./components/shared/checklist";
+export { SettingsRowGroup } from "./components/features/settings/SettingsRowGroup";
+export type { SettingsRowGroupProps } from "./components/features/settings/SettingsRowGroup";
+
+// Where a flow of a few steps is, the stepper the email provider setup draws:
+// re-exported by `@nextlyhq/plugin-sdk/admin` for a plugin's own flow.
+export { Stepper } from "./components/ui/stepper";
+export type {
+  StepperProps,
+  StepperStep,
+  StepState,
+} from "./components/ui/stepper";
+
+// The drop area a file is dragged onto or chosen from, as the Media library
+// draws it: re-exported by `@nextlyhq/plugin-sdk/admin` for a plugin screen
+// that reads a file itself, such as an import.
+export { FileDropArea } from "./components/ui/file-drop-area";
+export type { FileDropAreaProps } from "./components/ui/file-drop-area";
 
 // A plugin's own admin UI reading a route that plugin contributed. The two
 // halves of a plugin — its HTTP routes and its admin components — had no way to
@@ -544,6 +617,7 @@ export { Label } from "@nextlyhq/ui";
 export { FieldShell, FormSection, FormActions } from "@nextlyhq/ui";
 /** @experimental */
 export type {
+  FieldLayout,
   FieldShellProps,
   FieldShellRenderProps,
   FieldWidth,

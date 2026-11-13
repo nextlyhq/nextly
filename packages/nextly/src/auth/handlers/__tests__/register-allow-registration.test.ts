@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { sanitizeConfig } from "../../../shared/types/config";
 import { buildAuthRouterDeps } from "../deps-bridge";
 import { handleRegister } from "../register";
+import { routeAuthRequest } from "../router";
 
 const ORIGIN = "http://localhost:3000";
 
@@ -93,6 +94,46 @@ describe("the registration choice in the app's configuration", () => {
     expect(sanitizeConfig({} as never).auth.allowRegistration).toBe(false);
     expect(
       sanitizeConfig({ auth: { allowRegistration: true } } as never).auth
+        .allowRegistration
+    ).toBe(true);
+  });
+});
+
+describe("the registration choice, as the admin's signed-out screens learn it", () => {
+  const services = (config: unknown) => (name: string) =>
+    name === "config"
+      ? config
+      : name === "adapter"
+        ? { getDrizzle: () => ({}) }
+        : {};
+
+  /** What setup-status answers for an app configured with `config`. */
+  async function setupStatus(
+    config: unknown
+  ): Promise<Record<string, unknown>> {
+    const res = await routeAuthRequest(
+      new Request(`${ORIGIN}/admin/api/auth/setup-status`),
+      "setup-status",
+      {
+        ...buildAuthRouterDeps(services(config)),
+        // The install has its administrator; the lookup is not under test.
+        hasAdministrator: async () => true,
+      }
+    );
+    expect(res?.status).toBe(200);
+    return (await res?.json()) as Record<string, unknown>;
+  }
+
+  // The sign-in page offers "Sign up", and the register page its form, only
+  // where the register route would take the request: from the one flag the
+  // register handler is refused by, never a second reading of the config.
+  it("is served by setup-status as off when the app says nothing", async () => {
+    expect((await setupStatus({ auth: {} })).allowRegistration).toBe(false);
+  });
+
+  it("is served by setup-status as on once the app turns it on", async () => {
+    expect(
+      (await setupStatus({ auth: { allowRegistration: true } }))
         .allowRegistration
     ).toBe(true);
   });

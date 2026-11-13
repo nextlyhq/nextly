@@ -26,6 +26,11 @@ import {
   installDependencies,
   nextlyPackagesToInstall,
 } from "./installers/dependencies";
+import {
+  initialMigrationCommand,
+  writeInitialMigration,
+  writesInitialMigration,
+} from "./installers/initial-migration";
 import { recordLaunchingPackageManager } from "./installers/package-manager-field";
 import {
   resolveTemplateSource,
@@ -776,6 +781,32 @@ export async function createNextly(
     }
   }
 
+  // --- A code-first project's first migration ---
+
+  // After the install, which brings `nextly`, and the `.env`, which names the
+  // database the migration is written for. A project nothing was installed
+  // into has the command named in its next steps instead.
+  const initialMigration = writesInitialMigration({
+    isFreshProject,
+    projectType,
+    approach,
+  });
+  if (initialMigration && !skipInstall) {
+    const s = p.spinner();
+    s.start("Writing the first migration from your config...");
+    const failed = await writeInitialMigration(cwd, projectInfo.packageManager);
+    if (failed === undefined) {
+      s.stop("First migration written");
+    } else {
+      s.stop("The first migration was not written");
+      // The project is whole without it; the build's `nextly migrate` needs
+      // it, so the command is named for the person to run.
+      p.log.warn(
+        `${failed}\nRun ${initialMigrationCommand(projectInfo.packageManager)} in the project before its first build.`
+      );
+    }
+  }
+
   // --- Success output ---
 
   const pm = projectInfo.packageManager;
@@ -815,6 +846,14 @@ export async function createNextly(
       `  Use it in an app: add ${pc.dim("myPlugin()")} to ${pc.dim("plugins")} in nextly.config.ts.`
     );
   } else {
+    if (initialMigration && skipInstall) {
+      // Run once the dependencies are installed: the build's `nextly migrate`
+      // applies the migration this writes from the config.
+      lines.push(`  ${pc.bold(initialMigrationCommand(pm))}`);
+      lines.push(
+        `  ${pc.dim("→ after installing: writes the first migration your build applies")}`
+      );
+    }
     lines.push(`  ${pc.bold(devCommand)}`);
     lines.push("");
 

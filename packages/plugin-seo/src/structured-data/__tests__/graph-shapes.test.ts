@@ -22,7 +22,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
-import { claimKey } from "../../address-record/rows";
+import { keepRecord } from "../../address-record/__tests__/record-double";
 import { buildStructuredData, type StructuredDataNode } from "../graph";
 import type { StructuredDataRules } from "../rules";
 
@@ -39,39 +39,22 @@ vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
   addressOfRequest: async (url: URL) => ({ locale: "en", path: url.pathname }),
 }));
 
+vi.mock("../../address-record/store", async importOriginal => ({
+  ...(await importOriginal()),
+  ...(await import("../../address-record/__tests__/record-double"))
+    .recordDouble,
+}));
+
 const ORIGIN = "https://nextlyhq.com";
 
 /** A site whose blog index is a Single holding `/blog`. */
 function context(): PluginContext {
-  return {
+  const ctx = {
     self: { collections: {} },
     config: {},
     publicAddresses: { defaultLanguage: async () => "en" },
     services: {
-      ownCollections: {
-        listEntries: async (
-          slug: string,
-          query: { where?: { claimKey?: { in?: string[] } } }
-        ) =>
-          slug === "nx_seo_addresses" &&
-          (query.where?.claimKey?.in ?? []).includes(
-            claimKey("address", "en", "/blog")
-          )
-            ? {
-                data: [
-                  {
-                    id: "r1",
-                    kind: "address",
-                    locale: "en",
-                    path: "/blog",
-                    holderCollection: "single:blog",
-                    holderId: "1",
-                    holderLabel: "Blog",
-                  },
-                ],
-              }
-            : { data: [] },
-      },
+      ownCollections: { listEntries: async () => ({ data: [] }) },
       collections: {
         getCollection: async (slug: string) => ({
           name: slug,
@@ -85,6 +68,16 @@ function context(): PluginContext {
       singles: { list: async () => ({ total: 0, data: [] }) },
     },
   } as unknown as PluginContext;
+  keepRecord(ctx, [
+    {
+      locale: "en",
+      path: "/blog",
+      holderCollection: "single:blog",
+      holderId: "1",
+      holderLabel: "Blog",
+    },
+  ]);
+  return ctx;
 }
 
 /** The brand facts and choices a site like nextlyhq.com would set. */
