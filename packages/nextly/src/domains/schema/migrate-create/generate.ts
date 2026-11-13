@@ -366,6 +366,21 @@ export interface GenerateArgs {
    */
   foreignKeysOfNewTables?: ReadonlyMap<string, readonly ForeignKeySpec[]>;
   /**
+   * The relationship keys a table that already exists holds before this file and after it, by
+   * table: a Schema Builder save that adds, moves or drops one. Read on SQLite only, which changes
+   * a key by rebuilding its table: the two sides are set on the previous and desired snapshots, so
+   * the diff plans the change and the table is rebuilt with every key it keeps. PostgreSQL and
+   * MySQL alter a key in place, through the statements the caller appends. Left out of the
+   * snapshot, as the keys of a new table are.
+   */
+  foreignKeysOfExistingTables?: ReadonlyMap<
+    string,
+    {
+      before: readonly ForeignKeySpec[];
+      after: readonly ForeignKeySpec[];
+    }
+  >;
+  /**
    * The person's answer to rows that do not fit a column this migration makes
    * required: fill them, or delete them (`resolution-statements`). The column
    * is created or kept nullable, the statement runs, then it is made NOT NULL,
@@ -710,6 +725,32 @@ function withKeysOfNewTables(
   };
 }
 
+/**
+ * `snapshot` with the keys `keys` gives each table on one side, for a table whose keys change
+ * (`foreignKeysOfExistingTables`). A table whose keys are the same on both sides is left as it is,
+ * so nothing is planned for it.
+ */
+function withKeysOfExistingTables(
+  snapshot: NextlySchemaSnapshot,
+  keys: GenerateArgs["foreignKeysOfExistingTables"],
+  side: "before" | "after"
+): NextlySchemaSnapshot {
+  if (keys === undefined || keys.size === 0) return snapshot;
+  return {
+    ...snapshot,
+    tables: snapshot.tables.map(table => {
+      const change = keys.get(table.name);
+      if (
+        change === undefined ||
+        JSON.stringify(change.before) === JSON.stringify(change.after)
+      ) {
+        return table;
+      }
+      return { ...table, foreignKeys: [...change[side]] };
+    }),
+  };
+}
+
 /** Statements a caller adds to one side of a file, before and after the generated ones. */
 export interface AddedStatements {
   first: readonly string[];
@@ -805,11 +846,21 @@ export async function generateMigration(
   });
   // Scoped, every table outside the scope stays as the latest snapshot has it.
   const stream = streamInScope(args.scope, unscoped, previous?.data ?? null);
-  const previousSnapshot = stream.previous;
-  const desiredSnapshot = withKeysOfNewTables(
-    stream.desired,
-    previousSnapshot,
-    args.foreignKeysOfNewTables
+  const existingKeys =
+    args.dialect === "sqlite" ? args.foreignKeysOfExistingTables : undefined;
+  const previousSnapshot = withKeysOfExistingTables(
+    stream.previous,
+    existingKeys,
+    "before"
+  );
+  const desiredSnapshot = withKeysOfExistingTables(
+    withKeysOfNewTables(
+      stream.desired,
+      previousSnapshot,
+      args.foreignKeysOfNewTables
+    ),
+    existingKeys,
+    "after"
   );
 
   // 2a. Plan companion `_locales` migrations for localized collections, singles, AND
