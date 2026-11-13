@@ -32,66 +32,76 @@ export interface AnswersGiven {
  * choices it applies to.
  */
 export function missingAnswers(given: AnswersGiven): string[] {
-  const missing: string[] = [];
-  const { defaults } = given;
-
-  if (given.existingProject) {
-    if (!defaults) {
-      missing.push("--yes (to add Nextly to the Next.js app in this folder)");
-    }
-  } else {
-    if (!given.folderGiven && !defaults) {
-      missing.push(
-        "a project folder as the first argument (create-nextly-app my-app, or . for this folder)"
-      );
-    }
-    // No flag answers this one: emptying or overlaying a folder is never a default.
-    if (given.targetNotEmpty) {
-      missing.push(
-        `a new or empty folder: ${given.targetLabel} already holds files`
-      );
-    }
-  }
-
   const template =
     given.projectType ??
-    (defaults || given.existingProject ? "blank" : undefined);
-  if (!template) {
-    missing.push(`--template <${getAvailableTemplateNames().join("|")}>`);
-  }
+    (given.defaults || given.existingProject ? "blank" : undefined);
+  return [
+    ...targetAnswers(given),
+    ...(template
+      ? []
+      : [`--template <${getAvailableTemplateNames().join("|")}>`]),
+    ...approachAnswers(given, template),
+    ...(template === "plugin" ? [] : appAnswers(given)),
+  ];
+}
 
-  if (!given.approach && !defaults) {
-    const withApproaches = getAvailableTemplateNames().filter(
-      templateHasApproaches
+/** Where the project goes: the folder, or consent to an existing app. */
+function targetAnswers(given: AnswersGiven): string[] {
+  if (given.existingProject) {
+    return given.defaults
+      ? []
+      : ["--yes (to add Nextly to the Next.js app in this folder)"];
+  }
+  const missing: string[] = [];
+  if (!given.folderGiven && !given.defaults) {
+    missing.push(
+      "a project folder as the first argument (create-nextly-app my-app, or . for this folder)"
     );
-    if (template === undefined && withApproaches.length > 0) {
-      missing.push(
-        `--approach <${APPROACHES.join("|")}> (for the ${withApproaches.join(", ")} template)`
-      );
-    } else if (template && withApproaches.includes(template)) {
-      missing.push(`--approach <${APPROACHES.join("|")}>`);
-    }
   }
-
-  if (template !== "plugin") {
-    if (!given.database && !defaults) {
-      missing.push(`--database <${DATABASES.join("|")}>`);
-    }
-    const database = given.database ?? (defaults ? "sqlite" : undefined);
-    if (!given.databaseUrl && !defaults && database !== "sqlite") {
-      missing.push(
-        database
-          ? "--database-url <url>, or --database-url - to read it from standard input"
-          : `--database-url <url>, or --database-url - to read it from standard input (for ${SERVER_DATABASES.join(", ")})`
-      );
-    }
-    if (given.skills === undefined && !defaults) {
-      missing.push(
-        "--no-skills to leave out the skills for coding agents, or --yes to add them"
-      );
-    }
+  // No flag answers this one: emptying or overlaying a folder is never a default.
+  if (given.targetNotEmpty) {
+    missing.push(
+      `a new or empty folder: ${given.targetLabel} already holds files`
+    );
   }
+  return missing;
+}
 
+/** The schema approach, for a template that has approaches or may. */
+function approachAnswers(
+  given: AnswersGiven,
+  template: ProjectType | undefined
+): string[] {
+  if (given.approach || given.defaults) return [];
+  const flag = `--approach <${APPROACHES.join("|")}>`;
+  const withApproaches = getAvailableTemplateNames().filter(
+    templateHasApproaches
+  );
+  if (template === undefined) {
+    return withApproaches.length > 0
+      ? [`${flag} (for the ${withApproaches.join(", ")} template)`]
+      : [];
+  }
+  return withApproaches.includes(template) ? [flag] : [];
+}
+
+/** An app's database, its connection string, and the skills for agents. */
+function appAnswers(given: AnswersGiven): string[] {
+  if (given.defaults) return [];
+  const missing: string[] = [];
+  if (!given.database) missing.push(`--database <${DATABASES.join("|")}>`);
+  if (!given.databaseUrl && given.database !== "sqlite") {
+    const stdin =
+      "--database-url <url>, or --database-url - to read it from standard input";
+    missing.push(
+      given.database ? stdin : `${stdin} (for ${SERVER_DATABASES.join(", ")})`
+    );
+  }
+  if (given.skills === undefined) {
+    missing.push(
+      "--no-skills to leave out the skills for coding agents, or --yes to add them"
+    );
+  }
   return missing;
 }
 

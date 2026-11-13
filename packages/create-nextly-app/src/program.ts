@@ -20,8 +20,6 @@ import { getAvailableTemplateNames } from "./lib/templates";
 import type {
   CreateNextlyOptions,
   DatabaseType,
-  PackageManager,
-  ProjectApproach,
   ProjectType,
 } from "./types";
 
@@ -49,11 +47,127 @@ interface CliOptions {
   skills?: boolean;
 }
 
+/**
+ * The argument values that may be a connection string: any holding `://`
+ * (whole, and after `=` in `--flag=value`), and the value given to any flag
+ * spelt like `--database-url`, misspelt or not. Masked whole wherever a
+ * message quotes them, since a fragment cut at a quote or a space would
+ * otherwise slip through a URL pattern.
+ */
+function secretArguments(args: readonly string[]): string[] {
+  const secrets: string[] = [];
+  args.forEach((arg, index) => {
+    const equals = arg.indexOf("=");
+    const flag = equals < 0 ? arg : arg.slice(0, equals);
+    const value = equals < 0 ? arg : arg.slice(equals + 1);
+    if (flag.startsWith("--database-url")) {
+      if (equals >= 0) secrets.push(value);
+      else if (args[index + 1] !== undefined) secrets.push(args[index + 1]);
+    }
+    if (arg.includes("://")) secrets.push(arg, value);
+  });
+  return secrets.filter(secret => secret.length > 0 && secret !== "-");
+}
+
+/** `text` with every secret argument and every URL masked. */
+function scrubbed(text: string, args: readonly string[]): string {
+  let out = text;
+  for (const secret of secretArguments(args)) {
+    out = redactConnection(out, secret);
+  }
+  return redactUrlsIn(out);
+}
+
 /** Stop with a one-line refusal, before anything is written. */
-function refuse(message: string): never {
+function refuse(message: string, args: readonly string[]): never {
   // A value echoed back may be a connection string given to the wrong flag.
-  console.error(`Error: ${redactUrlsIn(message)}`);
+  console.error(`Error: ${scrubbed(message, args)}`);
   process.exit(1);
+}
+
+/** The value of a choice flag, refused with the nearest choice if unknown. */
+function checkChoice<T extends string>(
+  flag: string,
+  value: string | undefined,
+  choices: readonly T[],
+  args: readonly string[]
+): T | undefined {
+  if (value === undefined) return undefined;
+  if (!choices.includes(value as T)) {
+    refuse(invalidChoiceMessage(flag, value, choices), args);
+  }
+  return value as T;
+}
+
+/** The checked answers from the command line, before any is acted on. */
+function checkedAnswers(
+  directory: string | undefined,
+  options: CliOptions,
+  args: readonly string[]
+) {
+  const { projectName, installInCwd } = resolveProjectArg(directory);
+  // Reject malformed positional arguments up-front so the user sees the
+  // error before the interactive flow starts. The interactive prompt
+  // applies the same validator, so the two entry points stay in sync.
+  const nameError = projectName ? validateProjectName(projectName) : undefined;
+  if (nameError) {
+    refuse(`Invalid project name '${projectName}'. ${nameError}.`, args);
+  }
+  // Against the template registry, which the interactive prompt offers too.
+  const templateError = options.template
+    ? validateTemplateName(options.template)
+    : undefined;
+  if (templateError) refuse(templateError, args);
+  return {
+    projectName,
+    installInCwd,
+    projectType: options.template as ProjectType | undefined,
+    approach: checkChoice("--approach", options.approach, APPROACHES, args),
+    database: checkChoice("--database", options.database, DATABASES, args),
+    packageManager: checkChoice(
+      "--package-manager",
+      options.packageManager,
+      PACKAGE_MANAGERS,
+      args
+    ),
+  };
+}
+
+/**
+ * The connection string from `--database-url`, read from standard input for
+ * `-`, and checked against the database it is for.
+ */
+async function databaseUrlFrom(
+  options: CliOptions,
+  database: DatabaseType | undefined,
+  stdin: NodeJS.ReadableStream & { isTTY?: boolean },
+  args: readonly string[]
+): Promise<{ url: string | undefined; fromStdin: boolean }> {
+  const fromStdin = options.databaseUrl === "-";
+  let url: string | undefined;
+  if (fromStdin) {
+    if (stdin.isTTY) {
+      refuse(
+        "--database-url - reads the connection string from standard input, " +
+          `which is a terminal here. Pipe it in: printf '%s' "$DATABASE_URL" | create-nextly-app ... --database-url -`,
+        args
+      );
+    }
+    url = await readAll(stdin);
+    if (!url) {
+      refuse(
+        "--database-url - read nothing from standard input. Pipe the connection string in.",
+        args
+      );
+    }
+  } else if (options.databaseUrl !== undefined) {
+    url = options.databaseUrl.trim();
+    if (!url) refuse("--database-url was given an empty value.", args);
+  }
+  const mismatch =
+    url === undefined ? undefined : connectionMismatch(database, url);
+  if (mismatch) refuse(mismatch, [...args, url as string]);
+  return { url, fromStdin };
 }
 
 /** Everything on standard input, trimmed: where `--database-url -` reads. */
@@ -82,7 +196,7 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
     // would print the password: every error it writes is scrubbed of URLs.
     .showSuggestionAfterError(true)
     .configureOutput({
-      outputError: (text, write) => write(redactUrlsIn(text)),
+      outputError: (text, write) => write(scrubbed(text, rawArgs(program))),
     })
     // No default value here on purpose: when the user omits the argument we
     // want `directory` to arrive as `undefined` so the interactive prompt
@@ -161,85 +275,17 @@ A connection string with a password, kept out of the command line:
         cliVersion: packageVersion(),
       });
 
+      const args = rawArgs(program);
       let databaseUrl: string | undefined;
       try {
-        const cwd = process.cwd();
-        const { projectName, installInCwd } = resolveProjectArg(directory);
-
-        // Reject malformed positional arguments up-front so the user sees the
-        // error before the interactive flow starts. The interactive prompt
-        // applies the same validator, so the two entry points stay in sync.
-        if (projectName) {
-          const nameError = validateProjectName(projectName);
-          if (nameError) {
-            refuse(`Invalid project name '${projectName}'. ${nameError}.`);
-          }
-        }
-
-        const projectType = options.template as ProjectType | undefined;
-
-        // Validate --template flag against the template registry, which is
-        // also what the interactive prompt offers.
-        const templateError = projectType
-          ? validateTemplateName(projectType)
-          : undefined;
-        if (templateError) refuse(templateError);
-
-        if (
-          options.approach &&
-          !APPROACHES.includes(options.approach as ProjectApproach)
-        ) {
-          refuse(
-            invalidChoiceMessage("--approach", options.approach, APPROACHES)
-          );
-        }
-        if (
-          options.database &&
-          !DATABASES.includes(options.database as DatabaseType)
-        ) {
-          refuse(
-            invalidChoiceMessage("--database", options.database, DATABASES)
-          );
-        }
-        if (
-          options.packageManager &&
-          !PACKAGE_MANAGERS.includes(options.packageManager as PackageManager)
-        ) {
-          refuse(
-            invalidChoiceMessage(
-              "--package-manager",
-              options.packageManager,
-              PACKAGE_MANAGERS
-            )
-          );
-        }
-
-        const fromStdin = options.databaseUrl === "-";
-        if (fromStdin) {
-          if (stdin.isTTY) {
-            refuse(
-              "--database-url - reads the connection string from standard input, " +
-                `which is a terminal here. Pipe it in: printf '%s' "$DATABASE_URL" | create-nextly-app ... --database-url -`
-            );
-          }
-          databaseUrl = await readAll(stdin);
-          if (!databaseUrl) {
-            refuse(
-              "--database-url - read nothing from standard input. Pipe the connection string in."
-            );
-          }
-        } else if (options.databaseUrl !== undefined) {
-          databaseUrl = options.databaseUrl.trim();
-          if (!databaseUrl) refuse("--database-url was given an empty value.");
-        }
-
-        if (databaseUrl !== undefined) {
-          const mismatch = connectionMismatch(
-            options.database as DatabaseType | undefined,
-            databaseUrl
-          );
-          if (mismatch) refuse(mismatch);
-        }
+        const answers = checkedAnswers(directory, options, args);
+        const given = await databaseUrlFrom(
+          options,
+          answers.database,
+          stdin,
+          args
+        );
+        databaseUrl = given.url;
 
         telemetry.capture("scaffold_started", {
           flags: {
@@ -250,14 +296,14 @@ A connection string with a password, kept out of the command line:
         });
 
         await createNextly({
-          cwd,
+          cwd: process.cwd(),
           defaults: options.yes,
-          projectType,
-          approach: options.approach as ProjectApproach | undefined,
-          database: options.database as DatabaseType | undefined,
+          projectType: answers.projectType,
+          approach: answers.approach,
+          database: answers.database,
           databaseUrl,
-          databaseUrlInArguments: databaseUrl !== undefined && !fromStdin,
-          packageManager: options.packageManager as PackageManager | undefined,
+          databaseUrlInArguments: databaseUrl !== undefined && !given.fromStdin,
+          packageManager: answers.packageManager,
           git: options.git,
           branch: options.branch,
           localTemplatePath: options.localTemplate,
@@ -270,10 +316,10 @@ A connection string with a password, kept out of the command line:
             program.getOptionValueSource("skills") === "cli"
               ? options.skills
               : undefined,
-          projectNameFromArg: projectName,
-          installInCwd,
+          projectNameFromArg: answers.projectName,
+          installInCwd: answers.installInCwd,
           // Standard input read for the URL is no terminal either.
-          interactive: Boolean(stdin.isTTY) && !fromStdin,
+          interactive: Boolean(stdin.isTTY) && !given.fromStdin,
         });
       } catch (error) {
         // An error nothing above caught still never prints the connection
@@ -291,4 +337,13 @@ A connection string with a password, kept out of the command line:
     });
 
   return program;
+}
+
+/**
+ * The arguments being parsed. Commander keeps them as `rawArgs` from the
+ * start of a parse, before any error is written, but leaves it out of its
+ * types.
+ */
+function rawArgs(program: Command): readonly string[] {
+  return (program as unknown as { rawArgs?: string[] }).rawArgs ?? [];
 }

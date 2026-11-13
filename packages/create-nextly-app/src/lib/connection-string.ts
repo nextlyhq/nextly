@@ -39,37 +39,46 @@ function splitConnection(url: string) {
 /** The parts of `url` that must never be printed, longest first. */
 export function connectionSecrets(url: string | undefined): string[] {
   if (!url) return [];
-  const secrets = new Set<string>([url]);
   const { rest, userinfo, query, ambiguous } = splitConnection(url);
   // Where the credentials' end is ambiguous, both readings are secret.
   const userinfos = ambiguous
     ? [userinfo, rest.slice(0, rest.lastIndexOf("@"))]
     : [userinfo];
-  for (const info of userinfos.filter(Boolean)) {
-    secrets.add(info);
-    const colon = info.indexOf(":");
-    const parts =
-      colon < 0 ? [info] : [info.slice(0, colon), info.slice(colon + 1)];
-    for (const part of parts) {
-      secrets.add(part);
-      secrets.add(safeDecode(part));
-    }
-  }
-  if (query) {
-    secrets.add(query);
-    for (const pair of query.split("&")) {
-      const equals = pair.indexOf("=");
-      secrets.add(pair);
-      if (equals < 0) continue;
-      const value = pair.slice(equals + 1);
-      for (const form of [value, safeDecode(value)]) {
-        if (form.length >= SHORTEST_BARE_QUERY_VALUE) secrets.add(form);
-      }
-    }
-  }
+  const secrets = new Set<string>([
+    url,
+    ...userinfos.flatMap(credentialSecrets),
+    ...querySecrets(query),
+  ]);
   return [...secrets]
     .filter(secret => secret.length > 0)
     .sort((a, b) => b.length - a.length);
+}
+
+/** `user:password` whole, and each half as written and decoded. */
+function credentialSecrets(userinfo: string): string[] {
+  if (!userinfo) return [];
+  const colon = userinfo.indexOf(":");
+  const parts =
+    colon < 0
+      ? [userinfo]
+      : [userinfo.slice(0, colon), userinfo.slice(colon + 1)];
+  return [userinfo, ...parts.flatMap(part => [part, safeDecode(part)])];
+}
+
+/** The query whole, each `key=value`, and each value long enough to stand alone. */
+function querySecrets(query: string): string[] {
+  if (!query) return [];
+  return [
+    query,
+    ...query.split("&").flatMap(pair => {
+      const equals = pair.indexOf("=");
+      const value = equals < 0 ? "" : pair.slice(equals + 1);
+      const bare = [value, safeDecode(value)].filter(
+        form => form.length >= SHORTEST_BARE_QUERY_VALUE
+      );
+      return [pair, ...bare];
+    }),
+  ];
 }
 
 /**

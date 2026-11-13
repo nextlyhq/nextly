@@ -4,7 +4,7 @@
  * either way (`postgres` for `postgresql`) or an edit distance of at most a
  * third of the choice's length.
  */
-export function nearest(
+function nearest(
   typed: string,
   choices: readonly string[]
 ): string | undefined {

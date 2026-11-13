@@ -29,7 +29,7 @@ export const PACKAGE_MANAGERS: readonly PackageManager[] = [
  * The database a connection string is for, from its scheme, or undefined for
  * a scheme none of them uses.
  */
-export function databaseOfUrl(url: string): DatabaseType | undefined {
+function databaseOfUrl(url: string): DatabaseType | undefined {
   const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase();
   if (scheme === "postgres" || scheme === "postgresql") return "postgresql";
   if (scheme === "mysql") return "mysql";

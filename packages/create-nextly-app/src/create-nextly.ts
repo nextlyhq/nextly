@@ -89,6 +89,7 @@ import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
 import { scriptRunner } from "./utils/package-manager-commands";
 import { pluginNodeRefusal } from "./utils/plugin-node";
 import { copyTemplate, resolveTemplatePath } from "./utils/template";
+import { findWorkspaceRoot } from "./utils/workspace";
 
 /**
  * Pick a safe project name when the user has chosen "install in cwd".
@@ -238,11 +239,19 @@ export async function createNextly(
   if (existingProject && options.packageManager) {
     // Each signal on its own: a stale lockfile beside a declaration for
     // another manager is as mixed as either disagreeing with the flag.
+    const workspace = await findWorkspaceRoot(cwd);
     const signals = [
       { manager: await installedAppPackageManager(cwd), what: "its lockfile" },
       {
         manager: await declaredAppPackageManager(cwd),
         what: "its package.json",
+      },
+      // Corepack applies the workspace root's declaration to its members.
+      {
+        manager: workspace
+          ? await declaredAppPackageManager(workspace.dir)
+          : undefined,
+        what: "its workspace's package.json",
       },
     ].filter(signal => signal.manager !== undefined);
     const disagreeing = signals.filter(

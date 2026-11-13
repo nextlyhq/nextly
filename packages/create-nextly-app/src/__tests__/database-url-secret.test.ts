@@ -197,6 +197,23 @@ describe("the connection string is kept secret", () => {
     for (const secret of SECRETS) expect(allOutput()).not.toContain(secret);
   });
 
+  for (const password of ['pa"ss', "pa'ss", "pa ss"]) {
+    it(`a misspelt --database-urll=<url> with ${JSON.stringify(password)} in the password prints none of it`, async () => {
+      const url = `postgresql://dbuser:${password}@db.example.com/app`;
+
+      const code = await runCli(["my-app", `--database-urll=${url}`], {
+        cwd: work,
+      });
+
+      expect(code).toBe(1);
+      const said = allOutput();
+      expect(said).toContain("unknown option");
+      for (const fragment of [password, "dbuser", "ss@db"]) {
+        expect(said).not.toContain(fragment);
+      }
+    });
+  }
+
   it("a direct createNextly call with a URL for another database is refused, nothing written", async () => {
     vi.spyOn(process, "exit").mockImplementation(code => {
       throw new Error(`process.exit(${String(code)})`);

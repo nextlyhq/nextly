@@ -148,6 +148,8 @@ describe("create-nextly-app without a terminal", () => {
       expect(lockfiles).toEqual([LOCKFILES[manager]]);
       // Every command it prints names that manager too.
       expect(allOutput()).toContain(`${scriptRunner(manager)} dev`);
+      // --no-git is parsed only: the scaffold makes no repository either way.
+      expect(files).not.toContain(".git");
     });
   }
 
@@ -205,6 +207,47 @@ describe("create-nextly-app without a terminal", () => {
     expect(allOutput()).toContain(
       "pnpm (its lockfile) and yarn (its package.json)"
     );
+  });
+
+  it("a workspace root declaring yarn is refused --package-manager pnpm in a member, untouched", async () => {
+    const root = path.join(dir, "repo");
+    const app = path.join(root, "app");
+    await mkdir(path.join(app, "src", "app"), { recursive: true });
+    await writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        private: true,
+        workspaces: ["app"],
+        packageManager: "yarn@4.9.2",
+      })
+    );
+    await writeFile(
+      path.join(root, "pnpm-lock.yaml"),
+      "lockfileVersion: '9.0'\n"
+    );
+    await writeFile(
+      path.join(app, "package.json"),
+      JSON.stringify({
+        name: "app",
+        dependencies: {
+          next: "16.0.0",
+          react: "19.2.0",
+          "react-dom": "19.2.0",
+        },
+      })
+    );
+    await writeFile(path.join(app, "next.config.ts"), "export default {};\n");
+    const before = (await readdir(app)).sort();
+
+    const code = await runCli(
+      [".", "--package-manager", "pnpm", "--yes", ...HERMETIC],
+      { cwd: app }
+    );
+
+    expect(code).toBe(1);
+    expect((await readdir(app)).sort()).toEqual(before);
+    expect(await fakes.calls()).toEqual([]);
+    expect(allOutput()).toContain("yarn (its workspace's package.json)");
   });
 
   it("an app whose package.json declares pnpm is refused --package-manager yarn, untouched", async () => {

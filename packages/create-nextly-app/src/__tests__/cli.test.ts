@@ -64,6 +64,9 @@ describe("the create-nextly-app command line", () => {
     expect(result.ran).toBe(0);
   });
 
+  // --no-git is parsed and handed on, by design: the scaffold makes no
+  // repository yet, so the flag changes nothing until it does (the full
+  // scaffold test checks no .git is made either way).
   it("--no-git reaches the scaffold as git: false, and git is on otherwise", async () => {
     expect((await parse(["my-app", "--no-git"])).options?.git).toBe(false);
     expect((await parse(["my-app"])).options?.git).toBe(true);
