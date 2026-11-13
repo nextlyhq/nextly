@@ -393,11 +393,14 @@ describe("names that clash where a field arrives", () => {
     plain("f-top", held === "title" ? "heading" : held),
   ];
 
+  // Judged on the names the save sends (`convertToFieldDefinition`): a name typed in other letter
+  // case, or with spaces, is sent as the stored name it becomes, which is then the same name.
   it.each([
     ["the same name", "subtitle", "subtitle"],
-    ["the same name in other letter case", "Subtitle", "subtitle"],
-    ["a name that becomes the same column", "subTitle", "sub_title"],
-  ])("%s, at the top level and inside a group", (words, incoming, held) => {
+    ["a name typed in other letter case", "Subtitle", "subtitle"],
+    ["a name typed with spaces", "Sub Title", "sub_title"],
+  ])("%s, at the top level and inside a group", (_case, incoming, held) => {
+    const words = "the same name";
     // Out of its group, beside a top-level field of the held name.
     const top = refusal(
       judgeMove(

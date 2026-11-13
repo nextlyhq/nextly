@@ -60,6 +60,13 @@ export interface MoveContext {
    * moving it out is refused as moving into it is.
    */
   fieldGroupFieldHolding?: (rowId: string) => BuilderField | undefined;
+  /**
+   * The ids of the containers a saved field sits in, outermost first, or null for a field never
+   * saved. Leaving repeating rows is refused only where the field's saved rows are: a field added
+   * there, or moved there, in this unsaved draft has no rows of its own to lose. Without it, every
+   * field's rows are taken as saved where it stands.
+   */
+  savedContainerIdsOf?: (fieldId: string) => readonly string[] | null;
 }
 
 /** Why a move is refused. */
@@ -114,6 +121,37 @@ function siblingsIn(
   container: BuilderField | null
 ): readonly BuilderField[] {
   return container ? (container.fields ?? []) : fields;
+}
+
+/** A field's name as the save sends it (`convertToFieldDefinition`), which is what a clash is judged on. */
+function sentName(field: BuilderField): string {
+  return convertToFieldDefinition(field).name ?? "";
+}
+
+/**
+ * Whether a field is a layout container: it has no name, so it holds no value of its own, and the
+ * fields inside it are stored on the level that holds it (the server's sibling rule).
+ */
+function isLayoutContainer(field: BuilderField): boolean {
+  return sentName(field) === "" && Array.isArray(field.fields);
+}
+
+/** The named fields one level holds, those inside its layout containers among them. */
+function namedFieldsIn(list: readonly BuilderField[]): BuilderField[] {
+  return list.flatMap(each =>
+    isLayoutContainer(each) ? namedFieldsIn(each.fields ?? []) : [each]
+  );
+}
+
+/**
+ * The container whose level a field in `chain`'s last container is named on: the nearest one with
+ * a name, a layout container being part of the level holding it; null for the top level.
+ */
+function namingLevel(chain: readonly BuilderField[]): BuilderField | null {
+  for (let at = chain.length - 1; at >= 0; at--) {
+    if (!isLayoutContainer(chain[at])) return chain[at];
+  }
+  return null;
 }
 
 function refuse(reason: MoveRefusalReason, message: string): MoveVerdict {
@@ -200,10 +238,20 @@ function repeatersOn(chain: readonly BuilderField[]): BuilderField[] {
 function crossingRefusal(
   field: BuilderField,
   from: readonly BuilderField[],
-  into: readonly BuilderField[]
+  into: readonly BuilderField[],
+  ctx: MoveContext
 ): MoveVerdict | null {
   const intoIds = new Set(into.map(each => each.id));
-  if (repeatersOn(from).some(repeater => !intoIds.has(repeater.id))) {
+  // Only rows the field is saved in hold values of its own (`savedContainerIdsOf`).
+  const savedIn = ctx.savedContainerIdsOf
+    ? new Set(ctx.savedContainerIdsOf(field.id) ?? [])
+    : null;
+  const leaving = repeatersOn(from).filter(
+    repeater =>
+      !intoIds.has(repeater.id) &&
+      (savedIn === null || savedIn.has(repeater.id))
+  );
+  if (leaving.length > 0) {
     return refuse(
       "out-of-repeating-rows",
       `${called(field)} cannot leave its repeating rows: each entry may hold several rows of it, which one field outside them cannot keep. Add a new field there instead.`
@@ -242,7 +290,7 @@ function siblingClashRefusal(
 ): MoveVerdict | null {
   for (const other of siblings) {
     if (other.id === field.id) continue;
-    const kind = siblingNameClash(field.name, other.name);
+    const kind = siblingNameClash(sentName(field), sentName(other));
     if (kind) {
       return refuse(
         "name-clash",
@@ -260,7 +308,7 @@ function heldNameRefusal(
   ctx: MoveContext
 ): MoveVerdict | null {
   for (const held of ctx.heldNames?.get(container?.id ?? "") ?? []) {
-    const kind = siblingNameClash(field.name, held);
+    const kind = siblingNameClash(sentName(field), held);
     if (kind) {
       return refuse(
         "name-clash",
@@ -279,14 +327,16 @@ function nameRefusal(
   ctx: MoveContext
 ): MoveVerdict | null {
   const reserved =
-    !container && ctx.topLevelReservesNames && isReservedFieldName(field.name);
+    !container &&
+    ctx.topLevelReservesNames &&
+    isReservedFieldName(sentName(field));
   return (
     siblingClashRefusal(field, container, siblings) ??
     heldNameRefusal(field, container, ctx) ??
     (reserved
       ? refuse(
           "reserved-name",
-          `${field.name} is reserved at the top level. Rename ${called(field)} first.`
+          `${sentName(field)} is reserved at the top level. Rename ${called(field)} first.`
         )
       : null)
   );
@@ -307,11 +357,16 @@ function arrivalRefusal(
   ctx: MoveContext
 ): MoveVerdict | null {
   const field = chain[chain.length - 1];
-  const source = chain.length > 1 ? chain[chain.length - 2] : null;
-  if ((source?.id ?? null) === (container?.id ?? null)) return null;
+  // Judged by level, not by container: a layout container is part of the level holding it, so
+  // moving into or out of one takes the field nowhere new.
+  const from = namingLevel(chain.slice(0, -1));
+  const into = container
+    ? namingLevel(chainTo(fields, container.id) ?? [container])
+    : null;
+  if ((from?.id ?? null) === (into?.id ?? null)) return null;
   return (
     lockedInsideRefusal(field, chain, ctx) ??
-    nameRefusal(field, container, siblingsIn(fields, container), ctx)
+    nameRefusal(field, into, namedFieldsIn(siblingsIn(fields, into)), ctx)
   );
 }
 
@@ -377,7 +432,7 @@ export function judgeMove(
   const refusal =
     sourceRefusal(chain, ctx) ??
     containerRefusal(field, into, ctx) ??
-    crossingRefusal(field, from, into ?? []) ??
+    crossingRefusal(field, from, into ?? [], ctx) ??
     ((ctx.excludedTypes ?? []).includes(field.type)
       ? refuse("excluded-type", `${called(field)} cannot go here.`)
       : null) ??
