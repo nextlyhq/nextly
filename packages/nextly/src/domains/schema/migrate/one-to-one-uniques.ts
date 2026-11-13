@@ -33,6 +33,7 @@ import {
 import {
   introspectLiveColumns,
   introspectTableNames,
+  introspectUnusableIndexes,
 } from "../pipeline/diff/introspect-live";
 import {
   readIndexUniqueness,
@@ -121,6 +122,9 @@ async function missingOnMainTable(
       c.toLowerCase()
     )
   );
+  // An index a failed or interrupted concurrent build left under the name holds nothing, and the
+  // create's `IF NOT EXISTS` would leave it in place: it is dropped first.
+  const unusable = await introspectUnusableIndexes(db, dialect, [table]);
   const missing: MissingUniqueness[] = [];
   for (const field of oneToOnes) {
     const column = columnOf.get(field.name);
@@ -140,7 +144,12 @@ async function missingOnMainTable(
       table,
       column,
       index: index.name,
-      statements: [createIndexSql(table, index, dialect, quoted(dialect))],
+      statements: [
+        ...(unusable.has(index.name.toLowerCase())
+          ? [`DROP INDEX IF EXISTS ${quoted(dialect)(index.name)}`]
+          : []),
+        createIndexSql(table, index, dialect, quoted(dialect)),
+      ],
     });
   }
   return missing;
@@ -166,20 +175,35 @@ async function missingOnTranslations(
   const [present] = await introspectTableNames(db, dialect, [companionTable]);
   if (present === undefined) return [];
   const indexes = await readIndexUniqueness(db, dialect, present);
-  const unique = uniqueIndexNames(indexes);
+  // An index a failed or interrupted concurrent build left under the name holds nothing: it counts
+  // as not unique, so the statements below replace it.
+  const unusable = await introspectUnusableIndexes(db, dialect, [present]);
+  const unique = new Set(
+    [...uniqueIndexNames(indexes)].filter(
+      name => !unusable.has(name.toLowerCase())
+    )
+  );
   // A column the translations table does not have yet holds nothing to repeat, and gets its index
-  // when the run adds it: judged here, its absent values would stop the run.
-  const columns = new Set(
+  // when the run adds it: judged here, its absent values would stop the run. One the dialect
+  // cannot key as it is (MySQL's JSON, as a reference to one of several collections is) gets no
+  // index, as the desired schema gives it none.
+  const columnTypes = new Map(
     (
       await introspectLiveColumns(db, dialect, [present])
-    ).tables[0]?.columns.map(column => column.name.toLowerCase()) ?? []
+    ).tables[0]?.columns.map(column => [
+      column.name.toLowerCase(),
+      column.type,
+    ]) ?? []
   );
   return wanted
-    .filter(
-      c =>
-        columns.has(c.column.toLowerCase()) &&
+    .filter(c => {
+      const type = columnTypes.get(c.column.toLowerCase());
+      return (
+        type !== undefined &&
+        uniquenessCanBeAnIndex(type, dialect) &&
         !unique.has(companionUniqueIndexName(companionTable, c.column))
-    )
+      );
+    })
     .map(c => ({
       entity,
       field: c.field,
@@ -211,6 +235,9 @@ async function missingUniqueness(
 ): Promise<MissingUniqueness[]> {
   const missing: MissingUniqueness[] = [];
   for (const registered of await registeredEntities(db, dialect)) {
+    // A plugin's tables follow its own migration modules, which would read an index made here as
+    // drift; its one-to-ones are its modules' to make unique.
+    if (registered.source.startsWith("plugin")) continue;
     missing.push(
       ...(await missingOnMainTable(db, dialect, registered)),
       ...(await missingOnTranslations(db, dialect, registered))
