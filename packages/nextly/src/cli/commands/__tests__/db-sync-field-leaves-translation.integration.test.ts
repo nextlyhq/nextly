@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineConfig } from "../../../config";
 import { ensureI18nArchive } from "../../../domains/i18n/migration/ensure-archive";
+import { readRecordedEntities } from "../../../domains/i18n/migration/recorded-before";
 import { defineFieldGroup } from "../../../field-groups/config/define-field-group";
 import { clearCachedSnapshot } from "../../../init/schema-snapshot-cache";
 import type { LoadConfigResult } from "../../utils/config-loader";
@@ -130,6 +131,37 @@ const archived = async (): Promise<{ locale: string; value: string }[]> =>
     : query(
         `SELECT "locale", "value" FROM "nextly_i18n_archive" ORDER BY "locale"`
       );
+
+const OTHER = "dbsleaves2";
+const OTHER_TABLE = `dc_${OTHER}`;
+
+/** Two translated collections, each with `body` translated or shared. */
+const twoConfigWith = (localized: boolean): LoadConfigResult["config"] =>
+  defineConfig({
+    localization: { locales: ["en", "es"], defaultLocale: "en" },
+    collections: [SLUG, OTHER].map(slug =>
+      defineCollection({
+        slug,
+        localized: true,
+        fields: [
+          { name: "title", type: "text", localized: false },
+          { name: "body", type: "text", localized },
+        ] as never,
+      })
+    ),
+  });
+
+/** Whether the registry records `slug`'s `body` as translated. */
+async function recordedTranslated(
+  config: LoadConfigResult["config"],
+  slug: string
+): Promise<boolean | undefined> {
+  const recorded = await readRecordedEntities(target!.adapter as never, config);
+  const body = recorded
+    ?.get(`collection:${slug}`)
+    ?.fields.find(f => f.name === "body");
+  return body?.localized === true;
+}
 
 const GROUP = "dbsleavegrp";
 const GROUP_TABLE = `comp_${GROUP}`;
@@ -272,5 +304,40 @@ describe("db:sync making a translated field shared (sqlite)", () => {
       )
     ).find(c => c.name === "body");
     expect(body?.notnull).toBe(1);
+  });
+  // Each entity's translations column is dropped on its own: one whose drop went through has
+  // moved, and stays recorded shared; only the one whose drop failed is written back translated.
+  it("writes back only the entity whose drop failed, and a rerun moves it", async () => {
+    await sync(twoConfigWith(true));
+    for (const table of [TABLE, OTHER_TABLE]) {
+      await query(
+        `INSERT INTO "${table}" ("id", "title", "slug", "created_at", "updated_at") VALUES ('a', 'a', 'a', 0, 0)`
+      );
+      await query(
+        `INSERT INTO "${table}_locales" ("_parent", "_locale", "body") VALUES ('a', 'en', 'Hello'), ('a', 'es', 'Hola')`
+      );
+    }
+    // A view reading the second collection's translated column: SQLite refuses to drop a column
+    // a view names, so that entity's drop fails after the first one's went through.
+    await query(
+      `CREATE VIEW "dbsleaves_hold" AS SELECT "body" FROM "${OTHER_TABLE}_locales"`
+    );
+
+    const shared = twoConfigWith(false);
+    await expect(sync(shared)).rejects.toThrow(/were not moved \(see above\)/);
+    expect(await columnsOf(COMPANION)).not.toContain("body");
+    expect(await columnsOf(`${OTHER_TABLE}_locales`)).toContain("body");
+    expect(await recordedTranslated(shared, SLUG)).toBe(false);
+    expect(await recordedTranslated(shared, OTHER)).toBe(true);
+
+    await query(`DROP VIEW "dbsleaves_hold"`);
+    await sync(shared);
+
+    expect(await columnsOf(`${OTHER_TABLE}_locales`)).not.toContain("body");
+    for (const table of [TABLE, OTHER_TABLE]) {
+      expect(
+        await query(`SELECT "body" FROM "${table}" WHERE "id" = 'a'`)
+      ).toEqual([{ body: "Hello" }]);
+    }
   });
 });

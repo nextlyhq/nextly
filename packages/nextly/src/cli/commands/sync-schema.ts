@@ -21,6 +21,8 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
+// A type only: the module itself is loaded when a sync has fields leaving translation.
+import type * as LeavingMove from "../../domains/i18n/runtime/fields-leaving-on-reload";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
 import type { CommandContext } from "../program";
@@ -155,8 +157,8 @@ export async function syncSchemaInOrder(
   }
 
   // From the first push on, the registry records the leaving fields as shared. Until the move
-  // finishes, a stop writes them back as recorded, still translated, with no schema change, so
-  // the values stay readable through the translations table and a rerun finds the fields leaving.
+  // finishes, a stop writes back those still leaving as recorded, still translated, with no schema
+  // change, so the values stay readable through the translations table and a rerun finds them.
   let moved = false;
   try {
     await pushEntities(
@@ -189,13 +191,8 @@ export async function syncSchemaInOrder(
   } finally {
     if (!moved) {
       await keepRecordedTranslated(
-        {
-          ...configResult,
-          config: mover.configWithLeavingFieldsTranslated(
-            config,
-            leaving.entries
-          ),
-        },
+        { mover, live, recordedBefore },
+        configResult,
         adapter,
         options,
         context
@@ -205,19 +202,44 @@ export async function syncSchemaInOrder(
 }
 
 /**
- * The registry written back from `configResult` alone, with no push (`autoSync: false`). Its own
- * failure is reported rather than raised, so the error that stopped the move is the one the run
- * ends on.
+ * The fields still leaving written back to the registry as recorded before the run, with no push
+ * (`autoSync: false`). Still leaving is asked again, as the run first asked it
+ * (`fieldsLeavingUnder`): recorded translated, with a translations column still there. A field
+ * whose column an earlier entity's drop removed has moved, and is left recorded shared, as it now
+ * is; written back translated, its retry would read it from a translations column that is gone.
+ * Its own failure is reported rather than raised, so the error that stopped the move is the one
+ * the run ends on.
  */
 async function keepRecordedTranslated(
+  run: {
+    mover: typeof LeavingMove;
+    live: DrizzleAdapter;
+    recordedBefore: Awaited<ReturnType<typeof readRecordedEntities>>;
+  },
   configResult: LoadConfigResult,
   adapter: CLIDatabaseAdapter,
   options: ResolvedDevOptions,
   context: CommandContext
 ): Promise<void> {
+  const { config } = configResult;
   try {
+    // Asked again only to find them; its refusals were reported when the run first asked.
+    const still = await run.mover.fieldsLeavingUnder(
+      run.live,
+      config,
+      new Map(),
+      run.recordedBefore,
+      () => undefined
+    );
+    if (still.entries.length === 0) return;
     await pushEntities(
-      configResult,
+      {
+        ...configResult,
+        config: run.mover.configWithLeavingFieldsTranslated(
+          config,
+          still.entries
+        ),
+      },
       adapter,
       { ...options, autoSync: false },
       context
