@@ -401,6 +401,23 @@ describe("a field among copies that share its id", () => {
     );
     expect(reason).toBe("ambiguous-place");
     expect(message).toContain("inner");
+    // A group holding nothing may carry no `fields` at all; the move would still place into both.
+    const bare = () =>
+      ({
+        id: "f-inner",
+        name: "inner",
+        label: "inner",
+        type: "group",
+      }) as BuilderField;
+    const bareFields = [
+      plain("f-a", "a"),
+      plain("f-g1", "first", { type: "group", fields: [bare()] }),
+      plain("f-g2", "second", { type: "group", fields: [bare()] }),
+    ];
+    expect(
+      refusal(judgeMove(bareFields, "f-a", { parentFieldId: "f-inner" }, ctx))
+        .reason
+    ).toBe("ambiguous-place");
   });
 });
 
