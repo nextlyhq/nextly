@@ -745,10 +745,12 @@ async function mysqlColumns(query: MysqlQuery, catalog: Catalog) {
     defaultValue: string | null;
     extra: string;
     collation: string | null;
+    expression: string | null;
   }>(
     `SELECT table_name AS tableName, column_name AS name, column_type AS type,
             is_nullable AS nullable, column_default AS defaultValue,
-            extra AS extra, collation_name AS collation
+            extra AS extra, collation_name AS collation,
+            generation_expression AS expression
        FROM information_schema.columns WHERE table_schema = DATABASE()`
   )) {
     const shape = catalog[column.tableName];
@@ -759,6 +761,8 @@ async function mysqlColumns(query: MysqlQuery, catalog: Catalog) {
       column.nullable === "YES" ? "null" : "not null",
       column.defaultValue !== null && `default ${column.defaultValue}`,
       column.extra.toLowerCase(),
+      // A generated column's expression, which no other field carries.
+      Boolean(column.expression) && `as (${column.expression})`,
       column.collation !== null && `collate ${column.collation}`
     );
   }

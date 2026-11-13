@@ -18,8 +18,8 @@ import mysql from "mysql2/promise";
 import pg from "pg";
 import { describe, expect, it } from "vitest";
 
-import type { Dialect } from "./catalog";
-import { dump, makeScratchDatabase, restore } from "./database";
+import { operationsBetween, type Dialect } from "./catalog";
+import { dump, makeScratchDatabase, readCatalog, restore } from "./database";
 
 function dialects(): Dialect[] {
   return process.env.TEST_MYSQL_URL ? ["mysql"] : ["sqlite"];
@@ -113,5 +113,35 @@ describe.each(dialects())("a dump on %s", dialect => {
       await target.drop();
       rmSync(scratch, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * MySQL's catalog states a generated column with its expression, which
+ * `COLUMN_DEFAULT` and `EXTRA` do not carry, so an upgrade that changes only
+ * the expression is an operation.
+ */
+describe.runIf(process.env.TEST_MYSQL_URL)("the MySQL catalog", () => {
+  it("reads a generated column whose expression changed as a change", async () => {
+    const server = process.env.TEST_MYSQL_URL;
+    const read = async (suffix: string, total: string) => {
+      const database = await makeScratchDatabase("mysql", { server }, suffix);
+      try {
+        await query(
+          "mysql",
+          database.url,
+          `CREATE TABLE t (price int, quantity int, total int GENERATED ALWAYS AS (${total}) VIRTUAL)`
+        );
+        return await readCatalog("mysql", database.url);
+      } finally {
+        await database.drop();
+      }
+    };
+    const operations = operationsBetween(
+      await read("_gate_generated_a", "price * quantity"),
+      await read("_gate_generated_b", "price + quantity")
+    );
+    expect(operations).toHaveLength(1);
+    expect(operations[0]).toMatch(/^change column t\.total: .*\* .* -> .*\+ /);
   });
 });
