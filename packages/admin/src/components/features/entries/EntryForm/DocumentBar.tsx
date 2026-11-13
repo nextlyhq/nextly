@@ -51,6 +51,11 @@ import { useEntryLocale } from "../EntryLocaleContext";
 import { SharePreviewPopover } from "../PreviewShare/SharePreviewPopover";
 import { translationCounts } from "../translation-meta";
 
+import {
+  BAR_CONTROLS_GAP,
+  BAR_ICON_CONTROL,
+  PANEL_TOGGLE_RULE,
+} from "./bar-controls";
 import { actionsAt } from "./document-actions";
 import { useDocumentBarHeight } from "./document-bar-height";
 import type { DocumentPanelMode } from "./document-panel-mode";
@@ -306,7 +311,10 @@ export function DocumentBar(props: DocumentBarProps): JSX.Element | null {
         must never push the bar's own off it. */}
       <div
         className={cn(
-          "ml-auto flex min-w-0 max-w-full items-center justify-end gap-1.5",
+          // Positioned, for the share popover's anchor at its end
+          // (`ShareAnchor`), which takes no place among the controls.
+          "relative ml-auto flex min-w-0 max-w-full items-center justify-end",
+          BAR_CONTROLS_GAP,
           // The admin's bar is one row tall, so there the controls give up
           // their words rather than wrap.
           inTopBar ? "flex-nowrap" : "flex-wrap"
@@ -510,7 +518,11 @@ function ShareAnchor({
       open={open}
       onOpenChange={onOpenChange}
     >
-      <span className="h-0 w-0 self-end" aria-hidden="true" />
+      {/* Out of the row's flow, at its bottom right corner: a point with
+          no width still took a gap after the last control, which left the
+          bar's controls short of its right end, where the editor's outline
+          draws them. */}
+      <span className="absolute right-0 bottom-0 h-0 w-0" aria-hidden="true" />
     </SharePreviewPopover>
   );
 }
@@ -729,12 +741,10 @@ function PanelToggle({
   const label = panelToggleLabel(collapsed);
   return (
     <>
-      <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
+      <span className={PANEL_TOGGLE_RULE} aria-hidden="true" />
       <Button
         type="button"
-        variant="outline"
-        size="sm"
-        className="px-2"
+        {...BAR_ICON_CONTROL}
         onClick={onToggle}
         aria-label={label}
         title={label}

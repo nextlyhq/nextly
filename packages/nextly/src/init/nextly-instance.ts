@@ -27,6 +27,8 @@ import type {
   AuthResult,
   BulkDeleteArgs,
   BulkDeleteMediaArgs,
+  PublishArgs,
+  PublishResult,
   BulkOperationResult,
   ChangePasswordArgs,
   CollectionSlug,
@@ -239,6 +241,20 @@ export interface Nextly {
   delete: <TSlug extends CollectionSlug = CollectionSlug>(
     args: DeleteArgs<TSlug>
   ) => Promise<MutationResult<{ id: string }> | DeleteResult>;
+
+  /**
+   * Publish the chosen languages of one entry, and its shared part, together.
+   *
+   * @experimental
+   */
+  publish: (args: PublishArgs) => Promise<MutationResult<PublishResult>>;
+
+  /**
+   * Unpublish the chosen languages of one entry, and its shared part, together.
+   *
+   * @experimental
+   */
+  unpublish: (args: PublishArgs) => Promise<MutationResult<PublishResult>>;
 
   /**
    * Count documents matching a query.
