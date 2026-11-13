@@ -29,6 +29,8 @@ export const home = defineSingle({
 
 The rules are on the [collection](/docs/configuration/collections#publicaddress) and [Single](/docs/configuration/singles#publicaddress) pages.
 
+A collection whose entries are not all served under one pattern can also name a text field holding an entry's own address with [`publicAddressField`](/docs/configuration/collections#publicaddressfield) (experimental). An entry with a value there is served at it, and the rest at the template. `publicAddressOf` answers the entry's own address, so canonical links, sitemap entries and redirects follow it.
+
 A type made in the Visual Schema Builder has no `publicAddress` of its own. A plugin can supply one through the `publicAddress.template` seam. It is judged by the same rules, and an address that breaks them counts as none.
 
 For a type with neither, `publicAddressOf` answers that it has no address.

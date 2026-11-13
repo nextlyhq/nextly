@@ -202,7 +202,7 @@ export function declaredPublicAddressProblem(
 
 /** A refused `publicAddress`, as the collection and Single validators report one. */
 export interface PublicAddressError {
-  path: "publicAddress";
+  path: "publicAddress" | "publicAddressField";
   code: "PUBLIC_ADDRESS_INVALID";
   message: string;
 }
@@ -261,4 +261,99 @@ export function fillPublicAddress(
   if (segments.some(s => s === "" || s === "." || s === "..")) return null;
   if (isReservedPath(filled)) return null;
   return filled;
+}
+
+/**
+ * @experimental An entry's own address, as the field a collection names in
+ * `publicAddressField` holds it: none where the field is empty, so the
+ * collection's template gives the entry its address; the address where the
+ * value is one a visitor can be served at on this site; and why not
+ * otherwise.
+ */
+export type OwnAddress =
+  | { status: "none" }
+  | { status: "resolved"; path: string }
+  | { status: "invalid"; problem: string };
+
+/** The shape a refused own address is described against. */
+const OWN_ADDRESS_SHAPE =
+  'Use an address on this site, starting with "/", such as "/about"';
+
+/**
+ * The address `value` names as an entry's own, judged and spelled as a
+ * template's result is: from the site's root, with no other host, query,
+ * fragment or trailing `/`, each segment encoded as a browser sends it, and
+ * no `.`, `..` or empty segment, or path the runtime keeps for itself.
+ */
+export function ownAddressOf(value: unknown): OwnAddress {
+  if (value === undefined || value === null) return { status: "none" };
+  if (typeof value !== "string") {
+    return { status: "invalid", problem: `${OWN_ADDRESS_SHAPE}.` };
+  }
+  const text = value.trim();
+  if (text === "") return { status: "none" };
+  if (text === "/") return { status: "resolved", path: "/" };
+  if (!text.startsWith("/") || text.startsWith("//") || /[?#\\\s]/.test(text)) {
+    return {
+      status: "invalid",
+      problem: `${OWN_ADDRESS_SHAPE}, with no other site, query or fragment.`,
+    };
+  }
+  if (text.endsWith("/")) {
+    return {
+      status: "invalid",
+      problem: `${OWN_ADDRESS_SHAPE}, without a "/" at the end.`,
+    };
+  }
+  // A step out of the path, or an empty part, is refused rather than encoded
+  // into one segment as a placeholder's value would be: a person typed it.
+  const segments = text.slice(1).split("/");
+  if (segments.some(part => part === "" || part === "." || part === "..")) {
+    return {
+      status: "invalid",
+      problem: `${OWN_ADDRESS_SHAPE}, with no empty, "." or ".." part.`,
+    };
+  }
+  // Filled as a template's one path placeholder is, so an own address and a
+  // template's result are encoded and refused by the same rule.
+  const path = fillPublicAddress(
+    "/{address}",
+    { address: text.slice(1) },
+    { pathFields: ["address"] }
+  );
+  return path === null
+    ? {
+        status: "invalid",
+        problem: `${OWN_ADDRESS_SHAPE}, outside the paths kept for the admin, the API and the runtime.`,
+      }
+    : { status: "resolved", path };
+}
+
+/**
+ * Why the field `publicAddressField` names cannot hold a collection's
+ * entries' own addresses, or null where it can or none is named: it needs the
+ * collection's template to fall back to, and must be a top-level text field.
+ */
+export function publicAddressFieldProblem(
+  field: unknown,
+  publicAddress: unknown,
+  fields: readonly unknown[]
+): string | null {
+  if (field === undefined) return null;
+  if (typeof field !== "string" || field === "") {
+    return "publicAddressField must name a text field of the collection.";
+  }
+  if (publicAddress === undefined) {
+    return `publicAddressField "${field}" needs publicAddress, the template an entry with no address of its own is served at.`;
+  }
+  const declared = fields.find(
+    each => (each as { name?: unknown } | null)?.name === field
+  ) as { type?: unknown } | undefined;
+  if (declared === undefined) {
+    return `publicAddressField: "${field}" is not a field of the collection.`;
+  }
+  if (declared.type !== "text") {
+    return `publicAddressField: "${field}" must be a text field.`;
+  }
+  return null;
 }
