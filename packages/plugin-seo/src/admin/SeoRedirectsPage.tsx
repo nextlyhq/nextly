@@ -51,14 +51,15 @@ import {
 
 import { proxyProblems } from "../problems/site-checks";
 import {
+  NOT_FOUND_TAB_HREF,
   REDIRECT_ROUTES,
-  REDIRECTS_PAGE,
+  REDIRECTS_PAGE_HREF,
   type ImportResult,
   type NotFoundView,
   type ProxyStatus,
   type RedirectView,
 } from "../redirects/contract";
-import { SEO_ADMIN_SLUG, SEO_PLUGIN_NAME } from "../settings/contract";
+import { SEO_PLUGIN_NAME } from "../settings/contract";
 
 import { copyNote } from "./copy-note";
 import {
@@ -71,10 +72,6 @@ import {
 } from "./redirect-dialogs";
 import { lastSeenWhen } from "./redirect-format";
 import { AdminLink, SeoTrail, type TrailStep } from "./section";
-
-/** Where the redirects screen is, and its Not found tab. */
-const REDIRECTS_HREF = `/admin/plugins/${SEO_ADMIN_SLUG}/${REDIRECTS_PAGE.path}`;
-const NOT_FOUND_HREF = `${REDIRECTS_HREF}?tab=notfound`;
 
 type Tab = "list" | "notfound";
 
@@ -512,7 +509,7 @@ function RedirectsTabs(props: {
   return (
     <PageTabs label="Redirects">
       <PageTab asChild current={props.tab === "list"} className="gap-1.5">
-        <AdminLink href={REDIRECTS_HREF}>
+        <AdminLink href={REDIRECTS_PAGE_HREF}>
           {/* Spaced by the tab's gap; the space keeps the name "Redirects 3". */}
           Redirects{" "}
           <span className="font-normal text-muted-foreground">
@@ -521,7 +518,7 @@ function RedirectsTabs(props: {
         </AdminLink>
       </PageTab>
       <PageTab asChild current={props.tab === "notfound"} className="gap-1.5">
-        <AdminLink href={NOT_FOUND_HREF}>
+        <AdminLink href={NOT_FOUND_TAB_HREF}>
           Not found{" "}
           <span className="font-normal text-muted-foreground">
             {props.notFound}
@@ -699,7 +696,7 @@ const TAB_TEXT: Record<Tab, { description: string; steps: TrailStep[] }> = {
     description:
       "Addresses visitors asked for that no page answered. Redirect the ones that matter.",
     steps: [
-      { label: "Redirects", href: REDIRECTS_HREF },
+      { label: "Redirects", href: REDIRECTS_PAGE_HREF },
       { label: "Not found" },
     ],
   },

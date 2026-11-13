@@ -39,11 +39,13 @@ import {
 } from "@nextlyhq/plugin-sdk/admin";
 
 import { PROXY_WIRING_NOTE } from "../../problems/site-checks";
-import type {
-  ImportResult,
-  NotFoundView,
-  ProxyStatus,
-  RedirectView,
+import {
+  newRedirectHref,
+  REDIRECTS_PAGE_HREF,
+  type ImportResult,
+  type NotFoundView,
+  type ProxyStatus,
+  type RedirectView,
 } from "../../redirects/contract";
 import {
   madeBy,
@@ -565,6 +567,26 @@ describe("a link asking for a new redirect", () => {
       suggestion: null,
     });
     expect(redirectAskedFor("?tab=notfound")).toBeNull();
+  });
+
+  it("is read as every screen writes it, To or none", () => {
+    const asked = (href: string) => {
+      const url = new URL(href, "https://acme.example");
+      expect(url.pathname).toBe(REDIRECTS_PAGE_HREF);
+      return redirectAskedFor(url.search);
+    };
+    expect(asked(newRedirectHref("/old page?x=1", "/new"))).toEqual({
+      from: "/old page?x=1",
+      suggestion: "/new",
+    });
+    expect(asked(newRedirectHref("/old", null))).toEqual({
+      from: "/old",
+      suggestion: null,
+    });
+    expect(asked(newRedirectHref("/old"))).toEqual({
+      from: "/old",
+      suggestion: null,
+    });
   });
 
   it("opens the form filled from it", () => {

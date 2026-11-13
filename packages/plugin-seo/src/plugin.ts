@@ -55,6 +55,7 @@ import { defaultSeoFields } from "./fields";
 import { importRoutes } from "./import/route";
 import { withLanguageLinks } from "./languages/head";
 import { notFoundCollection } from "./not-found/collection";
+import { moveLoggedRows } from "./not-found/log";
 import { keepSeoContext } from "./not-found/report";
 import { plainCopyProxyHandler } from "./outputs/ai-outputs";
 import { listPages, type ListedPagesService } from "./outputs/listing";
@@ -91,7 +92,7 @@ import { problemsCollection } from "./problems/store";
 import { RECEIVED_PAGE } from "./received/contract";
 import { receivedRoutes } from "./received/route";
 import { redirectsCollection } from "./redirects/collection";
-import { REDIRECTS_PAGE } from "./redirects/contract";
+import { REDIRECTS_PAGE, REDIRECTS_PAGE_HREF } from "./redirects/contract";
 import { heldRedirectKeys } from "./redirects/held-keys";
 import { redirectsProxyHandler } from "./redirects/proxy-handler";
 import { redirectRoutes } from "./redirects/routes";
@@ -99,15 +100,12 @@ import { PAGE_BUILDER_PLUGIN } from "./resolver/design-level";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
 import { routeValuesCollection } from "./route-values/collection";
 import { withRouteValues } from "./route-values/record";
+import { seoSchema, seoSchemaPlugin } from "./schema/definition";
 import {
   contentTypesRoute,
   settingsDocumentRoute,
 } from "./settings/content-types-route";
-import {
-  SETTINGS_PAGE,
-  SEO_ADMIN_SLUG,
-  SETTINGS_PAGE_HREF,
-} from "./settings/contract";
+import { SETTINGS_PAGE, SETTINGS_PAGE_HREF } from "./settings/contract";
 import {
   readBrandFacts,
   readSeoRules,
@@ -146,9 +144,6 @@ import {
 
 // Read the version from package.json so the plugin's declared version can never
 // drift from what actually ships (mirrors @nextlyhq/plugin-form-builder).
-/** Where the redirects screen is, for the admin's menu. */
-const REDIRECTS_PAGE_HREF = `/admin/plugins/${SEO_ADMIN_SLUG}/${REDIRECTS_PAGE.path}`;
-
 const require = createRequire(import.meta.url);
 const { version: PLUGIN_VERSION } = require("../package.json") as {
   version: string;
@@ -671,6 +666,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     collections: [
       addressRecordCollection(),
       redirectsCollection(),
+      // The collection the not-found log was kept in before it moved to the
+      // plugin's own table. Still declared so the rows a site already has are
+      // kept, and moved to the table at start (`moveLoggedRows`); nothing
+      // writes it any more.
       notFoundCollection(),
       problemsCollection(),
       // The SEO of each page a route renders from its own code, by address.
@@ -679,6 +678,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // which the SEO tab, bulk edit and the problem list read.
       routeValuesCollection(),
     ],
+    // The plugin's own tables, for bookkeeping written in one statement:
+    // the log of addresses not found.
+    schema: seoSchema,
     // Every page's head, as worked out above, each page built in code
     // recorded as connected as its route asks for its head, and what each
     // entry's or Single's route supplies in code kept for the admin.
@@ -905,6 +907,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // and one that cannot fall behind, because it is the same string the
     // package already reads for its own `version`.
     nextly: `>=${PLUGIN_VERSION}`,
+    // The schema version its migrations bring the database to, read from the
+    // one declaration of its tables.
+    schemaVersion: seoSchemaPlugin.schemaVersion,
     author: "Nextly <contact@nextlyhq.com> (https://nextlyhq.com)",
     homepage: "https://nextlyhq.com",
     repository: "https://github.com/nextlyhq/nextly",
@@ -976,6 +981,14 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // record up to date with content saved while the plugin was absent or
       // addresses a deploy moved.
       void startCatchUp(ctx);
+      // The not-found log an earlier version kept in a collection, moved to
+      // the plugin's table; one count once there is nothing left to move.
+      void moveLoggedRows(ctx).catch((error: unknown) => {
+        ctx.logger.error(
+          "The SEO plugin could not move its not-found log to its table",
+          { error }
+        );
+      });
       // Decided once, the first time the plugin starts on a site: whether a
       // site with no production address known is kept out of search.
       void decideStanding(ctx).catch((error: unknown) => {

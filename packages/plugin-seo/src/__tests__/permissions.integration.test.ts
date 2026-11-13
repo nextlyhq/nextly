@@ -889,9 +889,16 @@ describe.each(getConfiguredTestDialects())(
           problem => problem.subject.type === "single:home"
         )
       ).toBe(false);
-      // The list says which types it covers for them, so a page of another
-      // type is not taken for one with no problems.
-      expect(itemOf(posts.body).types).toEqual(["posts"]);
+      // The list says which pages it checked for them, so a page it left
+      // out is not taken for one with no problems.
+      const checkedOf = async (cookie: string) =>
+        (
+          itemOf((await route("GET", "/problems", cookie)).body).checked as {
+            type: string;
+          }[]
+        ).map(page => page.type);
+      expect(await checkedOf(postsReader)).not.toContain("single:home");
+      expect(await checkedOf(homeReader)).toContain("single:home");
       const refused = await route(
         "GET",
         "/problems",

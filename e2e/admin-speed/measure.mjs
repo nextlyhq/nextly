@@ -66,9 +66,9 @@ const USER = { email: "dev@nextly.local", password: "DevPassword123!" };
 
 const STATEMENT_SLACK = 0.05;
 /**
- * A screen's statements move more than a start's from run to run, while a
- * few requests are still sometimes sent twice (`racy` in the pins); they are
- * held to this until those duplicates are gone, then to `STATEMENT_SLACK`.
+ * A screen's statements are held to this rather than `STATEMENT_SLACK`, since
+ * repeated runs of one commit have moved them by about a tenth. It tightens
+ * to `STATEMENT_SLACK` once runs show each screen's count holding still.
  */
 const SCREEN_STATEMENT_SLACK = 0.15;
 /** The least a growth pin allows either way, as two starts differ by a few. */
@@ -529,13 +529,21 @@ async function measureDialect(dialect, dir) {
       await page.goto(`${BASE}/admin`, { timeout: 120_000 });
       await emailBox(page).waitFor({ timeout: 120_000 });
     };
+    // Each screen's wait names something only that screen draws once its data
+    // is in. The sign-in form has a `main` and a textbox of its own, and the
+    // signed-in frame paints its outline before the server answers, so a bare
+    // `main` or the first textbox matches a screen that has not loaded, or
+    // the sign-in form drawn in its place.
+    //
+    // Signed in: the rail's column says the server has confirmed the session.
+    const signedIn = p => p.locator('aside[data-shell-answers="settled"]');
     const signIn = async page => {
       await emailBox(page).fill(USER.email);
       await page
         .getByRole("textbox", { name: /password/i })
         .fill(USER.password);
       await page.getByRole("button", { name: /sign in|log in/i }).click();
-      await page.locator("main").waitFor({ timeout: 300_000 });
+      await signedIn(page).waitFor({ timeout: 300_000 });
     };
 
     // The sign-in screen, signed out, on the started server.
@@ -557,15 +565,29 @@ async function measureDialect(dialect, dir) {
     await signIn(first);
     await first.close();
 
-    const entryLink =
-      'main a[href^="/admin/collections/posts/"]:not([href$="/create"]) >> visible=true';
+    // The dashboard: a widget's cell, which its outline does not draw.
+    const widgetCell = p =>
+      p
+        .getByTestId("dashboard-container")
+        .locator('[data-testid^="widget-cell-"]')
+        .first();
+    // The list: a row's way in, a link the entries table draws for each row
+    // and not over its outline rows.
+    const entryLink = p =>
+      p
+        .getByRole("table", { name: "Entries table" })
+        .locator("a[data-row-entry]")
+        .first();
+    // The edit page: the entry's own Title field.
+    const titleBox = p =>
+      p.getByRole("main").getByRole("textbox", { name: /^title/i });
     out.screens.dashboard = (
       await steady(
         context,
         log,
         async page => {
           await page.goto(`${BASE}/admin`, { timeout: 120_000 });
-          await page.locator("main").waitFor({ timeout: 120_000 });
+          await widgetCell(page).waitFor({ timeout: 120_000 });
         },
         {}
       )
@@ -577,8 +599,8 @@ async function measureDialect(dialect, dir) {
         await page.goto(`${BASE}/admin/collections/posts`, {
           timeout: 120_000,
         });
-        await page.locator(entryLink).first().waitFor({ timeout: 120_000 });
-        return page.locator(entryLink).first().getAttribute("href");
+        await entryLink(page).waitFor({ timeout: 120_000 });
+        return entryLink(page).getAttribute("href");
       },
       {}
     );
@@ -590,7 +612,7 @@ async function measureDialect(dialect, dir) {
         log,
         async page => {
           await page.goto(new URL(href, BASE).toString(), { timeout: 120_000 });
-          await page.getByRole("textbox").first().waitFor({ timeout: 120_000 });
+          await titleBox(page).waitFor({ timeout: 120_000 });
         },
         {}
       )
