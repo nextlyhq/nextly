@@ -15,7 +15,12 @@
 import type { JSX } from "react";
 
 import { DOCUMENT_COLUMN_INSET } from "@admin/components/features/entries/EntryForm/DocumentEditorLayout";
+import {
+  USERS_LIST,
+  USERS_LIST_COLUMNS,
+} from "@admin/components/features/users/users-list-layout";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
+import { useCollectionFoldedPanel } from "@admin/components/layout/PanelFold";
 import { ROUTES } from "@admin/constants/routes";
 
 import {
@@ -26,6 +31,12 @@ import {
   ListOutline,
   MediaOutline,
 } from "./outlines";
+
+/**
+ * The users list's own columns, as its outline draws them before a site's
+ * custom fields are known.
+ */
+const USERS_OUTLINE_COLUMNS = Object.values(USERS_LIST_COLUMNS);
 
 /** The kinds of screen an address can open, as far as their outline goes. */
 type ScreenOutlineKind =
@@ -69,14 +80,28 @@ const SECTION_KINDS: Readonly<Record<string, SectionKinds>> = {
   account: () => "form",
 };
 
-/** The kind of screen `pathname` opens. */
-function screenOutlineKind(pathname: string): ScreenOutlineKind {
-  const [section, slug, item] = pathname
+/** The address's parts after the admin's own segment. */
+function addressParts(pathname: string): string[] {
+  return pathname
     .replace(/^\/admin\/?/, "")
     .split("/")
     .filter(part => part.length > 0);
+}
+
+/** The kind of screen `pathname` opens. */
+function screenOutlineKind(pathname: string): ScreenOutlineKind {
+  const [section, slug, item] = addressParts(pathname);
   if (section === undefined) return "dashboard";
   return SECTION_KINDS[section]?.(slug, item) ?? "generic";
+}
+
+/** The collection whose document `pathname` opens, or none. */
+function documentCollection(
+  kind: ScreenOutlineKind,
+  pathname: string
+): string | undefined {
+  if (kind !== "entry-editor" && kind !== "entry-creator") return undefined;
+  return addressParts(pathname)[1];
 }
 
 /** The outline of the screen `pathname` opens. */
@@ -86,11 +111,15 @@ export function ScreenOutlineFor({
   pathname: string;
 }): JSX.Element {
   const kind = screenOutlineKind(pathname);
+  // A collection whose document screens start with the panel folded is
+  // outlined folded, by the screen's own declaration, so the frame does not
+  // move when the screen arrives.
+  useCollectionFoldedPanel(documentCollection(kind, pathname));
   switch (kind) {
     case "dashboard":
       return <DashboardOutline />;
     case "list":
-      return <ListOutline />;
+      return <ListOutline list={addressParts(pathname)[1]} />;
     case "entry-editor":
     case "entry-creator":
     case "single-editor":
@@ -106,7 +135,17 @@ export function ScreenOutlineFor({
     case "media":
       return <MediaOutline />;
     case "users":
-      return <ListOutline title="Users" />;
+      return (
+        <ListOutline
+          title="Users"
+          // The users page says what it is for under its title.
+          subtitle
+          list={USERS_LIST}
+          selection
+          headers={USERS_OUTLINE_COLUMNS.map(column => column.header)}
+          columnWidths={USERS_OUTLINE_COLUMNS.map(column => column.width)}
+        />
+      );
     case "form":
       return <FormOutline />;
     case "generic":

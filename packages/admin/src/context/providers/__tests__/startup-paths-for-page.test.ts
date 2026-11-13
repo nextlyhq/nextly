@@ -13,7 +13,10 @@ import { startupPathsForPage } from "../admin-startup";
 const COMMON = ["/auth/session", "/me"];
 const PAGE = "/admin/plugins/acme-seo/overview";
 const READ = "/plugins/@acme/seo/overview/checklist";
-const SCREENS = JSON.stringify({ [PAGE]: [READ] });
+/** The element's text, as the admin layout writes it, with these pages' reads. */
+const screensWith = (reads: unknown): string =>
+  JSON.stringify({ reads, foldedPanels: [] });
+const SCREENS = screensWith({ [PAGE]: [READ] });
 
 describe("the startup request's paths for a page", () => {
   it("adds a plugin page's declared reads after what every screen needs", () => {
@@ -46,7 +49,7 @@ describe("the startup request's paths for a page", () => {
 
   it("finds a page whose address the browser percent-encodes", () => {
     const page = "/admin/plugins/acme-seo/über";
-    const screens = JSON.stringify({ [page]: [READ] });
+    const screens = screensWith({ [page]: [READ] });
     expect(startupPathsForPage(encodeURI(page), COMMON, screens, 16)).toContain(
       READ
     );
@@ -56,14 +59,16 @@ describe("the startup request's paths for a page", () => {
     ["no element", null],
     ["text that is not JSON", "{not json"],
     ["JSON that is not a map", "[1,2]"],
-    ["a page whose reads are not a list", JSON.stringify({ [PAGE]: READ })],
-    ["reads that are not paths", JSON.stringify({ [PAGE]: [1, null] })],
+    ["reads that are not a map", screensWith([READ])],
+    ["reads outside `reads`", JSON.stringify({ [PAGE]: [READ] })],
+    ["a page whose reads are not a list", screensWith({ [PAGE]: READ })],
+    ["reads that are not paths", screensWith({ [PAGE]: [1, null] })],
   ])("names only what every screen needs with %s", (_case, screensJson) => {
     expect(startupPathsForPage(PAGE, COMMON, screensJson, 16)).toEqual(COMMON);
   });
 
   it("names a path once, and no more than the startup request may carry", () => {
-    const screens = JSON.stringify({
+    const screens = screensWith({
       [PAGE]: ["/me", READ, "/plugins/@acme/seo/a", "/plugins/@acme/seo/b"],
     });
 

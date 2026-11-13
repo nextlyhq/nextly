@@ -38,6 +38,12 @@ import {
   Search,
 } from "@admin/components/icons";
 import { SectionErrorFallback } from "@admin/components/shared/error-fallbacks";
+import { outlineRowsFor } from "@admin/components/shared/loading-frame/list-rows";
+import {
+  ListToolbarOutline,
+  ScreenOutline,
+  TableOutline,
+} from "@admin/components/shared/loading-frame/outlines";
 import type { PaginationProps } from "@admin/components/shared/pagination/types";
 import {
   Button,
@@ -91,6 +97,9 @@ import {
 import { useClampedPage } from "./useClampedPage";
 import { useMinuteClock } from "./useMinuteClock";
 import { useTabStripOverflow } from "./useTabStripOverflow";
+
+/** The releases list's name: its `registryKey`, and what its row count is kept under. */
+const RELEASES_LIST = "releases";
 
 /**
  * Rows per page: the sizes every admin table offers, starting at the middle
@@ -282,17 +291,26 @@ function filteredEmptyFor(
   };
 }
 
+/** The count pill's shape, the same whether it holds a count or waits for one. */
+const COUNT_PILL =
+  "ml-2 inline-flex min-w-5 justify-center rounded-full px-1.5 text-xs font-medium tabular-nums leading-5";
+
 /**
  * A tab's label with its count drawn as a pill. The pill is hidden from
  * assistive technology, which reads the trigger's own name instead, so the
- * count is announced as "Drafts (2)" rather than run into the word.
+ * count is announced as "Drafts (2)" rather than run into the word. While the
+ * counts are on their way an empty pill holds the count's place, so the tabs
+ * do not widen, and the list under them does not move, when they land.
  */
 function TabLabel({
   tab,
   count,
+  counting,
 }: {
   tab: ReleaseListTab;
   count: number | undefined;
+  /** Whether the counts are still on their way. */
+  counting: boolean;
 }) {
   // Needs attention draws its count in the warning tone only while there is
   // something in it: an alarm-coloured zero would ask for attention it does
@@ -301,12 +319,17 @@ function TabLabel({
   return (
     <>
       {RELEASE_TAB_LABEL[tab]}
+      {count === undefined && counting ? (
+        <span aria-hidden className={cn(COUNT_PILL, "bg-muted")}>
+          {"\u00a0"}
+        </span>
+      ) : null}
       {count === undefined ? null : (
         <>
           <span
             aria-hidden
             className={cn(
-              "ml-2 inline-flex min-w-5 justify-center rounded-full px-1.5 text-xs font-medium tabular-nums leading-5",
+              COUNT_PILL,
               urgent
                 ? "bg-danger-text text-danger-surface"
                 : "bg-muted text-muted-foreground"
@@ -646,9 +669,12 @@ function toolbarFor(
 function ReleaseTabStrip({
   tab,
   counts,
+  counting,
 }: {
   tab: ReleaseListTab;
   counts: Record<ReleaseListTab, number | undefined>;
+  /** Whether the counts are still on their way. */
+  counting: boolean;
 }) {
   const strip = useTabStripOverflow(tab);
   return (
@@ -660,7 +686,7 @@ function ReleaseTabStrip({
       >
         {RELEASE_LIST_TABS.map(t => (
           <TabsTrigger key={t} value={t} aria-label={tabName(t, counts[t])}>
-            <TabLabel tab={t} count={counts[t]} />
+            <TabLabel tab={t} count={counts[t]} counting={counting} />
           </TabsTrigger>
         ))}
       </TabsList>
@@ -701,9 +727,26 @@ export function ReleaseList({ onCreate }: ReleaseListProps): JSX.Element {
     setDialogOpen(true);
   };
 
+  // Whether any release exists decides the toolbar, so until the counts say,
+  // the toolbar and the table stand as one outline the answer replaces whole:
+  // a toolbar drawn on a guess and then taken away would move the list.
+  const counting = counts.isPending;
   const panel = (
     <ListView<Release>
-      {...toolbarFor(q, anyRelease, list.isFetching && Boolean(q.search))}
+      {...(counting
+        ? {}
+        : toolbarFor(q, anyRelease, list.isFetching && Boolean(q.search)))}
+      skeleton={
+        <ScreenOutline>
+          <div className="space-y-4">
+            {counting ? <ListToolbarOutline /> : null}
+            <TableOutline
+              headers={columns.map(column => column.header)}
+              rows={outlineRowsFor(RELEASES_LIST)}
+            />
+          </div>
+        </ScreenOutline>
+      }
       hasActiveFilters={q.hideSingles || Boolean(q.reason)}
       columns={columns}
       rows={rows}
@@ -713,9 +756,9 @@ export function ReleaseList({ onCreate }: ReleaseListProps): JSX.Element {
       }
       primaryColumn="title"
       rowActions={release => rowActionsFor(release, openDialog)}
-      registryKey="releases"
+      registryKey={RELEASES_LIST}
       ariaLabel={`${RELEASE_TAB_LABEL[q.tab]} releases`}
-      loading={list.isPending}
+      loading={list.isPending || counting}
       error={null}
       empty={emptyStateFor(q.tab, {
         anyRelease,
@@ -751,7 +794,11 @@ export function ReleaseList({ onCreate }: ReleaseListProps): JSX.Element {
         value={q.tab}
         onValueChange={next => isListTab(next) && goToTab(next)}
       >
-        <ReleaseTabStrip tab={q.tab} counts={counts.counts} />
+        <ReleaseTabStrip
+          tab={q.tab}
+          counts={counts.counts}
+          counting={counts.isPending}
+        />
         {/* One panel per tab for the tablist's own wiring; only the open
             tab's panel holds the list. */}
         {RELEASE_LIST_TABS.map(t => (

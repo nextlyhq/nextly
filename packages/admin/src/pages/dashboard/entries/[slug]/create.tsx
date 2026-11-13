@@ -33,6 +33,7 @@ import {
 } from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { useCollectionFoldedPanel } from "@admin/components/layout/PanelFold";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { EditorOutline } from "@admin/components/shared/loading-frame/outlines";
@@ -123,6 +124,9 @@ export default function CreateEntryPage({
   params,
 }: CreateEntryPageProps): React.ReactElement {
   const slug = params?.slug;
+  // The panel folded, where the collection's plugin says its document
+  // screens start so, as the frame's outline of this address was drawn.
+  useCollectionFoldedPanel(slug);
 
   // Fetch enriched collection schema (component fields are populated)
   const { data: collection, isLoading, error } = useCollectionSchema(slug);

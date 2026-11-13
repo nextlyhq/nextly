@@ -406,6 +406,16 @@ export interface PluginCollectionView {
    * Details, in the order given: see `PluginPanelSection`.
    */
   panelSections?: PluginPanelSection[];
+  /**
+   * @experimental Whether this collection's document screens (an entry's
+   * editor, a new entry's, and the pages of its own edit view) start with the
+   * rail's panel folded away, for an editor that needs the width. The bar
+   * shows a toggle that brings the panel back, and the reader's choice is
+   * remembered. Declared here, rather than asked for as the screen mounts
+   * (`useFoldedPanel`), so the admin's first frame is drawn folded too and
+   * nothing moves when the screen arrives.
+   */
+  foldedPanel?: boolean;
 }
 
 /**

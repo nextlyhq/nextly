@@ -15,6 +15,9 @@
  *   later read can ask "has it changed?" instead of being sent it again;
  * - **`branding`**: the site's public branding (logo, name, favicon), which
  *   the sign-in page already shows to anyone;
+ * - **`layout`**: how the admin's own parts were last drawn for this person,
+ *   as numbers alone (how many rows a list drew), so an outline drawn before
+ *   the server answers stands as tall as the part that replaces it;
  * - interface preferences (a folded panel, pinned items), under their own keys;
  * - the record that someone signed in here, which picks the first screen.
  *
@@ -185,6 +188,20 @@ const rememberedBrandingSchema = z.object({
 
 export type RememberedBranding = z.infer<typeof rememberedBrandingSchema>;
 
+/** The name of one part of the admin whose drawn size is kept. */
+const layoutPart = z.string().min(1).max(200);
+
+/**
+ * How the admin's parts were last drawn: a whole number per part, and
+ * nothing else. A part is named by where it is drawn (`list-rows:posts`),
+ * never by what it shows, and holds a size, never a value read from it.
+ */
+const rememberedLayoutSchema = z
+  .record(layoutPart, z.number().int().min(0).max(100_000))
+  .refine(parts => Object.keys(parts).length <= 500);
+
+export type RememberedLayout = z.infer<typeof rememberedLayoutSchema>;
+
 /**
  * The schema reads whose answers may be kept: one collection's, one Single's
  * or one field group's schema, by the address the admin reads it at. Never a
@@ -207,6 +224,8 @@ const KINDS = {
   menu: { schema: rememberedMenuSchema, labelled: true },
   schema: { schema: rememberedSchemaSchema, labelled: true },
   branding: { schema: rememberedBrandingSchema, labelled: false },
+  // Labelled: what a list drew depends on what this person may read.
+  layout: { schema: rememberedLayoutSchema, labelled: true },
 } as const;
 
 type MemoryKind = keyof typeof KINDS;
@@ -504,6 +523,26 @@ export function rememberSchema(
   session: number = state.session
 ): boolean {
   return remember("schema", path, { etag, body }, session);
+}
+
+/** How `part` was last drawn, or undefined where it is not remembered. */
+export function recallLayout(part: string): number | undefined {
+  const kept = recall("layout", "") as RememberedLayout | undefined;
+  return kept !== undefined && Object.hasOwn(kept, part)
+    ? kept[part]
+    : undefined;
+}
+
+/**
+ * Keep how `part` was drawn now, beside every other part kept. Refused, as
+ * every kind is, where the site turned remembering off; and for a size that
+ * is not a whole number from 0, which is no size.
+ */
+export function rememberLayout(part: string, size: number): boolean {
+  if (!layoutPart.safeParse(part).success) return false;
+  const kept = (recall("layout", "") as RememberedLayout | undefined) ?? {};
+  if (kept[part] === size) return true;
+  return remember("layout", "", { ...kept, [part]: size });
 }
 
 /** The remembered public branding; empty when none is kept. */

@@ -31,11 +31,29 @@ import {
 } from "@admin/components/layout/header/TopBarPlaces";
 import { PAGER_FRAME } from "@admin/components/shared/pagination/pager-layout";
 import {
+  FIXED_LAYOUT_TABLE,
   ROW_ACTIONS_COLUMN,
   ROW_ACTIONS_TRIGGER,
+  SELECTION_COLUMN,
 } from "@admin/components/ui/table/data-table/row-actions";
+import {
+  LIST_TOOLBAR_CONTROLS,
+  LIST_TOOLBAR_ROW,
+  LIST_TOOLBAR_SEARCH,
+} from "@admin/components/ui/table/list-view/toolbar-layout";
+import {
+  confirmLabels,
+  rememberLayout,
+  resetDeviceMemoryForTests,
+} from "@admin/lib/device-memory/device-memory";
 
-import { EditorOutline, TableOutline } from "../outlines";
+import { FIRST_GUESS_ROWS, outlineRowsFor } from "../list-rows";
+import {
+  EditorOutline,
+  ListToolbarOutline,
+  ScreenOutline,
+  TableOutline,
+} from "../outlines";
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({ plugins: [] }),
@@ -121,5 +139,88 @@ describe("the table outline", () => {
     expect(
       table.compareDocumentPosition(pager) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+  });
+});
+
+describe("how many rows a list's outline draws", () => {
+  it("draws the rows it is given", () => {
+    const { container } = render(<TableOutline rows={10} />);
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(10);
+  });
+
+  it("guesses five for a list never opened here, else draws as many as it last drew", () => {
+    window.localStorage.clear();
+    resetDeviceMemoryForTests();
+    confirmLabels({ user: "u", schemaVersion: "1", permissionVersion: "p" });
+    expect(outlineRowsFor("posts")).toBe(FIRST_GUESS_ROWS);
+    rememberLayout("list-rows:posts", 10);
+    expect(outlineRowsFor("posts")).toBe(10);
+    // A list that drew none drew its empty state, which says nothing of the
+    // rows it will draw once it has some.
+    rememberLayout("list-rows:posts", 0);
+    expect(outlineRowsFor("posts")).toBe(FIRST_GUESS_ROWS);
+    expect(outlineRowsFor(undefined)).toBe(FIRST_GUESS_ROWS);
+  });
+});
+
+describe("a table outline of a list laid out by its columns' widths", () => {
+  it("lays its columns out by the same widths, after the selection boxes' column", () => {
+    const { container } = render(
+      <TableOutline
+        selection
+        headers={["Name", "Role"]}
+        columnWidths={[280, 160]}
+      />
+    );
+    const table = container.querySelector("table")!;
+    expect(classesOf(table)).toContain(FIXED_LAYOUT_TABLE);
+    const heads = container.querySelectorAll("thead th");
+    expect(heads[0].className).toContain(SELECTION_COLUMN);
+    expect((heads[1] as HTMLElement).style.width).toBe("280px");
+    expect((heads[2] as HTMLElement).style.width).toBe("160px");
+    for (const row of container.querySelectorAll("tbody tr")) {
+      expect(row.firstElementChild!.className).toContain(SELECTION_COLUMN);
+    }
+  });
+
+  it("lays its columns out by their content where any width is missing", () => {
+    const { container } = render(
+      <TableOutline
+        headers={["Name", "Role"]}
+        columnWidths={[280, undefined]}
+      />
+    );
+    expect(classesOf(container.querySelector("table")!)).not.toContain(
+      FIXED_LAYOUT_TABLE
+    );
+  });
+});
+
+describe("a list's toolbar outline", () => {
+  it("is laid out by the toolbar's own classes", () => {
+    const { container } = render(<ListToolbarOutline />);
+    const row = container.firstElementChild as HTMLElement;
+    expect(row.className).toBe(LIST_TOOLBAR_ROW);
+    expect((row.children[0] as HTMLElement).className).toBe(
+      LIST_TOOLBAR_SEARCH
+    );
+    expect((row.children[1] as HTMLElement).className).toBe(
+      LIST_TOOLBAR_CONTROLS
+    );
+  });
+});
+
+describe("an outline not yet due", () => {
+  it("is laid out but not drawn, so it holds its parts' place from the first paint", () => {
+    render(
+      <ScreenOutline>
+        <TableOutline />
+      </ScreenOutline>
+    );
+    const outline = screen.getByTestId("screen-outline");
+    // Before 0.4 s: its parts are there, taking their room, and unseen.
+    expect(outline.hasAttribute("data-outline-shown")).toBe(false);
+    expect(classesOf(outline)).toContain("invisible");
+    expect(outline.querySelectorAll("tbody tr").length).toBeGreaterThan(0);
   });
 });

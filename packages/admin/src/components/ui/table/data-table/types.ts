@@ -100,7 +100,11 @@ export interface NextlyColumn<Row extends object = Record<string, unknown>> {
   hideLabelOnMobile?: boolean;
   /** Text alignment. */
   align?: "left" | "center" | "right";
-  /** Fixed/So min width (px) hint. */
+  /**
+   * The column's width in pixels. Where every shown column declares one, the
+   * table is laid out by these widths alone, never by its rows, so its columns
+   * do not move as the rows arrive; extra room is shared among them.
+   */
   width?: number;
   /** Arbitrary bag for plugin/extension metadata (fieldType, pluginId, editable, ...). */
   meta?: Record<string, unknown>;

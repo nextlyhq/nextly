@@ -46,6 +46,7 @@ import {
 } from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { useCollectionFoldedPanel } from "@admin/components/layout/PanelFold";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { EditorOutline } from "@admin/components/shared/loading-frame/outlines";
@@ -191,6 +192,11 @@ export default function EditEntryPage({
       ? { collection: slug, entryId: id }
       : null
   );
+
+  // The panel folded, where the collection's plugin says its document
+  // screens start so, as the frame's outline of this address was drawn.
+  // Above every return, as a hook, so the loading outline is folded too.
+  useCollectionFoldedPanel(slug);
 
   // Active content language for this editor. `undefined` = the app's default locale
   // (the backend resolves it). Switching triggers a refetch (useEntry is keyed by locale) and

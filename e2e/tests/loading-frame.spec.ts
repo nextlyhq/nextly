@@ -50,15 +50,20 @@ type Marks = Record<Part, number | null>;
  * and writes the signed-in record, with no remembered menu, before the
  * admin's code reads it.
  */
-async function recordParts(page: Page): Promise<void> {
+async function recordParts(
+  page: Page,
+  { revisit = false }: { revisit?: boolean } = {}
+): Promise<void> {
   await page.addInitScript(
-    ([key, memory, selectors]) => {
+    ([key, memory, selectors, keep]) => {
       window.localStorage.setItem(key, "1");
       // Nothing remembered of the menu, so the frame is the one a browser
       // draws before it has one: the rail drawn from memory is
-      // device-memory.spec's.
+      // device-memory.spec's. A revisit keeps what an earlier visit left.
       for (const stored of Object.keys(window.localStorage)) {
-        if (stored.startsWith(memory)) window.localStorage.removeItem(stored);
+        if (!keep && stored.startsWith(memory)) {
+          window.localStorage.removeItem(stored);
+        }
       }
       const marks: Record<string, number | null> = {};
       for (const part of Object.keys(selectors)) marks[part] = null;
@@ -76,7 +81,7 @@ async function recordParts(page: Page): Promise<void> {
         attributes: true,
       });
     },
-    [SIGNED_IN_HERE_KEY, REMEMBERED_PREFIX, SELECTORS] as const
+    [SIGNED_IN_HERE_KEY, REMEMBERED_PREFIX, SELECTORS, revisit] as const
   );
 }
 
@@ -433,13 +438,12 @@ test.describe("the screen replacing its outline", () => {
     }
   });
 
-  for (const screenName of ["dashboard", "list", "edit"] as const) {
+  for (const screenName of ["dashboard", "edit"] as const) {
     test(`moves no part of the ${screenName} as its data arrives`, async ({
       page,
     }) => {
       test.setTimeout(90_000);
       let path = "";
-      if (screenName === "list") path = "/collections/posts";
       if (screenName === "edit") {
         // A post of the test's own, which no other test opens: an editor
         // open on a post elsewhere (another spec, a repeat on another worker)
@@ -474,9 +478,6 @@ test.describe("the screen replacing its outline", () => {
           { scopeKind: "collection", slug: "posts", entryId: item.id },
           "post"
         );
-      } else if (screenName === "list") {
-        await page.goto(`${ADMIN}${path}`);
-        await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
       }
 
       await recordShifts(page);
@@ -527,6 +528,285 @@ test.describe("the screen replacing its outline", () => {
         description: `${screenName}: ${total.toFixed(4)} after the release`,
       });
       expect(total, JSON.stringify(shifts)).toBeLessThanOrEqual(0.05);
+    });
+  }
+});
+
+/** The widths a screen is held to: a laptop's, with the menu panel open, up. */
+const WIDTHS = [1024, 1280, 1440] as const;
+
+/**
+ * How a screen is loaded: every admin request held until the outline shows
+ * and then let through at once, or nothing held, as a reader meets it.
+ */
+type LoadMode = "held" | "unheld";
+
+/** A box in CSS pixels, rounded so sub-pixel rendering never reads as a move. */
+type PartBox = { x: number; y: number; width: number; height: number };
+
+/**
+ * Each named part of the screen (`data-frame-part`) the page draws, by name:
+ * the outline's own, or the loaded screen's, outside any outline.
+ */
+async function frameParts(
+  page: Page,
+  drawnBy: "outline" | "screen"
+): Promise<Record<string, PartBox>> {
+  return page.evaluate(by => {
+    const parts: Record<string, PartBox> = {};
+    for (const element of Array.from(
+      document.querySelectorAll("[data-frame-part]")
+    )) {
+      const inOutline =
+        element.closest('[data-testid="screen-outline"]') !== null;
+      if (inOutline !== (by === "outline")) continue;
+      const rect = element.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) continue;
+      parts[element.getAttribute("data-frame-part") as string] = {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      };
+    }
+    return parts;
+  }, drawnBy);
+}
+
+/** Every layout shift recorded from `since` on the page's clock. */
+async function shiftsSince(page: Page, since: number) {
+  return (
+    await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __shifts: { value: number; at: number; sources: string[] }[];
+          }
+        ).__shifts
+    )
+  ).filter(shift => shift.at >= since);
+}
+
+/**
+ * Opens `path` as `mode` says and waits until it has settled; then holds the
+ * promise: nothing moved, not the frame, not a part of the screen, and every
+ * named part the outline drew stands where the screen drew it (the check a
+ * layout-shift score cannot make, since an outline replaced by different
+ * elements scores nothing however far off it was).
+ */
+async function expectStillLoad(
+  page: Page,
+  path: string,
+  mode: LoadMode,
+  {
+    revisit = false,
+    parts = true,
+  }: {
+    revisit?: boolean;
+    /**
+     * Whether the outline's named parts are held to the screen's. Not where a
+     * plugin draws a block above them, which the outline cannot know of
+     * before the server has answered.
+     */
+    parts?: boolean;
+  } = {}
+): Promise<void> {
+  await recordShifts(page);
+  await recordParts(page, { revisit });
+  await countFetches(page);
+  let releasedAt = 0;
+  let before: Awaited<ReturnType<typeof shellBoxes>> | null = null;
+  let outlined: Record<string, PartBox> = {};
+  if (mode === "held") {
+    const held = await holdAdminRequests(page);
+    await openHeld(page, path);
+    await expect(page.locator(SELECTORS.outline).first()).toBeVisible();
+    before = await shellBoxes(page);
+    outlined = await frameParts(page, "outline");
+    releasedAt = await page.evaluate(() => performance.now());
+    held.release();
+  } else {
+    await openHeld(page, path);
+  }
+  await screenArrived(page);
+  await expect(page.locator('[data-shell-answers="pending"]')).toHaveCount(0, {
+    timeout: 60_000,
+  });
+  await screenSettled(page);
+
+  if (before !== null) {
+    const after = await shellBoxes(page);
+    expect(after.rail).toEqual(before.rail);
+    expect(after.bar).toEqual(before.bar);
+    expect(after.main).toEqual(before.main);
+  }
+  const shifts = await shiftsSince(page, releasedAt);
+  const total = shifts.reduce((sum, shift) => sum + shift.value, 0);
+  test.info().annotations.push({
+    type: "layout-shift",
+    description: `${mode} ${path}: ${total.toFixed(4)}`,
+  });
+  // Nothing moves: not a part of the screen, not the frame around it.
+  expect(shifts, JSON.stringify(shifts)).toEqual([]);
+
+  if (!parts) return;
+  const loaded = await frameParts(page, "screen");
+  for (const [name, box] of Object.entries(outlined)) {
+    expect(loaded[name], `the screen draws no ${name}`).toBeDefined();
+    expect(loaded[name], `the outline's ${name} against the screen's`).toEqual(
+      box
+    );
+  }
+}
+
+/** The playground's entries API for a collection. */
+const entriesOf = (slug: string) => `/admin/api/collections/${slug}/entries`;
+
+/**
+ * Makes `count` posts of the test's own, all carrying one stamp in their
+ * excerpt, and returns the posts list's address filtered to them: a list
+ * whose length the test decides, whatever other tests write meanwhile.
+ */
+/**
+ * The text field each list's entries are stamped in, so its address can be
+ * filtered to the test's own: the posts' excerpt, the tags' description.
+ */
+const STAMPED = { posts: "excerpt", tags: "description" } as const;
+
+/**
+ * Makes `count` entries of the test's own in `slug`, all carrying one stamp,
+ * and returns the list's address filtered to them: a list whose length the
+ * test decides, whatever other tests write meanwhile.
+ */
+async function ownList(
+  page: Page,
+  slug: keyof typeof STAMPED,
+  count: number,
+  made: string[]
+): Promise<string> {
+  const stamp = `frame-${Date.now()}-${test.info().repeatEachIndex}-${test.info().workerIndex}`;
+  for (let index = 0; index < count; index += 1) {
+    const created = await page.request.post(entriesOf(slug), {
+      data: {
+        title: `Frame ${index} ${stamp}`,
+        slug: `${stamp}-${index}`,
+        [STAMPED[slug]]: stamp,
+      },
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    const { item } = (await created.json()) as { item: { id: string } };
+    made.push(`${entriesOf(slug)}/${item.id}`);
+  }
+  const where = encodeURIComponent(
+    JSON.stringify({ [STAMPED[slug]]: { equals: stamp } })
+  );
+  return `/collections/${slug}?where=${where}`;
+}
+
+/** A form of the test's own, which no other test holds open. */
+async function ownForm(page: Page, made: string[]): Promise<string> {
+  const stamp = `${Date.now().toString(36)}-${test.info().repeatEachIndex}-${test.info().workerIndex}`;
+  const created = await page.request.post(entriesOf("forms"), {
+    data: {
+      name: `Frame form ${stamp}`,
+      slug: `frame-form-${stamp}`,
+      status: "published",
+      fields: [
+        { type: "text", name: "name", label: "Name" },
+        { type: "email", name: "email", label: "Email" },
+      ],
+    },
+  });
+  expect(created.ok(), await created.text()).toBe(true);
+  const { item } = (await created.json()) as { item: { id: string } };
+  made.push(`${entriesOf("forms")}/${item.id}`);
+  return `/collections/forms/${item.id}`;
+}
+
+/** Visits `path` once, as a reader did before, so the device remembers it. */
+async function visitOnce(page: Page, path: string): Promise<void> {
+  await page.addInitScript(key => {
+    window.localStorage.setItem(key, "1");
+  }, SIGNED_IN_HERE_KEY);
+  // What `screenSettled` reads: the page's last change and its open reads.
+  await recordShifts(page);
+  await countFetches(page);
+  await page.goto(`${ADMIN}${path}`);
+  await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('[data-testid="screen-outline"]')).toHaveCount(0, {
+    timeout: 60_000,
+  });
+  await screenSettled(page);
+  await page.goto("about:blank");
+}
+
+test.describe("each screen's outline, held to the screen it stands for", () => {
+  /** Entries the tests made, deleted after each, so no list counts them. */
+  const made: string[] = [];
+
+  test.afterEach(async ({ page }) => {
+    for (const address of made.splice(0)) {
+      const removed = await page.request.delete(address);
+      expect(removed.ok(), await removed.text()).toBe(true);
+    }
+  });
+
+  for (const width of WIDTHS) {
+    test.describe(`at ${width} px`, () => {
+      test.use({ viewport: { width, height: 900 } });
+
+      for (const mode of ["held", "unheld"] as const) {
+        // The posts list has a plugin's showcase under its table, which a
+        // table that grows as its rows land would push down, and a plugin's
+        // block above it; the tags list has neither, so its outline's rows
+        // are held to the list's own.
+        for (const slug of ["posts", "tags"] as const) {
+          test(`moves no part of a list of five ${slug}, ${mode}`, async ({
+            page,
+          }) => {
+            test.setTimeout(90_000);
+            const path = await ownList(page, slug, 5, made);
+            await expectStillLoad(page, path, mode, {
+              parts: slug === "tags",
+            });
+          });
+
+          test(`moves no part of a page of ten ${slug} on a revisit, ${mode}`, async ({
+            page,
+          }) => {
+            test.setTimeout(90_000);
+            // More than the outline's first guess: the first visit learns how
+            // many rows the list draws, and the next draws its outline so.
+            const path = await ownList(page, slug, 11, made);
+            await visitOnce(page, path);
+            await expectStillLoad(page, path, mode, {
+              revisit: true,
+              parts: slug === "tags",
+            });
+          });
+        }
+
+        test(`moves no part of the form editor, ${mode}`, async ({ page }) => {
+          test.setTimeout(90_000);
+          const path = await ownForm(page, made);
+          await expectStillLoad(page, path, mode);
+        });
+
+        test(`moves no part of the releases, ${mode}`, async ({ page }) => {
+          test.setTimeout(90_000);
+          await expectStillLoad(page, "/releases", mode);
+        });
+
+        test(`moves no part of the users on a revisit, ${mode}`, async ({
+          page,
+        }) => {
+          test.setTimeout(90_000);
+          // How many accounts there are is the suite's, not this test's: the
+          // first visit learns how many rows the list draws.
+          await visitOnce(page, "/users");
+          await expectStillLoad(page, "/users", mode, { revisit: true });
+        });
+      }
     });
   }
 });
