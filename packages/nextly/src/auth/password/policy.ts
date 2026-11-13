@@ -47,6 +47,16 @@ export interface PasswordHasher {
   ) => boolean | void | string | { ok: boolean; message?: string };
   /** Optional name for the digester in error messages. */
   name?: string;
+  /**
+   * Optional: whether a stored value is one of this hasher's hashes. With it,
+   * sign-in refuses a stored value that is neither this hasher's nor core's
+   * bcrypt (a password stored as given) without asking `verify`. Without it,
+   * any non-empty stored value that is not bcrypt goes to `verify`. Bcrypt
+   * values core stored before the hasher was configured are verified with
+   * bcrypt and stored again with `hash` at the next sign-in, unless this
+   * answers that the value is the hasher's own.
+   */
+  isHash?: (stored: string) => boolean;
 }
 
 export const DEFAULT_MIN_PASSWORD_LENGTH = 8;

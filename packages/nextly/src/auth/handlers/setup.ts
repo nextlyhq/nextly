@@ -3,6 +3,7 @@
 // the legitimate first-admin form. See docs/auth/csrf.md.
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { respondAction, respondData } from "../../api/response-shapes";
+import { appPasswordRule } from "../../di/password-digester";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
@@ -357,7 +358,8 @@ function setupInputRefusal(
     });
   }
 
-  const strengthResult = validatePasswordStrength(password);
+  // Judged by the app's hasher, which hashes the first account.
+  const strengthResult = validatePasswordStrength(password, appPasswordRule());
   if (strengthResult.ok) return null;
   // The rules a password failed are the only part of this a person can act
   // on, so they travel on `data.errors` -- the key the canonical envelope

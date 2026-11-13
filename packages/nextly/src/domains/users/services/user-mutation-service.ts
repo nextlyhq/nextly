@@ -24,11 +24,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Table, Column } from "drizzle-orm";
 import { eq, inArray, isNotNull, sql } from "drizzle-orm";
 
-import { hashPassword, isPasswordHash } from "@nextly/auth/password";
 import {
   CreateLocalUserSchema,
   UpdateUserSchema,
 } from "@nextly/schemas/_zod/user";
+import { createPasswordSchema } from "@nextly/schemas/_zod/validation";
 import {
   buildCreateUserSchema,
   buildUpdateUserSchema,
@@ -47,6 +47,7 @@ import {
   firstIdentifierNamed,
   missingSchemaObject,
 } from "../../../database/missing-column";
+import { appPasswordDigester } from "../../../di/password-digester";
 import { NextlyError } from "../../../errors";
 import { safeEmit } from "../../../events/domain-events";
 import {
@@ -530,27 +531,28 @@ function isExternalIdentityShape(account: {
 }
 
 /**
- * How an update recognises a stored password, set by the caller that knows
- * the app's configuration. See {@link UserMutationService.updateUser}.
+ * `schema` with its password judged by the app's hasher: its `reach`, or its
+ * own `validate`, in place of core bcrypt's 72 bytes. The input schemas are
+ * where every account write judges a password, so the hasher's contract is
+ * applied there, before anything is hashed, and the same password is taken or
+ * refused on create and update as on a change or a reset. Without a hasher the
+ * schema is core's, unchanged.
  */
-export interface UpdateUserOptions {
-  /**
-   * Whether the app configures its own `passwordHasher`. Its hashes can take
-   * any form, and its sign-in verifies them, so with one any stored value
-   * counts as a password. Without one only core's hash does: core signs no
-   * one in with anything else.
-   */
-  customPasswordHasher?: boolean;
+function withAppPasswordRule<
+  S extends typeof CreateLocalUserSchema | typeof UpdateUserSchema,
+>(schema: S): S {
+  const { hasher } = appPasswordDigester();
+  if (!hasher) return schema;
+  return schema.extend({
+    password: createPasswordSchema({ hasher }).optional(),
+  }) as S;
 }
 
-/** Whether a stored value is a password, as {@link UpdateUserOptions} says. */
-function storesPassword(
-  value: unknown,
-  customPasswordHasher: boolean
-): boolean {
-  return customPasswordHasher
-    ? typeof value === "string" && value !== ""
-    : isPasswordHash(value);
+/** Whether a stored value is a password the app's sign-in takes. */
+function storesPassword(value: unknown): boolean {
+  // With core's hashing only its hash, since a stored value that is not one
+  // signs nobody in; with the app's own hasher, any value it recognises.
+  return appPasswordDigester().isHash(value);
 }
 
 /**
@@ -783,7 +785,7 @@ export class UserMutationService extends BaseService {
    */
   private getCreateSchema(): typeof CreateLocalUserSchema {
     this.ensureSchemasUpToDate();
-    return this.createSchema;
+    return withAppPasswordRule(this.createSchema);
   }
 
   /**
@@ -791,7 +793,7 @@ export class UserMutationService extends BaseService {
    */
   private getUpdateSchema(): typeof UpdateUserSchema {
     this.ensureSchemasUpToDate();
-    return this.updateSchema;
+    return withAppPasswordRule(this.updateSchema);
   }
 
   /**
@@ -1309,7 +1311,7 @@ export class UserMutationService extends BaseService {
       // write that takes a hash, and which refuses anything else.
       let passwordHash: string | null = null;
       if (userData.password && userData.password.length > 0) {
-        passwordHash = await hashPassword(userData.password);
+        passwordHash = await appPasswordDigester().hash(userData.password);
       }
 
       // Account-enumeration sensitive: the public message stays generic
@@ -1449,7 +1451,7 @@ export class UserMutationService extends BaseService {
         isExternalIdentityShape({
           isActive: values.isActive === true,
           verified: values.emailVerified != null,
-          hasPassword: isPasswordHash(values.passwordHash),
+          hasPassword: storesPassword(values.passwordHash),
         })
       ) {
         throw NextlyError.forbidden({
@@ -1839,8 +1841,7 @@ export class UserMutationService extends BaseService {
   async updateUser(
     userId: number | string,
     changes: UpdateUserData,
-    caller: UserWriteCaller = "app",
-    options: UpdateUserOptions = {}
+    caller: UserWriteCaller = "app"
   ): Promise<UserMutationResponse> {
     try {
       // The person's own to set, through their profile: refused here, first,
@@ -1998,7 +1999,7 @@ export class UserMutationService extends BaseService {
         if (rawPassword.trim().length > 0) {
           Object.assign(
             updateData,
-            passwordColumns(await hashPassword(rawPassword))
+            passwordColumns(await appPasswordDigester().hash(rawPassword))
           );
         }
       }
@@ -2233,8 +2234,7 @@ export class UserMutationService extends BaseService {
               await this.refuseExternalIdentityShape(
                 currentUser.id,
                 updateData,
-                txDb,
-                options.customPasswordHasher === true
+                txDb
               );
             }
             if (hasFieldUpdates && endsSessions) {
@@ -2691,8 +2691,7 @@ export class UserMutationService extends BaseService {
   private async refuseExternalIdentityShape(
     userId: string | number,
     set: UserUpdateData,
-    txDb: DrizzleTransactionLike,
-    customPasswordHasher: boolean
+    txDb: DrizzleTransactionLike
   ): Promise<void> {
     const { users } = this.tables;
     const read = txDb
@@ -2739,11 +2738,9 @@ export class UserMutationService extends BaseService {
         set.emailVerified !== undefined
           ? set.emailVerified != null
           : row.emailVerified != null,
-      // A password as the app's sign-in would take one: with core's hashing
-      // only its hash, since a stored value that is not one signs nobody in.
+      // A password as the app's sign-in would take one.
       hasPassword: storesPassword(
-        set.passwordHash !== undefined ? set.passwordHash : row.passwordHash,
-        customPasswordHasher
+        set.passwordHash !== undefined ? set.passwordHash : row.passwordHash
       ),
     };
     if (isExternalIdentityShape(after)) {
