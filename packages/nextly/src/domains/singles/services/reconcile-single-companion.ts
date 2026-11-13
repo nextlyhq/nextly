@@ -37,6 +37,7 @@ import {
   liveCompanionShape,
 } from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
+import type { BusyTableWait } from "../../schema/services/apply-migration-statements";
 
 /** Everything the companion reconcile needs about the save that triggered it. */
 export interface ReconcileSingleCompanionArgs {
@@ -76,6 +77,8 @@ export interface ReconcileSingleCompanionArgs {
    * throwing when they are refused. Left out, each column is dropped right after its copy.
    */
   settleLeaving?: () => Promise<void>;
+  /** A Schema Builder save's wait for a busy table (`applyCompanionTransition`). */
+  busyTable?: BusyTableWait;
 }
 
 export async function reconcileSingleCompanion(
@@ -154,6 +157,7 @@ export async function reconcileSingleCompanion(
     adapter,
     plan,
     settleLeaving: args.settleLeaving,
+    ...(args.busyTable === undefined ? {} : { busyTable: args.busyTable }),
     kind: "single",
     slug,
     tableName,
