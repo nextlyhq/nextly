@@ -33,7 +33,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { ExtensionSchema } from "../extension/build-extension-schema";
 import { resolveIndexName } from "../extension/compile";
 import { enumChecks } from "../extension/enum-check";
-import type { SchemaOwner } from "../extension/types";
+import type { ExtensionColumn, SchemaOwner } from "../extension/types";
 import type {
   NextlySchemaSnapshot,
   Operation,
@@ -91,41 +91,47 @@ export function contributedElements(
   dialect: SupportedDialect
 ): ContributedElement[] {
   if (!schema) return [];
-  const out: ContributedElement[] = [];
-  for (const [table, elements] of schema.elementOwners) {
-    for (const element of elements) out.push({ table, ...element });
-  }
-  for (const [table, columns] of schema.entityColumns) {
-    for (const column of columns) {
-      if (column.contributedBy === undefined) continue;
-      out.push({
-        table,
-        elementKind: "column",
-        elementName: column.name,
-        owner: column.contributedBy,
-      });
-      for (const check of enumChecks(table, [column], dialect)) {
-        out.push({
-          table,
-          elementKind: "check",
-          elementName: check.name,
-          owner: column.contributedBy,
-        });
-      }
-    }
-  }
-  for (const [table, indexes] of schema.entityIndexes) {
-    for (const index of indexes) {
-      if (index.contributedBy === undefined) continue;
-      out.push({
-        table,
-        elementKind: "index",
-        elementName: resolveIndexName(table, index),
-        owner: index.contributedBy,
-      });
-    }
-  }
-  return out;
+  return [
+    ...[...schema.elementOwners].flatMap(([table, elements]) =>
+      elements.map(element => ({ table, ...element }))
+    ),
+    ...[...schema.entityColumns].flatMap(([table, columns]) =>
+      columns.flatMap(column => hiddenColumnElements(table, column, dialect))
+    ),
+    ...[...schema.entityIndexes].flatMap(([table, indexes]) =>
+      indexes.flatMap(index =>
+        index.contributedBy === undefined
+          ? []
+          : [
+              {
+                table,
+                elementKind: "index" as const,
+                elementName: resolveIndexName(table, index),
+                owner: index.contributedBy,
+              },
+            ]
+      )
+    ),
+  ];
+}
+
+/** A hidden column on an entity or core table, and the enum check it implies. */
+function hiddenColumnElements(
+  table: string,
+  column: ExtensionColumn,
+  dialect: SupportedDialect
+): ContributedElement[] {
+  const owner = column.contributedBy;
+  if (owner === undefined) return [];
+  return [
+    { table, elementKind: "column", elementName: column.name, owner },
+    ...enumChecks(table, [column], dialect).map(check => ({
+      table,
+      elementKind: "check" as const,
+      elementName: check.name,
+      owner,
+    })),
+  ];
 }
 
 /**
@@ -231,24 +237,53 @@ export function keptElements(input: {
 }): KeptElement[] {
   const live = byName(input.live);
   const desired = byName(input.desired);
-  const kept: KeptElement[] = [];
-  for (const row of input.rows) {
+  return removedOwnersElements(input.rows, input.declaring)
+    .filter(element => {
+      const desiredTable = desired.get(element.table.toLowerCase());
+      const wanted = elementsOf(desiredTable, element.kind);
+      return (
+        wanted !== undefined &&
+        !wanted.some(e => e.name === element.name) &&
+        hasElement(live.get(element.table.toLowerCase()), element)
+      );
+    })
+    .map(element => ({
+      ...element,
+      table: desired.get(element.table.toLowerCase())?.name ?? element.table,
+    }));
+}
+
+/**
+ * The elements the owner rows record for a plugin that declares no schema
+ * any more: what a push neither drops nor changes.
+ */
+function removedOwnersElements(
+  rows: readonly OwnerRecord[],
+  declaring: ReadonlySet<string>
+): KeptElement[] {
+  return rows.flatMap(row => {
     const kind = row.elementKind ?? "table";
-    if (kind === "table") continue;
-    if (row.ownerKind !== "plugin" || input.declaring.has(row.ownerId)) {
-      continue;
-    }
-    const table = row.tableName.toLowerCase();
-    const name = row.elementName ?? "";
-    const liveTable = live.get(table);
-    const desiredTable = desired.get(table);
-    if (liveTable === undefined || desiredTable === undefined) continue;
-    if (!elementsOf(liveTable, kind)?.some(e => e.name === name)) continue;
-    const wanted = elementsOf(desiredTable, kind);
-    if (wanted === undefined || wanted.some(e => e.name === name)) continue;
-    kept.push({ table: desiredTable.name, kind, name, ownerId: row.ownerId });
-  }
-  return kept;
+    if (kind === "table" || row.ownerKind !== "plugin") return [];
+    if (declaring.has(row.ownerId)) return [];
+    return [
+      {
+        table: row.tableName,
+        kind,
+        name: row.elementName ?? "",
+        ownerId: row.ownerId,
+      },
+    ];
+  });
+}
+
+/** Whether a table has the element, in a dimension it tracks. */
+function hasElement(
+  table: TableSpec | undefined,
+  element: Pick<KeptElement, "kind" | "name">
+): boolean {
+  return (
+    elementsOf(table, element.kind)?.some(e => e.name === element.name) ?? false
+  );
 }
 
 /**
@@ -413,40 +448,49 @@ export function refuseChangesToKeptElements(input: {
   desired: NextlySchemaSnapshot;
   live: NextlySchemaSnapshot;
 }): void {
-  const removed = new Map<string, string>();
-  for (const row of input.rows) {
-    const kind = row.elementKind ?? "table";
-    if (kind === "table") continue;
-    if (row.ownerKind !== "plugin" || input.declaring.has(row.ownerId)) {
-      continue;
-    }
-    removed.set(
-      `${row.tableName.toLowerCase()}\u0000${kind}\u0000${row.elementName ?? ""}`,
-      row.ownerId
-    );
-  }
-  if (removed.size === 0) return;
-  for (const op of input.operations) {
+  refusePlannedChanges(
+    input.operations,
+    removedOwnersElements(input.rows, input.declaring)
+  );
+  refuseKeptOverRemovedColumns(input.kept, input.desired, input.live);
+}
+
+/** Refuse an operation that changes one of `removed`. */
+function refusePlannedChanges(
+  operations: readonly Operation[],
+  removed: readonly KeptElement[]
+): void {
+  if (removed.length === 0) return;
+  const key = (table: string, kind: ElementKind, name: string) =>
+    `${table.toLowerCase()}\u0000${kind}\u0000${name}`;
+  const owners = new Map(
+    removed.map(e => [key(e.table, e.kind, e.name), e.ownerId])
+  );
+  for (const op of operations) {
     const change = changeOf(op);
     if (change === undefined) continue;
-    const owner = removed.get(
-      `${change.table.toLowerCase()}\u0000${change.kind}\u0000${change.name}`
-    );
+    const owner = owners.get(key(change.table, change.kind, change.name));
     if (owner !== undefined) throw keptElementRefusal(change, owner);
   }
-  const desired = byName(input.desired);
-  const live = byName(input.live);
-  for (const element of input.kept) {
-    if (element.kind !== "index" && element.kind !== "fk") continue;
-    const columns = new Set(
-      desired.get(element.table.toLowerCase())?.columns.map(c => c.name) ?? []
+}
+
+/**
+ * Refuse a kept index or foreign key over a column the desired table no
+ * longer has: the database would drop it with that column.
+ */
+function refuseKeptOverRemovedColumns(
+  kept: readonly KeptElement[],
+  desiredSnapshot: NextlySchemaSnapshot,
+  liveSnapshot: NextlySchemaSnapshot
+): void {
+  const desired = byName(desiredSnapshot);
+  const live = byName(liveSnapshot);
+  for (const element of kept) {
+    const table = element.table.toLowerCase();
+    const columns = new Set(desired.get(table)?.columns.map(c => c.name) ?? []);
+    const gone = keptElementColumns(live.get(table), element).find(
+      column => !columns.has(column)
     );
-    const liveTable = live.get(element.table.toLowerCase());
-    const spec =
-      element.kind === "index"
-        ? liveTable?.indexes?.find(e => e.name === element.name)
-        : liveTable?.foreignKeys?.find(e => e.name === element.name);
-    const gone = (spec?.columns ?? []).find(column => !columns.has(column));
     if (gone === undefined) continue;
     throw keptElementRefusal(
       {
@@ -461,11 +505,21 @@ export function refuseChangesToKeptElements(input: {
   }
 }
 
+/** The columns a kept index or foreign key names, as the database has it. */
+function keptElementColumns(
+  table: TableSpec | undefined,
+  element: KeptElement
+): readonly string[] {
+  const find = <T extends { name: string; columns: string[] }>(
+    list: readonly T[] | undefined
+  ) => list?.find(e => e.name === element.name)?.columns ?? [];
+  if (element.kind === "index") return find(table?.indexes);
+  if (element.kind === "fk") return find(table?.foreignKeys);
+  return [];
+}
+
 /** The kept elements on one table, by kind. */
-export function keptOn(
-  kept: readonly KeptElement[],
-  table: string
-): KeptElement[] {
+function keptOn(kept: readonly KeptElement[], table: string): KeptElement[] {
   return kept.filter(e => e.table.toLowerCase() === table.toLowerCase());
 }
 
