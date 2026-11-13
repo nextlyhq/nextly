@@ -528,6 +528,7 @@ function sqliteColumns(
         column.notnull ? "not null" : "null",
         column.dflt_value !== null && `default ${column.dflt_value}`,
         column.pk > 0 && `primary key ${column.pk}`,
+        clauses.get(column.name)?.autoincrement === true && "autoincrement",
         // BINARY is the collation a column has when it names none.
         (clauses.get(column.name)?.collation ?? "BINARY").toUpperCase() !==
           "BINARY" && `collate ${clauses.get(column.name)?.collation}`,
@@ -603,11 +604,13 @@ interface ColumnClauses {
   generated?: string;
   /** Its collation, where it names one. */
   collation?: string;
+  /** Whether its key is AUTOINCREMENT, which decides the ids it hands out. */
+  autoincrement?: boolean;
 }
 
 /**
- * Each column's generated expression and collation in a CREATE TABLE
- * statement, by column name. A COLLATE inside an expression or a string is
+ * Each column's generated expression, collation and AUTOINCREMENT in a CREATE
+ * TABLE statement, by column name. A COLLATE inside an expression or a string is
  * not the column's own, so only the definition's outer text is searched.
  */
 function columnClauses(sql: string): Map<string, ColumnClauses> {
@@ -626,6 +629,8 @@ function columnClauses(sql: string): Map<string, ColumnClauses> {
     }
     const collate = /\bCOLLATE\s+["`[]?(\w+)/i.exec(outerText(item));
     if (collate !== null) found.collation = collate[1];
+    // Without it, a deleted highest id is handed out again.
+    if (/\bAUTOINCREMENT\b/i.test(outerText(item))) found.autoincrement = true;
     clauses.set(column, found);
   }
   return clauses;

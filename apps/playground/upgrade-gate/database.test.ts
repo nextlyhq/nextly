@@ -332,3 +332,34 @@ describe("a SQLite dump of an AUTOINCREMENT table", () => {
     }
   });
 });
+
+describe("the SQLite catalog's AUTOINCREMENT", () => {
+  it("reads a key rebuilt without AUTOINCREMENT as a change", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "upgrade-gate-autoincrement-"));
+    try {
+      const read = async (name: string, ddl: string) => {
+        const file = join(scratch, `${name}.sqlite`);
+        const db = new Sqlite(file);
+        db.exec(ddl);
+        db.close();
+        return readCatalog("sqlite", `file:${file}`);
+      };
+      expect(
+        operationsBetween(
+          await read(
+            "before",
+            `CREATE TABLE "t" ("id" integer PRIMARY KEY AUTOINCREMENT, "v" text)`
+          ),
+          await read(
+            "after",
+            `CREATE TABLE "t" ("id" integer PRIMARY KEY, "v" text)`
+          )
+        )
+      ).toEqual([
+        "change column t.id: integer null primary key 1 autoincrement -> integer null primary key 1",
+      ]);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+});
