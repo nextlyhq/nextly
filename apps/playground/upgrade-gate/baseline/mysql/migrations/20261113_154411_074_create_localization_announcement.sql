@@ -1,4 +1,4 @@
--- Migration: 20261113_145349_698_create_localization_announcement
+-- Migration: 20261113_154411_074_create_localization_announcement
 -- Singles: announcement
 -- Entity scope: touched
 -- Generated: localization companion (create-only) (i18n)

@@ -1,4 +1,4 @@
--- Migration: 20261113_145349_696_create_localization_authors
+-- Migration: 20261113_154411_072_create_localization_authors
 -- Collections: authors
 -- Entity scope: touched
 -- Generated: localization companion (create-only) (i18n)

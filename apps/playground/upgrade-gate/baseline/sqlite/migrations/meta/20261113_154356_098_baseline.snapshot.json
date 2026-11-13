@@ -2036,7 +2036,7 @@
       }
     }
   },
-  "migrationHash": "232051b570ac9325074c3316aa39612ecf9c18d31e30d06e96942e4fdc256a66",
+  "migrationHash": "0a830f79e75d5ac63c626e969b87ac700ea19db815572f38d69a978085ab4a05",
   "permissions": {
     "app": {},
     "collections": {
@@ -3177,53 +3177,52 @@
           {
             "name": "_component_type",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "default": "0",
             "name": "_order",
             "nullable": true,
-            "type": "int(11)"
+            "type": "integer"
           },
           {
             "name": "_parent_field",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_parent_id",
             "nullable": false,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "_parent_table",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": false,
-            "type": "datetime"
+            "type": "integer"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
-            "holdsSingleReference": true,
             "name": "og_image",
             "nullable": true,
             "referenceShape": "one",
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": false,
-            "type": "datetime"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -3263,84 +3262,83 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
             "name": "article_count",
             "nullable": true,
-            "type": "int"
+            "type": "integer"
           },
           {
-            "holdsSingleReference": true,
             "name": "avatar",
             "nullable": true,
             "referenceShape": "one",
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
             "nullable": true,
-            "type": "varchar(191)"
+            "type": "text"
           },
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar(20)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -3385,77 +3383,77 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
             "name": "content",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
             "nullable": true,
-            "type": "varchar(191)"
+            "type": "text"
           },
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar(20)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -3488,39 +3486,39 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
             "nullable": true,
-            "type": "varchar(191)"
+            "type": "text"
           },
           {
             "name": "description",
@@ -3530,29 +3528,29 @@
           {
             "name": "icon",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -3585,54 +3583,54 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
             "name": "area",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "category",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "content",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
             "nullable": true,
-            "type": "varchar(191)"
+            "type": "text"
           },
           {
             "name": "description",
@@ -3642,35 +3640,35 @@
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar(20)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -3703,72 +3701,71 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
             "nullable": true,
-            "type": "varchar(191)"
+            "type": "text"
           },
           {
             "name": "data",
             "nullable": false,
-            "type": "json"
+            "type": "text"
           },
           {
             "name": "edited_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "edited_by",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "holdsSingleReference": true,
             "name": "form",
             "nullable": true,
             "referenceShape": "one",
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "ip_address",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "notes",
@@ -3778,43 +3775,43 @@
           {
             "name": "response_key",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "spam_reason",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "status",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "submitted_at",
             "nullable": false,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "user_agent",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           }
         ],
         "indexes": [
@@ -3876,28 +3873,28 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
             "name": "closed_message",
@@ -3905,15 +3902,15 @@
             "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
             "nullable": true,
-            "type": "varchar(191)"
+            "type": "text"
           },
           {
             "name": "description",
@@ -3923,54 +3920,54 @@
           {
             "name": "fields",
             "nullable": false,
-            "type": "json"
+            "type": "text"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "name",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "notifications",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
             "name": "settings",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "status",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "went_live_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -4003,44 +4000,44 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
             "name": "areas",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
             "nullable": true,
-            "type": "varchar(191)"
+            "type": "text"
           },
           {
             "name": "description",
@@ -4050,35 +4047,35 @@
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar(20)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -4111,75 +4108,75 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
             "name": "blocked_by",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "claim_key",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
             "nullable": true,
-            "type": "varchar(191)"
+            "type": "text"
           },
           {
             "name": "holder_collection",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "holder_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "kind",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "locale",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "path",
@@ -4189,23 +4186,23 @@
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "space",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -4280,96 +4277,96 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
             "name": "class_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
             "nullable": true,
-            "type": "varchar(191)"
+            "type": "text"
           },
           {
             "name": "entity",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "entity_key",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "field",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "locale",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "scope",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "variant",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           }
         ],
         "indexes": [
@@ -4416,44 +4413,44 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
             "name": "component_id",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
             "nullable": true,
-            "type": "varchar(191)"
+            "type": "text"
           },
           {
             "name": "exposure_id",
@@ -4464,33 +4461,33 @@
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "identity",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "kind",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -4537,101 +4534,101 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
             "name": "component_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
             "nullable": true,
-            "type": "varchar(191)"
+            "type": "text"
           },
           {
             "name": "entity",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "entity_key",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "field",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "kind",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "locale",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "scope",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "variant",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           }
         ],
         "indexes": [
@@ -4678,71 +4675,71 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
             "nullable": true,
-            "type": "varchar(191)"
+            "type": "text"
           },
           {
             "name": "generation",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "scope_key",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -4789,89 +4786,88 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
             "name": "content",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
             "nullable": true,
-            "type": "varchar(191)"
+            "type": "text"
           },
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
-            "holdsSingleReference": true,
             "name": "layout",
             "nullable": true,
             "referenceShape": "one",
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "no_header_footer",
             "nullable": true,
-            "type": "tinyint(1)"
+            "type": "integer"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar(20)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -4911,49 +4907,49 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
             "name": "category",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "content",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
             "nullable": true,
-            "type": "varchar(191)"
+            "type": "text"
           },
           {
             "name": "description",
@@ -4963,45 +4959,45 @@
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "granularity",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "keywords",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar(20)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5034,35 +5030,34 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
-            "holdsReferenceList": true,
             "name": "categories",
             "nullable": true,
             "referenceShape": "list",
-            "type": "json"
+            "type": "text"
           },
           {
             "name": "content",
@@ -5070,15 +5065,15 @@
             "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
             "nullable": true,
-            "type": "varchar(191)"
+            "type": "text"
           },
           {
             "name": "custom_script",
@@ -5088,7 +5083,7 @@
           {
             "name": "editor_mode",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "excerpt",
@@ -5096,76 +5091,74 @@
             "type": "text"
           },
           {
-            "holdsSingleReference": true,
             "name": "featured_image",
             "nullable": true,
             "referenceShape": "one",
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "meta_description",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "meta_title",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "sections",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
             "name": "settings",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar(20)"
+            "type": "text"
           },
           {
-            "holdsReferenceList": true,
             "name": "tags",
             "nullable": true,
             "referenceShape": "list",
-            "type": "json"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5205,39 +5198,39 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
             "nullable": true,
-            "type": "varchar(191)"
+            "type": "text"
           },
           {
             "name": "description",
@@ -5248,23 +5241,23 @@
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5297,107 +5290,107 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
             "name": "address",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "collection",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "content",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "created_by",
             "nullable": true,
-            "type": "varchar(191)"
+            "type": "text"
           },
           {
             "name": "entry",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "entry_collection",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "entry_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "forked_from",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar(20)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5465,72 +5458,72 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
             "name": "campaign",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar(20)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5561,61 +5554,61 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "layout",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5641,72 +5634,72 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "first_published_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "hero",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "default": "'draft'",
             "name": "status",
             "nullable": false,
-            "type": "varchar(20)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5732,75 +5725,73 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
-            "holdsSingleReference": true,
             "name": "default_layout",
             "nullable": true,
             "referenceShape": "one",
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "default_layout_changed_by",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
-            "holdsSingleReference": true,
             "name": "seeded_layout",
             "nullable": true,
             "referenceShape": "one",
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5840,33 +5831,33 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
             "name": "body",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
             "name": "body_source",
@@ -5876,18 +5867,18 @@
           {
             "name": "changed_by",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "head",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
             "name": "head_source",
@@ -5898,23 +5889,23 @@
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -5940,61 +5931,61 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "site_name",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [
@@ -6024,76 +6015,76 @@
           {
             "name": "_changed_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "_changed_by_id",
             "nullable": true,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "_changed_by_kind",
             "nullable": true,
-            "type": "varchar(16)"
+            "type": "text"
           },
           {
             "name": "_changed_by_principal_kind",
             "nullable": true,
-            "type": "varchar(64)"
+            "type": "text"
           },
           {
             "default": "1",
             "name": "_revision",
             "nullable": false,
-            "type": "int"
+            "type": "integer"
           },
           {
             "name": "breakpoints",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
             "name": "classes",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "created_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           },
           {
             "name": "fonts",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
             "name": "id",
             "nullable": false,
             "primaryKey": true,
-            "type": "varchar(36)"
+            "type": "text"
           },
           {
             "name": "slug",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "title",
             "nullable": false,
-            "type": "varchar(255)"
+            "type": "text"
           },
           {
             "name": "tokens",
             "nullable": true,
-            "type": "json"
+            "type": "text"
           },
           {
-            "default": "CURRENT_TIMESTAMP",
+            "default": "(strftime('%s', 'now'))",
             "name": "updated_at",
             "nullable": true,
-            "type": "timestamp"
+            "type": "integer"
           }
         ],
         "indexes": [

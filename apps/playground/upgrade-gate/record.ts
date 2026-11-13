@@ -108,13 +108,31 @@ async function workspaceVersions(commit: string): Promise<Map<string, string>> {
 }
 
 /**
+ * The file holding the commit a finished install was made from. It is written
+ * last, so a site from another release, or one whose install stopped
+ * part-way, is never reused: it is made again.
+ */
+const RELEASE_MARKER = ".release-commit";
+
+/** Whether `site` holds a finished install made from `commit`. */
+export function isInstalledFrom(site: string, commit: string): boolean {
+  const marker = join(site, RELEASE_MARKER);
+  return (
+    existsSync(marker) &&
+    readFileSync(marker, "utf8").trim() === commit &&
+    existsSync(join(site, "apps/playground/node_modules/.bin/nextly"))
+  );
+}
+
+/**
  * The release's playground, with its workspace dependencies pinned to the
  * versions that release published, installed from npm.
  */
 async function prepareSite(commit: string, work: string): Promise<string> {
   const site = join(work, "site");
   const playground = join(site, "apps/playground");
-  if (existsSync(join(playground, "node_modules/.bin/nextly"))) {
+  const marker = join(site, RELEASE_MARKER);
+  if (isInstalledFrom(site, commit)) {
     console.log(`Using the release's site already installed at ${site}`);
     return playground;
   }
@@ -157,6 +175,7 @@ async function prepareSite(commit: string, work: string): Promise<string> {
     cwd: playground,
     maxBuffer: 64 * 1024 * 1024,
   });
+  writeFileSync(marker, `${commit}\n`);
   return playground;
 }
 

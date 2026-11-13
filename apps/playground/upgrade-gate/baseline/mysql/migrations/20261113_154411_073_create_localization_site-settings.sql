@@ -1,4 +1,4 @@
--- Migration: 20261113_145349_697_create_localization_site-settings
+-- Migration: 20261113_154411_073_create_localization_site-settings
 -- Singles: site-settings
 -- Entity scope: touched
 -- Generated: localization companion (create-only) (i18n)

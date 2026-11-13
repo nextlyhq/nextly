@@ -267,15 +267,27 @@ async function dumpPostgres(url: string, container?: string): Promise<string> {
     : await run("pg_dump", [...flags, url], {
         maxBuffer: 256 * 1024 * 1024,
       });
-  return (
-    stdout
-      .split("\n")
-      // psql's own commands (`\restrict`) and the comment lines are not SQL a
-      // plain connection runs, and carry nothing the restore needs.
-      .filter(line => !line.startsWith("\\") && !line.startsWith("--"))
-      .join("\n")
-      .replace(/\n{3,}/g, "\n\n")
-  );
+  return restorablePostgresDump(stdout);
+}
+
+/**
+ * A `pg_dump` script as the restore replays it. psql's own commands
+ * (`\restrict`) and the comment lines are not SQL a plain connection runs.
+ * The session settings at its head are dropped too: one a newer server knows
+ * (`transaction_timeout`, PostgreSQL 17's) stops the restore on an older one,
+ * and none of them changes what the restore builds.
+ */
+export function restorablePostgresDump(script: string): string {
+  return script
+    .split("\n")
+    .filter(
+      line =>
+        !line.startsWith("\\") &&
+        !line.startsWith("--") &&
+        !/^SET \w+ = .*;$/.test(line)
+    )
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n");
 }
 
 /** Everything `url` holds, as SQL that `restore` replays into an empty database. */
@@ -335,6 +347,78 @@ function tableIn(catalog: Catalog, table: string) {
 /** The words that state an element, the empty ones left out. */
 function words(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(" ");
+}
+
+/** The index just past the quoted name or string that opens at `start`. */
+function pastQuoted(sql: string, start: number): number {
+  const close = sql[start] === "[" ? "]" : sql[start];
+  let at = start + 1;
+  while (at < sql.length) {
+    if (sql[at] === close) {
+      // A doubled quote is one quote inside the string.
+      if (close !== "]" && sql[at + 1] === close) {
+        at += 2;
+        continue;
+      }
+      return at + 1;
+    }
+    at += 1;
+  }
+  return at;
+}
+
+/** The index just past the parenthesised expression that opens at `start`. */
+function pastParenthesised(sql: string, start: number): number {
+  let depth = 0;
+  let at = start;
+  while (at < sql.length) {
+    const char = sql[at];
+    if (QUOTES.has(char)) {
+      at = pastQuoted(sql, at);
+      continue;
+    }
+    if (char === "(") depth += 1;
+    if (char === ")") {
+      depth -= 1;
+      if (depth === 0) return at + 1;
+    }
+    at += 1;
+  }
+  return at;
+}
+
+const QUOTES = new Set(["'", '"', "`", "["]);
+
+/**
+ * The CHECK constraints in a SQLite table's statement, which no pragma lists.
+ * Each is named by its CONSTRAINT name where it has one, and otherwise by its
+ * expression, so a check added, dropped or rewritten is an operation.
+ */
+export function sqliteChecks(sql: string): Record<string, string> {
+  const checks: Record<string, string> = {};
+  let at = 0;
+  while (at < sql.length) {
+    if (QUOTES.has(sql[at])) {
+      at = pastQuoted(sql, at);
+      continue;
+    }
+    const keyword = /^CHECK\s*\(/i.exec(sql.slice(at));
+    if (keyword === null || /\w/.test(sql[at - 1] ?? "")) {
+      at += 1;
+      continue;
+    }
+    const open = at + keyword[0].length - 1;
+    const end = pastParenthesised(sql, open);
+    const definition = `check ${sql.slice(open, end)}`;
+    const named =
+      /CONSTRAINT\s+(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|(\w+))\s*$/i.exec(
+        sql.slice(0, at)
+      );
+    const name = named?.slice(1).find(part => part !== undefined);
+    checks[name ?? definition] = definition;
+    at = end;
+  }
+  return checks;
 }
 
 type SqliteDb = InstanceType<typeof Sqlite>;
@@ -431,12 +515,13 @@ function readSqliteCatalog(url: string): Catalog {
     const catalog: Catalog = {};
     const tables = db
       .prepare(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
       )
-      .all() as { name: string }[];
-    for (const { name } of tables) {
+      .all() as { name: string; sql: string }[];
+    for (const { name, sql } of tables) {
       const shape = tableIn(catalog, name);
       shape.columns = sqliteColumns(db, name);
+      Object.assign(shape.constraints, sqliteChecks(sql));
       sqliteIndexes(db, name, shape);
       sqliteForeignKeys(db, name, shape);
     }
