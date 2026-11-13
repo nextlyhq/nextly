@@ -577,6 +577,93 @@ dependency's table reads that table through the ordinary `ctx.db` methods, and
 writes its own column there through `ctx.db.contributed`: the ordinary methods
 write through the dependency's definition, which does not declare it.
 
+## Overriding a generated column's storage
+
+A field decides its column: a `text` field is `text` on PostgreSQL and
+`varchar(255)` on MySQL, a `number` field is an `integer`. The app can change
+how one of those columns is stored, within what the field holds, with
+`schema.overrideColumn` in its schema hook:
+
+```ts
+import { defineConfig } from "nextly";
+import { col } from "nextly/schema-extension";
+
+export default defineConfig({
+  collections: [posts],
+  db: {
+    schema: {
+      extend: [
+        ({ schema }) => {
+          // Store `city` in at most 10 characters.
+          schema.overrideColumn("dc_posts", "city", col.varchar(10));
+          // Keep view counts past 2,147,483,647.
+          schema.overrideColumn("dc_posts", "views", col.bigint());
+        },
+      ],
+    },
+  },
+});
+```
+
+The first argument is the table of a collection, a Single or a component
+(`dc_<slug>`, `single_<slug>`, `comp_<slug>`), and the second the field's
+name or its column's. Every push and migration then describes the column
+with that storage: development push, `migrate:create`, `migrate:check` and
+`nextly migrate` apply it, and the owner's next change, a SQLite rebuild
+included, keeps it rather than changing it back. The override is recorded as
+the app's own, so it is the one change the app's migrations may make in
+place to a column it did not declare.
+
+What a column may become depends on what its field holds:
+
+| The field's column | May become | PostgreSQL | MySQL | SQLite |
+| --- | --- | --- | --- | --- |
+| a string (text, email, select, radio, textarea, rich text, code, password, icon) | `col.text()` | `text` | `varchar(255)` | `text` |
+| | `col.longText()` | `text` | `text` | `text` |
+| | `col.shortText()` | `varchar(255)` | `varchar(255)` | `text` |
+| | `col.varchar(n)` | `varchar(n)` | `varchar(n)` | `text` |
+| a whole number (`number`) | `col.integer()` | `integer` | `int` | `integer` |
+| | `col.bigint()` | `bigint` | `bigint` | `integer` |
+| a decimal (`number` with `dbType: "decimal"`) | `col.decimal(p, s)`, no fewer digits on either side of the point | `numeric(p, s)` | `decimal(p, s)` | `numeric` |
+
+- **A width is enforced where the database enforces one.** `col.varchar(10)`
+  refuses an 11-character value on PostgreSQL and MySQL. SQLite stores no
+  width, so there the override changes nothing and the longer value is kept.
+  Unlike `col.varchar(n)` on a table you declare, which is `text` on
+  PostgreSQL, an override to a width is `varchar(n)` there too.
+- **A string may narrow; the data decides.** When every stored value fits, the
+  narrower column is applied without a prompt. When one doesn't, the push
+  stops before changing anything and names the column and how many rows are
+  too long, and `nextly migrate` runs strict on MySQL, so the migration fails
+  rather than cut a value.
+- **A number may only widen** from the field's own storage, since nothing
+  checks that stored numbers fit a narrower one. Removing an override, or
+  moving it back towards the field's storage, is planned like any type
+  change: a widening applies, and a numeric narrowing asks first in
+  development and fails in a migration if a value no longer fits.
+- **Storage only.** Whether the column is required, its default, its index
+  and its uniqueness stay the field's. An override that sets `nullable`, a
+  default, a key or enum values is refused.
+
+Refused when the hook runs, with a message naming the column:
+
+- an override from a plugin's hook; only the app may change how another
+  owner's field is stored;
+- `col.char`, `col.uuid` and `col.enum`, which change what a value is (padded,
+  a UUID, one of a list), and any kind from another family, such as a string
+  column to an integer;
+- `col.smallint()` for a whole number, and a decimal with fewer digits, which
+  narrow a number;
+- a field that holds a float, a boolean, a date or JSON: the builders offer
+  one storage for each;
+- a column the entity keeps for itself (its id, timestamps, status, title and
+  slug), a relationship's or upload's key column, a hidden column another
+  owner added, a field stored per language (its column is on the language
+  table), and a table that isn't an entity's;
+- an override that would leave an index unbuildable, such as `col.longText()`
+  on a unique field, which MySQL can't index;
+- a second override of the same column.
+
 ## Keys, checks and relations on a table you do not own
 
 `extendTable` also takes `foreignKeys`, `checks` and `relations`, in the same

@@ -29,7 +29,7 @@ import {
   assertAddableToExistingRows,
   assertMayAddColumns,
   assertMayOverride,
-  assertOverrideCompatible,
+  resolveColumnOverride,
 } from "../extension-columns";
 
 import { REFUSED_CONSTRUCT_HOOKS } from "./after-drizzle-refused-constructs";
@@ -136,13 +136,23 @@ describe("columns on a generated table", () => {
 describe("override a generated column", () => {
   it("narrows storage within a value family, app only", () => {
     // Narrowing within a family, such as `varchar('city', { length: 10 })`.
-    expect(() =>
-      assertOverrideCompatible("text", "varchar", "dc_posts", "city")
-    ).not.toThrow();
+    expect(
+      resolveColumnOverride(
+        { kind: "text" },
+        col.varchar(10),
+        "dc_posts",
+        "city"
+      )
+    ).toEqual({ kind: "shortText", length: 10 });
     // Crossing families leaves the field's validation describing a column
     // that cannot hold what it accepts.
     expect(() =>
-      assertOverrideCompatible("text", "integer", "dc_posts", "city")
+      resolveColumnOverride(
+        { kind: "text" },
+        col.integer(),
+        "dc_posts",
+        "city"
+      )
     ).toThrow(NextlyError);
     // A plugin doing this would change what every reader of that field gets.
     expect(() =>

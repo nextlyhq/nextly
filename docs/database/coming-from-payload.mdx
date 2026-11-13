@@ -37,7 +37,7 @@ The full guide to declaring tables is
 | 1   | Add tables (`rawTables`, schema hooks)         | `defineTable` in `db.schema.extend` or a plugin's schema | Yes        | Yes     | Yes     |
 | 2   | Hooks that see every generated table           | `schema.tables()` and `schema.getTable()` in a hook      | Yes        | Yes     | Yes     |
 | 3   | Add columns to a collection's table            | `schema.extendTable(table, { columns })`, hidden         | Yes        | Yes     | Yes     |
-| 4   | Override a generated column                    | Not available yet                                        | -          | -       | -       |
+| 4   | Override a generated column                    | `schema.overrideColumn()`, within the value family       | Yes        | Yes     | Yes     |
 | 5   | Compound and unique indexes                    | Collection `indexes`; `indexes` on `defineTable`         | Yes        | Yes     | Yes     |
 | 6   | Partial indexes                                | Refused, on purpose                                      | Refused    | Refused | Refused |
 | 7   | Expression indexes                             | `expression` in a table's `indexes`                      | Yes        | Yes     | Yes     |
@@ -238,10 +238,29 @@ See [Columns on a table you do not own](/docs/database/extending-the-schema#colu
 **Payload:** `extendTable` with a column of the same name replaces the column Payload
 generated, for example to make `city` a `varchar(10)`.
 
-**Nextly:** not available yet. A collection field's column comes from its type and
-options. To store something alongside it, add a hidden column (row 3) or a table of
-your own (row 1). On a table you declare yourself, the `afterDrizzle` hook can reshape
-a column (row 11).
+**Nextly:** `schema.overrideColumn()` in the app's schema hook changes how a
+collection's, Single's or component's field column is stored, within what the field
+holds:
+
+```ts
+db: {
+  schema: {
+    extend: [
+      ({ schema }) => schema.overrideColumn("dc_posts", "city", col.varchar(10)),
+    ],
+  },
+},
+```
+
+It's narrower than Payload's on purpose. Payload's `extendTable` replaces the whole
+column definition with any Drizzle column, with no check. Nextly's override changes
+the storage only, within the column's value family. A string becomes another string
+type or width, a whole number becomes a `bigint`, and a decimal gains digits. Being
+required, the default and the indexes stay the field's. Only the app may override,
+never a plugin. A string narrowing is judged by the data already stored. The width
+is enforced on PostgreSQL and MySQL; SQLite stores none. The full table is under
+[Overriding a generated column's storage](/docs/database/extending-the-schema#overriding-a-generated-columns-storage).
+To store something beside a field instead, add a hidden column (row 3).
 
 ### 10. Enums
 
@@ -847,7 +866,6 @@ Payload doesn't offer these. Each works on PostgreSQL, MySQL and SQLite.
 
 These are being built and aren't available yet:
 
-- **Overriding a generated column** (row 4).
 - **Version checks for checks and expression indexes on MySQL.** Today an older MySQL
   server is left to fail or, for a check before 8.0.16, to accept it without enforcing
   it. A refusal that names the server's version, before anything is applied, is

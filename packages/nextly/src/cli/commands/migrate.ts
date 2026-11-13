@@ -63,6 +63,7 @@ import {
   type SchemaEventRow,
 } from "../../domains/schema/events/schema-events-repository";
 import type { ExtensionSchema } from "../../domains/schema/extension/build-extension-schema";
+import { overriddenColumns } from "../../domains/schema/extension/entity-contributions";
 import { compileExtensionSchema } from "../../domains/schema/extension/publish";
 import {
   appliedChecksums,
@@ -2141,6 +2142,7 @@ async function runMigrationStreams(
     ...(deps.collectionSources === undefined
       ? {}
       : { collectionSources: deps.collectionSources }),
+    columnOverrides: overriddenColumns(deps.extensionSchema),
   });
   return { pluginModulesApplied, applied };
 }
@@ -3939,6 +3941,11 @@ export async function runFileMigrations(args: {
    * creates with itself is that plugin's (`RegistryWriteDeps.collectionSources`).
    */
   collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
+  /**
+   * The columns whose storage the app overrides (`overriddenColumns`): the
+   * one in-place change to another owner's column its files may make.
+   */
+  columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
 }): Promise<number> {
   const { adapter, db, dialect, migrationsDir, logger } = args;
   // The files about to run judged once more, as they read now: the folder may
@@ -4045,6 +4052,9 @@ export async function runFileMigrations(args: {
         // Read before each file, after the files before it have run.
         liveTables: await readLiveTables(db, dialect, [upStatements]),
         liveIndexTables: await readLiveIndexTables(db, dialect, [upStatements]),
+        ...(args.columnOverrides === undefined
+          ? {}
+          : { columnOverrides: args.columnOverrides }),
       });
       assertRunnableStatements(upStatements, dialect, filename, {
         transaction: m.transaction,

@@ -72,6 +72,7 @@ import {
   withDeclaredModifiers,
 } from "../extension/column-descriptor";
 import { enumChecks } from "../extension/enum-check";
+import type { ColumnOverride } from "../extension/draft";
 import type { ExtensionColumn } from "../extension/types";
 import type { ForeignKeySpec } from "../pipeline/diff/types";
 
@@ -86,6 +87,7 @@ import {
   ENUM_STORAGE_LENGTH,
   getColumnDescriptor,
   migrateStepColumnDescriptors,
+  renderDialectType,
   systemColumnsForFields,
 } from "./field-column-descriptor";
 
@@ -151,6 +153,14 @@ export interface RuntimeSchemaOptions {
    */
   extensionColumns?: readonly ExtensionColumn[];
   /**
+   * The app's overrides of this table's field columns' storage. Defaulted
+   * from the active extension schema, as the contributed columns are: the
+   * runtime table is what drizzle-kit pushes and what a SQLite rebuild
+   * recreates, so a column built here with the field's own storage would be
+   * changed back by either.
+   */
+  columnOverrides?: readonly ColumnOverride[];
+  /**
    * The foreign keys THIS table's desired spec carries, declared on a SQLite
    * table only.
    *
@@ -193,6 +203,8 @@ export function generateRuntimeSchema(
     isSingle: options.isSingle ?? tableName.startsWith("single_"),
     extensionColumns:
       options.extensionColumns ?? contributedColumnsFor(tableName, dialect),
+    columnOverrides:
+      options.columnOverrides ?? overriddenColumnsFor(tableName, dialect),
   };
   let table: unknown;
   switch (dialect) {
@@ -335,6 +347,46 @@ export function contributedColumnsFor(
   dialect: SupportedDialect
 ): readonly ExtensionColumn[] {
   return getActiveExtensionSchema(dialect)?.entityColumns.get(tableName) ?? [];
+}
+
+/**
+ * The app's overrides of `tableName`'s field columns, from the active
+ * extension schema: the one lookup every runtime-table builder makes, as
+ * `contributedColumnsFor` is for contributed columns.
+ */
+export function overriddenColumnsFor(
+  tableName: string,
+  dialect: SupportedDialect
+): readonly ColumnOverride[] {
+  return (
+    getActiveExtensionSchema(dialect)?.columnOverrides.get(tableName) ?? []
+  );
+}
+
+/**
+ * A field column's descriptor with the storage an override gives it: the
+ * kind and size change, and its name and nullability stay the field's. The
+ * rendered type is asked of `renderDialectType`, so the runtime column and
+ * the desired spec (`withEntityContributions`) render one override alike.
+ */
+export function withColumnOverride(
+  desc: ColumnDescriptor,
+  overrides: readonly ColumnOverride[],
+  dialect: SupportedDialect
+): ColumnDescriptor {
+  const override = overrides.find(o => o.column === desc.name);
+  if (override === undefined) return desc;
+  return {
+    name: desc.name,
+    nullable: desc.nullable,
+    kind: override.kind,
+    dialectType: renderDialectType(override.kind, dialect, override),
+    ...(override.length !== undefined ? { length: override.length } : {}),
+    ...(override.precision !== undefined
+      ? { precision: override.precision }
+      : {}),
+    ...(override.scale !== undefined ? { scale: override.scale } : {}),
+  };
 }
 
 /**
@@ -562,7 +614,10 @@ function buildDrizzleColumnRecord(
       options.builtBy ?? "codeFirst"
     );
     if (!desc) continue;
-    out[field.name] = buildUserDrizzleColumn(desc, dialect);
+    out[field.name] = buildUserDrizzleColumn(
+      withColumnOverride(desc, options.columnOverrides ?? [], dialect),
+      dialect
+    );
   }
 
   addContributedDrizzleColumns(out, options.extensionColumns ?? [], dialect);

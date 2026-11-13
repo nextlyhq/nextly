@@ -87,6 +87,10 @@ export function entitySeedColumns(
       typed.set(system.name, kindAndSizes(system));
     }
   }
+  // The columns the entity's own fields generate, as opposed to the ones its
+  // kind gives it: only these may have their storage overridden. A field of
+  // the same name as a system column (`title`, `slug`) is the field's.
+  const fieldColumns = new Set<string>();
   for (const field of entity.fields) {
     const descriptor = getColumnDescriptor(
       field as unknown as DescribedField,
@@ -95,11 +99,19 @@ export function entitySeedColumns(
     );
     if (descriptor === null) continue;
     typed.set(descriptor.name, kindAndSizes(descriptor));
+    fieldColumns.add(descriptor.name);
   }
+  // Every column an index or unique constraint of the entity's own covers, so
+  // an override that would leave one unbuildable is refused when declared.
+  const indexed = new Set(
+    (spec.indexes ?? []).flatMap(index => index.columns)
+  );
 
   return spec.columns.map(column => ({
     name: column.name,
     nullable: column.nullable,
     ...(typed.get(column.name) ?? {}),
+    ...(fieldColumns.has(column.name) ? { field: true } : {}),
+    ...(indexed.has(column.name) ? { indexed: true } : {}),
   }));
 }

@@ -81,6 +81,7 @@ import {
   quoteIdent,
   quoteIdentMysql,
 } from "../../pipeline/ddl-emitter/identifiers";
+import { buildDesiredTableFromFields } from "../../pipeline/diff/build-from-fields";
 import { diffSnapshots } from "../../pipeline/diff/diff";
 import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
 import type { Operation, TableSpec } from "../../pipeline/diff/types";
@@ -91,11 +92,8 @@ import {
 } from "../build-extension-schema";
 import { toTableSpec } from "../compile";
 import { entitySeedColumns } from "../entity-seed";
-import {
-  assertMayAddColumns,
-  assertMayOverride,
-  assertOverrideCompatible,
-} from "../extension-columns";
+import { withEntityContributions } from "../entity-contributions";
+import { assertMayAddColumns } from "../extension-columns";
 import { col, defineTable, type TableDefinition } from "../dsl";
 import type { ExtensionTable, SchemaOwner } from "../types";
 import { REFUSED_CONSTRUCT_HOOKS } from "./after-drizzle-refused-constructs";
@@ -350,44 +348,97 @@ const CAPABILITIES: Capability[] = [
     row: 4,
     title: "override a generated column's definition",
     run: async ctx => {
-      // The rule is compile-time, within one value family, app-only.
-      expect(() =>
-        assertOverrideCompatible("text", "varchar", POSTS_TABLE, "city")
-      ).not.toThrow();
-      expect(() =>
-        assertOverrideCompatible("text", "integer", POSTS_TABLE, "city")
-      ).toThrow(NextlyError);
-      // A plugin narrowing what the collection stores would change what
-      // every reader of that field gets.
-      expect(() =>
-        assertMayOverride({ kind: "plugin", id: "fx" }, POSTS_TABLE, "city")
-      ).toThrow(NextlyError);
+      // The collection's `city`, a text field, as the config seeds it and
+      // as its table is generated.
+      const fields = [{ name: "city", type: "text" }];
+      const entity: ExtensionSchemaInput["entities"][number] = {
+        name: POSTS_TABLE,
+        slug: "posts",
+        entityKind: "collection",
+        columns: entitySeedColumns(
+          { entityKind: "collection", tableName: POSTS_TABLE, fields },
+          ctx.dialect
+        ),
+      };
+      const override = (storage: ReturnType<typeof col.varchar>) =>
+        buildExtensionSchema(
+          schemaInput(ctx.dialect, {
+            entities: [entity],
+            app: {
+              owner: { kind: "app" },
+              extend: [
+                ({ schema }) =>
+                  schema.overrideColumn(POSTS_TABLE, "city", storage),
+              ],
+            },
+          })
+        );
 
-      // The narrowed column is storage: the entity's table carries the
-      // declared width, ENFORCED where the dialect enforces widths — MySQL
-      // only. PostgreSQL compiles varchar to text (the width exists to make
-      // the column indexable there), and SQLite keeps no width either, so on
-      // those the narrowing is the compile-time rule above.
-      const base = defineTable(POSTS_TABLE, {
-        id: col.id(),
-        city: col.varchar(10),
-      });
-      const spec = toTableSpec(
-        extensionTable(base, { kind: "app" }),
+      // Payload replaces the whole definition; here the app changes the
+      // storage within the column's value family, and nothing else.
+      await expect(override(col.integer())).rejects.toThrow(NextlyError);
+      await expect(
+        buildExtensionSchema(
+          schemaInput(ctx.dialect, {
+            entities: [entity],
+            plugins: [
+              {
+                owner: { kind: "plugin", id: "fx" },
+                extend: [
+                  ({ schema }) =>
+                    schema.overrideColumn(POSTS_TABLE, "city", col.varchar(10)),
+                ],
+              },
+            ],
+          })
+        )
+      ).rejects.toThrow(/Only the app may override/);
+
+      // The generated table with the override, through the helper every push
+      // and migration describes an entity's table with.
+      const built = await override(col.varchar(10));
+      const generated = buildDesiredTableFromFields(
+        POSTS_TABLE,
+        fields as unknown as Parameters<typeof buildDesiredTableFromFields>[1],
+        ctx.dialect,
+        { builtBy: "codeFirst" }
+      );
+      const spec = withEntityContributions(
+        generated,
+        built,
+        undefined,
         ctx.dialect
       );
       await ctx.apply([spec]);
       const live = (await ctx.live([spec.name]))[0]!;
-      expect(live.columns.map(c => c.name)).toContain("city");
-      await ctx.execute(
-        `INSERT INTO ${ctx.q(spec.name)} (${ctx.q("id")}, ${ctx.q("city")}) VALUES ('o1', '0123456789')`
+      const city = live.columns.find(c => c.name === "city")!;
+      // A row naming every column the table requires, by its type, and
+      // `city`, so the write reaches the column under test.
+      const required = spec.columns.filter(
+        c => c.name !== "city" && !c.nullable && c.default === undefined
       );
-      if (ctx.dialect === "mysql") {
-        await expect(
-          ctx.execute(
-            `INSERT INTO ${ctx.q(spec.name)} (${ctx.q("id")}, ${ctx.q("city")}) VALUES ('o2', '0123456789X')`
-          )
-        ).rejects.toThrow();
+      const literal = (type: string, id: string) =>
+        /char|text|uuid/i.test(type)
+          ? `'${id}'`
+          : /time|date/i.test(type) && ctx.dialect !== "sqlite"
+            ? "CURRENT_TIMESTAMP"
+            : "1";
+      const insert = (id: string, value: string) =>
+        ctx.execute(
+          `INSERT INTO ${ctx.q(spec.name)} (${[...required.map(c => c.name), "city"].map(ctx.q).join(", ")}) VALUES (${[...required.map(c => literal(c.type, id)), `'${value}'`].join(", ")})`
+        );
+      await insert("o1", "0123456789");
+      if (ctx.dialect === "sqlite") {
+        // SQLite keeps no width, so the override changes no storage there,
+        // and the longer value is kept whole.
+        expect(city.type.toLowerCase()).toBe("text");
+        await insert("o2", "0123456789X");
+      } else {
+        // Bounded on PostgreSQL as on MySQL: the width the app asked for is
+        // enforced, which a declared table's `col.varchar` is not on
+        // PostgreSQL.
+        expect(city.type.toLowerCase()).toMatch(/varchar|character varying/);
+        await expect(insert("o2", "0123456789X")).rejects.toThrow();
       }
     },
   },
