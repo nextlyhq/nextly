@@ -237,6 +237,21 @@ describe("the text under the link", () => {
     ).not.toContainEqual(["maxSnippet", 0]);
   });
 
+  it("keeps the stored limit while what is typed is not one", async () => {
+    const writes: [string, unknown][] = [];
+    render(<Harness writes={writes} initial={{ maxSnippet: 80 }} />);
+    await openAdvanced();
+    const limit = screen.getByLabelText("Characters at most");
+    expect(limit).toHaveValue("80");
+    for (const typed of ["0", "abc", "-5"]) {
+      fireEvent.change(limit, { target: { value: typed } });
+      expect(limit).toHaveAttribute("aria-invalid", "true");
+    }
+    expect(writes.filter(([field]) => field === "maxSnippet")).toEqual([]);
+    fireEvent.change(limit, { target: { value: "120" } });
+    expect(writes).toEqual([["maxSnippet", 120]]);
+  });
+
   it("says what None costs, and the Google preview shows no text", async () => {
     const writes: [string, unknown][] = [];
     render(<Harness writes={writes} initial={{ maxSnippet: 80 }} />);
