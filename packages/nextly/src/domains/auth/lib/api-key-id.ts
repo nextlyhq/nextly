@@ -10,8 +10,9 @@
  * budget of its own, so a flood of invalid keys cannot refuse a valid key
  * that carries an id.
  *
- * Every generation of the secret verifies an id, so rotating `NEXTLY_SECRET`
- * with the old one in `NEXTLY_SECRET_PREVIOUS` keeps every key's id. An id that
+ * Every keyed generation of the secret verifies an id, so rotating
+ * `NEXTLY_SECRET` with the old one in `NEXTLY_SECRET_PREVIOUS` keeps every key's
+ * id; an unkeyed one never does, since anyone can derive its key. An id that
  * verifies under none is treated as no id at all (the bound shared by keys
  * without one), never refused for it, so a key outlives a lost secret.
  *
@@ -62,11 +63,27 @@ export function verifiedApiKeyId(rawKey: string): string | null {
   const id = match[1];
   const random = id.slice(0, RANDOM_HEX);
   const tag = Buffer.from(id.slice(RANDOM_HEX));
-  for (const secret of generationsCurrentFirst(
-    env.NEXTLY_SECRET,
-    env.NEXTLY_SECRET_PREVIOUS
-  )) {
+  for (const secret of verifyingGenerations()) {
     if (timingSafeEqual(Buffer.from(tagOf(random, secret)), tag)) return id;
   }
   return null;
+}
+
+/**
+ * The generations an id is verified under. A retired generation without a
+ * secret (listed in `NEXTLY_SECRET_PREVIOUS` for data written before one was
+ * set) is left out: its key is derived from nothing, so anyone could tag ids
+ * under it and buy each a budget of its own. Only an install with no secret at
+ * all, which only development is, verifies under the unkeyed generation, the
+ * one it mints with.
+ */
+function verifyingGenerations(): Array<string | undefined> {
+  const generations = generationsCurrentFirst(
+    env.NEXTLY_SECRET,
+    env.NEXTLY_SECRET_PREVIOUS
+  );
+  const keyed = generations.filter(
+    (secret): secret is string => secret !== undefined && secret !== ""
+  );
+  return env.NEXTLY_SECRET ? keyed : [generations[0]];
 }

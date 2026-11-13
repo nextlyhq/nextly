@@ -55,6 +55,15 @@ describe("verifiedApiKeyId", () => {
     expect(verifiedApiKeyId(`nx_live_${foreign}_${secretPart}`)).toBeNull();
   });
 
+  it("never verifies an id tagged without a secret, though an unkeyed generation is listed as previous", () => {
+    // What anyone can make: an id tagged under a key derived from nothing.
+    vi.stubEnv("NEXTLY_SECRET", "");
+    _resetEnvCache();
+    const unkeyed = mintApiKeyId();
+    withSecrets(SECRET_A, '[null,""]');
+    expect(verifiedApiKeyId(`nx_live_${unkeyed}_${secretPart}`)).toBeNull();
+  });
+
   it("keeps verifying an id across a rotation, while the old secret is listed as previous", () => {
     withSecrets(SECRET_A);
     const id = mintApiKeyId();
