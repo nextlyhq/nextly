@@ -645,12 +645,49 @@ function useReleaseListData(q: ReturnType<typeof useReleaseListQuestion>) {
   };
 }
 
-/** The list toolbar's search and filter, offered once any release exists. */
+/**
+ * The list's outline: the table, under the toolbar's outline while whether
+ * there is a toolbar is still unknown.
+ */
+function ReleaseListOutline({
+  toolbar,
+  headers,
+}: {
+  toolbar: boolean;
+  headers: readonly ReactNode[];
+}): JSX.Element {
+  return (
+    <ScreenOutline>
+      <div className="space-y-4">
+        {toolbar ? <ListToolbarOutline /> : null}
+        <TableOutline headers={headers} rows={outlineRowsFor(RELEASES_LIST)} />
+      </div>
+    </ScreenOutline>
+  );
+}
+
+/**
+ * Whether a read is still waiting for its first answer. Once it has answered,
+ * a later read (the same question asked again, or a new one) is a recount,
+ * and what was drawn from the first answer stays.
+ */
+function useFirstAnswerPending(pending: boolean): boolean {
+  const [answered, setAnswered] = useState(!pending);
+  if (!pending && !answered) setAnswered(true);
+  return pending && !answered;
+}
+
+/**
+ * The list toolbar's search and filter, offered once any release exists, and
+ * held back altogether while the counts that decide it have not first said.
+ */
 function toolbarFor(
   q: ReturnType<typeof useReleaseListQuestion>,
   anyRelease: boolean,
-  searching: boolean
+  searching: boolean,
+  held: boolean
 ) {
+  if (held) return {};
   if (!anyRelease) return { search: undefined, inlineFilters: undefined };
   return {
     search: {
@@ -727,25 +764,25 @@ export function ReleaseList({ onCreate }: ReleaseListProps): JSX.Element {
     setDialogOpen(true);
   };
 
-  // Whether any release exists decides the toolbar, so until the counts say,
-  // the toolbar and the table stand as one outline the answer replaces whole:
-  // a toolbar drawn on a guess and then taken away would move the list.
-  const counting = counts.isPending;
+  // Whether any release exists decides the toolbar, so until the counts first
+  // say, the toolbar and the table stand as one outline the answer replaces
+  // whole: a toolbar drawn on a guess and then taken away would move the list.
+  // A later recount (a search, the filter) keeps the toolbar it already has,
+  // so the search box keeps its focus and text; only the pills wait.
+  const firstCount = useFirstAnswerPending(counts.isPending);
   const panel = (
     <ListView<Release>
-      {...(counting
-        ? {}
-        : toolbarFor(q, anyRelease, list.isFetching && Boolean(q.search)))}
+      {...toolbarFor(
+        q,
+        anyRelease,
+        list.isFetching && Boolean(q.search),
+        firstCount
+      )}
       skeleton={
-        <ScreenOutline>
-          <div className="space-y-4">
-            {counting ? <ListToolbarOutline /> : null}
-            <TableOutline
-              headers={columns.map(column => column.header)}
-              rows={outlineRowsFor(RELEASES_LIST)}
-            />
-          </div>
-        </ScreenOutline>
+        <ReleaseListOutline
+          toolbar={firstCount}
+          headers={columns.map(column => column.header)}
+        />
       }
       hasActiveFilters={q.hideSingles || Boolean(q.reason)}
       columns={columns}
@@ -758,7 +795,7 @@ export function ReleaseList({ onCreate }: ReleaseListProps): JSX.Element {
       rowActions={release => rowActionsFor(release, openDialog)}
       registryKey={RELEASES_LIST}
       ariaLabel={`${RELEASE_TAB_LABEL[q.tab]} releases`}
-      loading={list.isPending || counting}
+      loading={list.isPending || firstCount}
       error={null}
       empty={emptyStateFor(q.tab, {
         anyRelease,
