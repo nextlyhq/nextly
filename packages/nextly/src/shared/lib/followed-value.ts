@@ -35,7 +35,10 @@
  * The state lives on `globalThis` under a name of the caller's: a Next.js
  * server holds several copies of a package's modules, and a state per copy
  * would be several reads per interval, each marked only by the writes made
- * through its own copy.
+ * through its own copy. The name is stored with this module's
+ * {@link FOLLOWED_STATE_VERSION}, because `globalThis` outlives a dev server's
+ * module reload: a state an older build left under the same name, in another
+ * shape, is never handed to this code.
  *
  * @module shared/lib/followed-value
  */
@@ -81,14 +84,27 @@ export interface FollowOptions {
   followedOnly?: boolean;
 }
 
-/** The followed value kept on `globalThis` under `name`, made on first use. */
+/**
+ * The shape of the state kept on `globalThis`, part of the key it is kept
+ * under. Raise it with any change to {@link FollowedState} or
+ * `FollowedReading`: a dev server keeps `globalThis` across a module reload,
+ * so the reloaded code would otherwise be handed the state the previous build
+ * made, in the previous shape.
+ */
+const FOLLOWED_STATE_VERSION = 1;
+
+/**
+ * The followed value kept on `globalThis` under `name` and this module's
+ * {@link FOLLOWED_STATE_VERSION}, made on first use.
+ */
 export function followedState<T>(name: string): FollowedState<T> {
   const holder = globalThis as unknown as Record<
     string,
     FollowedState<T> | undefined
   >;
-  holder[name] ??= { marks: 0, byDatabase: new WeakMap() };
-  return holder[name];
+  const key = `${name}_followed_v${FOLLOWED_STATE_VERSION}`;
+  holder[key] ??= { marks: 0, byDatabase: new WeakMap() };
+  return holder[key];
 }
 
 /**
