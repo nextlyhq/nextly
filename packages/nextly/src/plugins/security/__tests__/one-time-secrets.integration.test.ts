@@ -654,6 +654,46 @@ describe.each(getConfiguredTestDialects())(
       expect(await spend(second.code)).toEqual({ ok: false, reason: "none" });
     });
 
+    it("never sweeps a code minted after its subject's history went, though its issue order started again", async () => {
+      const { a, rows } = await boot();
+      const adapter = current?.first.adapter as unknown as DrizzleAdapter;
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const minted = Date.now();
+      const mint = (expiresInMs: number) =>
+        a.security.secrets.mintCode({
+          purpose: "sign-in",
+          subject,
+          expiresInMs,
+          maxWrongTries: 3,
+        });
+      const seqOf = async (n: number) =>
+        (await rows()).find(row => row.issueSeq === n)?.id as string;
+      await mint(60 * 60_000);
+      await mint(60_000);
+      // The state a sweep can meet while another overlaps it: the other removed the older code,
+      // and a code minted since took the issue order from 1 again, below the expired newer one.
+      await adapter.delete("nextly_one_time_secrets", {
+        and: [{ column: "id", op: "=", value: await seqOf(1) }],
+      });
+      vi.setSystemTime(minted + 60_000 + ONE_TIME_SECRETS_GRACE_MS + 60_000);
+      const fresh = await mint(60 * 60_000);
+      await adapter.updateCount(
+        "nextly_one_time_secrets",
+        { issueSeq: 1 },
+        { and: [{ column: "id", op: "=", value: await seqOf(3) }] }
+      );
+
+      expect((await pruneOneTimeSecrets(adapter, new Date())).removed).toBe(1);
+      expect(await rows()).toHaveLength(1);
+      expect(
+        await a.security.secrets.consumeCode({
+          purpose: "sign-in",
+          subject,
+          code: fresh.code,
+        })
+      ).toMatchObject({ ok: true });
+    });
+
     it("hands the scheduled drain the sweep, so a secret-only install still sweeps", async () => {
       await boot();
       expect(

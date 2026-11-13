@@ -61,25 +61,41 @@ export function pruneOneTimeSecrets(
   );
 }
 
-/** A removed code's subject, purpose and place in their order. */
+/** A code's subject, purpose, place in their order and when it was issued. */
 type CodeRow = {
   id: string;
   subjectKey: string;
   purpose: string;
   issueSeq: number | null;
+  createdAt: Date;
 };
+
+/** The columns `CodeRow` reads. */
+const CODE_COLUMNS = ["id", "subjectKey", "purpose", "issueSeq", "createdAt"];
+
+/** The group a code belongs to: its subject and purpose. */
+function groupOf(row: CodeRow): string {
+  return `${row.subjectKey}\u0000${row.purpose}`;
+}
 
 /**
  * Every code issued before one of `ids` for the same subject and purpose, removed with it: each
  * was voided when a newer one was minted, so none is spendable, and none may outlive the newer one
  * to answer for it. Returns how many went.
+ *
+ * A code is taken as older only when it is both lower in the issue order AND was issued no later
+ * than the removed code. The issue order starts again at 1 once a subject's codes are all gone, so
+ * an overlapping sweep that already removed the history could let a code minted since then sit
+ * below the threshold; such a code is issued more than a day after the removed one expired, so its
+ * issue time sets it apart. The older codes are found in one read and removed by their ids in one
+ * delete, so a code minted between the two is never touched and no query is sent per subject.
  */
 async function removeOlderCodes(
   db: Pick<DrizzleAdapter, "select" | "delete">,
   ids: readonly string[]
 ): Promise<number> {
   const removing = await db.select<CodeRow>(ONE_TIME_SECRETS_TABLE, {
-    columns: ["id", "subjectKey", "purpose", "issueSeq"],
+    columns: CODE_COLUMNS,
     where: {
       and: [
         { column: "id", op: "IN", value: [...ids] },
@@ -91,22 +107,39 @@ async function removeOlderCodes(
   const newest = new Map<string, CodeRow>();
   for (const row of removing) {
     if (row.issueSeq === null) continue;
-    const group = `${row.subjectKey}\u0000${row.purpose}`;
-    const held = newest.get(group);
-    if (!held || (held.issueSeq ?? 0) < row.issueSeq) newest.set(group, row);
+    const held = newest.get(groupOf(row));
+    if (!held || (held.issueSeq ?? 0) < row.issueSeq) {
+      newest.set(groupOf(row), row);
+    }
   }
-  let removed = 0;
-  for (const row of newest.values()) {
-    removed += await db.delete(ONE_TIME_SECRETS_TABLE, {
+  if (newest.size === 0) return 0;
+  const anchors = [...newest.values()];
+  const candidates = await db.select<CodeRow>(ONE_TIME_SECRETS_TABLE, {
+    columns: CODE_COLUMNS,
+    where: {
       and: [
-        { column: "subjectKey", op: "=", value: row.subjectKey },
-        { column: "purpose", op: "=", value: row.purpose },
+        {
+          column: "subjectKey",
+          op: "IN",
+          value: [...new Set(anchors.map(row => row.subjectKey))],
+        },
         { column: "kind", op: "=", value: "code" },
-        { column: "issueSeq", op: "<", value: row.issueSeq ?? 0 },
         // The batch's own rows are deleted by the batch, and counted there.
         { column: "id", op: "NOT IN", value: [...ids] },
       ],
-    });
-  }
-  return removed;
+    },
+  });
+  const older = candidates.filter(row => {
+    const anchor = newest.get(groupOf(row));
+    return (
+      anchor !== undefined &&
+      row.issueSeq !== null &&
+      row.issueSeq < (anchor.issueSeq ?? 0) &&
+      row.createdAt.getTime() <= anchor.createdAt.getTime()
+    );
+  });
+  if (older.length === 0) return 0;
+  return db.delete(ONE_TIME_SECRETS_TABLE, {
+    and: [{ column: "id", op: "IN", value: older.map(row => row.id) }],
+  });
 }
