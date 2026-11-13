@@ -133,7 +133,9 @@ import type {
 } from "../domains/schema/pipeline/types";
 import type { ColumnOrigin } from "../domains/schema/services/field-column-descriptor";
 import {
+  activePostgresSchema,
   assertAdapterPostgresSchema,
+  assertInstallationInConfiguredSchema,
   resolvePostgresSchema,
   setActivePostgresSchema,
 } from "../domains/schema/services/postgres-schema";
@@ -1853,6 +1855,14 @@ async function prepareBootSchema(
   if (bootDialect === undefined) return undefined;
 
   publishBootPostgresSchema(adapter, bootDialect, transformedConfig, logger);
+  // Before first-run setup and the development push, either of which would
+  // build a second, empty installation in a schema the setting was moved to.
+  if (bootDialect === "postgresql") {
+    await assertInstallationInConfiguredSchema(
+      adapter.getDrizzle(),
+      activePostgresSchema()
+    );
+  }
 
   // Held rather than only published: first-run is reached through a dynamic
   // import, which a bundler may resolve to a second instance of the module
@@ -3824,7 +3834,30 @@ function collectSlugs(
   return slugs;
 }
 
-function publishWebhookRecordingPolicies(config: NextlyServiceConfig): void {
+/**
+ * The webhook-recording decisions a start publishes, for a command that runs without one, such as
+ * `nextly migrate`'s workflow pass: the configuration's own (`publishWebhookRecordingPolicies`),
+ * then the opt-outs the registries store for entities the configuration does not own, read once.
+ * An entity with `webhooks: false` then records no event from the command, as from a request.
+ */
+export async function publishRecordingPoliciesForCommand(
+  adapter: DrizzleAdapter,
+  config: RecordingPolicyConfig
+): Promise<void> {
+  publishWebhookRecordingPolicies(config);
+  await publishStoredWebhookRecordingPolicies(adapter, {
+    collections: collectSlugs(config.collections),
+    singles: collectSlugs(config.singles),
+  });
+}
+
+/** What the recording decisions are read from: the entities and the plugins that contribute some. */
+type RecordingPolicyConfig = Pick<
+  NextlyServiceConfig,
+  "plugins" | "collections" | "singles"
+>;
+
+function publishWebhookRecordingPolicies(config: RecordingPolicyConfig): void {
   // Provenance comes from the plugin contribution list, not the optional
   // `admin.isPlugin` flag: a plugin's opt-out must be tagged `plugin` (so a
   // code-first reconcile never prunes it) even when the plugin never sets that

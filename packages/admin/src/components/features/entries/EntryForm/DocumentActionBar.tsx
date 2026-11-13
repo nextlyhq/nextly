@@ -37,6 +37,7 @@ import { Fragment, type JSX } from "react";
 import { useInTopBar } from "@admin/components/layout/header/TopBarPlaces";
 import { cn } from "@admin/lib/utils";
 
+import { BAR_CONTROLS_GAP, BAR_ICON_CONTROL } from "./bar-controls";
 import {
   actionsAt,
   menuGroups,
@@ -341,7 +342,8 @@ export function DocumentActionBar({
     // arrow and More together never split across two lines.
     <div
       className={cn(
-        "flex min-w-0 max-w-full items-center justify-end gap-1.5",
+        "flex min-w-0 max-w-full items-center justify-end",
+        BAR_CONTROLS_GAP,
         // In the bar it also keeps its own width, so its buttons never spill
         // over the controls before them.
         inTopBar ? "shrink-0 flex-nowrap" : "flex-wrap",
@@ -646,9 +648,7 @@ function DocumentMenu({
       <DropdownMenuTrigger asChild>
         <Button
           type="button"
-          variant="outline"
-          size="sm"
-          className="px-2"
+          {...BAR_ICON_CONTROL}
           aria-label="More actions"
           title="More actions"
           {...(narrowItems.some(item => item.togglesPanel === true)

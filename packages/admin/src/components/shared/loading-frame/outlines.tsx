@@ -19,6 +19,7 @@
 
 import {
   Button,
+  buttonVariants,
   PageHeader,
   Skeleton,
   Table,
@@ -28,25 +29,36 @@ import {
   TableHeader,
   TableRow,
 } from "@nextlyhq/ui";
-import { cardHeightPx } from "nextly/card-geometry";
-import { GRID_COLUMNS } from "nextly/config";
+import { listCardHeightPx } from "nextly/card-geometry";
+import { GRID_COLUMNS, listEntries } from "nextly/config";
 import { CORE_DEFAULT_LAYOUT } from "nextly/core-widget-data";
 import type { CSSProperties, JSX, ReactNode } from "react";
 
 import {
+  BAR_CONTROLS_GAP,
+  BAR_ICON_CONTROL,
+  PANEL_TOGGLE_RULE,
+} from "@admin/components/features/entries/EntryForm/bar-controls";
+import {
   cardSpanClass,
   GRID_CLASS,
 } from "@admin/components/features/widgets/sizes";
+import { MoreHorizontal, PanelRight } from "@admin/components/icons";
 import {
-  ChevronDown,
-  Eye,
-  History,
-  MoreHorizontal,
-  PanelRight,
-} from "@admin/components/icons";
-import { TopBarPlace } from "@admin/components/layout/header/TopBarPlaces";
+  STAND_IN_ATTRIBUTE,
+  TopBarPlace,
+} from "@admin/components/layout/header/TopBarPlaces";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared/breadcrumbs";
+import {
+  PAGER_BUTTON_SIZE,
+  PAGER_CONTROLS,
+  PAGER_FRAME,
+} from "@admin/components/shared/pagination/pager-layout";
+import {
+  ROW_ACTIONS_COLUMN,
+  ROW_ACTIONS_TRIGGER,
+} from "@admin/components/ui/table/data-table/row-actions";
 import { MEDIA_GRID_CLASSES } from "@admin/constants/media";
 import { cn } from "@admin/lib/utils";
 
@@ -188,14 +200,68 @@ const NARROW_HIDDEN = (index: number): string | undefined =>
 const ROW_TITLE_WIDTHS = [200, 240, 160, 130, 110] as const;
 
 /**
+ * One outline bar on the line a cell's text takes: an empty text run beside it
+ * gives the line the table's own font, so the row is as tall as a row of text
+ * without the outline naming a height.
+ */
+function CellLine({
+  className,
+  soft,
+  style,
+}: {
+  className?: string;
+  soft?: boolean;
+  style?: CSSProperties;
+}): JSX.Element {
+  return (
+    <span className="flex items-center">
+      {"\u200b"}
+      <OutlineBar soft={soft} className={className} style={style} />
+    </span>
+  );
+}
+
+/**
+ * The pager under a table, as its frame and the shapes of its controls: the
+ * pager's own classes (`pagination/pager-layout`), so it stands as tall as the
+ * pager that replaces it at every width. What it will say (the rows shown, the
+ * page count) is not known, so bars hold its words.
+ */
+function PagerOutline(): JSX.Element {
+  return (
+    <div className={PAGER_FRAME}>
+      {/* The summary's line, after the controls where the two stack. */}
+      <span className="order-2 flex items-center @2xl/content:order-1">
+        {"\u200b"}
+        <OutlineBar soft className="h-3 w-36" />
+      </span>
+      <div className={PAGER_CONTROLS}>
+        <div className="flex gap-1">
+          {Array.from({ length: 3 }, (_, index) => (
+            <ControlOutline key={index} className={PAGER_BUTTON_SIZE} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * A table with its real head where its columns are known, and five outline
- * rows: a title, then shorter, softer values in the other columns.
+ * rows: a title, then shorter, softer values in the other columns. Each row
+ * ends in the row actions' column as the table draws it, whose trigger is the
+ * row's tallest part, so an outline row is as tall as a real one; and the
+ * table's pager follows the rows, inside the table's card, as the table's own
+ * does. How many rows the list will have is not known; five stand in for them.
  */
 export function TableOutline({
   headers,
+  rowActions = true,
 }: {
   /** The column heads, when the columns are known. */
   headers?: readonly ReactNode[];
+  /** Whether the table's rows end in their actions, as every list's do. */
+  rowActions?: boolean;
 }): JSX.Element {
   const columns: readonly ReactNode[] = headers ?? [null, null, null];
   return (
@@ -216,33 +282,43 @@ export function TableOutline({
                 )}
               </TableHead>
             ))}
+            {rowActions ? <TableHead className={ROW_ACTIONS_COLUMN} /> : null}
           </TableRow>
         </TableHeader>
         <TableBody>
           {ROW_TITLE_WIDTHS.map((width, row) => (
             <TableRow key={row} className="border-b border-border">
               {columns.map((_, index) => (
-                <TableCell
-                  key={index}
-                  className={cn("h-12 py-3", NARROW_HIDDEN(index))}
-                >
+                <TableCell key={index} className={NARROW_HIDDEN(index)}>
                   {index === 0 ? (
-                    <OutlineBar
-                      className="block h-3 max-w-full"
-                      style={{ width }}
-                    />
+                    <CellLine className="h-3 max-w-full" style={{ width }} />
                   ) : (
-                    <OutlineBar
+                    <CellLine
                       soft
-                      className={cn("block h-3", index === 1 ? "w-16" : "w-11")}
+                      className={cn("h-3", index === 1 ? "w-16" : "w-11")}
                     />
                   )}
                 </TableCell>
               ))}
+              {rowActions ? (
+                <TableCell className={ROW_ACTIONS_COLUMN}>
+                  {/* The trigger's own box, empty and unseen: the row's
+                      height is the real trigger's. Set at the line's top, as
+                      an empty box on the text's baseline would add the
+                      line's descent below it. */}
+                  <span
+                    className={cn(
+                      buttonVariants(ROW_ACTIONS_TRIGGER),
+                      "invisible align-top"
+                    )}
+                  />
+                </TableCell>
+              ) : null}
             </TableRow>
           ))}
         </TableBody>
       </Table>
+      <PagerOutline />
     </div>
   );
 }
@@ -282,6 +358,16 @@ export function ListOutline({
     </ScreenOutline>
   );
 }
+
+/**
+ * How tall a dashboard card is first drawn, in pixels, while its answer is on
+ * its way: a list card's skeleton, holding its default "Number of entries"
+ * (`listEntries` of no setting) at the default density.
+ */
+const FIRST_DRAWN_CARD_HEIGHT = listCardHeightPx(
+  listEntries(undefined),
+  "default"
+);
 
 /** The widths of the dashboard's recent-list rows, in order. */
 const RECENT_ROW_WIDTHS = [180, 220, 140, 160] as const;
@@ -325,11 +411,12 @@ export function DashboardCardsOutline({
               span,
               "flex flex-col gap-3 rounded-lg border border-border bg-card p-4"
             )}
-            // A card of the default's four rows; the real card is as tall as
-            // its content, which no outline can know.
-            // The height a real card of four rows takes, from the grid's own
-            // geometry, so the outline stands as tall as the card it precedes.
-            style={{ minHeight: cardHeightPx(4) }}
+            // A card is as tall as its content, which no outline can know,
+            // so it stands as tall as the cards that replace it are first
+            // drawn: a list card loading its default number of entries, the
+            // frame and the rows by core's own card geometry. A row of the
+            // default dashboard is that tall until its cards' answers land.
+            style={{ minHeight: FIRST_DRAWN_CARD_HEIGHT }}
           >
             <OutlineBar className="h-3.5 w-[120px]" />
             {RECENT_ROW_WIDTHS.map(width => (
@@ -445,87 +532,72 @@ export function MediaOutline(): JSX.Element {
   );
 }
 
-/** A disabled control of the editor bar's outline. */
-function BarButton({
-  children,
-  primary = false,
-  label,
-  joined,
-  narrow = false,
-}: {
-  children: ReactNode;
-  primary?: boolean;
-  label?: string;
-  /** Which half of a split button this is. */
-  joined?: "start" | "end";
-  /** An icon on the bar's tight padding, as More and the panel toggle are. */
-  narrow?: boolean;
-}): JSX.Element {
-  return (
-    <Button
-      type="button"
-      size="sm"
-      variant={primary ? "default" : "outline"}
-      disabled
-      aria-disabled="true"
-      aria-label={label}
-      className={cn(
-        "gap-1.5",
-        narrow && "px-2",
-        joined === "start" && "rounded-r-none",
-        joined === "end" &&
-          "rounded-l-none border-l border-primary-foreground/20 px-2"
-      )}
-    >
-      {children}
-    </Button>
-  );
-}
+/**
+ * The height of the bar's controls: the height class of the button size they
+ * are drawn at (`BAR_ICON_CONTROL`), read from the button's own sizes.
+ */
+const BAR_CONTROL_HEIGHT = buttonVariants({ size: BAR_ICON_CONTROL.size })
+  .split(/\s+/)
+  .find(name => name.startsWith("h-"));
 
 /**
- * The editor's bar while its document loads: the same right-hand controls the
- * real bar draws (History, Preview, the Publish split, More, the panel toggle),
- * disabled, so the bar keeps their width and nothing in it moves when the
- * document arrives. Drawn at once, as part of the frame, not after 0.4 s.
+ * The editor's bar while its document loads, drawn at once, as part of the
+ * frame, not after 0.4 s. Laid out from the bar's right end, as the real
+ * controls are, and standing in the bar on its own rather than in the place
+ * the real bar fills (`STAND_IN_ATTRIBUTE`): the document's trail, whose
+ * width only the document's title decides, arrives with the real bar and
+ * moves nothing drawn here.
+ *
+ * Only the controls that stand in the same place whatever the document's state
+ * are drawn as controls: for a saved document, More, then the rule and the
+ * panel toggle at the far end, where the wide layout draws them. The ones
+ * before them depend on the document (History where it keeps versions, a
+ * preview where it has one, Publish for a draft beside Save draft, Save alone
+ * for a published one) and so on what no outline can know, so one still bar
+ * holds their place, and the real controls replace it rather than shifting
+ * across it. A new document's bar has only its verbs, so its outline is the
+ * bar alone.
  */
-function EditorBarOutline(): JSX.Element {
+function EditorBarOutline({ creating }: { creating: boolean }): JSX.Element {
   return (
     <TopBarPlace name="end">
       <div
         data-testid="editor-bar-outline"
-        className="flex min-w-0 flex-1 flex-nowrap items-center gap-x-3"
+        {...{ [STAND_IN_ATTRIBUTE]: "" }}
+        className={cn(
+          "flex min-w-0 flex-1 items-center justify-end",
+          BAR_CONTROLS_GAP
+        )}
       >
-        <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
-        <div className="ml-auto flex min-w-0 items-center justify-end gap-1.5">
-          {/* History and Preview as the bar draws them beside a document's
-              trail: their icons, their words stepped aside. */}
-          <span className="contents max-lg:hidden">
-            <BarButton label="History">
-              <History className="h-4 w-4" aria-hidden="true" />
-            </BarButton>
-            <BarButton label="Preview">
-              <Eye className="h-4 w-4" aria-hidden="true" />
-            </BarButton>
-          </span>
-          {/* The primary action and its menu, joined as the real split is. */}
-          <span className="flex">
-            <BarButton primary joined="start">
-              Publish
-            </BarButton>
-            <BarButton primary joined="end" label="More publishing actions">
-              <ChevronDown className="h-4 w-4" aria-hidden="true" />
-            </BarButton>
-          </span>
-          <BarButton label="More" narrow>
-            <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-          </BarButton>
-          <span className="contents max-lg:hidden">
-            <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
-            <BarButton label="Document panel" narrow>
-              <PanelRight className="h-4 w-4" aria-hidden="true" />
-            </BarButton>
-          </span>
-        </div>
+        <OutlineBar
+          soft
+          className={cn(BAR_CONTROL_HEIGHT, "w-24 rounded-md lg:w-48")}
+        />
+        {creating ? null : (
+          <>
+            <Button
+              type="button"
+              {...BAR_ICON_CONTROL}
+              disabled
+              aria-disabled="true"
+              aria-label="More actions"
+            >
+              <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+            </Button>
+            <span className="contents max-lg:hidden">
+              <span className={PANEL_TOGGLE_RULE} aria-hidden="true" />
+              <Button
+                type="button"
+                {...BAR_ICON_CONTROL}
+                disabled
+                aria-disabled="true"
+                aria-label="Document panel"
+              >
+                <PanelRight className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            </span>
+          </>
+        )}
       </div>
     </TopBarPlace>
   );
@@ -541,7 +613,10 @@ export function EditorOutline({
   sideWidth = 320,
   columnClassName,
   columnStyle,
+  creating = false,
 }: {
+  /** Whether the document is a new one, whose bar has only its verbs. */
+  creating?: boolean;
   /** The document panel's width beside the fields, in pixels. */
   sideWidth?: number;
   /** The editor's field column inset, from the editor itself. */
@@ -551,7 +626,7 @@ export function EditorOutline({
 }): JSX.Element {
   return (
     <>
-      <EditorBarOutline />
+      <EditorBarOutline creating={creating} />
       <ScreenOutline>
         <PageContainer type="editor">
           <div className="flex flex-col items-stretch lg:min-h-[calc(100vh-var(--admin-bar-height))] lg:flex-row">
