@@ -8,11 +8,11 @@
  * `hero` group shown only while `hero.mode` is "visual" would be judged by a
  * top-level `mode` — another field, or none.
  *
- * @module components/features/entries/EntryForm/__tests__/document-view-field-gate.test
+ * @module components/features/entries/EntryForm/__tests__/document-view-field-refusal.test
  */
 import { describe, expect, it } from "vitest";
 
-import { viewFieldRefusal } from "../document-view-field-gate";
+import { viewFieldRefusal } from "../document-view-field-refusal";
 
 const shownWhenVisual = {
   condition: { field: "mode", operator: "equals", value: "visual" },

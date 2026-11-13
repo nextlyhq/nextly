@@ -15,18 +15,27 @@ import {
   pinRefusal,
   pinsFrom,
   routeKey,
+  SHELL_CATEGORY,
+  shellModuleBreaches,
 } from "./check-bundle-budgets.mjs";
 
 const KB = 1024;
 
-/** A report: a small total, a 250 KB shell, and routes with their own code. */
+/**
+ * A report: a small total, a shell under its budget (derived from it, so a
+ * lowered budget leaves the passing cases passing), and routes with their own
+ * code.
+ */
 /**
  * A shipped total over the budget, derived from it, so raising the budget
  * leaves these tests measuring a breach.
  */
 const OVER_TOTAL_KB = BUDGETS.totalMinifiedKB + 20;
 
-function report(routes, { totalKB = 1000, shellKB = 250 } = {}) {
+function report(
+  routes,
+  { totalKB = 1000, shellKB = BUDGETS.shellGzipKB - 30 } = {}
+) {
   return {
     totals: {
       browser: { count: 3, minifiedBytes: totalKB * KB },
@@ -229,5 +238,101 @@ describe("describeBreaches", () => {
         )
       ),
     ]);
+  });
+});
+
+/**
+ * A build of three chunks: the entry and one chunk it shares are the shell,
+ * a route's chunk is not. `modules` places modules in chunks; `imports` says
+ * what each imports.
+ */
+function shellBuild(modules, imports = {}) {
+  return {
+    report: {
+      chunks: [
+        { file: "index.mjs", category: SHELL_CATEGORY },
+        { file: "shared.mjs", category: SHELL_CATEGORY },
+        { file: "route.mjs", category: "route-later" },
+      ],
+    },
+    record: {
+      chunks: {
+        "index.mjs": [],
+        "shared.mjs": [],
+        "route.mjs": [],
+        ...modules,
+      },
+      imports,
+    },
+  };
+}
+
+describe("shellModuleBreaches", () => {
+  const keptOut = ["react-hook-form/", "src/components/field-ui/"];
+
+  it("passes a shell holding none of the modules kept out of it", () => {
+    const { report, record } = shellBuild({
+      "index.mjs": ["src/index.ts", "src/layout/RootLayout.tsx"],
+      "route.mjs": ["react-hook-form/dist/index.esm.mjs"],
+    });
+    expect(shellModuleBreaches(report, record, keptOut, [])).toEqual([]);
+  });
+
+  it("fails a kept-out module in a shell chunk, naming it, its chunk and the imports that brought it", () => {
+    const { report, record } = shellBuild(
+      {
+        "index.mjs": ["src/index.ts", "src/hooks/useThing.ts"],
+        "shared.mjs": ["react-hook-form/dist/index.esm.mjs"],
+      },
+      {
+        "src/index.ts": ["src/hooks/useThing.ts"],
+        "src/hooks/useThing.ts": ["react-hook-form/dist/index.esm.mjs"],
+      }
+    );
+    const [breach, ...rest] = shellModuleBreaches(report, record, keptOut, []);
+    expect(rest).toEqual([]);
+    expect(breach.kind).toBe("shell-module");
+    expect(breach.name).toBe("react-hook-form/");
+    expect(breach.measured).toContain(
+      "react-hook-form/dist/index.esm.mjs in shared.mjs"
+    );
+    expect(breach.measured).toContain(
+      "src/index.ts -> src/hooks/useThing.ts -> react-hook-form/dist/index.esm.mjs"
+    );
+  });
+
+  it("says when no import from the entry leads to it, rather than inventing a chain", () => {
+    const { report, record } = shellBuild({
+      "index.mjs": ["src/index.ts"],
+      "shared.mjs": ["src/components/field-ui/FieldPicker.tsx"],
+    });
+    const [breach] = shellModuleBreaches(report, record, keptOut, []);
+    expect(breach.name).toBe("src/components/field-ui/");
+    expect(breach.measured).toContain("placed there beside");
+  });
+
+  it("lets the shell hold a module it is allowed to, under a kept-out start", () => {
+    const { report, record } = shellBuild({
+      "index.mjs": ["src/index.ts", "src/components/field-ui/constants.ts"],
+    });
+    expect(
+      shellModuleBreaches(report, record, keptOut, [
+        "src/components/field-ui/constants.ts",
+      ])
+    ).toEqual([]);
+  });
+
+  it("fails when the build left no record, since nothing could be said of the shell", () => {
+    const { report } = shellBuild({});
+    const [breach] = shellModuleBreaches(report, null, keptOut, []);
+    expect(breach.kind).toBe("shell-module");
+    expect(breach.budget).toContain("rebuild");
+  });
+
+  it("fails a record of another build, which names other chunks", () => {
+    const { report, record } = shellBuild({});
+    delete record.chunks["shared.mjs"];
+    const [breach] = shellModuleBreaches(report, record, keptOut, []);
+    expect(breach.budget).toContain("another build");
   });
 });
