@@ -373,6 +373,35 @@ describe("a field among copies that share its id", () => {
     expect(namesIn(after, "f-g2")).toEqual(["x"]);
     expect(namesIn(after)).toEqual(["first", "second", "x"]);
   });
+
+  it("judges the moved field's name against a copy where it arrives, though they share an id", () => {
+    const fields = [
+      plain("f-g1", "first", { type: "group", fields: [plain("f-same", "x")] }),
+      plain("f-g2", "second", {
+        type: "group",
+        fields: [plain("f-same", "x")],
+      }),
+    ];
+    expect(
+      refusal(judgeMove(fields, "f-same", { parentFieldId: "f-g2" }, ctx))
+        .reason
+    ).toBe("name-clash");
+  });
+
+  it("refuses a place whose id another container shares, which a move could not tell apart", () => {
+    const inner = () =>
+      plain("f-inner", "inner", { type: "group", fields: [] });
+    const fields = [
+      plain("f-a", "a"),
+      plain("f-g1", "first", { type: "group", fields: [inner()] }),
+      plain("f-g2", "second", { type: "group", fields: [inner()] }),
+    ];
+    const { reason, message } = refusal(
+      judgeMove(fields, "f-a", { parentFieldId: "f-inner" }, ctx)
+    );
+    expect(reason).toBe("ambiguous-place");
+    expect(message).toContain("inner");
+  });
 });
 
 describe("names that clash where a field arrives", () => {
@@ -574,6 +603,57 @@ describe("names as the save sends them, and layout groups", () => {
       judgeMove(level, "f-x", { parentFieldId: "f-layout" }, ctx).allowed
     ).toBe(true);
   });
+
+  it("judges every name a moved layout group carries where it arrives", () => {
+    const fields = [
+      plain("f-layout", "", {
+        type: "group",
+        fields: [plain("f-inner", "body")],
+      }),
+      plain("f-g", "group", {
+        type: "group",
+        fields: [plain("f-out", "Body")],
+      }),
+    ];
+    expect(
+      refusal(judgeMove(fields, "f-layout", { parentFieldId: "f-g" }, ctx))
+        .reason
+    ).toBe("name-clash");
+    // A name reserved at the top level, carried there inside a layout group.
+    const nested = [
+      plain("f-g", "group", {
+        type: "group",
+        fields: [
+          plain("f-layout", "", {
+            type: "group",
+            fields: [plain("f-status", "status")],
+          }),
+        ],
+      }),
+    ];
+    expect(refusal(judgeMove(nested, "f-layout", {}, ctx)).reason).toBe(
+      "reserved-name"
+    );
+  });
+
+  it("lets a unique field into a layout group on its own level, but not into one inside a group", () => {
+    const fields = [
+      plain("f-code", "code", { advanced: { unique: true } }),
+      plain("f-layout", "", { type: "group", fields: [] }),
+      plain("f-g", "group", {
+        type: "group",
+        fields: [plain("f-inner-layout", "", { type: "group", fields: [] })],
+      }),
+    ];
+    expect(
+      judgeMove(fields, "f-code", { parentFieldId: "f-layout" }, ctx).allowed
+    ).toBe(true);
+    expect(
+      refusal(
+        judgeMove(fields, "f-code", { parentFieldId: "f-inner-layout" }, ctx)
+      ).reason
+    ).toBe("unique-into-container");
+  });
 });
 
 describe("leaving repeating rows before the save", () => {
@@ -599,6 +679,25 @@ describe("leaving repeating rows before the save", () => {
     expect(
       refusal(
         judgeMove(fields(), "f-kept", {}, savedIn({ "f-kept": ["f-rows"] }))
+      ).reason
+    ).toBe("out-of-repeating-rows");
+  });
+
+  it("keeps a saved field in its rows when an unsaved group holding it would leave them", () => {
+    const wrapped = [
+      plain("f-rows", "rows", {
+        type: "repeater",
+        fields: [
+          plain("f-wrap", "wrap", {
+            type: "group",
+            fields: [plain("f-kept", "kept")],
+          }),
+        ],
+      }),
+    ];
+    expect(
+      refusal(
+        judgeMove(wrapped, "f-wrap", {}, savedIn({ "f-kept": ["f-rows"] }))
       ).reason
     ).toBe("out-of-repeating-rows");
   });
