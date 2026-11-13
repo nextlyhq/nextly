@@ -209,7 +209,7 @@ export function rewriteCallerOf<
     authenticatedScope: context.authenticatedScope,
     ...(context.actor === undefined || context.actor === null
       ? {}
-      : { actor: context.actor as NonNullable<C["actor"]> }),
+      : { actor: context.actor }),
     ...(plugin === undefined ? {} : { plugin }),
   };
 }

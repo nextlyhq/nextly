@@ -882,7 +882,7 @@ export function wrapCollectionsForPlugin(
     createCollection: schemaChange("createCollection"),
     updateCollection: schemaChange("updateCollection"),
     deleteCollection: schemaChange("deleteCollection"),
-    rewriteField: rewrites.rewriteField,
+    rewriteField: rewrites.rewriteField.bind(rewrites),
     withTransaction: <T>(
       work: (tx: PluginCollectionTransaction) => Promise<T>
     ): Promise<T> =>
