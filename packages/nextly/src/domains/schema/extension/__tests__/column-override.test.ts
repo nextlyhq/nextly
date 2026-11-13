@@ -336,6 +336,17 @@ describe("which columns an override reaches", () => {
     }
   });
 
+  it("refuses a width that leaves the row past what MySQL holds", async () => {
+    // 16,383 characters are 65,532 bytes under utf8mb4, before the table's
+    // own columns, against MySQL's 65,535-byte row.
+    expect(await refusal(() => override("city", col.varchar(16383)))).toMatch(
+      /mysql limits a row/
+    );
+    expect(await override("city", col.varchar(4000))).toMatchObject({
+      length: 4000,
+    });
+  });
+
   it("leaves the table as it was when refused", async () => {
     const schema = await buildExtensionSchema(
       input(({ schema: draft }) => {
