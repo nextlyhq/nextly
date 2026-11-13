@@ -85,6 +85,29 @@ export function resetPasswordPolicy(): void {
 }
 
 /**
+ * The part of the account password rule a browser can apply before it
+ * submits: the minimum length, and the byte limit of the digester that will
+ * hash the password, or `null` where that digester sets none a browser can
+ * check (`reach: "unbounded"`, or no numeric reach beside its own
+ * `validate`). The server still judges every write in full.
+ */
+export interface ClientPasswordRule {
+  minLength: number;
+  maxBytes: number | null;
+}
+
+/**
+ * The browser's part of the rule for passwords `hasher` hashes, or for core's
+ * bcrypt without one. Derived from the same values the server judges by, so
+ * the admin's forms cannot drift from it.
+ */
+export function clientPasswordRule(hasher?: DigesterReach): ClientPasswordRule {
+  let maxBytes: number | null = DEFAULT_DIGESTER_REACH_BYTES;
+  if (hasher) maxBytes = typeof hasher.reach === "number" ? hasher.reach : null;
+  return { minLength: getMinPasswordLength(), maxBytes };
+}
+
+/**
  * The reach-relevant part of a digester's contract — everything
  * `checkDigesterReach` reads. A full `PasswordHasher` satisfies it, and so
  * does a bare descriptor naming only what the check needs.

@@ -1127,8 +1127,8 @@ exports[`each code, as a command ends with it > PACKAGE_INSTALL_FAILED 1`] = `
 
 exports[`each code, as a command ends with it > PASSWORD_CLEAR_UNCONFIRMED 1`] = `
 "✗ Nothing was changed: --apply also needs --confirm-default-hasher.
-  Why:  --confirm-default-hasher is your statement that no stored password was written by a custom passwordHasher, now or earlier. A custom hasher's hashes can look like plain text here, and clearing them locks those people out.
-  Next: If no custom passwordHasher ever wrote a password, run \`nextly users:clear-plaintext-passwords --apply --confirm-default-hasher\`.
+  Why:  --confirm-default-hasher is your statement that every stored password was written by core's bcrypt or by the passwordHasher in nextly.config.ts, now and earlier. Another hasher's hashes can look like plain text here, and clearing them locks those people out.
+  Next: If no other passwordHasher ever wrote a password, run \`nextly users:clear-plaintext-passwords --apply --confirm-default-hasher\`.
   Docs: https://nextlyhq.com/docs/cli/errors/password-clear-unconfirmed  (PASSWORD_CLEAR_UNCONFIRMED)"
 `;
 
