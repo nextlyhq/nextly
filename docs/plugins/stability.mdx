@@ -90,7 +90,7 @@ These ship today but carry no guarantee yet — use them, but expect change:
   `migrations`), the `defineTable` / `col.*` DSL, `schema.extendTable`,
   `schema.adoptTable` and `db.schema.afterDrizzle`
 - Collection `db` options: `db.idType`, `db.allowIdOnCreate`, `db.slugPaths`
-- `db.postgres.schema` (accepts only `"public"` for now)
+- `db.postgres.schema` (a PostgreSQL schema other than `public`)
 - The manifest's declaration of reach: `capabilities` (`net.outbound`,
   `db.rawSql`, `secrets`, `auth.login`), `provides` and `requires`
 - The stateful runtime surfaces, each present only once declared:

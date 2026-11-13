@@ -111,6 +111,10 @@ import {
   tokenTable,
   type TokenTable,
 } from "../../auth/services/token-account-binding";
+import {
+  entryStillReferenced,
+  referrersHolding,
+} from "../../collections/services/entry-still-referenced";
 import { deliveriesTableFor } from "../../email/deliveries-table";
 import {
   eraseRecipientDeliveries,
@@ -2907,6 +2911,23 @@ export class UserMutationService extends BaseService {
     };
     if (caller === "plugin") {
       await this.refuseSuperAdminAccount(userId, administratorRefusal);
+    }
+    // A required relationship the Schema Builder keyed to this account refuses the deletion.
+    // Asked first, before anything of the account is removed (its roles, media ownership, email
+    // records, its row), so the refusal leaves the account whole and says what still points at it.
+    // An optional relationship is emptied by the database when the row goes.
+    const referrers = await referrersHolding(
+      this.adapter,
+      this.dialect,
+      "users",
+      String(userId)
+    );
+    if (referrers.length > 0) {
+      throw entryStillReferenced(
+        referrers,
+        { operation: "deleteUser", userId },
+        "user"
+      );
     }
     // The same refusal, asked again inside the deletion's transaction.
     const refuseAdministratorInTx = async (txDb: DrizzleTransactionLike) => {

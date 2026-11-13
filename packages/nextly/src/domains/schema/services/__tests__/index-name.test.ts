@@ -17,6 +17,7 @@ import {
   indexNameForColumn,
   indexNameForColumns,
   MAX_INDEX_NAME_LENGTH,
+  movedForeignKeyName,
   uniquenessCanBeAnIndex,
 } from "../index-name";
 
@@ -242,5 +243,39 @@ describe("uniquenessCanBeAnIndex on MySQL's TEXT and BLOB sizes", () => {
 
   it.each(["postgresql", "sqlite"])("allows text on %s", dialect => {
     expect(uniquenessCanBeAnIndex("text", dialect)).toBe(true);
+  });
+});
+
+describe("movedForeignKeyName", () => {
+  it("names a key moved from the usual name after its new target, and moves it back", () => {
+    expect(
+      movedForeignKeyName(
+        "dc_posts",
+        "owner",
+        "fk_dc_posts_owner",
+        "dc_editors"
+      )
+    ).toBe("fk_dc_posts_owner_to_dc_editors");
+    expect(
+      movedForeignKeyName(
+        "dc_posts",
+        "owner",
+        "fk_dc_posts_owner_to_dc_editors",
+        "dc_authors"
+      )
+    ).toBe("fk_dc_posts_owner");
+  });
+
+  it("skips a name another column's key holds", () => {
+    // `owner_to_dc_editors` is a column of its own, whose usual key name is the moved one.
+    expect(
+      movedForeignKeyName(
+        "dc_posts",
+        "owner",
+        "fk_dc_posts_owner",
+        "dc_editors",
+        new Set(["fk_dc_posts_owner_to_dc_editors"])
+      )
+    ).toBe("fk_dc_posts_owner_to_dc_editors_2");
   });
 });

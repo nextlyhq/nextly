@@ -44,6 +44,9 @@ import {
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
+import type { SchemaChangeAnswers } from "../../domains/schema/builder-save/schema-change-save";
+import { entityRelations } from "../../domains/schema/builder-save/single-relations";
+import { fieldGroupEntity } from "../../domains/schema/builder-save/stored-entity";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
@@ -69,6 +72,13 @@ import { assertAddressAllowed } from "../../shared/address-rule";
 import type { Logger } from "../../shared/types";
 import { writeAppliedFieldsRow } from "../helpers/applied-fields-row";
 import { readAuthenticatedUser } from "../helpers/authenticated-user";
+import {
+  builderSaveDeps,
+  checkBuilderSaveHistory,
+  reviewBuilderSchemaChange,
+  landingPush,
+  writeBuilderSchemaChange,
+} from "../helpers/builder-save-change";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import {
   builderSchemaPush,
@@ -581,21 +591,43 @@ export const COMPONENTS_METHODS: Record<
         recordedFields: recordedFieldsOf(component),
       };
 
-      return respondData(
-        await builderSchemaPreviewBody({
-          desired,
-          db,
-          dialect,
-          slug: slug,
-          tableName,
-          builtBy: "fieldGroup",
-          entity: component,
-          currentFields,
-          newFields: fields as FieldDefinition[],
-          requestedLocalized: readRequestLocalized(body),
-          schemaVersion: component.schemaVersion,
-        })
-      );
+      const preview = await builderSchemaPreviewBody({
+        desired,
+        db,
+        dialect,
+        slug: slug,
+        tableName,
+        builtBy: "fieldGroup",
+        entity: component,
+        currentFields,
+        newFields: fields as FieldDefinition[],
+        requestedLocalized: readRequestLocalized(body),
+        schemaVersion: component.schemaVersion,
+      });
+      // What the save writes beyond the person's change, for the review to show before they
+      // confirm, as a collection's does: each conversion an adoption makes, each fill and delete.
+      const answers = body as SchemaChangeAnswers;
+      const notices = await reviewBuilderSchemaChange(builderSaveDeps(), {
+        kind: "fieldGroup",
+        slug,
+        table: tableName,
+        stored: fieldGroupEntity(component),
+        fields: fields as FieldDefinition[],
+        localized:
+          readRequestLocalized(body) ??
+          (component as { localized?: boolean }).localized === true,
+        answers: {
+          renameResolutions: answers.renameResolutions ?? [],
+          eventResolutions: answers.eventResolutions ?? [],
+          ...(answers.resolutions === undefined
+            ? {}
+            : { resolutions: answers.resolutions }),
+          ...(answers.acknowledgedConversions === undefined
+            ? {}
+            : { acknowledgedConversions: answers.acknowledgedConversions }),
+        },
+      });
+      return respondData({ ...preview, notices });
     },
   },
 
@@ -634,6 +666,7 @@ export const COMPONENTS_METHODS: Record<
         renameResolutions,
         eventResolutions,
         localized: requestLocalized,
+        acknowledgedConversions,
       } = body as {
         fields: unknown[];
         confirmed: boolean;
@@ -644,6 +677,7 @@ export const COMPONENTS_METHODS: Record<
         // i18n: the builder sends the current toggle so a save that flips i18n AND changes fields
         // provisions the companion in the same apply. Undefined = leave the persisted value.
         localized?: boolean;
+        acknowledgedConversions?: string[];
       };
 
       if (!confirmed) throw new Error("Schema changes must be confirmed");
@@ -751,6 +785,9 @@ export const COMPONENTS_METHODS: Record<
           );
           // The dialog's answer on a translated field's rename, refused when it does not
           // say, before anything changes.
+          // The history checks a save makes, before anything below changes the table.
+          const builderSave = builderSaveDeps();
+          await checkBuilderSaveHistory(builderSave);
           const companionRename = await resolveCompanionRename(
             renameResolutions,
             {
@@ -840,58 +877,99 @@ export const COMPONENTS_METHODS: Record<
             recordedFields: recordedFieldsOf(component),
           };
 
-          const push = builderSchemaPush({
-            dialect,
-            db,
-            databaseName,
-            slug,
-            kind: "component",
-            resolutions: [
-              renameResolutions ?? [],
-              eventResolutions ?? [],
-              legacyBundle,
-            ],
-          });
+          const landing = landingPush(
+            builderSchemaPush({
+              dialect,
+              db,
+              databaseName,
+              slug,
+              kind: "component",
+              resolutions: [
+                renameResolutions ?? [],
+                eventResolutions ?? [],
+                legacyBundle,
+              ],
+            }),
+            dialect
+          );
+          // Notes once the push may have changed the database, so a failure after it keeps the
+          // files that record it.
+          const push = landing.push;
           // The push excludes companion tables, so comp_<slug>_locales is brought in step right
           // after it: created on the first translatable field, then ADD/DROPped as the field set
           // changes.
-          await pushAndReconcileCompanion(push, desired, "component", {
-            slug,
-            tableName,
-            oldFields: component.fields as unknown as FieldDefinition[],
-            newFields: fields as unknown as FieldDefinition[],
-            localized: isStored,
-            wasLocalized: wasStored,
-            adapter,
-            renamed: companionRename ?? undefined,
-            // The settings the first push left off, once the shared columns hold the default
-            // language's values. A new desired schema rather than an edit of the first: the
-            // pipeline keeps the last one it applied, by reference, to skip a push that changes
-            // nothing.
-            settleLeaving: settingsDeferred
-              ? leavingSettingsStep({
-                  adapter,
-                  entity: slug,
-                  tableName,
-                  builtBy: "fieldGroup",
-                  oldFields: (component.fields ??
-                    []) as unknown as FieldDefinition[],
-                  newFields: fields as unknown as FieldDefinition[],
-                  renamed: companionRename,
-                  push: () =>
-                    push({
-                      ...desired,
-                      components: {
-                        ...desired.components,
-                        [slug]: {
-                          ...desired.components[slug],
-                          fields: fields as DesiredFieldGroup["fields"],
-                        },
-                      },
-                    }),
-                })
-              : undefined,
-          });
+          // The change applied by the push and written as the field group's migration, so its table
+          // stands on record for every migration after it, as a collection's Builder save leaves it.
+          await writeBuilderSchemaChange(
+            builderSave,
+            () =>
+              pushAndReconcileCompanion(push, desired, "component", {
+                slug,
+                tableName,
+                oldFields: component.fields as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                localized: isStored,
+                wasLocalized: wasStored,
+                adapter,
+                renamed: companionRename ?? undefined,
+                // The settings the first push left off, once the shared columns hold the default
+                // language's values. A new desired schema rather than an edit of the first: the
+                // pipeline keeps the last one it applied, by reference, to skip a push that changes
+                // nothing.
+                settleLeaving: settingsDeferred
+                  ? leavingSettingsStep({
+                      adapter,
+                      entity: slug,
+                      tableName,
+                      builtBy: "fieldGroup",
+                      oldFields: (component.fields ??
+                        []) as unknown as FieldDefinition[],
+                      newFields: fields as unknown as FieldDefinition[],
+                      renamed: companionRename,
+                      push: () =>
+                        push({
+                          ...desired,
+                          components: {
+                            ...desired.components,
+                            [slug]: {
+                              ...desired.components[slug],
+                              fields: fields as DesiredFieldGroup["fields"],
+                            },
+                          },
+                        }),
+                    })
+                  : undefined,
+              }),
+            {
+              kind: "fieldGroup",
+              slug,
+              table: tableName,
+              stored: fieldGroupEntity(component),
+              fields: fields as unknown as FieldDefinition[],
+              localized: isLocalized,
+              answers: {
+                renameResolutions: renameResolutions ?? [],
+                eventResolutions: eventResolutions ?? [],
+                ...(resolutions ? { resolutions } : {}),
+                // The conversions an adoption makes that the review showed and the person confirmed.
+                ...(acknowledgedConversions === undefined
+                  ? {}
+                  : { acknowledgedConversions }),
+              },
+              // What the push moves beside the table, as a collection's save writes it: a renamed
+              // nested field group's rows moved to its new name, and any junction tables.
+              ...(builderSave === undefined
+                ? {}
+                : await entityRelations(
+                    builderSave.adapter,
+                    getLoggerFromDI() ?? DISCARDED_LOG,
+                    tableName,
+                    (component.fields ?? []) as unknown as FieldDefinition[],
+                    fields as unknown as FieldDefinition[]
+                  )),
+            },
+            landing.landed
+          );
 
           const newSchemaVersion = currentVersion + 1;
 
@@ -1150,6 +1228,8 @@ export const COMPONENTS_METHODS: Record<
         });
       }
 
+      // The registry's delete writes it as the field group's migration where a writer is set up,
+      // so every entry point that deletes one leaves no snapshot still recording its table.
       await svc.registry.deleteComponent(slug);
 
       return respondAction(`Component "${slug}" deleted successfully.`, {
