@@ -189,13 +189,16 @@ function limitOf(text: string): number | null {
  * limit of 0 is refused and points to None, the one choice that says what
  * hiding the text costs.
  */
-function SnippetRow({
-  values,
-  writable,
-  errors,
-  onSet,
-}: AdvancedProps): ReactNode {
+function SnippetRow(props: AdvancedProps): ReactNode {
+  const { values, writable, errors, onSet } = props;
   const id = useId();
+  // Each choice only where the group declares the field it writes, so the
+  // tab never sets a directive a site's own `seo` fields leave out.
+  const offered = SNIPPET_OPTIONS.filter(
+    option =>
+      option.value === "any" ||
+      declares(props, option.value === "shorter" ? "maxSnippet" : "nosnippet")
+  );
   const stored =
     typeof values.maxSnippet === "number" ? values.maxSnippet : undefined;
   const none = values.nosnippet === true;
@@ -213,8 +216,12 @@ function SnippetRow({
   );
   const write = (maxSnippet: number | null, nosnippet: boolean) => {
     wrote(keyOf(maxSnippet, nosnippet));
-    if (maxSnippet !== (stored ?? null)) onSet("maxSnippet", maxSnippet);
-    if (nosnippet !== none) onSet("nosnippet", nosnippet);
+    if (declares(props, "maxSnippet") && maxSnippet !== (stored ?? null)) {
+      onSet("maxSnippet", maxSnippet);
+    }
+    if (declares(props, "nosnippet") && nosnippet !== none) {
+      onSet("nosnippet", nosnippet);
+    }
   };
   const choose = (next: string) => {
     setShorter(next === "shorter");
@@ -232,7 +239,7 @@ function SnippetRow({
         <SegmentedChoice
           aria-labelledby={`${id}-label`}
           size="bordered"
-          options={SNIPPET_OPTIONS}
+          options={offered}
           value={chosen}
           disabled={!writable}
           onSelect={choose}

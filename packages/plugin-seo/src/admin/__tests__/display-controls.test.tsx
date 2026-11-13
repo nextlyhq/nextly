@@ -55,13 +55,16 @@ const FIELDS = [
   "nocache",
 ];
 
-function contextWith(site: Partial<Levels["site"]> = {}): SeoTabContext {
+function contextWith(
+  site: Partial<Levels["site"]> = {},
+  fields: readonly string[] = FIELDS
+): SeoTabContext {
   return {
     levels: { ...LEVELS, site: { ...LEVELS.site, ...site } },
     site: { name: "Nextly", origin: "https://nextlyhq.com" },
     typeLabel: "Page",
     fieldLabels: { title: "Title", excerpt: "Excerpt" },
-    fields: FIELDS,
+    fields: [...fields],
     mayChange: true,
   };
 }
@@ -254,6 +257,39 @@ describe("the text under the link", () => {
     expect(screen.getByTestId("seo-search-description")).toHaveTextContent(
       "No text under the link"
     );
+  });
+});
+
+describe("the text under the link, where the group declares only one of its fields", () => {
+  const options = () =>
+    within(screen.getByRole("radiogroup", { name: "Text under the link" }))
+      .getAllByRole("radio")
+      .map(radio => radio.textContent);
+
+  it("offers no None where the group has no nosnippet field", async () => {
+    render(
+      <Harness
+        context={contextWith(
+          {},
+          FIELDS.filter(name => name !== "nosnippet")
+        )}
+      />
+    );
+    await openAdvanced();
+    expect(options()).toEqual(["Any length", "Shorter"]);
+  });
+
+  it("offers no Shorter where the group has no maxSnippet field", async () => {
+    render(
+      <Harness
+        context={contextWith(
+          {},
+          FIELDS.filter(name => name !== "maxSnippet")
+        )}
+      />
+    );
+    await openAdvanced();
+    expect(options()).toEqual(["Any length", "None"]);
   });
 });
 
