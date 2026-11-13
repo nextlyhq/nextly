@@ -68,14 +68,20 @@ function onOrigin(address: string, origin: string | undefined): string {
 }
 
 /**
- * A language tag as Open Graph states a page's language: `en-US` as
- * `en_US`, a bare language as itself. Nothing for text that is no language.
+ * A language tag as Open Graph states a page's language, which is always a
+ * language and a territory: `en-US` as `en_US`. A bare language is given the
+ * territory it is most often written for, from Unicode's likely-subtags
+ * data, so `en` is `en_US`, `de` is `de_DE` and `pt` is `pt_BR`. Nothing for
+ * text that is no language.
  */
 export function cardLocale(language: string | undefined): string | undefined {
   if (language === undefined || language.trim() === "") return undefined;
   try {
-    const { language: lang, region } = new Intl.Locale(language.trim());
-    return region === undefined ? lang : `${lang}_${region}`;
+    const locale = new Intl.Locale(language.trim());
+    const region = locale.region ?? locale.maximize().region;
+    return region === undefined
+      ? locale.language
+      : `${locale.language}_${region}`;
   } catch {
     return undefined;
   }

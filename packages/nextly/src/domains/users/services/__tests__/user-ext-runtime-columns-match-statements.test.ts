@@ -9,7 +9,7 @@
  * are compared here character for character, apart from case, for every field shape the builder
  * gives a column, for the table's own columns, and for a field it gives none.
  */
-import { getTableColumns } from "drizzle-orm";
+import { getColumns, type Table } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
 import type { UserFieldConfig } from "../../../../users/config/types";
@@ -83,9 +83,9 @@ function runtimeColumn(
   column: string
 ): { type: string; notNull: boolean } | null {
   const table = builder.generateRuntimeSchema(fields.map(asConfig));
-  const declared = Object.values(
-    getTableColumns(table as Parameters<typeof getTableColumns>[0])
-  ).find(each => each.name === column);
+  const declared = Object.values(getColumns(table as Table)).find(
+    each => each.name === column
+  );
   if (declared === undefined) return null;
   return {
     type: declared.getSQLType().trim().toLowerCase(),
@@ -129,9 +129,9 @@ describe("UserExtSchemaService.generateRuntimeSchema", () => {
         () => {
           const field = FIELDS.find(each => each.name === "teams")!;
           const table = builder.generateRuntimeSchema([asConfig(field)]);
-          const column = Object.values(
-            getTableColumns(table as Parameters<typeof getTableColumns>[0])
-          ).find(each => each.name === "teams");
+          const column = Object.values(getColumns(table as Table)).find(
+            each => each.name === "teams"
+          );
           expect(column?.mapToDriverValue(["alpha", "beta"])).toBe(
             JSON.stringify(["alpha", "beta"])
           );

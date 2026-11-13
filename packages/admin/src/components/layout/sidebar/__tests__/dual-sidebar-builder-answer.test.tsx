@@ -41,6 +41,8 @@ vi.mock("@nextlyhq/ui", () => ({
     <>{children}</>
   ),
   TooltipContent: () => null,
+  // The rail's neutral shapes for entries not decided yet.
+  Skeleton: () => <span data-testid="skeleton" />,
 }));
 vi.mock("@admin/components/shared/ThemeAwareLogo", () => ({
   ThemeAwareLogo: () => null,
@@ -90,6 +92,12 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
     error: null,
     content: { isLoading: answers.contentLoading },
   }),
+}));
+// The Content panel's lists, which the rail reads only to keep the menu on
+// the device: nothing in these tests asks for them.
+vi.mock("@admin/hooks/useSidebarContentLists", () => ({
+  useSidebarCollectionList: () => ({ items: [], data: undefined }),
+  useSidebarSingleList: () => ({ items: [], hasArrived: false }),
 }));
 vi.mock("@admin/hooks/queries", () => ({
   NAV_COLLECTIONS_PARAMS: {},

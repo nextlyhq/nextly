@@ -91,6 +91,38 @@ describe("describeHolder", () => {
     expect(text).toContain("`nextly_field_group_lock`");
     expect(text).toContain("nextly migrate --force-unlock");
   });
+
+  it("names the file and the session of an earlier holder's statement that did not stop", () => {
+    const text = describeHolder(
+      {
+        kind: "earlier-statement",
+        owner: "old-host:77#u",
+        session: "4242",
+        unit: "0007_add_keys.sql",
+      },
+      NOW
+    );
+
+    expect(text).toContain("a statement for `0007_add_keys.sql`");
+    expect(text).toContain("process 77 on old-host");
+    expect(text).toContain("database session 4242 and did not stop");
+  });
+
+  it("names the session alone where the statement names nothing readable", () => {
+    const text = describeHolder(
+      {
+        kind: "earlier-statement",
+        owner: "old-host:77#u",
+        session: "4242",
+        unit: null,
+      },
+      NOW
+    );
+
+    expect(text).toMatch(/^a statement that the earlier holder/);
+    expect(text).toContain("database session 4242 and did not stop");
+    expect(text).not.toContain("null");
+  });
 });
 
 describe("forceUnlock", () => {

@@ -171,7 +171,7 @@ function lowerFirst(label: string): string {
 /**
  * An item's severity, told apart by shape as well as colour, so a reader who
  * cannot tell red from amber still can: critical is "!" in a circle, warning
- * "!" in a triangle, each in its status's solid colour. Its name is said in
+ * "!" in a triangle, each in its status's text colour. Its name is said in
  * words to assistive technology.
  */
 function SeverityMark({ severity }: { severity: AttentionSeverity }) {
@@ -189,7 +189,7 @@ function SeverityMark({ severity }: { severity: AttentionSeverity }) {
         data-testid="needs-attention-mark"
         className={cn(
           "size-5",
-          severity === "critical" ? "text-danger-solid" : "text-warning-solid"
+          severity === "critical" ? "text-danger-text" : "text-warning-text"
         )}
       />
       <span className="sr-only">{severityName(severity)}</span>

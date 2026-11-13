@@ -26,6 +26,11 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import {
+  consentToCover,
+  describeDeletion,
+  type Deletion,
+} from "../migrate/data-loss-consent";
 import { NO_TRANSACTION_MARKER } from "../migrate/split-sql";
 
 import { getDialectDisplayName } from "./dialect-name";
@@ -52,6 +57,33 @@ const SETTINGS_HEADER = "-- Settings:";
  * (`-- Permissions: @nextlyhq/plugin-form-builder: + export-submissions`).
  */
 const PERMISSIONS_HEADER = "-- Permissions:";
+
+/**
+ * The destructive mark: the line saying a file deletes data and which consent `nextly migrate`
+ * needs for it, and the line naming each deletion. Written second in the header, under the
+ * migration's name, so a reviewer reading the file in a diff sees it first. It is for that
+ * review: `nextly migrate` judges a file by its statements, marked or not.
+ */
+export const DESTRUCTIVE_HEADER = "-- Destructive:";
+export const DELETES_HEADER = "-- Deletes:";
+
+/** The destructive mark for `deletions`, or nothing for a file that deletes nothing. */
+function destructiveLines(deletions: readonly Deletion[]): string {
+  if (deletions.length === 0) return "";
+  const consent = consentToCover(deletions);
+  const each = deletions.map(deletion => {
+    // The count belongs to one database; the file runs against others.
+    const uncounted: Deletion =
+      deletion.kind === "unnamed"
+        ? deletion
+        : { ...deletion, count: undefined };
+    return `${DELETES_HEADER} ${oneLine(describeDeletion(uncounted))}\n`;
+  });
+  return (
+    `${DESTRUCTIVE_HEADER} this migration deletes data. nextly migrate needs consent: ${oneLine(consent)}\n` +
+    each.join("")
+  );
+}
 
 /**
  * `text` on one line. A settings or permissions header names what a config or a plugin declares,
@@ -165,6 +197,14 @@ export interface FormatArgs {
    * Builder entity's registry row travels with its settings.
    */
   changesNoTable?: boolean;
+  /**
+   * What the migration deletes (`plannedDeletions`). A file with any carries
+   * the destructive mark: a `-- Destructive:` line naming the consent `nextly
+   * migrate` needs, and one `-- Deletes:` line per deletion. Counts are left
+   * out: they are of the database `migrate:create` read, and the file runs
+   * against others.
+   */
+  deletions?: readonly Deletion[];
   /** Override generated-at timestamp for tests; default = `new Date()`. */
   now?: Date;
 }
@@ -214,7 +254,7 @@ export function formatMigrationFile(args: FormatArgs): string {
         : "-- (no automatic down — this migration is not reversible. Hand-write rollback SQL here)";
 
   return `-- Migration: ${args.name}
-${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}${permissionLines}-- Generated at: ${now}
+${destructiveLines(args.deletions ?? [])}${collectionLine}${singleLine}${componentLine}${userExtLine}${scopeLine}${settingsLines}${permissionLines}-- Generated at: ${now}
 -- Dialect: ${getDialectDisplayName(args.dialect)}
 
 -- UP

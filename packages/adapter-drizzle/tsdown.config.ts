@@ -1,8 +1,12 @@
 import { defineConfig } from "tsdown";
 
 export default defineConfig({
+  // The settings below are every server package's on purpose, each package
+  // building on its own; only the entries are this package's.
+  // fallow-ignore-next-line code-duplication
   entry: [
     "src/index.ts",
+    "src/build-phase.ts",
     "src/types/index.ts",
     "src/schema/index.ts",
     "src/migrations.ts",

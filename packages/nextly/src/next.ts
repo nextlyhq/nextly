@@ -20,7 +20,22 @@
  * ```
  */
 
+import { createRequire } from "node:module";
+import { resolve } from "node:path";
+
 import { warnIfCacheComponentsOff } from "./cache-components";
+import {
+  BUILD_SCHEMA_VERSION_ENV,
+  newestMigrationIn,
+  type RunnersFolderReading,
+} from "./domains/schema/build-schema-version";
+import { nextlyTracingIncludes } from "./next-runtime-includes";
+import { statedDialect } from "./shared/lib/stated-dialect";
+import { DEFAULT_MIGRATIONS_DIR } from "./shared/types/migrations-dir-default";
+
+// The files `withNextly` adds to every route's trace, for a config that is not
+// wrapped in it to add itself.
+export { nextlyTracingIncludes } from "./next-runtime-includes";
 
 /**
  * Packages that must be loaded from node_modules at runtime
@@ -48,27 +63,6 @@ const NEXTLY_SERVER_EXTERNAL_PACKAGES = [
   "drizzle-kit",
   // Auth (jose is a pure ESM package, no native bindings)
   "jose",
-];
-
-/**
- * Packages that must be explicitly included in the Vercel Lambda
- * output via `outputFileTracingIncludes`.
- *
- * pnpm's strict `.pnpm` store uses symlinks for peer deps, but
- * Vercel's Lambda filesystem doesn't always follow symlink chains.
- * This forces Next.js/NFT to copy these packages into the Lambda
- * regardless of whether tracing resolves them.
- */
-const NEXTLY_FILE_TRACING_INCLUDES = [
-  "./node_modules/pg/**/*",
-  "./node_modules/pg-*/**/*",
-  "./node_modules/mysql2/**/*",
-  "./node_modules/better-sqlite3/**/*",
-  "./node_modules/@nextlyhq/adapter-postgres/**/*",
-  "./node_modules/@nextlyhq/adapter-mysql/**/*",
-  "./node_modules/@nextlyhq/adapter-sqlite/**/*",
-  "./node_modules/@nextlyhq/adapter-drizzle/**/*",
-  "./node_modules/drizzle-orm/**/*",
 ];
 
 /**
@@ -180,6 +174,22 @@ export interface WithNextlyOptions {
   apiRoute?: string;
   /** More root files, beyond robots.txt, sitemap.xml and llms.txt, that a plugin answers. */
   rootFiles?: readonly string[];
+  /**
+   * The app's migrations folder, relative to the project root, as
+   * `db.migrationsDir` in the Nextly config sets it. Defaults to
+   * `./src/db/migrations`, that setting's default. Its newest migration is
+   * the build's schema version, which a production start compares with the
+   * database's.
+   */
+  migrationsDir?: string;
+  /**
+   * The database dialect the app's migrations run on, which decides which of
+   * a migration's dialect variants runs and how an earlier Schema Builder's
+   * files are recognised. Defaults to the one the environment states
+   * (`DB_DIALECT`, else the one `DATABASE_URL` implies, else PostgreSQL), as
+   * Nextly reads it at run time.
+   */
+  dialect?: "postgresql" | "mysql" | "sqlite";
 }
 
 type Rewrite = Record<string, unknown>;
@@ -266,6 +276,22 @@ function withRootFileRewrites(
   };
 }
 
+/**
+ * The runner's reading of the migrations folder (`readMigrationFolderSync`),
+ * loaded when it is first needed: it brings the core schema with it, which
+ * would add most of a second to every load of `next.config`, and a folder
+ * needs it only when it holds a file an earlier Schema Builder wrote.
+ *
+ * Required synchronously, since `withNextly` returns the config at once: the
+ * built `cli/utils` entry, which sits beside this one in `dist`.
+ */
+function loadRunnersReading(): RunnersFolderReading {
+  const loaded = createRequire(import.meta.url)("./cli/utils/index.mjs") as {
+    readMigrationFolderSync: RunnersFolderReading;
+  };
+  return loaded.readMigrationFolderSync;
+}
+
 export function withNextly<T extends Record<string, unknown>>(
   nextConfig: T,
   options: WithNextlyOptions = {}
@@ -289,9 +315,11 @@ export function withNextly<T extends Record<string, unknown>>(
     ...new Set([...existing, ...NEXTLY_SERVER_EXTERNAL_PACKAGES]),
   ];
 
-  // Force-include database packages in Vercel Lambda output.
-  // pnpm's strict .pnpm store uses symlinks for peer deps, but
-  // Vercel's Lambda filesystem doesn't follow symlink chains.
+  // Force-include database packages in Vercel Lambda output, and the
+  // Next.js files Nextly loads at request time through requires no trace
+  // follows (`nextlyTracingIncludes`). pnpm's strict .pnpm store uses
+  // symlinks for peer deps, but Vercel's Lambda filesystem doesn't follow
+  // symlink chains.
   //
   // Next.js reads `outputFileTracingIncludes` at the top level only. Under
   // `experimental` it warns on every build that the key is unrecognized and
@@ -305,11 +333,36 @@ export function withNextly<T extends Record<string, unknown>>(
       nextConfig.outputFileTracingIncludes as TracingIncludes | undefined,
       experimentalIncludes as TracingIncludes | undefined
     ),
-    { "/**": NEXTLY_FILE_TRACING_INCLUDES }
+    { "/**": nextlyTracingIncludes() }
   );
+
+  // The build's schema version: the newest migration in the app's folder,
+  // named while Next.js loads this config, from the project root it loads it
+  // in. Handed to the server two ways, since Nextly itself is a server
+  // external that Next.js does not inline values into: through `env`, which
+  // Next.js inlines into the app's `instrumentation.ts` for it to pass to
+  // `createRegister` on every host, and on `process.env`, which Next.js keeps
+  // for the server `next start` starts after loading the config, for a hook
+  // that passes none. No migration, no version, and a production start then
+  // compares nothing.
+  // Read as the runner reads it on the app's dialect, so a file the runner
+  // sets aside is never named; its reading is loaded only for a folder that
+  // could hold one (`loadRunnersReading`).
+  const buildVersion = newestMigrationIn(
+    resolve(process.cwd(), options.migrationsDir ?? DEFAULT_MIGRATIONS_DIR),
+    options.dialect ?? statedDialect(process.env),
+    loadRunnersReading
+  );
+  if (buildVersion !== undefined) {
+    process.env[BUILD_SCHEMA_VERSION_ENV] = buildVersion;
+  }
+  const env = nextConfig.env as Record<string, string> | undefined;
 
   return {
     ...nextConfig,
+    ...(buildVersion === undefined
+      ? {}
+      : { env: { ...env, [BUILD_SCHEMA_VERSION_ENV]: buildVersion } }),
     serverExternalPackages: merged,
     ...(nextConfig.experimental === undefined ? {} : { experimental }),
     outputFileTracingIncludes: includes,

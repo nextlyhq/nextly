@@ -38,9 +38,11 @@ import {
 } from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
-import { clearRegistryRowCache } from "../../domains/dynamic-collections/services/collection-row-cache";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
-import { appLocalization } from "../../domains/i18n/configured-locales";
+import {
+  appLanguageOrder,
+  appLocalization,
+} from "../../domains/i18n/configured-locales";
 import {
   archiveFieldsLeavingTranslation,
   fieldsAsFirstPushed,
@@ -84,6 +86,7 @@ import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-s
 import { assertAddressAllowed } from "../../shared/address-rule";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import { consoleLogger } from "../../shared/types";
+import { writeAppliedFieldsRow } from "../helpers/applied-fields-row";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -118,12 +121,17 @@ import {
 } from "../helpers/service-envelope";
 import {
   parseRichTextFormat,
+  parseRichTextStyles,
   isTruthyParam,
   parseStatusParam,
   requireParam,
   toNumber,
 } from "../helpers/validation";
-import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
+import {
+  restoreFieldsOf,
+  versionInputOf,
+  versionInputOfQuery,
+} from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
 import { readListOffset } from "./list-offset";
@@ -284,6 +292,8 @@ export const SINGLE_VERSION_METHODS: Record<
         request,
         // The version the restore was made from, judged as its update is.
         version: versionInputOf(body),
+        // The fields chosen; every field the version holds when none are.
+        fields: restoreFieldsOf(body),
       });
       return respondAction("Version restored.", result);
     },
@@ -722,6 +732,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
     execute: async (svc, p, _body, request) => {
       const slug = requireParam(p, "slug", "Single slug");
       const richTextFormat = parseRichTextFormat(p.richTextFormat);
+      // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+      const richTextStyles = parseRichTextStyles(p.richTextStyles);
       // Absent → undefined so the service applies its published-only default
       // (an untrusted read must not leak a draft Single); pass
       // `?status=all|draft|published` to widen. An invalid value is rejected
@@ -771,7 +783,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           result.data = transformRichTextFields(
             result.data,
             single.fields,
-            richTextFormat
+            richTextFormat,
+            richTextStyles
           ) as typeof result.data;
         }
       }
@@ -1386,6 +1399,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             renamed: companionRename,
             tableName: single.tableName,
             defaultLocale: appLocalization()?.defaultLocale ?? "en",
+            languageOrder: appLanguageOrder(),
             adapter,
             entity: slug,
             kind: "single",
@@ -1501,20 +1515,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // version the database did not persist.
           let versionPersisted = true;
           try {
-            await adapter.update(
-              "dynamic_singles",
-              {
-                fields: JSON.stringify(fields),
-                schema_hash: calculateSchemaHash(fields as FieldConfig[]),
-                migration_status: "applied",
-                localized: isLocalized,
-                schema_version: newSchemaVersion,
-                updated_at: new Date(),
-              },
-              { and: [{ column: "slug", op: "=", value: slug }] }
-            );
-            // Written past the registry service, so the cached registry row is cleared here.
-            clearRegistryRowCache();
+            // The row and the stored schema version in one transaction, and the
+            // cached rows cleared after it (`writeAppliedFieldsRow`).
+            await writeAppliedFieldsRow(adapter, {
+              table: "dynamic_singles",
+              slug,
+              fields: fields as FieldConfig[],
+              localized: isLocalized,
+              schemaVersion: newSchemaVersion,
+            });
           } catch (err) {
             versionPersisted = false;
             const msg = err instanceof Error ? err.message : String(err);

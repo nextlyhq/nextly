@@ -104,9 +104,46 @@ async function publish(t: TestNextly, slug: string): Promise<string> {
   return String(created.item.id);
 }
 
+/**
+ * A deadlock as `dialect`'s driver reports one, or none where the dialect
+ * has none: SQLite runs one writer at a time.
+ */
+function driverDeadlock(dialect: TestDialect): Error | undefined {
+  if (dialect === "postgresql") {
+    return Object.assign(new Error("deadlock detected"), { code: "40P01" });
+  }
+  if (dialect === "mysql") {
+    return Object.assign(new Error("Deadlock found when trying to get lock"), {
+      code: "ER_LOCK_DEADLOCK",
+      errno: 1213,
+    });
+  }
+  return undefined;
+}
+
 describe.each(getConfiguredTestDialects())(
   "a plugin takes part through ctx.publicAddresses (%s)",
   dialect => {
+    it("a deadlock in a participant's write asks the editor to try again", async ({
+      skip,
+    }) => {
+      const deadlock = driverDeadlock(dialect);
+      if (deadlock === undefined) return skip();
+      const { record, participant } = asPluginParticipant();
+      const failing: PublicAddressParticipant = {
+        ...participant,
+        record: async () => {
+          throw deadlock;
+        },
+      };
+      const { t } = await boot(dialect, failing);
+
+      await expect(publish(t, "hello")).rejects.toMatchObject({
+        code: "CONFLICT",
+      });
+      expect(record.held()).toEqual({});
+    });
+
     it("is asked on a save, on its own database bound to the save", async () => {
       const { record, participant, dbs } = asPluginParticipant();
       const { t } = await boot(dialect, participant);
@@ -273,7 +310,7 @@ describe.each(getConfiguredTestDialects())(
       await expect(outcome).rejects.toThrow("second record failed");
     });
 
-    it("held pages through a type oldest first, each once", async () => {
+    it("held pages through a type in id order, each once", async () => {
       const { t, ctx } = await boot(dialect);
       const ids = [
         await publish(t, "one"),
@@ -297,16 +334,15 @@ describe.each(getConfiguredTestDialects())(
       expect(listed.map(item => item.holder.id).sort()).toEqual(
         [...ids].sort()
       );
-      // Oldest first: by creation, then id, which settles entries made in
-      // the same second (SQLite keeps seconds).
-      const created = await t.nextly.find({
-        collection: "posts",
-        sort: ["createdAt", "id"],
-      });
+      // In id order, the order the cursor pages in, so a document made or
+      // deleted while a caller pages never moves one not yet read behind it.
+      // Ids need not follow creation order, so this is not creation order.
+      const byId = await t.nextly.find({ collection: "posts", sort: "id" });
       expect(listed.map(item => item.holder.id)).toEqual(
-        created.items.map(item => String(item.id))
+        byId.items.map(item => String(item.id))
       );
-      // Each carries when it was made, for ordering across types.
+      // Each carries when it was made, for a caller to settle claims oldest
+      // first across types.
       expect(listed.every(item => typeof item.createdAt === "string")).toBe(
         true
       );

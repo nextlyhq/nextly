@@ -31,6 +31,7 @@ import {
   historyEnabledFrom,
   historyRetentionFrom,
 } from "@admin/components/features/versions/history-enabled";
+import { useEditorRestoreSurface } from "@admin/components/features/versions/useEditorRestoreSurface";
 import { PREVIOUS_VERSION } from "@admin/components/features/versions/version-search-params";
 import { versionsHref } from "@admin/components/features/versions/versions-href";
 import {
@@ -77,7 +78,12 @@ import { useTranslationSource } from "../TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "../useEntryLocaleContext";
 
 import { pluginDocumentLock } from "./document-lock-affordances";
-import { useDocumentPanelParts, useDocumentPlace } from "./document-place";
+import {
+  topLevelFieldNames,
+  useContentFields,
+  useDocumentPanelParts,
+  useDocumentPlace,
+} from "./document-place";
 import { DocumentFormSource } from "./document-values";
 import type { ContributedAction } from "./DocumentActionBar";
 import {
@@ -412,6 +418,7 @@ export function EntryForm({
 
   const {
     form,
+    formRestore,
     defaultValues,
     handleSubmit: submitEntry,
     writeStatus,
@@ -650,10 +657,26 @@ export function EntryForm({
       readDraft,
     ]
   );
+  // What a restore puts values back into: this form. The document's lock is
+  // decided further down, so a restore reads it when it asks.
+  const restoreReadOnly = useRef(false);
+  // The language being edited: the default where the address names none.
+  const editingLocale = locale ?? defaultLocale;
+  const editingLanguage = getLocale(editingLocale)?.label;
+  const editorRestore = useEditorRestoreSurface({
+    restore: formRestore,
+    form,
+    fields: allFields,
+    readOnly: () => restoreReadOnly.current,
+    localized: collection.localized === true,
+    ...(editingLanguage ? { language: editingLanguage } : {}),
+    ...(editingLocale ? { locale: editingLocale } : {}),
+  });
   const viewedVersionHost = useViewedVersion(
     allFields,
     takeoverTypes,
-    versionFor
+    versionFor,
+    editorRestore
   );
   const {
     viewingVersion,
@@ -800,6 +823,9 @@ export function EntryForm({
     }
   );
   useEffect(() => {
+    restoreReadOnly.current = lock.readOnly;
+  }, [lock.readOnly]);
+  useEffect(() => {
     setChangeAwaiting(lock.changeAwaitingAnswer);
   }, [lock.changeAwaitingAnswer]);
 
@@ -814,9 +840,24 @@ export function EntryForm({
    * warning the meta strip it covers would have shown. And after the lock,
    * whose read-only answer it shares with every other field.
    */
+  // The edit page's place: plugins' blocks around the bar and the editor,
+  // their tabs over the field column and their sections in the panel.
+  const documentPlace = useDocumentPlace(
+    {
+      kind: "collection",
+      collection: collectionSlug,
+      entryId: entry?.id ?? null,
+    },
+    entry ?? undefined
+  );
+  const fieldNames = useMemo(() => topLevelFieldNames(allFields), [allFields]);
+  // The fields a surface draws beside a takeover field leave out those a
+  // plugin's tab takes over, by the same rule as the page's own content:
+  // they are drawn, and edited, in their tab.
+  const besideFields = useContentFields(documentPlace, fieldNames, allFields);
   const renderEntryFields = useCallback(
     (excludePath: string, presentation?: EntryFieldsPresentation) =>
-      fieldsBesidePanel(allFields, excludePath, {
+      fieldsBesidePanel(besideFields, excludePath, {
         disabled: savePending,
         readOnly: lock.readOnly,
         mode,
@@ -825,7 +866,7 @@ export function EntryForm({
         ...(presentation === undefined ? {} : { presentation }),
       }),
     [
-      allFields,
+      besideFields,
       savePending,
       lock.readOnly,
       mode,
@@ -934,13 +975,22 @@ export function EntryForm({
     () => autosaveScopeFor("collection", collection.name, savedEntryId),
     [savedEntryId, collection.name]
   );
+  /*
+   * Whether this entry keeps recovery points: a saved entry of a collection
+   * with autosave on. The server refuses a recording anywhere else, so where
+   * this is false the editor records nothing, offers nothing back and shows no
+   * recording status. One answer for every recorder in the editor, the page
+   * builder's included, and for keeping a refused save's edits.
+   */
+  const keepsRecoveryPoints =
+    autosaveScope !== null && autosaveEnabledFor(collection);
   // The other half of recording: offer the work back when the editor opens, and
   // write it into this form when the author accepts.
   const recovery = offerHeldWhileRecovering(
     useAutosaveRecovery({
       // A reader is offered no recovery point: restoring one would make the
       // read-only form dirty with work it cannot save.
-      scope: readOnlyForReader ? null : autosaveScope,
+      scope: readOnlyForReader || !keepsRecoveryPoints ? null : autosaveScope,
       form,
       // The language the form shows: a point recorded in another is never
       // taken for the document.
@@ -977,8 +1027,12 @@ export function EntryForm({
      * shared predicate states the rule once for both editors.
      */
     // Nor is a reader's form recorded, which cannot change the document, nor
-    // one whose language's answer is on its way, which may not yet.
-    enabled: !updatesHeld && mayRecordRecovery(isSubmitting, viewingVersion),
+    // one whose language's answer is on its way, which may not yet. Nor an
+    // entry that keeps no recovery points at all.
+    enabled:
+      keepsRecoveryPoints &&
+      !updatesHeld &&
+      mayRecordRecovery(isSubmitting, viewingVersion),
     // The pace the collection configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(collection),
     // Each point records the version its edits began from.
@@ -1103,16 +1157,9 @@ export function EntryForm({
   // Where the docked column is on screen, it carries the id and the language
   // panel, so the field column's own copies of them step aside.
   const panelDocked = mode === "edit" && panel.docked;
-  // The edit page's place: plugins' blocks around the bar and the editor,
-  // their tabs over the field column and their sections in the panel.
-  const documentPlace = useDocumentPlace(
-    {
-      kind: "collection",
-      collection: collectionSlug,
-      entryId: entry?.id ?? null,
-    },
-    entry ?? undefined
-  );
+  // The fields a plugin's tab edits are drawn in that tab, not here; every
+  // field keeps its value in the form, so Save still stores them.
+  const contentFields = useContentFields(documentPlace, fieldNames, mainFields);
 
   /*
    * What deciding this document's actions reads. Every write handler goes
@@ -1124,7 +1171,7 @@ export function EntryForm({
    * header's chip, and a document view's own through the host.
    */
   const recoveryPoint: RecoveryPointState = {
-    enabled: autosaveScope !== null,
+    enabled: keepsRecoveryPoints,
     storedAt: autosave.lastSavedAt,
     // A recovery point newer than the stored document, still on offer: its
     // edits are not stored, whatever the form says.
@@ -1193,8 +1240,6 @@ export function EntryForm({
   // and the author's choices, over the edits it keeps. The comparison is of
   // the change that made the save stale, where the entry keeps history.
   const staleHistory = versionConflict?.stale.historyVersion;
-  const keepsRecoveryPoints =
-    autosaveScope !== null && autosaveEnabledFor(collection);
   lock.now.keepsEdits = keepsRecoveryPoints;
   // Load the current version, keeping the edits as a recovery point where the
   // document keeps them and offering it then; elsewhere the edits are
@@ -1235,6 +1280,8 @@ export function EntryForm({
         {...contextDocumentStatus}
         // The fields, so a field inside a repeater's row has an address.
         fields={getCollectionFields(collection)}
+        // So a field recording its own state stays quiet where this does.
+        keepsRecoveryPoints={keepsRecoveryPoints}
       >
         <DocumentFormSource form={form} contentHeld={contentHeld}>
           <EntryFormProvider
@@ -1407,6 +1454,9 @@ export function EntryForm({
                   // The fields, so a field inside a repeater's row has an
                   // address the Page Builder and other views open it by.
                   fields={getCollectionFields(collection)}
+                  // So a field recording its own state, the Page Builder's
+                  // canvas, stays quiet where the editor's recording does.
+                  keepsRecoveryPoints={keepsRecoveryPoints}
                   // Only where a takeover can happen. The embedded branch renders
                   // the whole body in a modal and hides nothing, so a panel there
                   // would offer a second copy of fields already on screen.
@@ -1597,6 +1647,8 @@ export function EntryForm({
                                     // held as a panel section is.
                                     form={form}
                                     documentLock={pluginLock}
+                                    fieldNames={fieldNames}
+                                    viewingPastVersion={viewingVersion !== null}
                                   >
                                     {/* The title first and largest, then the slug
                                   on the line under it. The slug is a write,
@@ -1666,6 +1718,10 @@ export function EntryForm({
                                           locale={locale}
                                           onLocaleChange={switchLocale}
                                           hasStatus={hasStatus}
+                                          sharedChangesPending={
+                                            entry?._sharedChangesPending ===
+                                            true
+                                          }
                                           actionsDisabled={contentHeld}
                                           // Publishing every language is a write
                                           // too, so a recovery holds it as well.
@@ -1688,7 +1744,7 @@ export function EntryForm({
                       answers a published version through the same surface. Its
                       comparison bar is drawn among the banners under the bar. */}
                                     <ViewedVersionBody
-                                      fields={historicalFields ?? mainFields}
+                                      fields={historicalFields ?? contentFields}
                                       values={historicalValues ?? undefined}
                                       // A submit in flight withholds restore too: a
                                       // restore racing the ordinary save would let
@@ -1706,14 +1762,14 @@ export function EntryForm({
                                         entryId={entry?.id ?? null}
                                         {...(entry ? { entry } : {})}
                                       >
-                                        {mainFields.length > 0 && (
+                                        {contentFields.length > 0 && (
                                           <div className="@4xl/content:p-8 pt-6">
                                             {/* Forward the form mode: in edit mode a blank password
                         field means "keep the current password" rather than a
                         required-field violation (see note on the layout form
                         above). */}
                                             <EntryFormContent
-                                              fields={mainFields}
+                                              fields={contentFields}
                                               disabled={savePending}
                                               readOnly={lock.readOnly}
                                               withCard

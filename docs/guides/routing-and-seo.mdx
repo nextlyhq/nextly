@@ -134,7 +134,8 @@ it may reach; access-gated or member content runs fresh per request.
 
 Other options: `nextly` (above), `trustedCollections` (required with
 `overrideAccess: true`), `slugField` (default `"slug"`), `depth`, `locale`,
-`richTextFormat`, `tags` (extra cache tags for populated relations),
+`richTextFormat`, `richTextStyles` (`"none"` for class-only rich text HTML), `tags`
+(extra cache tags for populated relations),
 `revalidate` (a time-based safety net for cached reads), and `cacheScope` (a
 discriminator when distinct readers — per tenant or database — resolve the same
 slug).
@@ -195,6 +196,21 @@ Both factories resolve a path across the configured collections (first match
 wins) and call `notFound()` on a genuine miss or a reserved path (`/admin`,
 `/api`, `/_next`, `/static`, and metadata files like `sitemap.xml`). `status`
 behaves as in `resolveContent`.
+
+To do something for each miss, such as logging the address, pass your own
+`notFound`, a function that answers it as Next.js's does. The route calls it in
+place of `notFound()` from the page and from `generateMetadata` alike, so one
+request may call it twice. A handler that returns is followed by `notFound()`,
+so the request is still answered not found. `createSingleRoute`, and the page
+builder's `createContentPage`, `createBlocksPage` and `createSinglePage`, take
+the same option. It is experimental: its name and shape may change before 1.0.
+
+Without Cache Components, `createPublicContentRoute` renders a path once, at
+build or on its first request, and keeps the answer, and Next.js refuses a
+kept render that reads the request (`headers()`, `cookies()`). Give a public
+route a handler that reads the request only with Cache Components on. The page
+builder's public forms leave the handler out themselves where their answers are
+kept.
 
 ### One route for every language
 
@@ -449,6 +465,19 @@ card, and `robots` from `noindex`). Blank `seo` fields fall back to the values
 you pass; caller `openGraph` / `twitter` extras win.
 
 ```ts
+import { buildMetadata, type MetadataEntry } from "nextly/runtime";
+
+// Your own read of one post by its slug, with the fields used below.
+declare function getPostBySlug(slug: string): Promise<
+  | (MetadataEntry & {
+      title: string;
+      excerpt?: string;
+      featuredImage?: { url: string };
+      publishedAt?: string;
+    })
+  | null
+>;
+
 export async function generateMetadata({
   params,
 }: {
@@ -485,34 +514,114 @@ A route that still passes `buildMetadata`, or `metadata` on a Page Builder route
 but its result becomes one input rather than the answer:
 
 - its title, description and social card values are used where nobody set one for the page;
-- its `robots` and canonical are not used, so the page and the sitemap built from the same answer
-  agree on whether a page is listed and where it lives;
+- its `robots` can hide the page, never list one the plugin hides: a `noindex` (or `nofollow`) the
+  route sets is kept whatever the answer says, and the directives it adds, such as Google's
+  `max-image-preview`, `max-snippet` and `max-video-preview` limits, are kept beside the answer's;
+- its canonical gives way to the plugin's, and is kept for a page the plugin gives none, such as
+  one whose type declares no public address;
 - anything else it sets, such as an Open Graph `type` or `publishedTime`, is kept.
+
+The plugin's title is the page's whole title, its site name included where the site's title
+pattern adds it, so it is handed to Next.js as `title: { absolute }`: a root layout's
+`title.template` (`%s | Acme`) does not add the name a second time. The route's own title, where
+it is the one served, keeps the form the route gave it. The social card's titles follow the same
+rule. See the [Next.js `title` field](https://nextjs.org/docs/app/api-reference/functions/generate-metadata#title).
 
 Without such a plugin, a route's metadata is served exactly as it returns it.
 
 Where the plugin's answer carries structured data, the page's `render` is handed it as
 `context.structuredData`: JSON-LD text, written so that no value can end its script element. Place
-it as the body of a JSON-LD script element, so it is in the HTML a crawler receives rather than
-added in the browser:
+it with `jsonLdScriptProps`, so it is in the HTML a crawler receives rather than added in the
+browser:
 
 ```tsx
-render: (entry, context) => (
-  <article>
-    {context.structuredData && (
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: context.structuredData }}
-      />
-    )}
-    <h1>{String(entry.title)}</h1>
-  </article>
-),
+import { createPublicContentRoute, jsonLdScriptProps } from "nextly/runtime";
+
+export const { generateStaticParams, generateMetadata, ContentPage } =
+  createPublicContentRoute({
+    collections: ["posts"],
+    render: (entry, context) => (
+      <article>
+        {context.structuredData && (
+          <script {...jsonLdScriptProps(context.structuredData)} />
+        )}
+        <h1>{String(entry.title)}</h1>
+      </article>
+    ),
+  });
+
+export default ContentPage;
 ```
 
-A Single route's `render` is handed it the same way. A route that resolves its entries its own way
-asks for it with `contentPageStructuredData(config, entry, context, path)`, beside
-`contentPageMetadata`.
+`jsonLdScriptProps` takes the plugin's text or nodes the site builds itself, and escapes them so
+no value can end the element: a site never writes that escaping by hand. A Single route's `render`
+is handed the structured data the same way.
+
+### A site that renders its own pages
+
+A site that reads its own content and renders it in its own routes asks for the same head and
+structured data, without a content route or a Single route. Each function asks the plugin as the
+route helpers do, and returns the route's own metadata unchanged where no plugin provides page
+metadata.
+
+| The page                       | Its head                                                 | Its structured data                                            |
+| ------------------------------ | -------------------------------------------------------- | -------------------------------------------------------------- |
+| An entry of a collection       | `contentPageMetadata(config, entry, context, path)`      | `contentPageStructuredData(config, entry, context, path)`      |
+| A Single                       | `singlePageMetadata(config, document, context, path?)`   | `singlePageStructuredData(config, document, context, path?)`   |
+| A page built in code, no entry | `seoMetadata(path, options)` from `@nextlyhq/plugin-seo` | `seoStructuredData(path, options)` from `@nextlyhq/plugin-seo` |
+
+`config` holds the route's own `buildMetadata` (and optionally `derivedMetadata`, `tags` and
+`revalidate`); `context` names the entry's collection and slug, or the Single's slug, and the
+language where the site has several. `path` is the address the request was served at. A Single
+asked without one is answered at its own public address; asked with a later page of its list, such
+as `/blog/page/2` for a blog Single at `/blog`, that page is its own page to search engines, with
+its own canonical. A Single route takes the same address as its `path` option, as a string or
+worked out from the route's params.
+
+```tsx
+// app/about/page.tsx
+import {
+  jsonLdScriptProps,
+  singlePageMetadata,
+  singlePageStructuredData,
+  type SingleDocument,
+} from "nextly/runtime";
+
+// Your own read of the "about-page" Single.
+declare function readAbout(): Promise<SingleDocument>;
+
+const config = {
+  buildMetadata: () => ({ title: "About", description: "Who we are." }),
+};
+const context = { slug: "about-page" };
+
+export async function generateMetadata() {
+  return singlePageMetadata(config, await readAbout(), context, "/about");
+}
+
+export default async function AboutPage() {
+  const about = await readAbout();
+  const structuredData = await singlePageStructuredData(
+    config,
+    about,
+    context,
+    "/about"
+  );
+  return (
+    <main>
+      {structuredData && <script {...jsonLdScriptProps(structuredData)} />}
+      <h1>{String(about.title)}</h1>
+    </main>
+  );
+}
+```
+
+Ask the head and the structured data with the same arguments: they then read one cached answer.
+Each starts Nextly first where nothing in the worker has yet, as a page whose reads were all cache
+hits, or one `next build` prerenders, may be served before anything else has. A worker that
+cannot start Nextly serves the route's own metadata and logs a warning once. A new app's
+`src/nextly/cached-read.ts` registers how it starts Nextly with `registerNextlyStart`, which is
+what lets a page prerendered by `next build` start it; an app made before then adds the same.
 
 ## Metadata in the first HTML
 
@@ -546,7 +655,11 @@ reads uncached (and marks the render dynamic) so it never freezes stale.
 ```ts
 // app/sitemap.ts
 import { nextlySitemap, nextlyTags } from "nextly/runtime";
-import { buildSitemapUrls } from "@nextlyhq/plugin-seo";
+import { buildSitemapUrls, type SitemapServices } from "@nextlyhq/plugin-seo";
+
+// The services your app reads its collections through, and its address.
+declare const services: SitemapServices;
+const baseUrl = "https://example.com";
 
 export default nextlySitemap({
   tags: nextlyTags("posts"),

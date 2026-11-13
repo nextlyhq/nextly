@@ -56,7 +56,12 @@ export interface RestoreVersionArgs {
   slug: string;
   entryId: string;
   versionNo: number;
-  user: UserContext;
+  /**
+   * The person the restore is made as, judged by every read and write rule.
+   * Absent for trusted server code (the Direct API and a plugin acting as
+   * itself), which no rule judges, as its own writes are not judged.
+   */
+  user?: UserContext;
   /**
    * Who performed the write, recorded on the outbox event. Forwarded so an
    * API-key restore is attributed to the key rather than to its owner, which
@@ -87,6 +92,13 @@ export interface RestoreVersionArgs {
    * the restorer never saw. Only those two keys are read.
    */
   version?: Readonly<Record<string, unknown>>;
+  /**
+   * The fields to restore, by top-level name; every field the version holds
+   * when absent. A name the version does not hold restores nothing.
+   *
+   * @experimental
+   */
+  fields?: readonly string[];
 }
 
 export type RestoreVersionResult = {
@@ -115,6 +127,11 @@ interface EntityDescription {
   /** Whether versions are still being captured for this entity. */
   versioningEnabled: boolean;
   /**
+   * Whether it keeps a working draft beside what is published, which is what a
+   * restore writes: without one, versions are history only.
+   */
+  draftsEnabled: boolean;
+  /**
    * Plugin collections get no synthesized `title`/`slug` columns — the update
    * path makes the same distinction before touching a slug.
    */
@@ -140,7 +157,10 @@ async function describeEntity(
     fields?: unknown[];
     localized?: boolean;
     status?: boolean;
-    versions?: { enabled?: boolean } | null;
+    versions?: {
+      enabled?: boolean;
+      drafts?: { enabled?: boolean } | null;
+    } | null;
     admin?: { isPlugin?: boolean } | null;
   } | null;
 
@@ -149,6 +169,9 @@ async function describeEntity(
     localized: Boolean(shape?.localized),
     hasStatus: Boolean(shape?.status),
     versioningEnabled: Boolean(shape?.versions?.enabled),
+    // The same test the update path makes before it holds a write as a draft.
+    draftsEnabled:
+      Boolean(shape?.status) && shape?.versions?.drafts?.enabled === true,
     isPlugin: shape?.admin?.isPlugin === true,
   };
 }
@@ -351,7 +374,7 @@ function dropFieldsTheProbeRejected(
  * rather than applied with values the caller may never have been able to read.
  */
 async function dropFieldsTheReaderMayNotRead(
-  args: RestoreVersionArgs,
+  args: RestoreVersionArgs & { user: UserContext },
   payload: Record<string, unknown>,
   fields: FieldConfig[],
   componentSchemas: ComponentSchemas,
@@ -441,7 +464,14 @@ function deepEquals(a: unknown, b: unknown): boolean {
 }
 
 /**
- * Restore `versionNo` onto the live document.
+ * Restore `versionNo` into the document's working draft.
+ *
+ * The chosen fields (every field the version holds, unless `fields` names
+ * some) are written as an edit held as a draft, so they reach the drafts of
+ * the parts the version holds (its language's and the shared one) and nothing
+ * published moves: status is never restored, so a restore never publishes or
+ * unpublishes. A collection or Single without drafts keeps versions as history
+ * only, and has no working draft to write, so its restore is refused.
  *
  * The caller is expected to have already established that this user may read
  * the document's history and may update the document; this performs the write
@@ -468,6 +498,31 @@ export async function restoreVersion(
     });
   }
 
+  const {
+    fields,
+    localized,
+    hasStatus,
+    versioningEnabled,
+    draftsEnabled,
+    isPlugin,
+  } = await describeEntity(args.scopeKind, args.slug);
+
+  // Refused before the version is read: without drafts the only place to put
+  // the version back is the live document, which would publish it.
+  if (!draftsEnabled) {
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage:
+        "This content keeps no drafts, so a version can only be restored by editing it back.",
+      logContext: {
+        reason: "restore-needs-drafts",
+        scopeKind: args.scopeKind,
+        scopeSlug: args.slug,
+        entryId: args.entryId,
+      },
+    });
+  }
+
   const versions = getService("versionsService");
   const version = await versions.get(
     {
@@ -477,19 +532,6 @@ export async function restoreVersion(
     },
     args.versionNo
   );
-
-  // A recorded save of a working draft names no status: its content was never
-  // live. Restoring it must stay a draft. Where the document can no longer
-  // hold one (drafts turned off, or a field the split cannot hold), the update
-  // refuses rather than write it to the live row and publish it.
-  const restoresSavedDraft =
-    version.status === "draft" &&
-    typeof version.snapshot === "object" &&
-    version.snapshot !== null &&
-    !Object.prototype.hasOwnProperty.call(version.snapshot, "status");
-
-  const { fields, localized, hasStatus, versioningEnabled, isPlugin } =
-    await describeEntity(args.scopeKind, args.slug);
 
   // The write goes through the ordinary update, which captures a version only
   // while versioning is on. With it off, a restore would overwrite live content
@@ -573,13 +615,30 @@ export async function restoreVersion(
   // keyed on the document would otherwise evaluate with
   // no id and hide fields the same caller can read in version history, making
   // restore stricter than the endpoint the snapshot came from.
-  await dropFieldsTheReaderMayNotRead(
-    args,
-    payload,
-    fields,
-    componentSchemas,
-    droppedFields
-  );
+  // Trusted server code reads every field, as its own reads do.
+  if (args.user) {
+    await dropFieldsTheReaderMayNotRead(
+      { ...args, user: args.user },
+      payload,
+      fields,
+      componentSchemas,
+      droppedFields
+    );
+  }
+
+  // Status is never restored: the restore is an edit held as a draft, and
+  // carrying a version's status would publish or retract with it.
+  delete payload.status;
+  // Nor is it reported as left behind when a read rule withheld it.
+  if (droppedFields.includes("status")) {
+    droppedFields.splice(droppedFields.indexOf("status"), 1);
+  }
+  // The fields chosen, narrowed only now: the read rules above judged each
+  // field against the whole version, as a version read does, since a rule
+  // may consult values the restore does not bring back. What is reported as
+  // left behind is narrowed to the chosen fields too.
+  keepOnlyChosen(payload, args.fields);
+  narrowToChosen(droppedFields, args.fields);
 
   // Field-level write rules strip denied keys inside the update path, silently
   // and after it has already reported success. Evaluating the same rules here
@@ -592,25 +651,13 @@ export async function restoreVersion(
   // real payload: the probe would edit the very thing it is meant to leave
   // alone, and the comparison below — which walks keys, not identity — would
   // see the two agreeing and report nothing.
-  const accessProbe: Record<string, unknown> = structuredClone(payload);
-  try {
-    await applyFieldWriteAccess({
-      kind: args.scopeKind === "single" ? "single" : "collection",
-      slug: args.slug,
-      data: accessProbe,
-      operation: "update",
-      user: args.user,
-      overrideAccess: false,
-      // The id as stored, as the read probe above is told.
-      id: args.entryId,
-    });
-    dropFieldsTheProbeRejected(payload, accessProbe, droppedFields);
-  } catch (error) {
-    // A rule that could not run never answered: the request ends with that,
-    // not with the restore going ahead as though it had allowed every field.
-    rethrowIfRuleCouldNotRun(error);
-    // A failure here must not block a restore the update path would allow; the
-    // update evaluates the same rules again and remains the authority.
+  // Trusted server code writes every field, so it has no rules to probe.
+  if (args.user) {
+    await dropFieldsTheWriterMayNotWrite(
+      { ...args, user: args.user },
+      payload,
+      droppedFields
+    );
   }
 
   if (Object.keys(payload).length === 0) {
@@ -648,13 +695,19 @@ export async function restoreVersion(
   // update's data as a save's is. Added after the payload is known to hold
   // something to restore, so a version alone never reads as content.
   const judgedPayload = { ...payload, ...versionKeysOf(args.version) };
+  // Every field the restore writes came from this version: recorded per field
+  // on the version the write captures, as a save after a restore records it.
+  const restoredFrom = Object.fromEntries(
+    Object.keys(payload).map(field => [field, args.versionNo])
+  );
 
   let written: { data?: unknown };
   if (args.scopeKind === "single") {
     const singles = getService("singleEntryService");
     const result = await singles.update(args.slug, judgedPayload, {
-      user: args.user,
-      overrideAccess: false,
+      // Judged as the restorer, or trusted where server code restores.
+      ...(args.user ? { user: args.user } : {}),
+      overrideAccess: !args.user,
       // Not route-authorized: the route judged the restore in every language,
       // and it writes the version's, so the update asks the rules again in
       // that language.
@@ -668,7 +721,10 @@ export async function restoreVersion(
         : {}),
       ...(writeLocale ? { locale: writeLocale } : {}),
       sourceVersionNo: args.versionNo,
-      ...(restoresSavedDraft ? { requireHeldDraft: true } : {}),
+      restoredFrom,
+      // Always held as a draft: where the update would write the published
+      // row instead, it refuses.
+      requireHeldDraft: true,
     });
     assertWriteSucceeded(result, args);
     written = result;
@@ -678,11 +734,12 @@ export async function restoreVersion(
       {
         collectionName: args.slug,
         entryId: args.entryId,
-        user: args.user,
+        // Judged as the restorer, or trusted where server code restores.
+        ...(args.user ? { user: args.user } : {}),
         // Not route-authorized: the route judged the restore in every
         // language, and it writes the version's, so the update asks the rule
         // again in that language, its filter included.
-        overrideAccess: false,
+        overrideAccess: !args.user,
         request: args.request,
         // A snapshot that restores `status: "published"` must satisfy the key's
         // own publish grant, not the owner's RBAC.
@@ -693,7 +750,10 @@ export async function restoreVersion(
         ...(writeLocale ? { locale: writeLocale } : {}),
         ...(args.actor ? { actor: args.actor } : {}),
         sourceVersionNo: args.versionNo,
-        ...(restoresSavedDraft ? { requireHeldDraft: true } : {}),
+        restoredFrom,
+        // Always held as a draft: where the update would write the published
+        // row instead, it refuses.
+        requireHeldDraft: true,
       },
       judgedPayload
     );
@@ -706,6 +766,79 @@ export async function restoreVersion(
     droppedFields,
     ...versionWritten(written),
   };
+}
+
+/**
+ * Drop from `payload` every field the restorer may not write, and report it.
+ *
+ * Field-level write rules strip denied keys inside the update path, silently
+ * and after it has already reported success. Evaluating the same rules here,
+ * against a copy so nothing is mutated, turns that into something the caller
+ * can be told about instead of a restore that reports success for content it
+ * never applied.
+ *
+ * The copy is deep. These rules strip nested keys by mutating the container in
+ * place, so a shallow copy would share every group and repeater with the real
+ * payload: the probe would edit the very thing it is meant to leave alone, and
+ * the comparison, which walks keys rather than identity, would see the two
+ * agreeing and report nothing.
+ */
+async function dropFieldsTheWriterMayNotWrite(
+  args: RestoreVersionArgs & { user: UserContext },
+  payload: Record<string, unknown>,
+  droppedFields: string[]
+): Promise<void> {
+  const accessProbe: Record<string, unknown> = structuredClone(payload);
+  try {
+    await applyFieldWriteAccess({
+      kind: args.scopeKind === "single" ? "single" : "collection",
+      slug: args.slug,
+      data: accessProbe,
+      operation: "update",
+      user: args.user,
+      // A key is judged on its own grants, as the update that follows judges
+      // it: asked of its owner, a field the key may not write would be
+      // reported as restored while the update keeps the stored value.
+      authenticatedScope: args.authenticatedScope,
+      overrideAccess: false,
+      // The id as stored, as the read probe is told.
+      id: args.entryId,
+    });
+    dropFieldsTheProbeRejected(payload, accessProbe, droppedFields);
+  } catch (error) {
+    // A rule that could not run never answered: the request ends with that,
+    // not with the restore going ahead as though it had allowed every field.
+    rethrowIfRuleCouldNotRun(error);
+    // A failure here must not block a restore the update path would allow; the
+    // update evaluates the same rules again and remains the authority.
+  }
+}
+
+/**
+ * Keeps the payload's top-level fields `chosen` names, where it names any: a
+ * restore of some fields writes those alone, and the update holds the rest of
+ * the draft as it was.
+ */
+function keepOnlyChosen(
+  payload: Record<string, unknown>,
+  chosen: readonly string[] | undefined
+): void {
+  if (chosen === undefined) return;
+  const keep = new Set(chosen);
+  for (const key of Object.keys(payload)) {
+    if (!keep.has(key)) delete payload[key];
+  }
+}
+
+/** Narrow a list of field names to the chosen ones, in place; all, when none were chosen. */
+function narrowToChosen(
+  names: string[],
+  chosen: readonly string[] | undefined
+): void {
+  if (chosen === undefined) return;
+  const keep = new Set(chosen);
+  const kept = names.filter(name => keep.has(name));
+  names.splice(0, names.length, ...kept);
 }
 
 /**

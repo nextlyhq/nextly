@@ -124,7 +124,7 @@ const OPERATOR_CASES: ReadonlyArray<{
     // inherits. SQLite folds with its own function instead, compiled below.
     operator: "ILIKE",
     condition: { column: "name", op: "ILIKE", value: "%test%" },
-    sql: `replace(lower("test_table"."name"), $1, $2) like replace(lower($3), $4, $5)`,
+    sql: `replace(lower(("test_table"."name")::text), $1, $2) like replace(lower(($3)::text), $4, $5)`,
     params: [SIGMA, FOLDED_SIGMA, "%test%", SIGMA, FOLDED_SIGMA],
   },
   {
@@ -177,7 +177,7 @@ const OPERATOR_CASES: ReadonlyArray<{
     // both sides lower-cased, the value matched literally as CONTAINS matches it.
     operator: "ICONTAINS",
     condition: { column: "name", op: "ICONTAINS", value: "Test" },
-    sql: `replace(lower("test_table"."name"), $1, $2) like replace(lower($3), $4, $5) escape '!'`,
+    sql: `replace(lower(("test_table"."name")::text), $1, $2) like replace(lower(($3)::text), $4, $5) escape '!'`,
     params: [SIGMA, FOLDED_SIGMA, "%Test%", SIGMA, FOLDED_SIGMA],
   },
 ];
@@ -290,7 +290,7 @@ describe("buildDrizzleWhere", () => {
         expect(
           compile({ and: [{ column: "name", op: "ICONTAINS", value }] })
         ).toEqual({
-          sql: `replace(lower("test_table"."name"), $1, $2) like replace(lower($3), $4, $5) escape '!'`,
+          sql: `replace(lower(("test_table"."name")::text), $1, $2) like replace(lower(($3)::text), $4, $5) escape '!'`,
           params: [SIGMA, FOLDED_SIGMA, pattern, SIGMA, FOLDED_SIGMA],
         });
       }

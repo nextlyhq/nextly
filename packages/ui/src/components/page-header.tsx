@@ -3,6 +3,9 @@ import {
   cloneElement,
   forwardRef,
   isValidElement,
+  useCallback,
+  useEffect,
+  useRef,
   type AnchorHTMLAttributes,
   type HTMLAttributes,
   type ReactNode,
@@ -160,20 +163,54 @@ export interface PageTabsProps extends HTMLAttributes<HTMLElement> {
 export const PageTabs: ForwardRefExoticComponent<
   PropsWithoutRef<PageTabsProps> & RefAttributes<HTMLElement>
 > = forwardRef<HTMLElement, PageTabsProps>(
-  ({ label, className, children, ...props }, ref) => (
-    <nav
-      ref={ref}
-      aria-label={label}
-      data-slot="page-tabs"
-      className={cn(
-        "flex gap-1 overflow-x-auto border-b border-border",
-        className
-      )}
-      {...props}
-    >
-      {children}
-    </nav>
-  )
+  ({ label, className, children, ...props }, ref) => {
+    const row = useRef<HTMLElement | null>(null);
+    // The current tab the row last brought into view, so it is brought
+    // into view once each time the current tab changes: a page drawn again
+    // leaves a row the person scrolled themselves where they put it.
+    const shown = useRef<Element | null>(null);
+    const setRow = useCallback(
+      (node: HTMLElement | null) => {
+        row.current = node;
+        if (typeof ref === "function") ref(node);
+        else if (ref) ref.current = node;
+      },
+      [ref]
+    );
+    // A row wider than its screen (a phone) scrolls sideways, and a page
+    // opened on a later section would otherwise show its current tab out
+    // of sight. The row alone is scrolled, never the page, and only as far
+    // as the tab needs.
+    useEffect(() => {
+      const nav = row.current;
+      const current = nav?.querySelector('[aria-current="page"]') ?? null;
+      if (nav === null || current === null || current === shown.current) {
+        return;
+      }
+      shown.current = current;
+      const bounds = nav.getBoundingClientRect();
+      const tab = current.getBoundingClientRect();
+      if (tab.left < bounds.left) {
+        nav.scrollLeft -= bounds.left - tab.left;
+      } else if (tab.right > bounds.right) {
+        nav.scrollLeft += tab.right - bounds.right;
+      }
+    });
+    return (
+      <nav
+        ref={setRow}
+        aria-label={label}
+        data-slot="page-tabs"
+        className={cn(
+          "flex gap-1 overflow-x-auto border-b border-border",
+          className
+        )}
+        {...props}
+      >
+        {children}
+      </nav>
+    );
+  }
 );
 PageTabs.displayName = "PageTabs";
 

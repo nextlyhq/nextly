@@ -13,7 +13,7 @@ import {
   MAX_WORKFLOW_NAME_LENGTH,
   primaryStep,
 } from "../define-workflow";
-import { workflowDefinitionHash } from "../hash";
+import { definitionHashBeforeRenames, workflowDefinitionHash } from "../hash";
 import { reviewWorkflow } from "../preset";
 import type { WorkflowInput } from "../types";
 
@@ -51,6 +51,25 @@ function base(): WorkflowInput {
         to: "drafting",
       },
     ],
+  };
+}
+
+/** `base()` with `inReview` renamed to `review`, recording the name it had. */
+function renamed(): WorkflowInput {
+  const input = base();
+  const to = (stage: string) => (stage === "inReview" ? "review" : stage);
+  return {
+    ...input,
+    stages: input.stages.map(stage =>
+      stage.name === "inReview"
+        ? { ...stage, name: "review", renamedFrom: "inReview" }
+        : stage
+    ),
+    steps: input.steps.map(step => ({
+      ...step,
+      from: to(step.from as string),
+      to: to(step.to),
+    })),
   };
 }
 
@@ -374,6 +393,18 @@ describe("defineWorkflow", () => {
       ).toEqual([]);
     });
 
+    it("refuses moving a removed stage's parts into a stage that allows publishing", () => {
+      expect(
+        problemsOf({ ...base(), removedStages: { legal: "approved" } })
+      ).toEqual([
+        "removedStages.legal: `approved` allows publishing, so a removed stage's parts would become publishable without an approval; name a stage before review.",
+      ]);
+      // A stage before review is accepted.
+      expect(
+        problemsOf({ ...base(), removedStages: { legal: "inReview" } })
+      ).toEqual([]);
+    });
+
     it("refuses an edit-after-approval stage with no way out", () => {
       const input = base();
       input.stages = [...input.stages, { name: "frozen", label: "Frozen" }];
@@ -395,12 +426,100 @@ describe("defineWorkflow", () => {
       ]);
     });
 
+    // A deploy moves the parts of a stage that is gone to a stage the definition names, by
+    // `removedStages` or by a stage's `renamedFrom`: each destination is judged alike.
+    describe.each([
+      {
+        kind: "removedStages",
+        /** `input` with the gone stage `legal`'s parts sent to `target`. */
+        send: (input: WorkflowInput, target: string): WorkflowInput => ({
+          ...input,
+          removedStages: { legal: target },
+        }),
+        path: () => "removedStages.legal",
+        publishableWhy: "a removed stage's parts would become publishable",
+      },
+      {
+        kind: "renamedFrom",
+        send: (input: WorkflowInput, target: string): WorkflowInput => ({
+          ...input,
+          stages: input.stages.map(stage =>
+            stage.name === target ? { ...stage, renamedFrom: "legal" } : stage
+          ),
+        }),
+        path: (index: number) => `stages[${index}].renamedFrom`,
+        publishableWhy: "the parts of `legal` would become publishable",
+      },
+    ])("a deploy's destination, by $kind", ({ send, path, publishableWhy }) => {
+      it("is refused where it allows publishing", () => {
+        expect(problemsOf(send(base(), "approved"))).toEqual([
+          `${path(2)}: \`approved\` allows publishing, so ${publishableWhy} without an approval; name a stage before review.`,
+        ]);
+        // A stage before review is accepted.
+        expect(problemsOf(send(base(), "inReview"))).toEqual([]);
+      });
+
+      it("is refused where no path leads from it to publishing", () => {
+        const input = base();
+        input.stages = [...input.stages, { name: "limbo", label: "Limbo" }];
+        expect(problemsOf(send(input, "limbo"))).toEqual([
+          `stages[3]: \`limbo\` can be reached (from \`${path(3)}\`), but no path of steps leads from it to a stage that allows publishing.`,
+        ]);
+      });
+    });
+
     it("refuses mapping a stage that still exists as removed", () => {
       expect(
         problemsOf({ ...base(), removedStages: { drafting: "inReview" } })
       ).toContain(
         "removedStages.drafting: `drafting` is still a stage of this workflow, so it cannot also be removed."
       );
+    });
+
+    it("refuses a stage renamed from a name the workflow still has, or from its own", () => {
+      const input = renamed();
+      input.stages = input.stages.map(stage =>
+        stage.name === "review" ? { ...stage, renamedFrom: "drafting" } : stage
+      );
+      expect(problemsOf(input)).toEqual([
+        "stages[1].renamedFrom: `drafting` is still a stage of this workflow, so no stage can be renamed from it.",
+      ]);
+      input.stages = input.stages.map(stage =>
+        stage.name === "review" ? { ...stage, renamedFrom: "review" } : stage
+      );
+      expect(problemsOf(input)).toEqual([
+        "stages[1].renamedFrom: `review` is still a stage of this workflow, so no stage can be renamed from it.",
+      ]);
+    });
+
+    it("refuses two stages renamed from one name", () => {
+      const input = renamed();
+      input.stages = input.stages.map(stage =>
+        stage.name === "approved"
+          ? { ...stage, renamedFrom: "inReview" }
+          : stage
+      );
+      expect(problemsOf(input)).toEqual([
+        "stages[2].renamedFrom: `inReview` is already the name `review` was renamed from; a name was renamed to one stage only.",
+      ]);
+    });
+
+    it("refuses a stage both renamed and listed as removed", () => {
+      expect(
+        problemsOf({ ...renamed(), removedStages: { inReview: "drafting" } })
+      ).toEqual([
+        "removedStages.inReview: `review` was renamed from `inReview`, so its parts go there; it cannot also be removed.",
+      ]);
+    });
+
+    it("refuses a renamedFrom that is not a stage name", () => {
+      const input = renamed();
+      input.stages = input.stages.map(stage =>
+        stage.name === "review" ? { ...stage, renamedFrom: "in review" } : stage
+      );
+      expect(problemsOf(input)).toEqual([
+        "stages[1].renamedFrom: `in review` is not a stage name: start with a letter, then use letters, digits, `_` or `-`.",
+      ]);
     });
 
     it("lists every problem at once", () => {
@@ -450,7 +569,44 @@ describe("reviewWorkflow", () => {
   });
 });
 
+describe("renamedFrom", () => {
+  it("keeps the name a stage was renamed from on the stage, and nowhere when none is given", () => {
+    const workflow = defineWorkflow(renamed());
+    expect(workflow.stages[1]).toEqual({
+      name: "review",
+      label: "In review",
+      allowsPublish: false,
+      renamedFrom: "inReview",
+    });
+    expect(workflow.stages[0]).not.toHaveProperty("renamedFrom");
+  });
+});
+
 describe("workflowDefinitionHash", () => {
+  it("does not change when a stage records the name it was renamed from", () => {
+    const recorded = renamed();
+    const unrecorded = {
+      ...recorded,
+      stages: recorded.stages.map(stage => ({
+        name: stage.name,
+        label: stage.label,
+        allowsPublish: stage.allowsPublish,
+      })),
+    };
+    expect(workflowDefinitionHash(defineWorkflow(recorded))).toBe(
+      workflowDefinitionHash(defineWorkflow(unrecorded))
+    );
+  });
+
+  it("answers, for a definition before its renames, the hash of the one it was renamed from", () => {
+    const before = workflowDefinitionHash(defineWorkflow(base()));
+    const after = defineWorkflow(renamed());
+    expect(workflowDefinitionHash(after)).not.toBe(before);
+    expect(definitionHashBeforeRenames(after)).toBe(before);
+    // With nothing renamed, the definition before its renames is itself.
+    expect(definitionHashBeforeRenames(defineWorkflow(base()))).toBe(before);
+  });
+
   it("is a sha256 hex digest that changes with the structure", () => {
     const hash = workflowDefinitionHash(defineWorkflow(base()));
     expect(hash).toMatch(/^[0-9a-f]{64}$/);

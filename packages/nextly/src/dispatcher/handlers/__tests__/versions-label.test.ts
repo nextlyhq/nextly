@@ -31,6 +31,9 @@ vi.mock("../../../api/versions-access", () => ({
   assertVersionLanguageReadable: () => Promise.resolve(null),
   redactSnapshotForUser: vi.fn(),
   resolveSingleDocumentId: vi.fn(),
+  // The rows as read: these cases judge the label, not which restored fields
+  // a reader may be told about, which has its own tests.
+  readableFieldSources: (rows: unknown) => Promise.resolve(rows),
 }));
 
 // DERIVED from the real module rather than a closed literal: the handler

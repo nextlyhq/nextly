@@ -488,6 +488,51 @@ describe.each(getConfiguredTestDialects())(
       ).toMatchObject({ ok: true });
     });
 
+    it("writes with the unkeyed generation while retired secrets are listed and none is current", async () => {
+      // Cleared after the boot, as above. A retired secret is still listed, which is allowed
+      // outside production: what is minted now is the unkeyed generation's, so clearing the
+      // retired setting later strands nothing.
+      const { a } = await boot();
+      vi.stubEnv("NEXTLY_SECRET", undefined);
+      vi.stubEnv(
+        "NEXTLY_SECRET_PREVIOUS",
+        JSON.stringify(["an-older-install-secret-long-enough-for-prod"])
+      );
+      _resetEnvCache();
+      const { token } = await a.security.secrets.mintToken({
+        purpose: "reset",
+        subject,
+        expiresInMs: 60_000,
+      });
+      vi.stubEnv("NEXTLY_SECRET_PREVIOUS", undefined);
+      _resetEnvCache();
+      expect(
+        await a.security.secrets.consumeToken({ purpose: "reset", token })
+      ).toMatchObject({ ok: true });
+    });
+
+    it("holds a secret until the expiry the mint returned, and not past it", async () => {
+      const { a } = await boot();
+      // Minted between whole seconds, as SQLite keeps a date to the second.
+      vi.useFakeTimers({
+        toFake: ["Date"],
+        now: new Date("2030-01-01T00:00:00.999Z"),
+      });
+      const { token, expiresAt } = await a.security.secrets.mintToken({
+        purpose: "reset",
+        subject,
+        expiresInMs: 60_000,
+      });
+      vi.setSystemTime(expiresAt.getTime() - 1);
+      expect(
+        await a.security.secrets.peekToken({ purpose: "reset", token })
+      ).toMatchObject({ ok: true });
+      vi.setSystemTime(expiresAt.getTime());
+      expect(
+        await a.security.secrets.peekToken({ purpose: "reset", token })
+      ).toMatchObject({ ok: false });
+    });
+
     it("lets a spent replacing token make way for the next one", async () => {
       const { a } = await boot();
       const replacing = {

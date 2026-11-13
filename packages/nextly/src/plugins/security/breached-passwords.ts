@@ -55,6 +55,9 @@ export async function checkBreached(
   const prefix = digest.slice(0, 5).toUpperCase();
   const suffix = digest.slice(5).toUpperCase();
   const source = config?.source ?? "pwned-passwords";
+  // A source naming both a `url` and a `range` is refused, as the schema refuses it: neither is
+  // asked, and the password goes unchecked.
+  if (namesBothSources(source)) return "unavailable";
   const timeoutMs = resolvedTimeoutMs(config);
 
   let suffixes: readonly string[] | null;
@@ -100,6 +103,13 @@ export function breachedPasswordsWarnings(
 ): string[] {
   const warnings: string[] = [];
   const source = config?.source;
+  if (namesBothSources(source)) {
+    warnings.push(
+      "[Nextly] security.breachedPasswords.source names both a url and a range, so neither " +
+        "is asked and every breached-password check answers that the password went unchecked. " +
+        "Keep one of them."
+    );
+  }
   if (typeof source === "object" && "url" in source && !isHttps(source.url)) {
     warnings.push(
       "[Nextly] security.breachedPasswords.source.url is not an https address, " +
@@ -113,6 +123,16 @@ export function breachedPasswordsWarnings(
     );
   }
   return warnings;
+}
+
+/** Whether a source names both a `url` and a `range`, which it may not. */
+function namesBothSources(source: unknown): boolean {
+  return (
+    typeof source === "object" &&
+    source !== null &&
+    "url" in source &&
+    "range" in source
+  );
 }
 
 /** The configured wait when it is within bounds; otherwise the default. */
@@ -202,13 +222,48 @@ async function fetchRange(
       timeoutMs
     );
     if (response === null || !response.ok) return null;
-    const body = await withinTime(response.text(), timeoutMs);
+    const body = await withinTime(cappedText(response), timeoutMs);
     return body === null ? null : body.split("\n");
   } catch {
     return null;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * The most a range answer may hold, in bytes. A padded answer from Have I Been Pwned is about
+ * 40 KB; this leaves room for a provider's larger one while bounding what a fast, very large (or
+ * compressed, expanding) answer can cost in memory, which the time limit alone does not.
+ */
+export const RANGE_ANSWER_MAX_BYTES = 256 * 1024;
+
+/**
+ * The answer's body as text, read as a stream and abandoned past {@link RANGE_ANSWER_MAX_BYTES}:
+ * a body past the cap is `null`, so the check answers `unavailable` rather than buffering it whole.
+ */
+async function cappedText(response: Response): Promise<string | null> {
+  const reader = response.body?.getReader();
+  if (!reader) return null;
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > RANGE_ANSWER_MAX_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
 }
 
 /** `work`'s value, or null when it rejects or takes longer than `ms`. */

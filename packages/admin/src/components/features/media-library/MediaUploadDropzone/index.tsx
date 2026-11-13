@@ -37,7 +37,8 @@
 import { Button } from "@nextlyhq/ui";
 import * as React from "react";
 
-import { Upload, AlertTriangle, X } from "@admin/components/icons";
+import { X } from "@admin/components/icons";
+import { DropTarget } from "@admin/components/ui/file-drop-area";
 import { cn } from "@admin/lib/utils";
 import type { Media } from "@admin/types/media";
 
@@ -157,22 +158,6 @@ export function MediaUploadDropzone({
       ? "active"
       : "default";
 
-  const borderStyles = {
-    // default: full-strength hover border, more visible than the resting border, not a fainter alpha.
-    default: "border-2 border-dashed border-border hover:border-primary",
-    active: "border-2 border-dashed border-primary",
-    reject: "border-2 border-dashed border-destructive",
-  };
-
-  // Background styles — use CSS variables (bg-card) so both light and dark modes resolve correctly.
-  const backgroundStyles = {
-    default: "bg-card",
-    active: "bg-primary/5 dark:bg-primary/5",
-    reject: "bg-danger-surface",
-  };
-
-  const IconComponent = visualState === "reject" ? AlertTriangle : Upload;
-
   return (
     <div className={cn("w-full relative group/dropzone", className)}>
       {!isCollapsed && (
@@ -192,89 +177,28 @@ export function MediaUploadDropzone({
             </Button>
           )}
 
-          {/* The target. Files can be added while others upload: they join
-              the queue. */}
-          <div
-            {...getRootProps()}
-            onClick={open}
-            onKeyDown={e => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                open();
-              }
-            }}
-            className={cn(
-              "relative flex flex-col items-center justify-center rounded-md transition-all duration-200 group",
-              borderStyles[visualState],
-              backgroundStyles[visualState],
-              "min-h-48 md:min-h-56 py-16 px-8",
-              "cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
-            )}
-            role="button"
-            aria-label="Upload files. Drag and drop files here, or press Enter to browse."
-            aria-describedby="upload-instructions"
-            tabIndex={0}
-          >
-            <input {...getInputProps()} aria-hidden="true" tabIndex={-1} />
-
-            {/* Icon square — solid filled, primary light color background */}
-            <div
-              className={cn(
-                "flex items-center justify-center rounded-md mb-5 transition-all duration-200",
-                "w-16 h-16",
-                visualState === "default" &&
-                  "bg-primary/20 dark:bg-primary/30 group-hover:bg-primary/30 dark:group-hover:bg-primary/40",
-                visualState === "active" && "bg-primary/20 dark:bg-primary/25",
-                visualState === "reject" &&
-                  "bg-danger-surface"
-              )}
-            >
-              <IconComponent
-                className={cn(
-                  visualState === "reject"
-                    ? "text-destructive"
-                    : "text-primary",
-                  "h-7 w-7 transition-colors duration-200"
-                )}
-              />
-            </div>
-
-            <div className="flex flex-col items-center gap-0.5 text-center">
-              {activeFolderId && activeFolderName && (
+          {/* The target, drawn as every drop area in the admin is. Files
+              can be added while others upload: they join the queue. */}
+          <DropTarget
+            state={visualState}
+            rootProps={getRootProps()}
+            inputProps={getInputProps()}
+            open={open}
+            label="Upload files. Drag and drop files here, or press Enter to browse."
+            title="Drag & drop files here"
+            hint="or click to browse"
+            activeTitle="Drop files here..."
+            rejectTitle="Some of these files can't be uploaded here"
+            description={description}
+            eyebrow={
+              activeFolderId && activeFolderName ? (
                 <p className="mb-1 text-xs text-muted-foreground">
                   Uploading to:{" "}
                   <span className="font-medium">{activeFolderName}</span>
                 </p>
-              )}
-              {/* Primary message. The browse hint is plain text: the whole
-                  target is the interactive element, and a nested <button>
-                  inside role="button" is invalid markup. */}
-              {visualState === "default" ? (
-                <>
-                  <p className="text-sm font-semibold text-foreground">
-                    Drag &amp; drop files here
-                  </p>
-                  <span className="mt-1 text-sm font-medium text-primary underline underline-offset-2">
-                    or click to browse
-                  </span>
-                </>
-              ) : (
-                <p className="text-sm font-semibold text-foreground">
-                  {visualState === "active"
-                    ? "Drop files here..."
-                    : "Some of these files can't be uploaded here"}
-                </p>
-              )}
-
-              {/* The types and size it takes, stated before upload. */}
-              <p
-                id="upload-instructions"
-                className="mt-2 text-xs text-muted-foreground"
-              >
-                {description}
-              </p>
-            </div>
-          </div>
+              ) : null
+            }
+          />
         </>
       )}
 

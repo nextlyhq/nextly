@@ -45,6 +45,7 @@ import {
 
 import { FORM_PAGES, formPageOf, type FormPageId } from "../form-pages";
 import type { AnyFormField, FormField, FormFieldTypeId } from "../types";
+import { blankConsentFields, CONSENT_TEXT_REQUIRED } from "../utils/consent";
 
 import { FieldCards } from "./components/builder/FieldCards";
 import { FieldInspector } from "./components/builder/FieldInspector";
@@ -78,6 +79,7 @@ import {
   useSeededNotification,
 } from "./form-editor-hooks";
 import { refusedPage, type SaveRefusal } from "./save-refusal";
+import { revisionToRetryOn } from "./stale-save";
 import { useBuilderConfig } from "./use-builder-config";
 
 /**
@@ -183,6 +185,8 @@ interface FormEditorProps {
   documentLock: DocumentLockGates | undefined;
   /** The form's version as read; see `initialData._rev`. */
   version: string | undefined;
+  /** The form as read, which a save refused as out of date is compared with. */
+  readAs: Record<string, unknown> | undefined;
   view: string | undefined;
 }
 
@@ -241,6 +245,8 @@ interface FormSaveTarget {
   writesHeld: boolean;
   /** The form's version as read; see `initialData._rev`. */
   version: string | undefined;
+  /** The form as read; see `revisionToRetryOn`. */
+  readAs: Record<string, unknown> | undefined;
 }
 
 /**
@@ -256,6 +262,7 @@ function useFormSave({
   onSuccess,
   writesHeld,
   version,
+  readAs,
 }: FormSaveTarget): {
   handleSave: () => Promise<void>;
   isSaving: boolean;
@@ -264,6 +271,9 @@ function useFormSave({
   // The version the next save sends: the one read, then the one each save
   // answered, so a second save is not refused for this editor's first.
   const startedFrom = useRef(version);
+  // The form as this editor last knew it stored: as read, then as each save
+  // answered.
+  const knownAs = useRef(readAs);
   const {
     fields,
     formData,
@@ -329,14 +339,23 @@ function useFormSave({
       const url = isCreating
         ? `/admin/api/collections/${collectionSlug}/entries`
         : `/admin/api/collections/${collectionSlug}/entries/${entryId}`;
-      const response = await fetch(url, {
-        method: isCreating ? "POST" : "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify(
-          saveBody(saveData, isCreating, startedFrom.current)
-        ),
+      const send = (from: string | undefined) =>
+        fetch(url, {
+          method: isCreating ? "POST" : "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify(saveBody(saveData, isCreating, from)),
+        });
+      let response = await send(startedFrom.current);
+      // Refused only because the plugin wrote the form since: once more, on
+      // the stored revision.
+      const retryOn = await revisionToRetryOn({
+        refused: response,
+        url,
+        sent: saveData,
+        readAs: knownAs.current,
       });
+      if (retryOn !== undefined) response = await send(retryOn);
       if (!response.ok) {
         const body: unknown = await response.json().catch(() => ({}));
         const where = refusedPage(body);
@@ -353,6 +372,7 @@ function useFormSave({
       } & Record<string, unknown>;
       const savedEntry: Record<string, unknown> = result.item ?? result;
       startedFrom.current = versionAfterSave(savedEntry, startedFrom.current);
+      knownAs.current = savedEntry;
       void queryClient.invalidateQueries({
         queryKey: ["entries", "list", collectionSlug],
       });
@@ -405,6 +425,7 @@ function FormEditor({
   onDelete,
   documentLock,
   version,
+  readAs,
   view,
 }: FormEditorProps): JSX.Element {
   const {
@@ -434,6 +455,7 @@ function FormEditor({
     onSuccess,
     writesHeld: documentLock?.actionsDisabled === true,
     version,
+    readAs,
   });
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
@@ -805,7 +827,8 @@ function editorTab(
 
 /**
  * What stops a save before it is sent, and where it is fixed: a form needs a
- * field, and a notification needs a name and good addresses. A notification is
+ * field, a consent needs its text, and a notification needs a name and good
+ * addresses. A notification is
  * written to the form as it is typed, so nothing between the editor and here
  * refuses one; both preconditions are answered by the module the editor asks.
  */
@@ -815,6 +838,13 @@ function blockedBeforeSave(
 ): SaveRefusal | undefined {
   if (fields.length === 0) {
     return { message: "Add at least one field to the form.", page: "builder" };
+  }
+  const blank = blankConsentFields(fields)[0];
+  if (blank !== undefined) {
+    return {
+      message: `${blank.label || blank.name}: ${CONSENT_TEXT_REQUIRED}`,
+      page: "builder",
+    };
   }
   const blocked = notificationsBlockingSave(notifications);
   return blocked ? { message: blocked, page: "notifications" } : undefined;
@@ -972,6 +1002,7 @@ export function FormBuilderView({
         onDelete={onDelete}
         documentLock={documentLock}
         version={initialData?._rev}
+        readAs={resolvedIsCreating ? undefined : initialData}
         view={view}
       />
     </FormBuilderProvider>

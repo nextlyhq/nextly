@@ -11,7 +11,7 @@
  * @since 1.0.0
  */
 
-import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
+import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import type React from "react";
 import { useEffect, useState } from "react";
 
@@ -48,6 +48,7 @@ import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
+import { EditorOutline } from "@admin/components/shared/loading-frame/outlines";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
@@ -75,7 +76,6 @@ import {
   editViewHasPages,
   editViewPage,
 } from "@admin/lib/plugins/document-view-registry";
-import { cn } from "@admin/lib/utils";
 import { entryKeys } from "@admin/services/entryApi";
 import { getCollectionFields } from "@admin/types/collection";
 
@@ -129,99 +129,15 @@ function EditEntryBreadcrumbs({
  * Loading skeleton for the edit entry page.
  */
 function EditEntryPageSkeleton() {
+  // The editor's outline, the one the frame drew for this address while the
+  // session was checked: the bar's controls at once, then the fields and the
+  // side panel at the editor's own geometry.
   return (
-    <PageContainer type="editor">
-      {/* Accessibility: Announce loading state to screen readers */}
-      <div className="sr-only" role="status" aria-live="polite">
-        Loading entry...
-      </div>
-
-      {/* An Editor page has no padding, as the editor that replaces this
-          does: its banners and panel start directly under the bar. */}
-      <div className="flex flex-col lg:flex-row lg:min-h-[calc(100vh-var(--admin-bar-height))] items-stretch">
-        {/* Main Content */}
-        {/* `min-w-0` as the editor that replaces this carries it: without it
-            this pane will not shrink and pushes the rail past the column. */}
-        <div
-          className={cn(
-            "flex-1 min-w-0 space-y-6 pt-6 lg:pt-8 mx-auto w-full",
-            // The editor's field column inset, so nothing moves sideways when
-            // the editor replaces this.
-            DOCUMENT_COLUMN_INSET
-          )}
-          // The editor that replaces this bounds its FIELD column, not the
-          // page, so a skeleton bounded at the page moves every field
-          // sideways the moment data arrives.
-          style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
-        >
-          {/* Breadcrumbs skeleton */}
-          <div className="mb-6">
-            <Skeleton className="h-5 w-64" />
-          </div>
-
-          {/* Header skeleton */}
-          <div className="mb-8">
-            <Skeleton className="w-48 mb-2" />
-            <Skeleton className="h-5 w-96" />
-          </div>
-
-          <div className="bg-card  border border-border rounded-lg p-6">
-            <div className="space-y-6">
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-32 w-full" />
-            </div>
-          </div>
-        </div>
-
-        {/* Sidebar */}
-        <div className="w-full lg:w-[320px] shrink-0  border-t border-border lg:border-t-0 lg:border-l border-border lg:border-border bg-card flex flex-col relative z-10">
-          <div className="lg:sticky lg:top-0 lg:h-[calc(100vh-var(--admin-bar-height))] flex flex-col">
-            {/* Sidebar Header/Actions Skeleton */}
-            <div className="p-6  border-b border-border space-y-3">
-              <div className="flex gap-3">
-                <Skeleton className="h-10 flex-1" />
-                <Skeleton className="h-10 flex-1" />
-              </div>
-            </div>
-
-            {/* Sidebar Content Skeleton */}
-            <div className="p-6 space-y-8">
-              {/* Sidebar Fields / SEO */}
-              <div className="space-y-4">
-                <Skeleton className="h-6 w-32" />
-                <div className="space-y-2">
-                  <Skeleton className="h-12 w-full" />
-                  <Skeleton className="h-12 w-full" />
-                </div>
-              </div>
-
-              {/* Document Info Skeleton */}
-              <div className="pt-6  border-t border-border">
-                <div className="bg-primary/5 px-6 py-3 mb-4">
-                  <Skeleton className="h-4 w-32" />
-                </div>
-                <div className="px-6 space-y-4">
-                  <div className="space-y-1">
-                    <Skeleton className="h-3 w-20" />
-                    <Skeleton className="h-4 w-full" />
-                  </div>
-                  <div className="space-y-1">
-                    <Skeleton className="h-3 w-16" />
-                    <Skeleton className="h-4 w-2/3" />
-                  </div>
-                  <div className="space-y-1">
-                    <Skeleton className="h-3 w-24" />
-                    <Skeleton className="h-4 w-2/3" />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </PageContainer>
+    <EditorOutline
+      sideWidth={320}
+      columnClassName={DOCUMENT_COLUMN_INSET}
+      columnStyle={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+    />
   );
 }
 
@@ -311,6 +227,9 @@ export default function EditEntryPage({
     // hint. Gated on localizationEnabled so a non-localized app sends no fallback param.
     fallbackLocale: localizationEnabled ? "none" : undefined,
     translationStatus: asksTranslationStatus,
+    // Once the schema says whether the collection keeps drafts: asked before,
+    // the entry is read as published and then again as its draft.
+    enabled: collection !== undefined,
   });
   // The same document as stored, read in the same language and view. The
   // populated read above leaves out a related item the editor may not read,
@@ -323,6 +242,8 @@ export default function EditEntryPage({
     draft: collection?.draftsEnabled === true,
     locale,
     fallbackLocale: localizationEnabled ? "none" : undefined,
+    // Held for the schema, as the populated read above is.
+    enabled: collection !== undefined,
   });
   const {
     document: entry,
@@ -658,6 +579,10 @@ export default function EditEntryPage({
   }
 
   const collectionLabel = collection.label || collection.name || slug;
+  // The trail's step leads to the collection's list, so it says what the
+  // list and the default editor's trail say: the plural ("Submissions"),
+  // not the one-entry label a collection may also answer as `label`.
+  const listLabel = collection.labels?.plural || collectionLabel;
   // Cast entry to Record<string, unknown> for getEntryTitle helper
   const entryData = entry as unknown as Record<string, unknown>;
   const entryTitle = getEntryTitle(entryData, id, collection.admin?.useAsTitle);
@@ -719,7 +644,7 @@ export default function EditEntryPage({
           breadcrumbs={
             <EditEntryBreadcrumbs
               collectionSlug={slug}
-              collectionLabel={collectionLabel}
+              collectionLabel={listLabel}
               entryTitle={entryTitle}
             />
           }

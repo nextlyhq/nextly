@@ -6,9 +6,9 @@
  * shows them as link tabs under its header, each with its own address.
  */
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PageFrame } from "../page-frame";
+import { PageFrame, PageFrameListener } from "../page-frame";
 import { PageHeader, PageTab, PageTabs } from "../page-header";
 
 afterEach(cleanup);
@@ -161,5 +161,149 @@ describe("a page header's tabs", () => {
   it("draws no tab row when the page has no sections", () => {
     render(<PageHeader title="Users" />);
     expect(screen.queryByRole("navigation")).toBeNull();
+  });
+});
+
+describe("a tab row wider than its screen", () => {
+  // jsdom lays nothing out, so each box is given here: a row 300px wide
+  // holding six tabs 100px wide side by side, each moved left by however
+  // far the row is scrolled, as a browser draws an overflowing row.
+  const NAMES = ["One", "Two", "Three", "Four", "Five", "Six"];
+  const box = (left: number, width: number): DOMRect => ({
+    left,
+    right: left + width,
+    x: left,
+    width,
+    top: 0,
+    bottom: 36,
+    y: 0,
+    height: 36,
+    toJSON: () => ({}),
+  });
+
+  beforeEach(() => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        const row = this.closest("nav");
+        if (row === null) return box(0, 0);
+        if (this === row) return box(0, 300);
+        const at = [...row.querySelectorAll("a")].indexOf(
+          this as HTMLAnchorElement
+        );
+        return box(at * 100 - row.scrollLeft, 100);
+      }
+    );
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  function tabs(current: string) {
+    return (
+      <PageTabs label="Sections">
+        {NAMES.map(name => (
+          <PageTab key={name} href={`/${name}`} current={name === current}>
+            {name}
+          </PageTab>
+        ))}
+      </PageTabs>
+    );
+  }
+
+  /** Whether the tab named `name` is wholly inside the row's box. */
+  function inView(name: string): boolean {
+    const row = screen.getByRole("navigation").getBoundingClientRect();
+    const tab = screen.getByRole("link", { name }).getBoundingClientRect();
+    return tab.left >= row.left && tab.right <= row.right;
+  }
+
+  it("scrolls the current tab into view when it opens past the row's edge", () => {
+    render(tabs("Five"));
+    expect(inView("Five")).toBe(true);
+    // Moved only as far as it takes: the tab's end at the row's end.
+    expect(screen.getByRole("navigation").scrollLeft).toBe(200);
+  });
+
+  it("leaves the row where it is when the current tab is in view", () => {
+    render(tabs("Two"));
+    expect(screen.getByRole("navigation").scrollLeft).toBe(0);
+  });
+
+  it("keeps a row the person scrolled, until another tab becomes current", () => {
+    const { rerender } = render(tabs("Five"));
+    const row = screen.getByRole("navigation");
+    // The person scrolls back to the start; the page draws again.
+    row.scrollLeft = 0;
+    rerender(tabs("Five"));
+    expect(row.scrollLeft).toBe(0);
+    // Another tab becomes current, before the row's start this time.
+    row.scrollLeft = 400;
+    rerender(tabs("Two"));
+    expect(inView("Two")).toBe(true);
+    expect(row.scrollLeft).toBe(100);
+  });
+});
+
+describe("a page frame listener", () => {
+  it("hears the type of a frame drawn inside it, and that it is gone", () => {
+    const onFrame = vi.fn();
+    const { rerender } = render(
+      <PageFrameListener onFrame={onFrame}>
+        <div>
+          <PageFrame type="form">
+            <p>Body</p>
+          </PageFrame>
+        </div>
+      </PageFrameListener>
+    );
+    expect(onFrame).toHaveBeenLastCalledWith("form");
+
+    rerender(
+      <PageFrameListener onFrame={onFrame}>
+        <div>
+          <p>Body</p>
+        </div>
+      </PageFrameListener>
+    );
+    expect(onFrame).toHaveBeenLastCalledWith(null);
+  });
+
+  it("hears only the outermost frame, which is the page's own", () => {
+    const onFrame = vi.fn();
+    render(
+      <PageFrameListener onFrame={onFrame}>
+        <PageFrame type="workspace">
+          <PageFrame type="list">
+            <p>Body</p>
+          </PageFrame>
+        </PageFrame>
+      </PageFrameListener>
+    );
+    // The inner frame mounts first; were it heard, "list" would be among the
+    // calls.
+    expect(onFrame.mock.calls).toEqual([["workspace"]]);
+  });
+
+  it("hears nothing from content that draws no frame", () => {
+    const onFrame = vi.fn();
+    render(
+      <PageFrameListener onFrame={onFrame}>
+        <p>Body</p>
+      </PageFrameListener>
+    );
+    expect(onFrame).not.toHaveBeenCalled();
+    expect(screen.getByText("Body")).toBeTruthy();
+  });
+
+  it("is not heard by a frame outside it", () => {
+    // A host draws its own frame around the listener, and that frame must not
+    // count as the content's.
+    const onFrame = vi.fn();
+    render(
+      <PageFrame type="workspace">
+        <PageFrameListener onFrame={onFrame}>
+          <p>Body</p>
+        </PageFrameListener>
+      </PageFrame>
+    );
+    expect(onFrame).not.toHaveBeenCalled();
   });
 });

@@ -12,6 +12,8 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { DynamicTableLoadResult } from "../../di/load-dynamic-tables";
+
 import { reloadDynamicTables } from "../reload-dynamic-tables";
 
 /**
@@ -45,6 +47,20 @@ vi.mock(
   "../../domains/field-groups/services/register-field-group-schemas",
   () => ({ registerComponentSchemas })
 );
+
+// The field groups' translation tables are made by their own pass, which reads
+// the field group registry through the same loader. Stood in for here, so the
+// loader's calls are the two entity passes these tests count, and the pass is
+// observed by whether it was asked.
+const ensureFieldGroupCompanions = vi.hoisted(() =>
+  vi.fn(
+    async (): Promise<DynamicTableLoadResult> => ({
+      registered: 0,
+      failures: [],
+    })
+  )
+);
+vi.mock("../field-group-companions", () => ({ ensureFieldGroupCompanions }));
 
 // The in-flight and queued runs are pinned to `globalThis`, so one test's
 // leftovers would otherwise be answered to the next test's callers.
@@ -83,6 +99,8 @@ afterEach(() => {
   loadDynamicTables.mockReset();
   registerComponentSchemas.mockReset();
   registerComponentSchemas.mockResolvedValue(0);
+  ensureFieldGroupCompanions.mockReset();
+  ensureFieldGroupCompanions.mockResolvedValue({ registered: 0, failures: [] });
   registerDynamicEntitySchema.mockReset();
   registerDynamicEntitySchema.mockResolvedValue(undefined);
 });
@@ -97,6 +115,32 @@ describe("reloadDynamicTables", () => {
         "dynamic_singles",
       ]);
     });
+  });
+
+  it("makes the field groups' missing translation tables only where the reload may define structure", async () => {
+    ready();
+    loadDynamicTables.mockResolvedValue(ok());
+
+    await reloadDynamicTables("[t]");
+    expect(ensureFieldGroupCompanions).toHaveBeenCalledTimes(1);
+
+    ensureFieldGroupCompanions.mockClear();
+    await reloadDynamicTables("[t]", { createMissingCompanions: false });
+    expect(ensureFieldGroupCompanions).not.toHaveBeenCalled();
+  });
+
+  it("reports a field group translation table it could not make", async () => {
+    ready();
+    loadDynamicTables.mockResolvedValue(ok());
+    ensureFieldGroupCompanions.mockResolvedValue({
+      registered: 0,
+      failures: [
+        { scope: "row", tableName: "comp_hero", error: new Error("disk full") },
+      ],
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await expect(reloadDynamicTables("[t]")).resolves.toBe(false);
   });
 
   it("gives a caller arriving mid-reload a run of its OWN", async () => {
@@ -267,7 +311,8 @@ describe("reloadDynamicTables", () => {
     loadDynamicTables.mockResolvedValue(ok());
     registerComponentSchemas.mockResolvedValue(2);
 
-    await reloadDynamicTables("[t]");
+    // Every entity and group registered: answered as loaded.
+    await expect(reloadDynamicTables("[t]")).resolves.toBe(true);
 
     expect(registerComponentSchemas).toHaveBeenCalledTimes(1);
   });
@@ -281,7 +326,9 @@ describe("reloadDynamicTables", () => {
     loadDynamicTables.mockResolvedValue(ok());
     registerComponentSchemas.mockRejectedValue(new Error("comp registry gone"));
 
-    await expect(reloadDynamicTables("[t]")).resolves.toBeUndefined();
+    // Answered rather than thrown: incomplete, so a caller that must not act
+    // on a partial reload can tell.
+    await expect(reloadDynamicTables("[t]")).resolves.toBe(false);
     expect(warn.mock.calls.flat().join(" ")).toMatch(/field groups/);
   });
 
@@ -289,7 +336,8 @@ describe("reloadDynamicTables", () => {
     containerGet.mockImplementation((name: string) =>
       name === "adapter" ? {} : undefined
     );
-    await expect(reloadDynamicTables("[t]")).resolves.toBeUndefined();
+    // Answered as not loaded, rather than thrown.
+    await expect(reloadDynamicTables("[t]")).resolves.toBe(false);
     // And it stopped rather than reading with a registry it could not write to.
     expect(loadDynamicTables).not.toHaveBeenCalled();
   });

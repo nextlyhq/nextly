@@ -54,7 +54,7 @@ import type {
   SupportedDialect,
   TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
-import { sql, type SQL } from "drizzle-orm";
+import { is, sql, SQL } from "drizzle-orm";
 import type {
   Connection as CallbackConnection,
   Pool as CallbackPool,
@@ -81,6 +81,13 @@ import {
   withMigrationSession,
   type MigrationSession,
 } from "../../field-groups/migration/session";
+
+import {
+  UNIT_COMMENT_CLOSE,
+  UNIT_COMMENT_OPEN,
+  unitComment,
+  unitOf,
+} from "./lock-statement-unit";
 
 /** The table the one schema lock lives in. */
 export const SCHEMA_LOCK_TABLE = "nextly_schema_lock";
@@ -109,6 +116,16 @@ const SCHEMA_LOCK_WAIT_MS = 60_000;
 
 /** How often a waiting run asks again. */
 const POLL_MS = 1_000;
+
+/**
+ * How long a run taking over a lapsed lock gives an earlier holder's statements to stop once
+ * asked, at the least: a run that waits for nothing (a Builder save) still lets a cancelled
+ * statement end before it refuses.
+ */
+const EARLIER_STATEMENT_MIN_WAIT_MS = 5_000;
+
+/** How often a run taking over asks again whether an earlier holder's statements have ended. */
+const EARLIER_STATEMENT_POLL_MS = 100;
 
 /** How many renewals fit in one lease; every other timing is derived from it. */
 const RENEW_DIVISOR = 8;
@@ -154,7 +171,21 @@ export type SchemaLockHolder =
       readonly name: string;
       readonly connectionId: string | null;
     }
-  | { readonly kind: "earlier-field-group-lock"; readonly owner: string };
+  | { readonly kind: "earlier-field-group-lock"; readonly owner: string }
+  | {
+      /** A statement the lapsed holder sent that was still running when the wait ran out. */
+      readonly kind: "earlier-statement";
+      readonly owner: string;
+      /** The database's id for the session running it. */
+      readonly session: string;
+      /**
+       * What the statement was sent for: its migration file or ledger key, or the command that
+       * sent it; null where its marker names nothing readable. Never the statement's text: a
+       * hand-written statement can hold a literal value, such as a key or a password, that must
+       * not reach a message or a log.
+       */
+      readonly unit: string | null;
+    };
 
 /** What the work is handed: the field-group session the lock holds beside its own row. */
 export type SchemaLockSession = MigrationSession;
@@ -218,8 +249,12 @@ export type SchemaLockOutcome<T> =
 interface HeldHere {
   readonly adapter: DrizzleAdapter;
   readonly claim: string;
+  /** The command holding the lock, which names a statement sent for no unit. */
+  readonly command: string;
   readonly session: MigrationSession;
   released: boolean;
+  /** Throws the lost-lock refusal unless the hold can still show it holds the lock. */
+  readonly assertHeld: () => Promise<void>;
 }
 
 /**
@@ -234,6 +269,110 @@ interface HeldHere {
  * however long work started inside it lives on.
  */
 const heldHere = new AsyncLocalStorage<readonly HeldHere[]>();
+
+/** The innermost lock this async context holds, or undefined outside every holder. */
+function heldNow(): HeldHere | undefined {
+  const store = heldHere.getStore() ?? [];
+  for (let at = store.length - 1; at >= 0; at -= 1) {
+    if (!store[at].released) return store[at];
+  }
+  return undefined;
+}
+
+/**
+ * Refuse, before a statement, a commit or a write to the ledger or the registry, a run that can no
+ * longer show it holds the schema lock (`SchemaLockHold.assertHeld`). Outside every holder of the
+ * lock there is no hold to lose, and nothing is refused.
+ */
+export async function assertSchemaLockHeld(): Promise<void> {
+  await heldNow()?.assertHeld();
+}
+
+/** The comment a statement is marked with while `claim` holds the lock (`markedForSchemaLock`). */
+function schemaLockMarker(claim: string): string {
+  return `/* nextly-lock:${claim} */`;
+}
+
+/**
+ * What follows the claim's comment on every statement `held` marks: the comment naming the unit it
+ * was sent for, or, for a statement sent for none, the command holding the lock, so a run refused
+ * by the statement can name it without reading its text (`lock-statement-unit`).
+ */
+function markerOf(held: HeldHere, unit: string | undefined): string {
+  return `${schemaLockMarker(held.claim)} ${unitComment(unit ?? held.command)}`;
+}
+
+/**
+ * `markedForSchemaLock` for a statement built as Drizzle SQL: the claim's comment goes first, so a
+ * run taking the lock over finds it by the same prefix. Anything else is returned as it is.
+ */
+export function markedSqlForSchemaLock(statement: unknown): unknown {
+  const held = heldNow();
+  if (held === undefined || !is(statement, SQL)) return statement;
+  return sql`${sql.raw(markerOf(held, undefined))}${statement}`;
+}
+
+/**
+ * `statement` marked with the claim of the lock this context holds, so a run that takes over a
+ * lapsed lock can find it still running in the database and stop it (`outlastEarlierStatements`).
+ * Unmarked outside every holder.
+ *
+ * `unit` is the migration file or ledger key the statement belongs to; without one, the statement
+ * is named by the command holding the lock.
+ */
+export function markedForSchemaLock(statement: string, unit?: string): string {
+  const held = heldNow();
+  return held === undefined ? statement : `${markerOf(held, unit)}${statement}`;
+}
+
+/** The `logContext.reason` every refusal of a run that lost the schema lock carries. */
+export const SCHEMA_LOCK_LOST_REASON = "schema lock lost while held";
+
+/**
+ * The refusal of a run that lost the schema lock. `lastApplied`, where the caller knows it, is the
+ * last file the run applied, which the operator checks the database against; `null` when it
+ * applied none.
+ */
+export function lostLockError(
+  command: string,
+  lastApplied?: string | null,
+  /** The file it was running when it lost the lock, whose statements may have applied. */
+  stoppedIn?: string
+): NextlyError {
+  const finished =
+    lastApplied === undefined
+      ? ""
+      : lastApplied === null
+        ? " It applied no migration before it lost the lock."
+        : ` The last migration it applied is ${lastApplied}.`;
+  const applied =
+    stoppedIn === undefined
+      ? finished
+      : ` It stopped while running ${stoppedIn}, some of whose statements may have applied.${finished}`;
+  return NextlyError.serviceUnavailable({
+    publicMessage:
+      `${command} lost the schema lock: it could no longer show it held it, so it started no ` +
+      `further statement and recorded nothing further.${applied} Check the database before ` +
+      "running it again.",
+    logContext: {
+      reason: SCHEMA_LOCK_LOST_REASON,
+      command,
+      ...(lastApplied === undefined ? {} : { lastApplied }),
+    },
+  });
+}
+
+/**
+ * Whether `error` is the refusal of a run that lost the schema lock (`lostLockError`), the one
+ * error a caller that otherwise carries on past a failure must let through: the run may change
+ * nothing further.
+ */
+export function isSchemaLockLost(error: unknown): error is NextlyError {
+  return (
+    NextlyError.is(error) &&
+    error.logContext?.reason === SCHEMA_LOCK_LOST_REASON
+  );
+}
 
 /** The claim this process would write: who it is, unique per acquisition. */
 function newClaim(): string {
@@ -378,10 +517,27 @@ async function ensureRow(
   return true;
 }
 
-type RowAttempt = { ok: true } | { ok: false; state: RowState | undefined };
+type RowAttempt =
+  | {
+      ok: true;
+      /** The claim of a holder whose row lapsed rather than being released, if any. */
+      earlier: string | undefined;
+    }
+  | { ok: false; state: RowState | undefined };
+
+/**
+ * The run whose lapsed row `claim` took over: a row still names the run that held it when that run
+ * stalled or was killed, whose statements may still be running; one that released it cleared the
+ * owner, and this run's own claim is no earlier holder.
+ */
+function earlierHolderOf(before: RowState, claim: string): string | undefined {
+  return before.owner !== null && before.owner !== claim
+    ? before.owner
+    : undefined;
+}
 
 /** Claim the row, or report who holds it. */
-async function claimRow(
+function claimRow(
   adapter: DrizzleAdapter,
   dialect: SupportedDialect,
   claim: string,
@@ -407,7 +563,9 @@ async function claimRow(
     // Read back rather than trusting an affected-row count, which the dialects report
     // differently. A claim that is ours but already near its end is not a claim to start work on.
     const after = await readState(ctx, dialect, timings);
-    if (after?.owner === claim && after.usable) return { ok: true };
+    if (after?.owner === claim && after.usable) {
+      return { ok: true, earlier: earlierHolderOf(before, claim) };
+    }
     if (after?.owner === claim) await ctx.runStatement(clearStatement(claim));
     return { ok: false, state: after };
   });
@@ -585,6 +743,25 @@ function connectionRunner(executor: Executor): StatementRunner {
     },
     query: async <T>(statement: SQL) =>
       toRows(await executor.execute(statement)) as T[],
+  };
+}
+
+/**
+ * SQLite's one connection, used directly: better-sqlite3 answers synchronously, and a statement on
+ * it runs inside whatever transaction that connection has open, where an adapter transaction
+ * would wait for that one to end.
+ */
+function sqliteDirectRunner(db: unknown): StatementRunner {
+  const direct = db as {
+    run(query: SQL): unknown;
+    all(query: SQL): unknown[];
+  };
+  return {
+    run: statement => {
+      direct.run(statement);
+      return Promise.resolve();
+    },
+    query: <T>(statement: SQL) => Promise.resolve(direct.all(statement) as T[]),
   };
 }
 
@@ -876,6 +1053,20 @@ class SchemaLockHold {
   interrupted = false;
   /** Another run took a lock this run held. */
   lost = false;
+  /** The claim of the holder whose lapsed row this run took, whose statements it must outlast. */
+  earlierClaim: string | undefined;
+  /**
+   * Whether this run has outlasted `earlierClaim`'s statements (`outlastEarlierStatements`).
+   * Until it has, a release gives the row back to that claim rather than freeing it, so the next
+   * run finds the claim and waits for its statements in turn.
+   */
+  earlierOutlasted = false;
+  /**
+   * When the lease was last confirmed, by this process's clock, dated from before the attempt
+   * that confirmed it: the acquisition, then each renewal that found the lock still this run's.
+   * Zero until the lock is taken.
+   */
+  private confirmedAt = 0;
   /** Whether the field-group claim's table has an expiry for the renewal to extend. */
   fieldGroupRenewable = false;
   private renewal: ReturnType<typeof setInterval> | undefined;
@@ -901,6 +1092,7 @@ class SchemaLockHold {
 
   /** Every lock at once, all or nothing. */
   async acquireOnce(): Promise<Attempt> {
+    const asked = Date.now();
     // The earlier migrate lock first. On MySQL it is the named lock, held on a connection for the
     // whole run, so a contender refused by it leaves this lock's row alone: taking the row first
     // would let a contender overwrite a row whose renewal was waiting behind a long transaction
@@ -927,7 +1119,10 @@ class SchemaLockHold {
         return this.heldByRow(row.state);
       }
       this.rowHeld = true;
+      this.earlierClaim = row.earlier;
+      this.earlierOutlasted = false;
     }
+    this.confirmedAt = asked;
     // The earlier field-group lock is taken by the session the work runs in; asked first so a
     // held one is waited for like any other, rather than refused by the session outright.
     const fieldGroup = await observeMigrationLock(this.adapter, this.dialect);
@@ -1018,10 +1213,12 @@ class SchemaLockHold {
       // second queued beneath it.
       if (renewing) return;
       renewing = true;
+      const asked = Date.now();
       this.outstandingRenewal = this.renewOnce().then(
         ({ disproved }) => {
           renewing = false;
           if (disproved) this.lost = true;
+          else this.confirmedAt = Math.max(this.confirmedAt, asked);
         },
         () => {
           // A failed attempt proves nothing either way; the next one asks again, and the end of
@@ -1066,6 +1263,56 @@ class SchemaLockHold {
   }
 
   /**
+   * Refuse to go on unless this run can still show it holds the lock: no other run has taken it,
+   * and a confirmation of its lease is younger than the loss deadline, which leaves two renewal
+   * intervals of lease in hand (`lossAfterMs`). A run that stalled past that, or whose renewals
+   * all failed, cannot show it, and a run that lost the lock starts no further statement and
+   * records nothing further.
+   */
+  async assertHeld(): Promise<void> {
+    if (!this.lost && this.confirmedAt > 0) {
+      if (Date.now() - this.confirmedAt < this.timings.lossAfterMs) return;
+      // No renewal has landed in time, which a long statement does to them on SQLite (its one
+      // connection, and a synchronous driver that holds the timers) without any other run near
+      // the lock: asked of the database now, the lease is extended and confirmed where the row
+      // still names this run.
+      if (await this.reconfirm().catch(() => false)) return;
+    }
+    this.lost = true;
+    throw lostLockError(this.options.command);
+  }
+
+  /**
+   * Extend the lease now and confirm it still names this run, on a connection that cannot wait
+   * behind the run's own work: SQLite's one connection directly (inside the run's transaction where
+   * one is open, which no other process can take the row through), and the renewal's own runner
+   * elsewhere. Undecided (false) where it cannot ask.
+   */
+  private async reconfirm(): Promise<boolean> {
+    const asked = Date.now();
+    const runner =
+      this.dialect === "sqlite"
+        ? sqliteDirectRunner(this.adapter.getDrizzle())
+        : this.ownRunner();
+    const { disproved } =
+      runner === undefined
+        ? await this.renewOnce()
+        : await renewAll(
+            runner,
+            this.dialect,
+            this.claim,
+            this.timings,
+            this.targets()
+          );
+    if (disproved) {
+      this.lost = true;
+      return false;
+    }
+    this.confirmedAt = Math.max(this.confirmedAt, asked);
+    return true;
+  }
+
+  /**
    * Whether this run still holds its lock now that its work has ended. The question that decides
    * whether it was excluded throughout: a row that still names this run was taken by no other.
    */
@@ -1097,7 +1344,18 @@ class SchemaLockHold {
     }
     const earlier = this.earlier;
     if (earlier !== undefined) releases.push(() => earlier.release());
-    if (this.rowHeld) releases.push(() => releaseRow(this.adapter, this.claim));
+    const earlierClaim = this.earlierClaim;
+    if (this.rowHeld) {
+      // Every way out before the earlier holder's statements are outlasted (the field-group lock
+      // found held, an interrupt, a listing that fails) leaves the row naming that holder, lapsed,
+      // as a refusal at the wait's deadline does: a freed row would let the next run start beside
+      // a statement of it still running.
+      releases.push(
+        earlierClaim !== undefined && !this.earlierOutlasted
+          ? () => handBackToEarlier(this, earlierClaim)
+          : () => releaseRow(this.adapter, this.claim)
+      );
+    }
     this.fieldGroupClaim = undefined;
     this.earlier = undefined;
     this.rowHeld = false;
@@ -1192,13 +1450,24 @@ function releaseThenStop(signal: NodeJS.Signals): void {
  */
 class LockWait {
   private readonly waitMs: number;
+  private readonly started = Date.now();
   private readonly deadline: number;
   private announced = false;
 
   constructor(private readonly options: SchemaLockOptions) {
     this.waitMs =
       options.whenHeld === "wait" ? (options.waitMs ?? SCHEMA_LOCK_WAIT_MS) : 0;
-    this.deadline = Date.now() + this.waitMs;
+    this.deadline = this.started + this.waitMs;
+  }
+
+  /** When an earlier holder's statements must have ended by: the wait's end, or a short floor. */
+  earlierStatementsDeadline(): number {
+    return Math.max(this.deadline, Date.now() + EARLIER_STATEMENT_MIN_WAIT_MS);
+  }
+
+  /** The refusal for `holder` once the wait is over, naming how long this run waited. */
+  refusal(holder: SchemaLockHolder): NextlyError {
+    return refusalFor(this.options, holder, Date.now() - this.started);
   }
 
   /**
@@ -1325,8 +1594,10 @@ async function runHeld<T>(
         const held: HeldHere = {
           adapter: hold.adapter,
           claim: hold.claim,
+          command: hold.options.command,
           session,
           released: false,
+          assertHeld: () => hold.assertHeld(),
         };
         const result = heldHere
           .run([...(heldHere.getStore() ?? []), held], () => work(session))
@@ -1425,6 +1696,180 @@ export async function withSchemaLock<T>(
 }
 
 /**
+ * A statement of an earlier holder still running, as the database lists it: its session, and the
+ * still-encoded unit its marker names (`unitOf` decodes it), or null.
+ */
+type EarlierStatement = { session: unknown; unit: unknown };
+
+/**
+ * The statements marked with `claim` (see `markedForSchemaLock`) that are running on the database
+ * now, on any connection but this one; undefined on SQLite, which runs one writer at a time, so a
+ * run cannot claim the row while a statement of the holder is still running. Only a running
+ * statement is listed: one that has ended inside a transaction left open lands nothing unless that
+ * transaction commits, which its run refuses once it cannot show it holds the lock.
+ *
+ * Only the unit comment's content is read back, cut out by the database itself, never the
+ * statement: its text can hold a literal value that must not leave the database through a refusal
+ * or a log. A comment whose closing is missing, as where PostgreSQL kept only the start of a long
+ * statement, reads as none, so a name cut short is never passed on as a whole one.
+ */
+function earlierStatementsQuery(
+  dialect: SupportedDialect,
+  claim: string
+): SQL | undefined {
+  const marker = schemaLockMarker(claim);
+  const unitPrefix = `${marker} ${UNIT_COMMENT_OPEN}`;
+  // Where the encoded unit starts, 1-based and in characters, as both databases count a string's
+  // positions; an integer built here, so it is written into the statement rather than bound.
+  const unitStart = sql.raw(String([...unitPrefix].length + 1));
+  if (dialect === "postgresql") {
+    return sql`SELECT ${id("pid")} AS ${id("session")},
+          CASE WHEN position(${unitPrefix} in ${id("query")}) = 1
+              AND position(${UNIT_COMMENT_CLOSE} in substr(${id("query")}, ${unitStart})) > 0
+            THEN split_part(substr(${id("query")}, ${unitStart}), ${UNIT_COMMENT_CLOSE}, 1)
+          END AS ${id("unit")}
+        FROM ${id("pg_stat_activity")}
+        WHERE ${id("state")} IN ('active', 'idle in transaction', 'idle in transaction (aborted)')
+          AND position(${marker} in ${id("query")}) = 1
+          AND ${id("pid")} <> pg_backend_pid()`;
+  }
+  if (dialect === "mysql") {
+    return sql`SELECT ${id("ID")} AS ${id("session")},
+          CASE WHEN LOCATE(${unitPrefix}, ${id("INFO")}) = 1
+              AND LOCATE(${UNIT_COMMENT_CLOSE}, SUBSTRING(${id("INFO")}, ${unitStart})) > 0
+            THEN SUBSTRING_INDEX(SUBSTRING(${id("INFO")}, ${unitStart}), ${UNIT_COMMENT_CLOSE}, 1)
+          END AS ${id("unit")}
+        FROM ${id("information_schema")}.${id("PROCESSLIST")}
+        WHERE ${id("COMMAND")} = 'Query' AND LOCATE(${marker}, ${id("INFO")}) = 1
+          AND ${id("ID")} <> CONNECTION_ID()`;
+  }
+  return undefined;
+}
+
+/**
+ * Gives the row back to the claim this run took it from, as lapsed as it found it, so the release
+ * that follows a refusal leaves it naming that claim.
+ */
+async function handBackToEarlier(
+  hold: SchemaLockHold,
+  earlier: string
+): Promise<void> {
+  await hold.adapter.transaction(async ctx => {
+    await ctx.runStatement(
+      sql`UPDATE ${id(SCHEMA_LOCK_TABLE)}
+          SET ${id("owner")} = ${earlier}, ${id("expires_at")} = ${nowExpression(hold.dialect)}
+          WHERE ${id("id")} = ${ROW_ID} AND ${id("owner")} = ${hold.claim}`
+    );
+  });
+  hold.rowHeld = false;
+}
+
+/**
+ * Ask the database to stop one running statement, leaving its session open: PostgreSQL's
+ * `pg_cancel_backend`, MySQL's `KILL QUERY`. Undefined for a session id that is not a number.
+ */
+function cancelStatement(
+  dialect: SupportedDialect,
+  session: unknown,
+  claim: string
+): SQL | undefined {
+  const number = Number(session);
+  if (!Number.isSafeInteger(number) || number <= 0) return undefined;
+  if (dialect === "postgresql") {
+    // Only while that session still runs a statement of the earlier claim, asked in the same
+    // statement as the cancel: a session that moved on to other work is left alone.
+    return sql`SELECT pg_cancel_backend(${id("pid")}) FROM ${id("pg_stat_activity")}
+        WHERE ${id("pid")} = ${number} AND ${id("state")} = 'active'
+          AND position(${schemaLockMarker(claim)} in ${id("query")}) = 1`;
+  }
+  // MySQL cannot make the kill conditional: it stops what the session runs at that moment, so a
+  // session that ended the statement and took up other work in between is stopped too.
+  // `KILL` takes a literal id, not a parameter; the id is a checked integer.
+  return sql`KILL QUERY ${sql.raw(String(number))}`;
+}
+
+/**
+ * The statement a refusal names: one that names what it was sent for, where any does, over one
+ * that names nothing. `running` is never empty here.
+ */
+function namedStatement(
+  running: readonly EarlierStatement[]
+): EarlierStatement {
+  return (
+    running.find(statement => unitOf(statement.unit) !== null) ?? running[0]
+  );
+}
+
+/**
+ * A run that took over a lapsed lock outlasts the earlier holder's statements before its first
+ * change: it asks the database to stop each one still running, and waits until none is, so no
+ * change of the earlier holder lands after one of this run's. A statement that outlives the wait
+ * (one the database will not stop, or that this run's role may not stop) refuses the run, naming
+ * the statement and its session; the lock is then released with nothing changed.
+ *
+ * It finds them by the claim each statement is marked with, so it outlasts a holder of this
+ * version only; a statement this run's role cannot see is not found.
+ */
+async function outlastEarlierStatements(
+  hold: SchemaLockHold,
+  wait: LockWait
+): Promise<void> {
+  const claim = hold.earlierClaim;
+  if (claim === undefined) return;
+  const listing = earlierStatementsQuery(hold.dialect, claim);
+  if (listing === undefined) {
+    // SQLite runs one writer at a time, so none of the earlier holder's statements is running.
+    hold.earlierOutlasted = true;
+    return;
+  }
+  const deadline = wait.earlierStatementsDeadline();
+  // The sessions already sent MySQL's `KILL QUERY`, which stops whatever the session runs when it
+  // arrives: sent once, so a session that ends the statement and takes up other work is not
+  // stopped by a later poll. PostgreSQL's cancel asks for the marked statement itself, so it is
+  // sent again on each poll, in case the first raced the statement's start.
+  const killed = new Set<string>();
+  for (;;) {
+    const running =
+      await hold.adapter.queryStatement<EarlierStatement>(listing);
+    if (running.length === 0) {
+      hold.earlierOutlasted = true;
+      return;
+    }
+    if (Date.now() >= deadline) {
+      // The row goes back to the earlier claim, lapsed, rather than being freed: the next run then
+      // finds that claim and waits for its statements in turn, where a freed row would let it
+      // start beside one still running.
+      await handBackToEarlier(hold, claim);
+      const named = namedStatement(running);
+      throw wait.refusal({
+        kind: "earlier-statement",
+        owner: claim,
+        session: String(named.session),
+        unit: unitOf(named.unit),
+      });
+    }
+    for (const statement of running) {
+      if (hold.dialect === "mysql") {
+        const session = String(statement.session);
+        if (killed.has(session)) continue;
+        killed.add(session);
+      }
+      const cancel = cancelStatement(hold.dialect, statement.session, claim);
+      // A cancel this role may not make, or one racing the statement's own end, is waited out.
+      if (cancel !== undefined) {
+        await hold.adapter.queryStatement(cancel).catch(() => undefined);
+      }
+    }
+    await new Promise(resolve =>
+      setTimeout(
+        resolve,
+        Math.max(0, Math.min(EARLIER_STATEMENT_POLL_MS, deadline - Date.now()))
+      )
+    );
+  }
+}
+
+/**
  * Take every lock and run `work` in them, as many attempts as the wait allows: an attempt whose
  * field-group session finds that lock held after all gives back what it took and waits again.
  */
@@ -1441,6 +1886,9 @@ async function runWhenHeld<T>(
     }
     await hold.prepareRenewal();
     hold.startRenewal();
+    // Held and renewed, so no third run can take the lock while the earlier holder's statements
+    // end; the work starts only once they have.
+    await outlastEarlierStatements(hold, wait);
     const ran = await runHeld(hold, work);
     if (ran.kind === "ran") return { ran: true, value: ran.value };
     await hold.stopRenewal();
@@ -1470,7 +1918,7 @@ async function assertHeldToTheEnd(hold: SchemaLockHold): Promise<void> {
     publicMessage:
       `${command} finished, but could not keep the schema lock to the end: another run took ` +
       "it while the work ran. Check the database before running it again.",
-    logContext: { reason: "schema lock lost while held", command },
+    logContext: { reason: SCHEMA_LOCK_LOST_REASON, command },
   });
 }
 
@@ -1556,6 +2004,13 @@ export function describeHolder(
         "another process, such as one of an earlier Nextly version, holds the field-group lock " +
         `(\`nextly_field_group_lock\`, ${processOf(holder.owner)}). If no such process is running, ` +
         "clear it with `nextly migrate --force-unlock`."
+      );
+    case "earlier-statement":
+      // What it was sent for and its session, never its text, which can hold a literal value.
+      return (
+        `a statement${holder.unit === null ? "" : ` for \`${holder.unit}\``} that the earlier ` +
+        `holder of the lock (${processOf(holder.owner)}) sent is still running in database ` +
+        `session ${holder.session} and did not stop when asked. Stop that session.`
       );
   }
 }

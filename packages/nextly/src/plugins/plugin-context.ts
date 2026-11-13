@@ -30,6 +30,16 @@ import type { CollectionRegistryService } from "../domains/collections/services/
 import { collectionFields } from "../domains/collections/services/collection-utils";
 import type { StoredReads } from "../domains/collections/services/stored-field-read";
 import type { ContentEventSubject } from "../domains/content-events/record";
+import {
+  type ForgetSendsInput,
+  forgetPluginSends,
+} from "../domains/email/plugin-send-forgetting";
+import {
+  onQueuedEmailChange,
+  type QueuedEmailChange,
+  RECIPIENT_DIGEST_PURPOSE,
+  useRecipientDigester,
+} from "../domains/email/queued-send-changes";
 import { pluginKeyScope, scopedSender } from "../domains/email/send-claims";
 import type { FieldGroupRegistryService } from "../domains/field-groups/services/field-group-registry-service";
 import type { JobRegistry } from "../domains/jobs/job-registry";
@@ -45,6 +55,7 @@ import {
   getDurableSubscribers,
   type DurableHandler,
 } from "../domains/plugin-events/subscribers";
+import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
   ExtensionColumn,
@@ -88,7 +99,10 @@ import {
   afterCommit as holdUntilCommit,
   runAdapterTransaction,
 } from "../shared/lib/run-adapter-transaction";
-import { secretGenerations } from "../shared/lib/secret-generations";
+import {
+  generationsCurrentFirst,
+  secretGenerations,
+} from "../shared/lib/secret-generations";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import type { AdminPlacement } from "./admin-placement";
@@ -173,6 +187,7 @@ import {
   createPluginReceivedWebhooks,
   type ReceivedWebhooksAdapter,
 } from "./security/received-webhooks";
+import { isWellFormed } from "./security/well-formed";
 import type { PluginSelf } from "./self";
 import { resolvePluginSelf } from "./self";
 import { methodFacade } from "./service-facade";
@@ -662,8 +677,48 @@ export type { PluginMediaService } from "./plugin-media";
 /** @experimental `ctx.services.email`. */
 export type PluginEmailService = Pick<
   EmailService,
-  (typeof PLUGIN_EMAIL_METHODS)[number]
->;
+  (typeof PLUGIN_EMAIL_METHODS)[number] | "readQueued" | "recipientDigest"
+> & {
+  /**
+   * @experimental Forget email this plugin sent about something it has
+   * deleted: cancel the queued emails among `queuedIds` that are still
+   * waiting or could be retried, clear the message and recipients of every
+   * one of them, and erase the delivery records of the sends that carried
+   * `idempotencyKeys`. Only this plugin's own: another caller's ids and keys
+   * name nothing. Pass `tx`, the handle a `ctx.db.transaction` callback or an
+   * in-transaction handler received, to commit with your own deletion;
+   * without one it runs in a transaction of its own, and is refused inside
+   * an open one.
+   */
+  forgetSends(
+    input: ForgetSendsInput,
+    options?: { tx?: PluginTransaction }
+  ): Promise<void>;
+  /**
+   * @experimental Be told of each change of this plugin's own queued emails,
+   * inside the transaction that makes it: an attempt starting (`sending`), a
+   * failure a retry can help (`retrying`), `sent`, `failed`, or `cancelled`
+   * with why. Each lists every final recipient after `email.beforeSend`
+   * filters, with its line, what became of it, a masked hint and this
+   * plugin's `recipientDigest` of it; no address. What the handler writes
+   * through `db` or the collection services' in-transaction methods with
+   * `transaction` commits or rolls back with the change, and a handler that
+   * throws undoes it, so the attempt is tried again: write as an upsert.
+   * Not told of an erasure, which a plugin reads with `readQueued`.
+   * Returns the undo; teardown also withdraws it.
+   */
+  onQueuedEmailChange(handler: QueuedEmailChangeHandler): () => void;
+};
+
+/**
+ * @experimental What `ctx.services.email.onQueuedEmailChange` hands its
+ * handler: the change, and this plugin's database and collection token
+ * bound to the change's transaction.
+ */
+export type QueuedEmailChangeHandler = (
+  change: QueuedEmailChange,
+  context: { db: PluginTransaction; transaction: PluginCollectionTransaction }
+) => void | Promise<void>;
 /** @experimental `ctx.services.versions`. */
 export type PluginVersionsService = Pick<
   VersionsService,
@@ -1268,6 +1323,37 @@ export interface PluginAdminConfig {
     | "users"
     | "settings";
 
+  /**
+   * Where the plugin's own rail item goes when it is opened, for a plugin
+   * placed `AdminPlacement.STANDALONE`. Written the way a menu item's `to` is:
+   *
+   * - one of the plugin's own pages, as `/admin/plugins/<slug>/<path>`, where
+   *   `<path>` is a `contributes.admin.pages` entry's `path`;
+   * - one of the plugin's own collections, as `/admin/collections/<slug>`,
+   *   with the slug the plugin declares. A host's `rename` is applied, as it
+   *   is to a menu item naming the collection, so the link follows the slug
+   *   the host registered. A sub-path, a query or a hash after either is kept.
+   *
+   * A reader who may not open it (a collection they cannot read, a page whose
+   * `requiredPermission` they lack) is sent where it would go without one.
+   * Without it, the rail item opens the first of the plugin's collections the
+   * reader can see, in the order its panel lists them, and with none, the
+   * first menu item its panel lists. A value naming anything else is ignored,
+   * as if unset, and reported at start-up in development.
+   *
+   * A site can override it per plugin in `admin.pluginOverrides`, as it can
+   * `placement` and `order`.
+   *
+   * @example
+   * ```ts
+   * admin: {
+   *   placement: AdminPlacement.STANDALONE,
+   *   landing: "/admin/plugins/analytics/overview",
+   * }
+   * ```
+   */
+  landing?: string;
+
   /** Plugin description shown on the plugin settings page */
   description?: string;
 
@@ -1320,7 +1406,9 @@ export interface PluginAdminConfig {
 export interface PluginDefinition<W extends AnyWidget = AnyWidget> {
   /**
    * Unique plugin name.
-   * Used for identification and error messages.
+   * Used for identification and error messages. `app`, in any letter case, is
+   * reserved: the site's own permissions are stored under that owner, and a
+   * plugin's under its name, so a plugin named `app` is refused at startup.
    */
   name: string;
 
@@ -1584,6 +1672,16 @@ export type {
 export function definePlugin<W extends AnyWidget = AnyWidget>(
   definition: PluginDefinition<W>
 ): PluginDefinition<W> {
+  // A plugin's name keys what it stores (its secrets, digests and settings). A name holding a lone
+  // surrogate encodes to UTF-8 as a replacement character, so two such names would key alike and
+  // reach each other's values: refused here, where every keyed use of the name begins.
+  if (typeof definition.name === "string" && !isWellFormed(definition.name)) {
+    throw NextlyError.configuration({
+      logMessage:
+        "A plugin's name must be well-formed Unicode: it holds a lone surrogate, which would key its stored values alike with another name's.",
+      logContext: { reason: "plugin-name-ill-formed" },
+    });
+  }
   const withRename: PluginDefinition<W> = {
     ...definition,
     // Framework remap: returns a NEW definition with the rename map
@@ -2877,6 +2975,32 @@ export function createPluginContext(
     ? resolvePluginSelf(plugin)
     : { name: "", collections: {}, singles: {} };
 
+  // Under this plugin's own key, kept in `nextly_meta` sealed in its name.
+  // The store and the install's secrets are read per call, as above. One
+  // helper for `ctx.security.digests` and for the recipient digests its
+  // queued email carries, so the two are one key and agree.
+  const digests = createKeyedDigests({
+    owner,
+    store: () => getServiceFn("metaService"),
+    adapter: () => asDigestKeyAdapter(getServiceFn("adapter")),
+    // The keyed generations only: a key is sealed and opened with one.
+    secrets: () =>
+      secretGenerations(env.NEXTLY_SECRET, env.NEXTLY_SECRET_PREVIOUS).filter(
+        (generation): generation is string => typeof generation === "string"
+      ),
+  });
+  const emailScope = pluginKeyScope(pluginName);
+  if (pluginName) {
+    // The digests its queued emails' recipients carry and its exclusions are
+    // compared by, withdrawn at teardown with its other subscriptions.
+    recordPluginSubscription(
+      pluginName,
+      useRecipientDigester(emailScope, mailbox =>
+        digests.digest(RECIPIENT_DIGEST_PURPOSE, mailbox)
+      )
+    );
+  }
+
   return {
     services: {
       collections: wrapCollectionsForPlugin(collectionService),
@@ -2966,10 +3090,45 @@ export function createPluginContext(
       media: mediaForPlugin(mediaService),
       // A plugin's keys are its own: scoped to its name, so two plugins, or a
       // plugin and the site, never name one send with the same key.
-      email: methodFacade(
-        scopedSender(emailService, pluginKeyScope(pluginName)),
-        PLUGIN_EMAIL_METHODS
-      ),
+      email: Object.freeze({
+        ...methodFacade(
+          scopedSender(emailService, emailScope),
+          PLUGIN_EMAIL_METHODS
+        ),
+        // Its own queued emails only, and its own digests, by its scope.
+        readQueued: (ids: readonly string[]) =>
+          scopedSender(emailService, emailScope).readQueued(ids),
+        recipientDigest: (address: string) =>
+          scopedSender(emailService, emailScope).recipientDigest(address),
+        // Each change of its own queued emails, in the change's transaction,
+        // with this plugin's database and collection token bound to it.
+        onQueuedEmailChange: (handler: QueuedEmailChangeHandler) => {
+          const undo = onQueuedEmailChange(emailScope, (change, tx) =>
+            bindToTransaction(tx, db =>
+              withWriteTransactionToken(
+                tx,
+                async transaction => {
+                  await handler(change, { db, transaction });
+                },
+                "ctx.services.email.onQueuedEmailChange"
+              )
+            )
+          );
+          if (pluginName) recordPluginSubscription(pluginName, undo);
+          return undo;
+        },
+        // Its own sends only, by the same scope its keys are claimed in.
+        forgetSends: (
+          input: ForgetSendsInput,
+          options?: { tx?: PluginTransaction }
+        ) =>
+          forgetPluginSends(pluginKeyScope(pluginName), input, {
+            tx: options?.tx,
+            // The context's own adapter, as its other services use.
+            adapter: getServiceFn("adapter"),
+            secrets: pluginSettingsSecrets(env),
+          }),
+      }),
       // Resolved on access, not at construction: `createPluginContext` is
       // exported, and a resolver written before this service existed would
       // otherwise throw while building the context for callers that never
@@ -3026,6 +3185,7 @@ export function createPluginContext(
     publicAddresses: pluginPublicAddresses({
       bindTo: bindToTransaction,
       owner: hookOwner ?? "app",
+      dialect: () => getServiceFn("dialect"),
       // Withdrawn at teardown with the plugin's other subscriptions.
       onTeardown: undo => {
         if (pluginName) recordPluginSubscription(pluginName, undo);
@@ -3064,26 +3224,19 @@ export function createPluginContext(
       // rotation applies at once.
       // Under this plugin's own key, kept in `nextly_meta` sealed in its name.
       // The store and the install's secrets are read per call, as above.
-      digests: createKeyedDigests({
-        owner,
-        store: () => getServiceFn("metaService"),
-        adapter: () => asDigestKeyAdapter(getServiceFn("adapter")),
-        // The keyed generations only: a key is sealed and opened with one.
-        secrets: () =>
-          secretGenerations(
-            env.NEXTLY_SECRET,
-            env.NEXTLY_SECRET_PREVIOUS
-          ).filter(
-            (generation): generation is string => typeof generation === "string"
-          ),
-      }),
+      digests,
       secrets: createOneTimeSecrets({
         owner,
         adapter: () => asSecretsAdapter(getServiceFn("adapter")),
         // Every generation, the unkeyed one included: a secret minted before
         // NEXTLY_SECRET was set stays readable while '[null]' keeps it.
+        // The current generation first, the unkeyed one when no NEXTLY_SECRET is set, as the
+        // helper writes with the head of this list.
         secrets: () =>
-          secretGenerations(env.NEXTLY_SECRET, env.NEXTLY_SECRET_PREVIOUS),
+          generationsCurrentFirst(
+            env.NEXTLY_SECRET,
+            env.NEXTLY_SECRET_PREVIOUS
+          ),
       }),
     },
     // Kept within this plugin's name, which decides the types it may record.

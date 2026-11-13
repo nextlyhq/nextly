@@ -8,6 +8,7 @@
  */
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import {
+  checkbox,
   date,
   defineCollection,
   number,
@@ -23,6 +24,10 @@ export function notFoundCollection(): CollectionConfig {
     slug: NOT_FOUND_SLUG,
     labels: { singular: "Address not found", plural: "Addresses not found" },
     internal: true,
+    // Written while a not-found page renders, where Next.js expires no cache
+    // tag, and read only by the admin's routes, which no cache holds: a write
+    // here has nothing to expire, and trying would log a failure every time.
+    revalidate: { disable: true },
     fields: [
       // The SHA-256 of the language and the address, so one address is one
       // row on every dialect, whatever its length.
@@ -37,6 +42,10 @@ export function notFoundCollection(): CollectionConfig {
       // languages' domains is two addresses.
       text({ name: "locale", label: "Language", required: true }),
       textarea({ name: "path", label: "Address", required: true }),
+      // The address exactly as a visitor asked for it, where that is not how
+      // the site's language rule spells the kept one (an unprefixed old link
+      // on a site whose languages are all prefixed).
+      textarea({ name: "asked", label: "Asked for" }),
       number({ name: "hits", label: "Visits", required: true, index: true }),
       date({
         name: "lastSeen",
@@ -47,6 +56,12 @@ export function notFoundCollection(): CollectionConfig {
       // `missing` for a request that found nothing, `moved` for an old
       // address a deploy moved whose redirect could not be saved.
       text({ name: "kind", label: "Kind", required: true }),
+      // Where the last visitor sent from another page came from: another
+      // site's host, or a path on this site without its query. Empty while
+      // every visitor came directly.
+      textarea({ name: "cameFrom", label: "Came from" }),
+      // Someone chose to ignore the address: listed only when asked for.
+      checkbox({ name: "ignored", label: "Ignored", defaultValue: false }),
     ],
     access: {
       create: () => false,

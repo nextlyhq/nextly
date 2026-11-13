@@ -12,7 +12,15 @@
  * Without these guarantees the SingleForm's `schema.status === true`
  * gate stays false and the Save Draft / Publish split never lights up.
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// The adapter double holds no stored schema version: registry writes run as
+// they are (`unversionedRegistryWrites`).
+vi.mock("../../schema/schema-version", async importOriginal =>
+  (
+    await import("../../../__tests__/helpers/unversioned-registry-writes")
+  ).unversionedRegistryWrites(await importOriginal())
+);
 
 import { SingleRegistryService } from "../services/single-registry-service";
 

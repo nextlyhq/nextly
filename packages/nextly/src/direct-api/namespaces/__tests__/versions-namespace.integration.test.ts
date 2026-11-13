@@ -1,0 +1,341 @@
+/**
+ * `nextly.versions.*`: a document's history from server code, answering as
+ * REST's history routes answer.
+ *
+ * Each operation runs the function its REST route runs, so each is checked
+ * here against REST's own answer for the same document: the list, one
+ * version, a comparison, naming a version, and a restore, which writes the
+ * working draft and never what is published. Marking a version seen is for
+ * people only, as on REST.
+ *
+ * Trusted by default, as the rest of the Direct API is. Called with
+ * `overrideAccess: false` and a user, each operation is judged as REST judges
+ * that person: a document they may not read is not found.
+ */
+
+// Set before the harness boots (env validation reads it once).
+process.env.NEXTLY_SECRET =
+  process.env.NEXTLY_SECRET ??
+  "test-secret-must-be-at-least-32-characters-long!!";
+
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+import { superAdminUser } from "../../../__tests__/fixtures/permission-holders";
+import { buildClaims } from "../../../auth/jwt/claims";
+import { signAccessToken } from "../../../auth/jwt/sign";
+import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
+import { defineCollection, text } from "../../../config";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+import { createDynamicHandlers } from "../../../routeHandler";
+import { ServiceContainer } from "../../../services/index";
+import type { AuthUserId } from "../../../types/auth";
+import {
+  account,
+  role,
+  seedPermissions,
+} from "../../__tests__/checked-access-fixtures";
+
+const ORIGIN = "http://localhost";
+const POSTS = "dav_posts";
+const ADMIN = "dav-admin";
+
+/** The namespace as these tests call it. */
+interface VersionsNamespace {
+  list(args: Record<string, unknown>): Promise<{
+    items: { versionNo: number; label?: string | null }[];
+  }>;
+  get(args: Record<string, unknown>): Promise<{
+    versionNo: number;
+    snapshot: Record<string, unknown>;
+  }>;
+  compare(args: Record<string, unknown>): Promise<unknown>;
+  name(
+    args: Record<string, unknown>
+  ): Promise<{ item: { label: string | null } }>;
+  restore(
+    args: Record<string, unknown>
+  ): Promise<{ item: { restoredFrom: number } }>;
+  markSeen(args: Record<string, unknown>): Promise<unknown>;
+}
+
+interface Handler {
+  createEntry(
+    params: Record<string, unknown>,
+    data: Record<string, unknown>
+  ): Promise<{ data: { id: string } | null }>;
+  updateEntry(
+    params: Record<string, unknown>,
+    data: Record<string, unknown>
+  ): Promise<{ success: boolean }>;
+  getEntry(
+    params: Record<string, unknown>
+  ): Promise<{ data: Record<string, unknown> | null }>;
+}
+
+describe.each(getConfiguredTestDialects())(
+  "nextly.versions (%s)",
+  (dialect: TestDialect) => {
+    let t: TestNextly;
+    let cookie: Record<string, string> = {};
+    let editorId: string;
+    let blindId: string;
+
+    const versions = () =>
+      (t.nextly as unknown as { versions: VersionsNamespace }).versions;
+    const handler = () =>
+      t.getService("collectionsHandler") as unknown as Handler;
+    const asUser = (id: string) => ({
+      overrideAccess: false,
+      user: { id: id as AuthUserId, email: `${id}@example.com` },
+    });
+
+    /** One REST call as the signed-in admin; the answer's JSON body. */
+    async function rest(
+      method: "GET" | "POST" | "PATCH",
+      path: string,
+      body?: Record<string, unknown>
+    ): Promise<Record<string, unknown>> {
+      const url = new URL(`${ORIGIN}/api/${path}`);
+      const req = new Request(url, {
+        method,
+        headers: {
+          origin: ORIGIN,
+          "content-type": "application/json",
+          ...cookie,
+        },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+      const segments = url.pathname.replace(/^\/api\//, "").split("/");
+      const handlers = createDynamicHandlers();
+      const res = await handlers[method](req, {
+        params: Promise.resolve({ params: segments }),
+      });
+      expect(res.status, await res.clone().text()).toBe(200);
+      return (await res.json()) as Record<string, unknown>;
+    }
+
+    /** A document published as "one", then as "two": versions 1 and 2. */
+    async function publishedTwice(): Promise<string> {
+      const created = await handler().createEntry(
+        { collectionName: POSTS, overrideAccess: true },
+        { title: "one", status: "published" }
+      );
+      const id = created.data!.id;
+      const saved = await handler().updateEntry(
+        { collectionName: POSTS, entryId: id, overrideAccess: true },
+        { title: "two", status: "published", _overwrite: true }
+      );
+      expect(saved.success).toBe(true);
+      return id;
+    }
+
+    /** The document's working draft as stored, or undefined for none. */
+    async function draftOf(
+      entryId: string
+    ): Promise<Record<string, unknown> | undefined> {
+      const rows = await t.adapter.select<{ snapshot: unknown }>(
+        "nextly_versions",
+        {
+          where: {
+            and: [
+              { column: "entryId", op: "=", value: entryId },
+              { column: "isAutosave", op: "=", value: false },
+              { column: "versionNo", op: "IS NULL" },
+              { column: "status", op: "=", value: "draft" },
+            ],
+          },
+        }
+      );
+      const stored = rows[0]?.snapshot;
+      return typeof stored === "string"
+        ? (JSON.parse(stored) as Record<string, unknown>)
+        : (stored as Record<string, unknown> | undefined);
+    }
+
+    beforeAll(async () => {
+      t = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        collections: [
+          defineCollection({
+            slug: POSTS,
+            status: true,
+            versions: { drafts: true },
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      await seedPermissions(t);
+      await superAdminUser(t, ADMIN);
+      const superRole = await new ServiceContainer(
+        t.adapter
+      ).roles.ensureSuperAdminRole();
+      const token = await signAccessToken(
+        buildClaims({
+          userId: ADMIN,
+          email: `${ADMIN}@example.test`,
+          name: ADMIN,
+          image: null,
+          roleIds: [String(superRole.id)],
+          sessionEpoch: 0,
+        }),
+        process.env.NEXTLY_SECRET ?? ""
+      );
+      cookie = { cookie: `nextly_session=${token}` };
+      editorId = await account(t, "dav-editor@example.com", [
+        await role(t, "dav-editors", [`read-${POSTS}`, `update-${POSTS}`]),
+      ]);
+      blindId = await account(t, "dav-blind@example.com", [
+        await role(t, "dav-blind-updaters", [`update-${POSTS}`]),
+      ]);
+    }, 180_000);
+
+    afterAll(async () => {
+      resetSessionStandingForTests();
+      await t?.destroy();
+    });
+
+    const history = (id: string) =>
+      `collections/${POSTS}/entries/${id}/versions`;
+
+    it("lists the versions REST lists", async () => {
+      const id = await publishedTwice();
+      const viaRest = (await rest("GET", history(id))) as {
+        items: { versionNo: number }[];
+      };
+
+      const viaDirect = await versions().list({ collection: POSTS, id });
+
+      expect(viaDirect.items.map(v => v.versionNo)).toEqual(
+        viaRest.items.map(v => v.versionNo)
+      );
+      expect(viaDirect.items.length).toBeGreaterThan(1);
+    }, 120_000);
+
+    it("reads one version as REST reads it", async () => {
+      const id = await publishedTwice();
+      const viaRest = (await rest("GET", `${history(id)}/1`)) as {
+        item?: { snapshot: Record<string, unknown> };
+        snapshot?: Record<string, unknown>;
+      };
+
+      const viaDirect = await versions().get({
+        collection: POSTS,
+        id,
+        versionNo: 1,
+      });
+
+      expect(viaDirect.snapshot.title).toBe("one");
+      expect(viaDirect.snapshot).toEqual((viaRest.item ?? viaRest).snapshot);
+    }, 120_000);
+
+    it("compares two versions as REST compares them", async () => {
+      const id = await publishedTwice();
+      const viaRest = await rest("GET", `${history(id)}/diff?from=1&to=2`);
+
+      const viaDirect = await versions().compare({
+        collection: POSTS,
+        id,
+        from: 1,
+        to: 2,
+      });
+
+      expect(viaDirect).toEqual(
+        (viaRest as { item?: unknown }).item ?? viaRest
+      );
+    }, 120_000);
+
+    it("names a version, and REST reads the name", async () => {
+      const id = await publishedTwice();
+
+      const named = await versions().name({
+        collection: POSTS,
+        id,
+        versionNo: 1,
+        label: "Kept",
+      });
+
+      expect(named.item.label).toBe("Kept");
+      const viaRest = (await rest("GET", history(id))) as {
+        items: { versionNo: number; label: string | null }[];
+      };
+      expect(viaRest.items.find(v => v.versionNo === 1)?.label).toBe("Kept");
+    }, 120_000);
+
+    it("restores into the working draft, leaving what is published", async () => {
+      const id = await publishedTwice();
+
+      const restored = await versions().restore({
+        collection: POSTS,
+        id,
+        versionNo: 1,
+        // Made over whatever is stored now, as REST's restore says it.
+        _overwrite: true,
+      });
+
+      expect(restored.item.restoredFrom).toBe(1);
+      const live = await handler().getEntry({
+        collectionName: POSTS,
+        entryId: id,
+        overrideAccess: true,
+      });
+      expect(live.data).toMatchObject({ title: "two" });
+      expect(await draftOf(id)).toMatchObject({ title: "one" });
+    }, 120_000);
+
+    it("restores as a person who may read and update the document", async () => {
+      const id = await publishedTwice();
+
+      const restored = await versions().restore({
+        collection: POSTS,
+        id,
+        versionNo: 1,
+        _overwrite: true,
+        ...asUser(editorId),
+      });
+
+      expect(restored.item.restoredFrom).toBe(1);
+    }, 120_000);
+
+    it("refuses a person who may not read the document, as REST's routes do", async () => {
+      const id = await publishedTwice();
+
+      // The history read asks `read-<collection>` first, as its route does.
+      await expect(
+        versions().list({ collection: POSTS, id, ...asUser(blindId) })
+      ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+      // The restore's route asks `update-<collection>`, which they hold; the
+      // document they may not read is then not found.
+      await expect(
+        versions().restore({
+          collection: POSTS,
+          id,
+          versionNo: 1,
+          _overwrite: true,
+          ...asUser(blindId),
+        })
+      ).rejects.toMatchObject({ code: "NOT_FOUND", statusCode: 404 });
+      expect(await draftOf(id)).toBeUndefined();
+    }, 120_000);
+
+    it("marks a version seen for a person, and refuses a call that names none", async () => {
+      const id = await publishedTwice();
+
+      await expect(
+        versions().markSeen({ collection: POSTS, id, versionNo: 1 })
+      ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+      await expect(
+        versions().markSeen({
+          collection: POSTS,
+          id,
+          versionNo: 1,
+          ...asUser(editorId),
+        })
+      ).resolves.toMatchObject({ item: { versionNo: 1 } });
+    }, 120_000);
+  }
+);

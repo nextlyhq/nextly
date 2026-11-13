@@ -37,6 +37,7 @@ import { resolvePluginSelf } from "./self";
 import {
   collectionContributors,
   servedCollectionSlug,
+  servedSingleSlug,
 } from "./served-collection-slug";
 
 /** @experimental Who is reading, as the offer asks it. */
@@ -161,8 +162,18 @@ async function deliveredFor(
     after: _after,
     requiredPermission: _permission,
     place: _place,
-    ...delivered
+    ...declaredDelivery
   } = contribution;
+  // Each named Single under the slug the admin serves it as.
+  const delivered =
+    owner && declaredDelivery.singles
+      ? {
+          ...declaredDelivery,
+          singles: declaredDelivery.singles.map(slug =>
+            servedSingleSlug(owner, slug)
+          ),
+        }
+      : declaredDelivery;
   // Each named collection under the slug the admin serves it as.
   const declared =
     owner && contribution.collections

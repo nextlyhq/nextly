@@ -7,15 +7,15 @@ description: The public plugin surface re-exported by @nextlyhq/plugin-sdk.
 
 ## Entry points
 
-| Import                         | Surface                                                                                                                                                          | React?              |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
-| `@nextlyhq/plugin-sdk`         | `definePlugin`, `contributes`/`ctx`/hook/event/filter types, `PermissionSlug`/`EventName`, `secret()`                                                            | no                  |
-| `@nextlyhq/plugin-sdk/testing` | `createTestNextly`                                                                                                                                               | no                  |
-| `@nextlyhq/plugin-sdk/client`  | `useCan`, `<Can>`                                                                                                                                                | yes (optional peer) |
-| `@nextlyhq/plugin-sdk/admin`   | `registerComponent`, `registerComponents`, `registerKnownPlugin` (deprecated), `ChallengeViewProps`, `ChallengeResolveResult`                                    | yes (optional peer) |
-| `@nextlyhq/plugin-sdk/routing` | `slugToStaticParam`                                                                                                                                              | no                  |
-| `@nextlyhq/plugin-sdk/db`      | Drizzle query operators (`eq`, `and`, `inArray`, …); `sql` is not among them — a declaration a reviewer reads, not a boundary, since a plugin can bundle its own | no                  |
-| `@nextlyhq/plugin-sdk/widgets` | `WidgetProps`, `WidgetData`, `WidgetRenderSize`, `WidgetResult`, `WidgetResultField` — types only, no runtime                                                    | no                  |
+| Import                         | Surface                                                                                                                                                                                              | React?              |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `@nextlyhq/plugin-sdk`         | `definePlugin`, `contributes`/`ctx`/hook/event/filter types, `PermissionSlug`/`EventName`, `secret()`                                                                                                | no                  |
+| `@nextlyhq/plugin-sdk/testing` | `createTestNextly`                                                                                                                                                                                   | no                  |
+| `@nextlyhq/plugin-sdk/client`  | `useCan`, `<Can>`                                                                                                                                                                                    | yes (optional peer) |
+| `@nextlyhq/plugin-sdk/admin`   | `registerComponent`, `registerComponents`, `registerKnownPlugin` (deprecated), `ChallengeViewProps`, `ChallengeResolveResult`                                                                        | yes (optional peer) |
+| `@nextlyhq/plugin-sdk/routing` | `slugToStaticParam`                                                                                                                                                                                  | no                  |
+| `@nextlyhq/plugin-sdk/db`      | Drizzle query operators (`eq`, `and`, `inArray`, …) and `increment` for `ctx.db.update`; `sql` is not among them — a declaration a reviewer reads, not a boundary, since a plugin can bundle its own | no                  |
+| `@nextlyhq/plugin-sdk/widgets` | `WidgetProps`, `WidgetData`, `WidgetRenderSize`, `WidgetResult`, `WidgetResultField` — types only, no runtime                                                                                        | no                  |
 
 ## `definePlugin(def): PluginDefinition`
 
@@ -45,6 +45,11 @@ interface PluginDefinition {
 }
 ```
 
+`name` is unique among the app's plugins, and `app` is reserved, in any letter case: the site's
+own permissions are stored under the owner `app` and a plugin's under its name, so startup and
+every CLI command refuse a plugin named `app` (`PLUGIN_RESOLUTION_ERROR`, `logContext.reason`
+`plugin-name-reserved`). Choose another name.
+
 ## `PluginContributions`
 
 ```ts
@@ -65,7 +70,7 @@ interface PluginContributions {
   dashboard?: DashboardContribution; // @experimental: { widgets?, suggest?, alternatives?, attention? } — see Dashboard widgets below
   admin?: {
     menu?: PluginMenuItem[]; // { label, to, icon?, order?, requiredPermission?, children? }
-    pages?: PluginAdminPage[]; // { path, component, requiredPermission? }
+    pages?: PluginAdminPage[]; // { path, component, requiredPermission?, startupReads? }
     settings?: { component: ComponentPath };
     views?: Record<string, PluginCollectionView>; // list/edit/before*/after*, and @experimental documentViews, documentActions and panelSections, by collection slug
     documentViews?: PluginFieldTypeDocumentView[]; // @experimental: views on every collection or Single with a field of one of this plugin's field types, at the top level, inside named groups, or in a repeater's rows
@@ -896,6 +901,12 @@ reserves (`admin-place-reserved-slug`), under one of core's segments
 (`admin-place-reserved`), outside the plugin's slug
 (`admin-place-outside-namespace`), or declared twice (`admin-place-collision`).
 
+A contribution to another plugin's place names that plugin in `dependsOn`, or in
+`optionalDependsOn` where the contributor works without it: while the owner is absent or
+disabled, a contribution to one of its places is left out and the app starts. A place the
+running owner does not declare is still refused (`admin-place-unknown`), as is one of a plugin
+the contributor names in neither.
+
 Every core place draws what is sent to it: settings, a user's detail page, the
 account page, the entry form, the login page, both edit pages, the dashboard
 and the entry list. A plugin draws its own
@@ -1122,6 +1133,28 @@ not saved, and what it writes through `control` is stored by the bar's Save
 and Publish with everything else. The open tab is kept in the address as
 `?tab=<id>`, so a reload or a shared link opens it again.
 
+A tab on an edit page may take over fields of the document with `fields`
+(`@experimental`), a list of top-level field names. The page then draws those
+fields in the tab instead of among its own content, and draws the tab only on a
+document that has every one of them. Their values stay in the document's form,
+so Save and Publish store them, and any surface that reads the document reads
+them as before. While a past version of the document is on screen, the page
+draws its own content alone and no contributed tab, since a tab reads the live
+document. A contribution to a Single's edit page may name the Singles it
+is for with `singles`, as one on a collection's page names its `collections`:
+
+```ts
+{
+  id: "acme-seo.tab",
+  kind: "tab",
+  place: "single.edit",
+  singles: ["homepage"], // every Single's page when absent
+  label: "SEO",
+  component: "@acme/seo/admin#SeoTab",
+  fields: ["seo"], // drawn in this tab, not among the page's fields
+}
+```
+
 ```tsx
 import { useEffect } from "react";
 import { useWatch } from "react-hook-form";
@@ -1216,6 +1249,13 @@ A bulk request is refused whole when any row fails. The rows are read once per
 collection, as the caller. Hiding an action in the admin is not its access
 control; this check is.
 
+A staff route your person's-menu item runs (`header.place: "menu"` with an
+`action.run`) is bound to that item too, under the id
+`<plugin-slug>.user-menu`, and its request names no rows:
+`{ "action": "<plugin-slug>.user-menu", "rows": [] }`. No rows are accepted for
+that id alone, and only on the route the item names; a list action on the same
+route still needs its rows.
+
 Boot fails, naming the plugin and the contribution, on an id outside the
 plugin's slug (`admin-contribution-outside-namespace`), one declared twice
 (`admin-contribution-duplicate`), a place that does not exist
@@ -1228,7 +1268,8 @@ there (`contribution-replace-unknown`), replaced twice
 dashboard's `widgets` is (`contribution-replace-not-allowed`), and one that
 is malformed
 (`admin-contribution-invalid`): a key its kind does not take, no label or
-component, an action that names none of the plugin's own routes, or a route
+component, `fields` that are not top-level field names or are named away from an
+edit page, `singles` away from a Single's page, an action that names none of the plugin's own routes, or a route
 that is public, a signed-in person's, or answers `GET`, a permission
 on the login page, or a rule where there is no entry to judge.
 

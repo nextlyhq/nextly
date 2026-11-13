@@ -36,19 +36,35 @@
  * repairs; failing the command instead would report a successful migration as
  * broken.
  *
+ * The registry rows THIS pass writes, though, share one transaction with the
+ * stored schema version (`schema-version.ts`), so the version never names a
+ * migration whose rows are not written.
+ *
  * @module domains/schema/migrate/reconcile-metadata
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { DeclaredNames } from "../../../cli/utils/migration-discovery";
+import { adapterForReads } from "../../../shared/lib/read-transaction-scope";
 import type { Logger } from "../../../shared/types";
 import type { SupportedDialect } from "../../../types/database";
 import { CollectionRegistryService } from "../../collections/services/collection-registry-service";
 import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
+import type {
+  EntitySettingsRecord,
+  SettingsEntityKind,
+} from "../migrate-create/entity-settings";
+import {
+  inRegistryStep,
+  newestAppliedAppMigration,
+  readSchemaVersion,
+  writeRegistryRows,
+} from "../schema-version";
 
+import { outstandingEntityChanges } from "./applied-entity-changes";
 import { registerFromMigrations } from "./metadata-register";
 import {
   isAwaitingMigration,
@@ -56,7 +72,7 @@ import {
   readPendingEntities,
   type PendingEntities,
 } from "./pending-entities";
-import { readRegistrySource } from "./registry-source";
+import { readRegistrySource, type RegistrySource } from "./registry-source";
 import { writeRegistryFromSource } from "./registry-writer";
 
 /**
@@ -83,7 +99,7 @@ export interface ReconcileLogger {
  * caller whose logger takes no second argument would otherwise see either
  * nothing or a stringified object appended to every line.
  */
-function asServiceLogger(logger: ReconcileLogger): Logger {
+export function asServiceLogger(logger: ReconcileLogger): Logger {
   return {
     debug: message => logger.debug(message),
     info: message => logger.info(message),
@@ -111,10 +127,12 @@ export interface ReconcileMetadataDeps {
   /** Seam for tests; defaults to the real registry writer. */
   writeRegistryFn?: typeof writeRegistryFromSource;
   /**
-   * Asked before each registry row is written; throws once the run can no
-   * longer show it holds the schema lock (`RegistryWriteDeps.assertLockHeld`).
+   * The registry rows the running configuration declares, given only by a
+   * first run that finds no migration carrying registry metadata
+   * (`first-run.ts`): the rows are written from it, by the writer the
+   * registry source uses, in place of any snapshot.
    */
-  assertLockHeld?: () => Promise<void> | void;
+  configurationRows?: EntitySettingsRecord;
   /** Each plugin-contributed collection's origin (`RegistryWriteDeps.collectionSources`). */
   collectionSources?: ReadonlyMap<string, `plugin:${string}`>;
   /**
@@ -136,6 +154,8 @@ export interface ReconcileMetadataResult {
   fieldGroupsRegistered: number;
   /** Rows the registry source records that could not be written, as `<kind> <slug>`. */
   rowsNotWritten: string[];
+  /** Rows of entities an applied migration dropped, removed this run, as `<kind> <slug>`. */
+  rowsRemoved: string[];
   /** Rows moved from `pending`/`generated` to `applied`. */
   marked: number;
   /**
@@ -233,7 +253,11 @@ async function markApplied(
   let stillPending = 0;
   let awaitingMigration = 0;
 
-  const rows = await registry.getPendingMigrations();
+  // A step of its own: a registry that cannot be read must not abort the
+  // transaction the other registries are written in.
+  const rows = await inRegistryStep(adapter, () =>
+    registry.getPendingMigrations()
+  );
   for (const row of rows) {
     const named = identify(row);
     if (!named) {
@@ -271,14 +295,20 @@ async function markApplied(
        * old physical table, so this answers yes for a change that has not
        * migrated at all — which is why the header check above exists.
        */
-      if (!(await adapter.tableExists(named.tableName))) {
+      // Through the view a service in this registry write reads with, so the
+      // read runs on the write's transaction (`adapterForReads`).
+      if (!(await adapterForReads(adapter).tableExists(named.tableName))) {
         stillPending += 1;
         continue;
       }
 
-      const outcome = await registry.updateMigrationStatusWithVerification(
-        named.slug,
-        named.tableName
+      // Its own step of the registry write, so a row that fails is rolled
+      // back alone (`inRegistryStep`).
+      const outcome = await inRegistryStep(adapter, () =>
+        registry.updateMigrationStatusWithVerification(
+          named.slug,
+          named.tableName
+        )
       );
       if (outcome.verified) marked += 1;
       else stillPending += 1;
@@ -310,7 +340,7 @@ async function markApplied(
 export async function reconcileMigrationMetadata(
   deps: ReconcileMetadataDeps
 ): Promise<ReconcileMetadataResult> {
-  const { adapter, dialect, migrationsDir, logger } = deps;
+  const { adapter, dialect } = deps;
 
   /*
    * Step 1: rows the snapshots describe that the registry does not have yet.
@@ -326,26 +356,100 @@ export async function reconcileMigrationMetadata(
    * per migration, and `isFileApplied` is the same query `runFileMigrations`
    * already uses to decide what is outstanding — so registration and execution
    * read one source rather than two that can disagree.
+   *
+   * Every registry row this pass writes, and the stored schema version, are
+   * written in ONE transaction (`writeRegistryRows`): a run stopped part-way
+   * leaves the rows and the version as they were. The ledger is read on that
+   * transaction too, so no read of this pass takes a second connection while
+   * the transaction holds one. The version names the newest applied migration
+   * only where every row was written and every registry read; a row left
+   * behind keeps the version where it was, and the next run, which writes it,
+   * moves the version too.
    */
-  const events = new SchemaEventsRepository(adapter.getDrizzle(), dialect);
+  const swept = await writeRegistryRows(
+    adapter,
+    async tx => {
+      const events = new SchemaEventsRepository(tx.getDrizzle(), dialect);
 
-  /*
-   * Memoized because both halves of this pass ask the ledger about the same
-   * files: registration, to decide what it may insert, and the sweep's
-   * evidence, to decide what shape the database has reached. One query per
-   * migration file rather than two, and — more usefully — one ANSWER, so the
-   * two halves cannot disagree about whether a file ran.
-   */
-  const appliedCache = new Map<string, Promise<boolean>>();
-  const isApplied = (filename: string): Promise<boolean> => {
-    const cached = appliedCache.get(filename);
-    if (cached) return cached;
-    const pending = events.isFileApplied(filename);
-    appliedCache.set(filename, pending);
-    return pending;
-  };
+      /*
+       * Memoized because both halves of this pass ask the ledger about the
+       * same files: registration, to decide what it may insert, and the
+       * sweep's evidence, to decide what shape the database has reached. One
+       * query per migration file rather than two, and — more usefully — one
+       * ANSWER, so the two halves cannot disagree about whether a file ran.
+       */
+      const appliedCache = new Map<string, Promise<boolean>>();
+      const isApplied = (filename: string): Promise<boolean> => {
+        const cached = appliedCache.get(filename);
+        if (cached) return cached;
+        const pending = inRegistryStep(adapter, () =>
+          events.isFileApplied(filename)
+        );
+        appliedCache.set(filename, pending);
+        return pending;
+      };
 
-  const registered = await registerRows(deps, isApplied);
+      /*
+       * The newest app migration the ledger records applied: what the stored
+       * schema version says once this pass has written its registry rows. A
+       * ledger that cannot be read leaves the version's migration as it was.
+       */
+      let appliedMigration: string | null | undefined;
+      try {
+        appliedMigration = newestAppliedAppMigration(
+          await inRegistryStep(adapter, () => events.listFileApplies())
+        );
+      } catch {
+        appliedMigration = undefined;
+      }
+      /*
+       * The newest migration whose registry rows are written, as the stored
+       * schema version names it: the migrations after it still owe their rows
+       * (`outstandingEntityChanges`). One that cannot be read owes them from
+       * the first migration.
+       */
+      const writtenThrough = async (): Promise<string | null> => {
+        try {
+          const stored = await inRegistryStep(adapter, () =>
+            readSchemaVersion(tx.getDrizzle(), dialect)
+          );
+          return stored.present ? (stored.version?.migration ?? null) : null;
+        } catch {
+          return null;
+        }
+      };
+      return {
+        ...(await registerAndSweep(deps, isApplied, writtenThrough)),
+        appliedMigration,
+      };
+    },
+    {
+      wrote: ({ result }) =>
+        result.collectionsRegistered +
+          result.singlesRegistered +
+          result.fieldGroupsRegistered +
+          result.rowsRemoved.length +
+          result.marked >
+        0,
+      migration: ({ complete, appliedMigration }) =>
+        complete ? appliedMigration : undefined,
+    }
+  );
+  return swept.result;
+}
+
+/**
+ * Both steps of the pass, inside the registry write the caller opened:
+ * registration, then the sweep of rows waiting on a table. `complete` says
+ * every row was written and every registry read.
+ */
+async function registerAndSweep(
+  deps: ReconcileMetadataDeps,
+  isApplied: (filename: string) => Promise<boolean>,
+  writtenThrough: () => Promise<string | null>
+): Promise<{ result: ReconcileMetadataResult; complete: boolean }> {
+  const { adapter, dialect, migrationsDir, logger } = deps;
+  const registered = await registerRows(deps, isApplied, writtenThrough);
 
   /*
    * Step 1b: which entities an unapplied migration still names.
@@ -431,12 +535,15 @@ export async function reconcileMigrationMetadata(
   }
 
   return {
-    ...registered,
-    marked,
-    stillPending,
-    awaitingMigration,
-    unscopedMigrations: awaiting.unscoped,
-    unreadable,
+    result: {
+      ...registered.rows,
+      marked,
+      stillPending,
+      awaitingMigration,
+      unscopedMigrations: awaiting.unscoped,
+      unreadable,
+    },
+    complete: registered.complete && unreadable.length === 0,
   };
 }
 
@@ -447,16 +554,21 @@ export async function reconcileMigrationMetadata(
  * registry source), each row is brought to it, written only where it
  * differs. Otherwise there is no source, and nothing is rewritten: the rows
  * an old template-shaped snapshot describes are still inserted where missing,
- * as they always were. The development boot asks for that insert alone
- * (`registryRows: "insert-missing"`), since its start syncs the rows from the
- * code as it is edited, ahead of any migration.
+ * as they always were. A development run (`registryRows: "insert-missing"`),
+ * whose start syncs the rows from the code as it is edited, ahead of any
+ * migration, adds only the rows the registry lacks, and rewrites only those of
+ * the entities the applied migrations still owe (`outstandingEntityChanges`).
  */
 async function registerRows(
   deps: ReconcileMetadataDeps,
-  isApplied: (filename: string) => Promise<boolean>
-): Promise<RegisteredRows> {
+  isApplied: (filename: string) => Promise<boolean>,
+  writtenThrough: () => Promise<string | null>
+): Promise<{ rows: RegisteredRows; complete: boolean }> {
   const { adapter, dialect, migrationsDir, logger } = deps;
-  const insertMissing = async (): Promise<RegisteredRows> => {
+  const insertMissing = async (): Promise<{
+    rows: RegisteredRows;
+    complete: boolean;
+  }> => {
     const inserted = await (deps.registerFn ?? registerFromMigrations)({
       migrationsDir,
       adapter,
@@ -464,45 +576,126 @@ async function registerRows(
       logger,
       isApplied,
     });
-    return { ...inserted, fieldGroupsRegistered: 0, rowsNotWritten: [] };
+    // Complete only where every entity's row was written: a row that failed
+    // keeps the stored version's migration where it was.
+    const { rowsNotWritten } = inserted;
+    return {
+      rows: {
+        collectionsRegistered: inserted.collectionsRegistered,
+        singlesRegistered: inserted.singlesRegistered,
+        fieldGroupsRegistered: 0,
+        rowsNotWritten,
+        rowsRemoved: [],
+      },
+      complete: rowsNotWritten.length === 0,
+    };
   };
-  if (deps.registryRows === "insert-missing") return insertMissing();
+  /** Brings the rows `source` records to it, the ones `rewrites` leaves aside excepted. */
+  const writeFrom = async (
+    source: Extract<RegistrySource, { kind: "snapshot" }>,
+    rewrites?: (kind: SettingsEntityKind, slug: string) => boolean
+  ): Promise<{ rows: RegisteredRows; complete: boolean }> => {
+    const written = await (deps.writeRegistryFn ?? writeRegistryFromSource)(
+      source,
+      {
+        adapter,
+        logger: asServiceLogger(logger),
+        ...(deps.collectionSources === undefined
+          ? {}
+          : { collectionSources: deps.collectionSources }),
+        ...(rewrites === undefined ? {} : { rewrites }),
+      }
+    );
+    return {
+      rows: {
+        collectionsRegistered: written.written.collection,
+        singlesRegistered: written.written.single,
+        fieldGroupsRegistered: written.written.fieldGroup,
+        rowsNotWritten: written.failed,
+        rowsRemoved: written.removed,
+      },
+      complete: written.failed.length === 0,
+    };
+  };
+  // A first run with no migration carrying the metadata takes its rows from
+  // the configuration, written as a registry source would be, whatever the
+  // mode: the record it commits with them keeps them as the baseline.
+  if (
+    deps.configurationRows === undefined &&
+    deps.registryRows === "insert-missing"
+  ) {
+    // Where the newest applied snapshot records every entity, the rows it
+    // records that the registry lacks are added from it, and the rows of the
+    // entities the applied migrations still owe are brought to it; every
+    // other row stays as the live sync left it. A snapshot in the older
+    // shape, or none, leaves the rows its entities list to be added as they
+    // always were.
+    const source = await readRegistrySource({ migrationsDir, isApplied });
+    if (source.kind !== "snapshot") return insertMissing();
+    const owed = await outstandingEntityChanges({
+      migrationsDir,
+      isApplied,
+      writtenThrough: await writtenThrough(),
+    });
+    return writeFrom(source, (kind, slug) => owed[kind].has(slug));
+  }
+  if (deps.configurationRows !== undefined) {
+    const fromConfiguration = await writeFrom({
+      kind: "snapshot",
+      file: "the configuration",
+      entities: deps.configurationRows,
+    });
+    // A first run whose migrations are a template's hand-written ones also
+    // adds the rows their older-format snapshot lists, which the
+    // configuration may not declare (a visual blog declares none of them).
+    const applied = await readRegistrySource({ migrationsDir, isApplied });
+    if (applied.kind !== "none" || applied.reason !== "older-format") {
+      return fromConfiguration;
+    }
+    const listed = await insertMissing();
+    return {
+      rows: {
+        collectionsRegistered:
+          fromConfiguration.rows.collectionsRegistered +
+          listed.rows.collectionsRegistered,
+        singlesRegistered:
+          fromConfiguration.rows.singlesRegistered +
+          listed.rows.singlesRegistered,
+        fieldGroupsRegistered: fromConfiguration.rows.fieldGroupsRegistered,
+        rowsNotWritten: [
+          ...fromConfiguration.rows.rowsNotWritten,
+          ...listed.rows.rowsNotWritten,
+        ],
+        rowsRemoved: fromConfiguration.rows.rowsRemoved,
+      },
+      complete: fromConfiguration.complete && listed.complete,
+    };
+  }
   const source = await readRegistrySource({ migrationsDir, isApplied });
   if (source.kind !== "snapshot") {
     // Fail closed: an unreadable newest snapshot may record anything, so no
-    // row is written from it, nor from an older one in its place.
+    // row is written from it, nor from an older one in its place. A
+    // template's older-format snapshot is not unreadable: the rows it lists
+    // are added where absent, below, as for one with no record.
     if (source.reason === "unreadable") {
       logger.warn(
         `The registry rows were not written: the newest applied snapshot (${source.file ?? "unknown"}) could not be read.`
       );
+      // Not complete: the rows the snapshot records are not written.
       return {
-        collectionsRegistered: 0,
-        singlesRegistered: 0,
-        fieldGroupsRegistered: 0,
-        rowsNotWritten: [],
+        rows: {
+          collectionsRegistered: 0,
+          singlesRegistered: 0,
+          fieldGroupsRegistered: 0,
+          rowsNotWritten: [],
+          rowsRemoved: [],
+        },
+        complete: false,
       };
     }
     return insertMissing();
   }
-  const written = await (deps.writeRegistryFn ?? writeRegistryFromSource)(
-    source,
-    {
-      adapter,
-      logger: asServiceLogger(logger),
-      ...(deps.assertLockHeld === undefined
-        ? {}
-        : { assertLockHeld: deps.assertLockHeld }),
-      ...(deps.collectionSources === undefined
-        ? {}
-        : { collectionSources: deps.collectionSources }),
-    }
-  );
-  return {
-    collectionsRegistered: written.written.collection,
-    singlesRegistered: written.written.single,
-    fieldGroupsRegistered: written.written.fieldGroup,
-    rowsNotWritten: written.failed,
-  };
+  return writeFrom(source);
 }
 
 /** What step 1 wrote, as the pass reports it. */
@@ -512,6 +705,7 @@ type RegisteredRows = Pick<
   | "singlesRegistered"
   | "fieldGroupsRegistered"
   | "rowsNotWritten"
+  | "rowsRemoved"
 >;
 
 /**
