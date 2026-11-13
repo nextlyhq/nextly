@@ -346,3 +346,17 @@ describe("an exception judged by every page it can open", () => {
     expect(refusals(text)[0]?.message).toContain("away from the whole site");
   });
 });
+
+describe("an exception judged where every character is named", () => {
+  it("still finds the page it opens", () => {
+    const text = [
+      "User-agent: Googlebot",
+      "Disallow: /",
+      "Allow: /$",
+      "Allow: /public",
+      "Disallow: /public~",
+      "Disallow: /~_-.0123456789abcdefghijklmnopqrstuvwxyz",
+    ].join("\n");
+    expect(refusals(text)[0]?.message ?? "").not.toContain("whole site");
+  });
+});

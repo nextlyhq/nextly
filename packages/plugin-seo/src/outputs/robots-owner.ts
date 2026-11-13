@@ -14,18 +14,20 @@
  *
  * @module outputs/robots-owner
  */
-import type { PluginContext } from "@nextlyhq/plugin-sdk";
-
 import { productionAddressesOf } from "../canonical";
 import { originOf } from "../origin";
 import { CRAWLERS } from "../received/contract";
 import { fetchAs, type FetchOptions } from "../received/fetch";
-import type { ReadRules } from "../resolver/provider";
+import type { SiteRules } from "../resolver/page-levels";
 import { ROBOTS_SERVED_BY_HEADER } from "../settings/robots-rules";
 
 /** What the owner is read with. */
 export interface RobotsOwnerSetup {
-  readRules: ReadRules;
+  /**
+   * The site's rules as already read by the caller, so asking for every
+   * page of a check costs no read of the settings.
+   */
+  rules: Pick<SiteRules, "productionAddresses">;
   /** The origin the plugin was configured with, where it was. */
   baseUrl?: string | undefined;
   /** How the file is fetched; the network itself unless a test says else. */
@@ -49,11 +51,9 @@ const GOOGLEBOT =
 
 /** Whether the robots.txt served at the site's main address is the site's own. */
 export async function siteServesOwnRobots(
-  ctx: PluginContext,
   setup: RobotsOwnerSetup
 ): Promise<boolean> {
-  const rules = await setup.readRules(ctx, undefined);
-  const production = productionAddressesOf(rules.productionAddresses);
+  const production = productionAddressesOf(setup.rules.productionAddresses);
   const configured = originOf(setup.baseUrl);
   const origins =
     production.length > 0

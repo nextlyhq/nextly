@@ -5,7 +5,6 @@
  * without the header is the site's; a read that fails says nothing, so the
  * plugin's rules are judged as served.
  */
-import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type {
@@ -35,9 +34,10 @@ function serving(answer: {
   return Object.assign(transport, { asked });
 }
 
-const ctx = {} as PluginContext;
-const site = (addresses: string[]) => () =>
-  Promise.resolve({ patterns: {}, productionAddresses: addresses });
+const site = (addresses: string[]) => ({
+  patterns: {},
+  productionAddresses: addresses,
+});
 
 beforeEach(() => forgetRobotsOwner());
 
@@ -48,8 +48,8 @@ describe("siteServesOwnRobots", () => {
       headers: { "x-nextly-robots": "plugin-seo" },
     });
     expect(
-      await siteServesOwnRobots(ctx, {
-        readRules: site(["https://example.com"]),
+      await siteServesOwnRobots({
+        rules: site(["https://example.com"]),
         fetch: { resolve, transport },
       })
     ).toBe(false);
@@ -58,8 +58,8 @@ describe("siteServesOwnRobots", () => {
 
   it("is true for a file without the header, the site's own", async () => {
     expect(
-      await siteServesOwnRobots(ctx, {
-        readRules: site(["https://example.com"]),
+      await siteServesOwnRobots({
+        rules: site(["https://example.com"]),
         fetch: { resolve, transport: serving({ status: 200 }) },
       })
     ).toBe(true);
@@ -67,16 +67,16 @@ describe("siteServesOwnRobots", () => {
 
   it("is false where the file can't be read, or no address is known", async () => {
     expect(
-      await siteServesOwnRobots(ctx, {
-        readRules: site(["https://example.com"]),
+      await siteServesOwnRobots({
+        rules: site(["https://example.com"]),
         fetch: { resolve, transport: serving({ status: 503 }) },
       })
     ).toBe(false);
     forgetRobotsOwner();
     const transport = serving({ status: 200 });
     expect(
-      await siteServesOwnRobots(ctx, {
-        readRules: site([]),
+      await siteServesOwnRobots({
+        rules: site([]),
         fetch: { resolve, transport },
       })
     ).toBe(false);
@@ -86,11 +86,11 @@ describe("siteServesOwnRobots", () => {
   it("reads the file once for a while, not on every page checked", async () => {
     const transport = serving({ status: 200 });
     const setup = {
-      readRules: site(["https://example.com"]),
+      rules: site(["https://example.com"]),
       fetch: { resolve, transport },
     };
-    await siteServesOwnRobots(ctx, setup);
-    await siteServesOwnRobots(ctx, setup);
+    await siteServesOwnRobots(setup);
+    await siteServesOwnRobots(setup);
     expect(transport.asked).toHaveLength(1);
   });
 });

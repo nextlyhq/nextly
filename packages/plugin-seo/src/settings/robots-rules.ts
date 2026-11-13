@@ -529,16 +529,12 @@ function matchesEverything(pattern: string): boolean {
 }
 
 /**
- * A character no rule of `rules` names, so a path spelled with it matches a
- * pattern only through that pattern's wildcards.
+ * A character no rule can name: a control character, which reading the box
+ * refuses and the plugin's own lines never hold, and which a path keeps as
+ * it is when normalized. A path spelled with it matches a pattern only
+ * through that pattern's wildcards.
  */
-function freshCharacter(rules: readonly PathRule[]): string {
-  const named = rules.map(rule => normalizedPath(rule.pattern)).join("");
-  const free = [..."~_-.0123456789abcdefghijklmnopqrstuvwxyz"].find(
-    char => !named.includes(char)
-  );
-  return free ?? "~";
-}
+const NAMED_BY_NO_RULE = "\u0001";
 
 /**
  * The most general page an allow pattern opens: its wildcards and, where it
@@ -574,10 +570,9 @@ function wholeSiteRule(
   // An exception counts only where it leaves a page other than the home
   // page open under the rules as crawlers apply them, judged at the most
   // general page it names. One a longer disallow overrides opens nothing.
-  const fresh = freshCharacter(rules);
   const opened = rules.some(rule => {
     if (!rule.allow) return false;
-    const page = generalPageOf(rule.pattern, fresh);
+    const page = generalPageOf(rule.pattern, NAMED_BY_NO_RULE);
     return page !== "/" && blockingRule(groups, agent, page) === undefined;
   });
   return opened ? undefined : widest;

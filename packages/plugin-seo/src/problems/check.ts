@@ -118,7 +118,9 @@ export interface ProblemChecks {
    * Whether the site serves a robots.txt of its own, which wins over the
    * plugin's: then its rules block nothing either.
    */
-  siteServesOwnRobots?: (ctx: PluginContext) => Promise<boolean>;
+  siteServesOwnRobots?: (
+    rules: Awaited<ReturnType<ReadRules>>
+  ) => Promise<boolean>;
   /**
    * The pages the site's routes render from their own code, which the
    * sitemap lists beside the entries, where the site has any.
@@ -152,14 +154,13 @@ function inSitemap(checks: ProblemChecks, type: string): boolean {
  * leaves the page out.
  */
 async function robotsBlockFor(
-  ctx: PluginContext,
   checks: ProblemChecks,
   type: string,
   rules: Awaited<ReturnType<ReadRules>>,
   ownAddress: string
 ): Promise<{ robotsBlock?: RobotsBlock }> {
   if (checks.servesRobots === false || !inSitemap(checks, type)) return {};
-  if ((await checks.siteServesOwnRobots?.(ctx)) === true) return {};
+  if ((await checks.siteServesOwnRobots?.(rules)) === true) return {};
   const robotsBlock = robotsBlockOf(
     servedGroups({
       aiCrawlers: rules.aiCrawlers ?? "all",
@@ -407,7 +408,7 @@ async function examine(
   const problems = pageProblems({
     subject,
     answer,
-    ...(await robotsBlockFor(ctx, checks, type, rules, ownAddress)),
+    ...(await robotsBlockFor(checks, type, rules, ownAddress)),
     canonicalIsOwn: canonicalIsOwn(
       answer,
       productionAddresses[0] ?? NO_ORIGIN,
