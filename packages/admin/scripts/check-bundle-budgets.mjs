@@ -7,7 +7,7 @@
  * - The shipped total — every browser-loaded chunk the package emits — stays
  *   at most 3,560 KB minified.
  * - The shell every route shares (the first screen's set) stays at most
- *   173 KB gzipped.
+ *   162 KB gzipped.
  * - Each route's own code — what its direct visit adds to the shell — stays
  *   at most its pinned size plus 10% (at least 2 KB). The pins live in
  *   `route-budgets.json`, measured when they were last set; a route with no
@@ -50,12 +50,12 @@ export const BUDGETS = {
   // and email setup screens, editors loaded on demand, and no unused code left
   // to remove, so the limit sits just above that measurement.
   totalMinifiedKB: 3740,
-  // The shared shell, measured at 156.4 KB gzipped on 2026-11-13 once the
-  // root entry exported only what an application mounts (it was 331 KB) and
-  // the shell stopped importing the form library and the barrels that
-  // brought it, plus the 10% a route's own code may grow above its pin. Held
-  // close to the measurement so the room is not spent without a decision.
-  shellGzipKB: 173,
+  // The shared shell, measured at 147.1 KB gzipped on 2026-11-13 once the
+  // root entry exported only what an application mounts (it was 331 KB), the
+  // shell stopped importing the form library, and its two validators moved
+  // to `zod/mini`, plus the 10% a route's own code may grow above its pin.
+  // Held close to the measurement so the room is not spent without a decision.
+  shellGzipKB: 162,
   // Spec R-3: each route's own code may grow this share above its pin...
   routeHeadroom: 0.1,
   // ...or this many KB, whichever is more, so a route that adds almost
@@ -264,6 +264,9 @@ export const KEPT_OUT_OF_SHELL = [
   "@dnd-kit/",
   "react-dropzone/",
   "file-selector/",
+  // zod's chained API: the shell validates with `zod/mini`, which shares
+  // zod's core and leaves the chained classes to the routes that use them.
+  "zod/v4/classic/",
   // The admin's own route parts.
   "src/components/features/media-library/MediaPickerDialog",
   "src/components/field-ui/",
@@ -296,10 +299,12 @@ export function readBundleModules(distDir) {
 
 /**
  * The static imports from the shell's entry module to the first of `targets`,
- * through modules the shell holds, or null when none leads there (a module
- * placed in a shell chunk beside one it is not imported with).
+ * through modules the shell holds or modules no chunk holds (a re-exporting
+ * module the bundler folded away, such as a package's index), or null when
+ * none leads there (a module placed in a shell chunk beside one it is not
+ * imported with). Never through a route's module: the shell does not load it.
  */
-function importChain(imports, from, targets, inShell) {
+function importChain(imports, from, targets, passable) {
   const cameFrom = new Map([[from, null]]);
   const queue = [from];
   while (queue.length > 0) {
@@ -312,7 +317,7 @@ function importChain(imports, from, targets, inShell) {
       return chain;
     }
     for (const next of imports[module] ?? []) {
-      if (!cameFrom.has(next) && inShell.has(next)) {
+      if (!cameFrom.has(next) && passable(next)) {
         cameFrom.set(next, module);
         queue.push(next);
       }
@@ -364,6 +369,9 @@ export function shellModuleBreaches(
     }
   }
 
+  // Every module some chunk holds, the routes' included.
+  const chunked = new Set(Object.values(record.chunks).flat());
+
   const breaches = [];
   for (const start of keptOut) {
     const found = [...inShell.keys()].filter(
@@ -374,7 +382,7 @@ export function shellModuleBreaches(
       record.imports,
       SHELL_ENTRY_MODULE,
       new Set(found),
-      inShell
+      module => inShell.has(module) || !chunked.has(module)
     );
     const first = chain === null ? found[0] : chain.at(-1);
     breaches.push({

@@ -316,6 +316,98 @@ const fkFixture = definePlugin({
   }
 );
 
+const parentStreamTable = defineTable("parents", {
+  id: col.id(),
+  label: col.shortText(),
+});
+const parentStreamPlugin = definePlugin({
+  name: "schema-e2e-parent-stream",
+  version: "0.0.0",
+  nextly: "*",
+  contributes: { schema: { prefix: "pa", tables: [parentStreamTable] } },
+});
+const childStreamTable = defineTable(
+  "children",
+  {
+    id: col.id(),
+    userId: col.shortText(),
+    parentId: col.shortText(),
+  },
+  {
+    foreignKeys: [
+      { columns: ["userId"], references: { table: "users", columns: ["id"] } },
+      {
+        columns: ["parentId"],
+        references: { table: "pa__parents", columns: ["id"] },
+        onDelete: "cascade",
+      },
+    ],
+  }
+);
+const childStreamPlugin = definePlugin({
+  name: "schema-e2e-child-stream",
+  version: "0.0.0",
+  nextly: "*",
+  dependsOn: { [parentStreamPlugin.name]: "*" },
+  contributes: { schema: { prefix: "ch", tables: [childStreamTable] } },
+});
+
+// Fresh-install enforcement across every dialect: a plugin's key to a core
+// table and to a declared dependency plugin's table (both created by earlier
+// streams) are created and enforced on the live database.
+describeEachDialect(
+  "a plugin table's foreign keys to earlier streams",
+  dialect => {
+    it("creates and enforces keys to a core table and to a dependency plugin's table on fresh install", async () => {
+      current = await createTestNextly({
+        dialect,
+        plugins: [childStreamPlugin, parentStreamPlugin],
+      });
+      const adapter = current.adapter;
+      const USER_ID = "018f2c2e-0000-7000-8000-00000000a001";
+      const PARENT_ID = "018f2c2e-0000-7000-8000-00000000b001";
+      await adapter.executeQuery(
+        `INSERT INTO users (id, email, name, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ${NOW(dialect)}, ${NOW(dialect)})`.replace(
+          /\?/g,
+          makePlaceholders(dialect)
+        ),
+        [
+          USER_ID,
+          "fk-test@example.com",
+          "FK Test",
+          dialect === "postgresql" ? true : 1,
+        ]
+      );
+      await adapter.executeQuery(
+        `INSERT INTO pa__parents (id, label) VALUES ('${PARENT_ID}', 'parent')`
+      );
+
+      // Control: valid references to both earlier streams succeed.
+      await adapter.executeQuery(
+        `INSERT INTO ch__children (id, user_id, parent_id)
+         VALUES ('018f2c2e-0000-7000-8000-00000000c001', '${USER_ID}', '${PARENT_ID}')`
+      );
+
+      // Violating the key to the core table is refused.
+      await expect(
+        adapter.executeQuery(
+          `INSERT INTO ch__children (id, user_id, parent_id)
+           VALUES ('018f2c2e-0000-7000-8000-00000000c002', '018f2c2e-0000-7000-8000-00000000dead', '${PARENT_ID}')`
+        )
+      ).rejects.toThrow();
+
+      // Violating the key to the dependency plugin's table is refused.
+      await expect(
+        adapter.executeQuery(
+          `INSERT INTO ch__children (id, user_id, parent_id)
+           VALUES ('018f2c2e-0000-7000-8000-00000000c003', '${USER_ID}', '018f2c2e-0000-7000-8000-00000000dead')`
+        )
+      ).rejects.toThrow();
+    });
+  }
+);
+
 const shelves = defineTable("shelves", { id: col.id() });
 const items = defineTable(
   "items",
