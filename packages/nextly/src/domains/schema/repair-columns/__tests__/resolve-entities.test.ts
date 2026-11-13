@@ -305,12 +305,9 @@ describe("resolveRepairEntities: the app's column overrides", () => {
     length: 10,
     owner: { kind: "app" as const },
   };
-  const overrides = {
-    byTable: new Map([["dc_posts", [city]]]),
-    dialect: "postgresql" as const,
-  };
+  const overrides = { byTable: new Map([["dc_posts", [city]]]) };
 
-  it("judges both definitions by an override the applied snapshot recorded", () => {
+  it("reads the applied storage from what the snapshot recorded, whatever the configuration says now", () => {
     const entity = only(
       resolveRepairEntities({
         configured: [configured()],
@@ -318,27 +315,13 @@ describe("resolveRepairEntities: the app's column overrides", () => {
         snapshots: [
           snapshot({
             table: "dc_posts",
-            columnTypes: { title: "varchar(10)" },
+            columnTypes: { title: "varchar(20)" },
           }),
         ],
         overrides,
       })
     );
-    expect(entity?.applied?.columnOverrides).toEqual([city]);
-    expect(entity?.configured?.columnOverrides).toEqual([city]);
-  });
-
-  it("leaves an override no applied migration recorded as a change still pending", () => {
-    const entity = only(
-      resolveRepairEntities({
-        configured: [configured()],
-        registry: [registry()],
-        snapshots: [
-          snapshot({ table: "dc_posts", columnTypes: { title: "text" } }),
-        ],
-        overrides,
-      })
-    );
+    expect(entity?.applied?.recordedTypes).toEqual({ title: "varchar(20)" });
     expect(entity?.applied?.columnOverrides).toBeUndefined();
     expect(entity?.configured?.columnOverrides).toEqual([city]);
   });
@@ -353,5 +336,6 @@ describe("resolveRepairEntities: the app's column overrides", () => {
       })
     );
     expect(entity?.applied?.columnOverrides).toEqual([city]);
+    expect(entity?.applied?.recordedTypes).toBeUndefined();
   });
 });

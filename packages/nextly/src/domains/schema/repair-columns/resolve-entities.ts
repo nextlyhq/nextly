@@ -24,15 +24,10 @@
 //
 // @module domains/schema/repair-columns/resolve-entities
 
-import type { SupportedDialect } from "../../../database/schema-registry";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { ColumnOverride } from "../extension/draft";
-import { typesDiffer } from "../pipeline/diff/declared-size";
 import { builtByFor, isCodeOwned } from "../pipeline/registered-collections";
-import {
-  type ColumnOrigin,
-  renderDialectType,
-} from "../services/field-column-descriptor";
+import type { ColumnOrigin } from "../services/field-column-descriptor";
 
 import type {
   AppliedDefinition,
@@ -87,10 +82,9 @@ export interface SnapshotEntity {
   columnTypes?: Readonly<Record<string, string>>;
 }
 
-/** The app's overrides as the configuration declares them now, and the dialect they render on. */
+/** The app's overrides as the configuration declares them now. */
 export interface RepairOverrides {
   byTable: ReadonlyMap<string, readonly ColumnOverride[]>;
-  dialect: SupportedDialect;
 }
 
 const PLUGIN_SOURCE = "plugin:";
@@ -189,33 +183,25 @@ function tableOf({ fromConfig, row, recorded }: EntitySources) {
 }
 
 /**
- * The overrides an applied definition carries. Where a snapshot says what was applied, the ones its
- * migration applied: an override whose storage the snapshot recorded for the column, so one the
- * configuration added since is a change still pending, as a field's is. Where a registry row does,
- * the configuration's: only a development push writes such a row, and it applies the configuration
- * as it stands.
+ * What an applied definition says of the app's overrides. Where a snapshot says what was applied,
+ * the column types it recorded, which carry the storage its migration gave each overridden column
+ * whatever the configuration declares since; a change to an override is then a change still
+ * pending, as a field's is. Where a registry row does, the configuration's overrides: only a
+ * development push writes such a row, and it applies the configuration as it stands.
  */
-function appliedOverrides(
+function withAppliedStorage(
+  applied: AppliedDefinition | null,
   sources: EntitySources,
-  configured: readonly ColumnOverride[],
-  dialect: SupportedDialect
-): readonly ColumnOverride[] {
-  const recorded = sources.recorded;
-  if (recorded === undefined) return configured;
-  return configured.filter(override => {
-    const type = recorded.columnTypes?.[override.column];
-    return (
-      type !== undefined &&
-      !typesDiffer(
-        { name: override.column, type, nullable: true },
-        {
-          name: override.column,
-          type: renderDialectType(override.kind, dialect, override),
-          nullable: true,
-        }
-      )
-    );
-  });
+  configured: readonly ColumnOverride[]
+): AppliedDefinition | null {
+  if (applied === null) return null;
+  if (applied.source === "snapshot") {
+    const recorded = sources.recorded?.columnTypes;
+    return recorded === undefined
+      ? applied
+      : { ...applied, recordedTypes: recorded };
+  }
+  return withOverrides(applied, configured);
 }
 
 /** `definition` carrying `overrides`, or as it is where there are none. */
@@ -239,11 +225,10 @@ function resolveEntity(
   if (identity === undefined || table === undefined) return null;
 
   const declared = overrides?.byTable.get(table) ?? [];
-  const applied = withOverrides(
+  const applied = withAppliedStorage(
     appliedDefinition(sources),
-    overrides === undefined
-      ? []
-      : appliedOverrides(sources, declared, overrides.dialect)
+    sources,
+    declared
   );
   const configured = withOverrides(configuredDefinition(sources), declared);
   // A code-first row waiting for a migration the configuration no longer declares: nothing says

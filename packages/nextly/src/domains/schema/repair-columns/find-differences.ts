@@ -16,12 +16,21 @@ import { isNextlyOwnedDocumentColumn } from "../../../lib/system-columns";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
+import type { ColumnOverride } from "../extension/draft";
+import { resolveColumnOverride } from "../extension/extension-columns";
 import { querySqlRows } from "../pipeline/classifier/count-helpers";
+import {
+  sizeFromDeclaration,
+  typesDiffer,
+} from "../pipeline/diff/declared-size";
 import { introspectLiveColumns } from "../pipeline/diff/introspect-live";
+import { normalizeType } from "../pipeline/diff/normalize-type";
 import type { ColumnSpec } from "../pipeline/diff/types";
 import {
+  type ColumnDescriptor,
   getColumnDescriptor,
   getComponentRowColumnDescriptor,
+  renderDialectType,
   type SupportedDialect,
 } from "../services/field-column-descriptor";
 import { withColumnOverride } from "../services/runtime-schema-generator";
@@ -82,12 +91,85 @@ function describeColumn(
   // table is not an entity table an override reaches.
   const descriptor = translation
     ? described
-    : withColumnOverride(described, definition.columnOverrides ?? [], dialect);
+    : withColumnOverride(
+        described,
+        [
+          ...(definition.columnOverrides ?? []),
+          ...recordedOverride(described, definition.recordedTypes, dialect),
+        ],
+        dialect
+      );
   return {
     name: descriptor.name,
     type: descriptor.dialectType,
     nullable: descriptor.nullable,
   };
+}
+
+/** A builder of the storage a recorded type spells, as an override would declare it. */
+function builderOf(
+  type: string
+): Parameters<typeof resolveColumnOverride>[1] | null {
+  const size = sizeFromDeclaration(type);
+  switch (normalizeType(type)) {
+    case "varchar":
+      return size === undefined
+        ? null
+        : { kind: "varchar", nullable: false, length: Number(size) };
+    case "text":
+      return { kind: "longText", nullable: false };
+    case "int4":
+      return { kind: "integer", nullable: false };
+    case "int8":
+      return { kind: "bigint", nullable: false };
+    case "numeric": {
+      const [precision, scale] = (size ?? "").split(",").map(Number);
+      return precision === undefined || scale === undefined
+        ? null
+        : { kind: "decimal", nullable: false, precision, scale };
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * The override an applied snapshot's recorded type shows for a field column: its storage where it
+ * differs from the field's own and is one an override may give the field, or none. Read from the
+ * snapshot alone, so a column whose override the configuration has changed or removed since is
+ * still judged by what its migration applied.
+ */
+function recordedOverride(
+  described: ColumnDescriptor,
+  recordedTypes: Readonly<Record<string, string>> | undefined,
+  dialect: SupportedDialect
+): ColumnOverride[] {
+  const recorded = recordedTypes?.[described.name];
+  if (recorded === undefined) return [];
+  const own: ColumnSpec = {
+    name: described.name,
+    type: described.dialectType,
+    nullable: true,
+  };
+  if (!typesDiffer(own, { ...own, type: recorded })) return [];
+  const builder = builderOf(recorded);
+  if (builder === null) return [];
+  try {
+    const storage = resolveColumnOverride(
+      described,
+      builder,
+      "",
+      described.name
+    );
+    // Only where the storage renders as recorded: a type an override could not have produced is
+    // not read as one.
+    const rendered = renderDialectType(storage.kind, dialect, storage);
+    return typesDiffer({ ...own, type: rendered }, { ...own, type: recorded })
+      ? []
+      : [{ column: described.name, ...storage, owner: { kind: "app" } }];
+  } catch {
+    return [];
+  }
 }
 
 /**

@@ -106,8 +106,8 @@ interface DraftTable {
   opaqueColumns?: ReadonlySet<string>;
   /** An entity's columns its own fields generate (`SeedEntityTable` `field`). */
   fieldColumns?: ReadonlySet<string>;
-  /** An entity's columns its own indexes cover (`SeedEntityTable` `indexed`). */
-  indexedColumns?: ReadonlySet<string>;
+  /** An entity's own indexes (`SeedEntityTable` `ownIndexes`). */
+  ownIndexes?: readonly ExtensionIndex[];
 }
 
 /** The app's override of one column's storage, as the store records it. */
@@ -188,9 +188,12 @@ export interface SeedEntityTable {
      * Only such a column may be overridden.
      */
     field?: boolean;
-    /** Whether an index or a unique constraint of the entity's own covers it. */
-    indexed?: boolean;
   }[];
+  /**
+   * The indexes the entity's own fields and config give its table, by column
+   * (`entitySeed`), so an override is judged against them.
+   */
+  ownIndexes?: { columns: string[]; unique: boolean }[];
 }
 
 /**
@@ -320,11 +323,9 @@ export class SchemaDraftStore {
             .filter(column => column.field === true)
             .map(column => column.name)
         ),
-        indexedColumns: new Set(
-          entity.columns
-            .filter(column => column.indexed === true)
-            .map(column => column.name)
-        ),
+        ...(entity.ownIndexes !== undefined
+          ? { ownIndexes: entity.ownIndexes }
+          : {}),
       });
     }
   }
@@ -1183,9 +1184,8 @@ function assertOverriddenRowFits(
 /**
  * Refuse an override that leaves an index over the column unbuildable on
  * some dialect: an unbounded string, or a width past MySQL's key limit. Both
- * the indexes hooks added and the entity's own (a unique or indexed field)
- * are judged; the entity's own are known by the column alone, so they are
- * judged as a one-column index.
+ * the indexes hooks added and the entity's own (a unique or indexed field, a
+ * compound index its config declares) are judged.
  */
 function assertOverriddenIndexesBuildable(
   table: DraftTable,
@@ -1195,7 +1195,7 @@ function assertOverriddenIndexesBuildable(
     existing.name === replaced.name ? replaced : existing
   );
   const opaque = table.opaqueColumns ?? new Set<string>();
-  for (const index of table.indexes) {
+  for (const index of [...table.indexes, ...(table.ownIndexes ?? [])]) {
     if (!index.columns.includes(replaced.name)) continue;
     // Weighed whole where every column it names is typed, so the key width
     // the override gives it is summed: a hook's index over a field widened
@@ -1205,13 +1205,6 @@ function assertOverriddenIndexesBuildable(
       columns.filter(existing => !opaque.has(existing.name)),
       table.name,
       index.columns.every(name => !opaque.has(name))
-    );
-  }
-  if (table.indexedColumns?.has(replaced.name) === true) {
-    assertIndexBuildable(
-      { columns: [replaced.name], unique: false },
-      [replaced],
-      table.name
     );
   }
 }

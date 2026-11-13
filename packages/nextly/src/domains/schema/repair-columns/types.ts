@@ -51,6 +51,13 @@ export interface EntityDefinition {
    * storage those columns are judged against in place of the field's. Absent, there are none.
    */
   columnOverrides?: readonly ColumnOverride[];
+  /**
+   * The type the applied migration snapshot recorded for each column of the entity's table, where a
+   * snapshot says what was applied. A field column it recorded with other storage than its field's
+   * own, within the field's value family, was overridden when that migration was written, whatever
+   * the configuration says now.
+   */
+  recordedTypes?: Readonly<Record<string, string>>;
 }
 
 /**

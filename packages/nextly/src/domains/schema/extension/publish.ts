@@ -22,6 +22,7 @@ import { pluginAdminSlug } from "../../../plugins/plugin-slug";
 import { renamePluginContributes } from "../../../plugins/schema/apply-contributions";
 import { CORE_TABLE_NAMES } from "../../../schemas/core-schema";
 import { resolveSingleTableName } from "../../singles/services/resolve-single-table-name";
+import type { DeclaredIndex } from "../pipeline/diff/build-from-fields";
 import {
   resolveCollectionTableName,
   resolveComponentTableName,
@@ -35,7 +36,7 @@ import {
   setActiveExtensionSchema,
 } from "./build-extension-schema";
 import type { SeedEntityTable } from "./draft";
-import { entitySeedColumns } from "./entity-seed";
+import { entitySeed } from "./entity-seed";
 import { pluginTablePrefix } from "./naming";
 import type { SchemaContribution } from "./run-hooks";
 
@@ -217,6 +218,18 @@ interface SeedFields {
   fields?: { name: string; type: string }[];
   status?: boolean;
   localized?: boolean;
+  /** A collection's compound indexes, by field. */
+  indexes?: DeclaredIndex[];
+}
+
+/** A seed's columns, and its own indexes where it has any. */
+function seedOf(
+  seeded: ReturnType<typeof entitySeed>
+): Pick<SeedEntityTable, "columns" | "ownIndexes"> {
+  return {
+    columns: seeded.columns,
+    ...(seeded.indexes.length > 0 ? { ownIndexes: seeded.indexes } : {}),
+  };
 }
 
 /**
@@ -294,17 +307,20 @@ export async function compileExtensionSchema(
     slug: entity.slug,
     entityKind,
     ...ownerPluginOf(declaredBy, entityKind, entity.slug),
-    columns: entitySeedColumns(
-      {
-        entityKind,
-        tableName: name,
-        fields: entity.fields ?? [],
-        ...(entity.status !== undefined ? { status: entity.status } : {}),
-        ...(entity.localized !== undefined
-          ? { localized: entity.localized }
-          : {}),
-      },
-      input.dialect
+    ...seedOf(
+      entitySeed(
+        {
+          entityKind,
+          tableName: name,
+          fields: entity.fields ?? [],
+          ...(entity.status !== undefined ? { status: entity.status } : {}),
+          ...(entity.localized !== undefined
+            ? { localized: entity.localized }
+            : {}),
+          ...(entity.indexes !== undefined ? { indexes: entity.indexes } : {}),
+        },
+        input.dialect
+      )
     ),
   });
   const entities: SeedEntityTable[] = [

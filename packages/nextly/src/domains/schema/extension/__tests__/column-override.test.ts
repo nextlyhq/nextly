@@ -25,39 +25,45 @@ import {
 import type { SchemaHook, SeedEntityTable } from "../draft";
 import { col, defineTable, type ColumnBuilder } from "../dsl";
 import { withEntityContributions } from "../entity-contributions";
-import { entitySeedColumns } from "../entity-seed";
+import { entitySeed, entitySeedColumns } from "../entity-seed";
 
 const TABLE = "dc_posts";
 
-/** A collection as the config seeds it: its fields' columns and its own. */
-function posts(dialect: SupportedDialect = "postgresql"): SeedEntityTable {
+/** A collection as the config seeds it: its fields' columns and its own, and its indexes. */
+function posts(
+  dialect: SupportedDialect = "postgresql",
+  indexes?: { fields: string[]; unique?: boolean }[]
+): SeedEntityTable {
+  const seeded = entitySeed(
+    {
+      entityKind: "collection",
+      tableName: TABLE,
+      fields: [
+        { name: "city", type: "text" },
+        { name: "body", type: "textarea" },
+        { name: "code", type: "text", unique: true },
+        { name: "views", type: "number" },
+        {
+          name: "price",
+          type: "number",
+          dbType: "decimal",
+          precision: 10,
+          scale: 2,
+        },
+        { name: "ratio", type: "number", options: { format: "float" } },
+        { name: "live", type: "checkbox" },
+        { name: "author", type: "relationship", relationTo: "users" },
+      ] as unknown as { name: string; type: string }[],
+      ...(indexes !== undefined ? { indexes } : {}),
+    },
+    dialect
+  );
   return {
     name: TABLE,
     slug: "posts",
     entityKind: "collection",
-    columns: entitySeedColumns(
-      {
-        entityKind: "collection",
-        tableName: TABLE,
-        fields: [
-          { name: "city", type: "text" },
-          { name: "body", type: "textarea" },
-          { name: "code", type: "text", unique: true },
-          { name: "views", type: "number" },
-          {
-            name: "price",
-            type: "number",
-            dbType: "decimal",
-            precision: 10,
-            scale: 2,
-          },
-          { name: "ratio", type: "number", options: { format: "float" } },
-          { name: "live", type: "checkbox" },
-          { name: "author", type: "relationship", relationTo: "users" },
-        ] as unknown as { name: string; type: string }[],
-      },
-      dialect
-    ),
+    columns: seeded.columns,
+    ownIndexes: seeded.indexes,
   };
 }
 
@@ -345,6 +351,17 @@ describe("which columns an override reaches", () => {
     expect(await override("city", col.varchar(4000))).toMatchObject({
       length: 4000,
     });
+  });
+
+  it("refuses an unbounded string where a compound index the collection declares needs a bound", async () => {
+    const declared = (storage: ColumnBuilder) =>
+      buildExtensionSchema(
+        input(({ schema }) => schema.overrideColumn(TABLE, "city", storage), {
+          entities: [posts("postgresql", [{ fields: ["city", "views"] }])],
+        })
+      );
+    expect(await refusal(() => declared(col.longText()))).toMatch(/mysql/i);
+    await expect(declared(col.varchar(100))).resolves.toBeDefined();
   });
 
   it("leaves the table as it was when refused", async () => {

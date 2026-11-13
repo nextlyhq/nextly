@@ -162,7 +162,7 @@ async function report(
     const overrides =
       extensionSchema === undefined
         ? undefined
-        : { byTable: extensionSchema.columnOverrides, dialect };
+        : { byTable: extensionSchema.columnOverrides };
     const readEntities = () =>
       readRepairEntities({
         ...(overrides !== undefined ? { overrides } : {}),

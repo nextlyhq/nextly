@@ -23,6 +23,7 @@ import { storesPerLanguage } from "../../i18n/per-language-storage";
 import {
   buildDesiredTableFromComponentFields,
   buildDesiredTableFromFields,
+  type DeclaredIndex,
 } from "../pipeline/diff/build-from-fields";
 import {
   getColumnDescriptor,
@@ -39,6 +40,8 @@ export interface SeedableEntity {
   fields: readonly { name: string; type: string }[];
   status?: boolean;
   localized?: boolean;
+  /** Compound indexes the config declares (a collection's `indexes`), by field. */
+  indexes?: readonly DeclaredIndex[];
 }
 
 type BuilderFields = Parameters<typeof buildDesiredTableFromFields>[1];
@@ -49,6 +52,23 @@ export function entitySeedColumns(
   entity: SeedableEntity,
   dialect: SupportedDialect
 ): SeedEntityTable["columns"] {
+  return entitySeed(entity, dialect).columns;
+}
+
+/**
+ * The seed of one entity table, for one dialect: its columns, and the
+ * indexes its own fields and config give it (a unique or indexed field, a
+ * declared compound index), by column, so an override that would leave one
+ * unbuildable is refused when declared. An expression index names no
+ * column, and none of its columns can be told apart, so it is left out.
+ */
+export function entitySeed(
+  entity: SeedableEntity,
+  dialect: SupportedDialect
+): {
+  columns: SeedEntityTable["columns"];
+  indexes: NonNullable<SeedEntityTable["ownIndexes"]>;
+} {
   // Code-first: the seed is built from the config, which is what these
   // entities come from, and the builder only decides column TYPES — the
   // names, which are what the draft checks, do not depend on it.
@@ -73,6 +93,9 @@ export function entitySeedColumns(
       : buildDesiredTableFromFields(entity.tableName, fields, dialect, {
           builtBy,
           hasStatus: entity.status === true,
+          ...(entity.indexes !== undefined
+            ? { indexes: [...entity.indexes] }
+            : {}),
           localized,
         });
 
@@ -107,15 +130,15 @@ export function entitySeedColumns(
     typed.set(descriptor.name, kindAndSizes(descriptor));
     fieldColumns.add(descriptor.name);
   }
-  // Every column an index or unique constraint of the entity's own covers, so
-  // an override that would leave one unbuildable is refused when declared.
-  const indexed = new Set((spec.indexes ?? []).flatMap(index => index.columns));
-
-  return spec.columns.map(column => ({
-    name: column.name,
-    nullable: column.nullable,
-    ...(typed.get(column.name) ?? {}),
-    ...(fieldColumns.has(column.name) ? { field: true } : {}),
-    ...(indexed.has(column.name) ? { indexed: true } : {}),
-  }));
+  return {
+    columns: spec.columns.map(column => ({
+      name: column.name,
+      nullable: column.nullable,
+      ...(typed.get(column.name) ?? {}),
+      ...(fieldColumns.has(column.name) ? { field: true } : {}),
+    })),
+    indexes: (spec.indexes ?? [])
+      .filter(index => index.columns.length > 0)
+      .map(index => ({ columns: [...index.columns], unique: index.unique })),
+  };
 }

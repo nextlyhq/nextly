@@ -80,16 +80,18 @@ const OVERRIDDEN: Record<(typeof TABLES)[number], string> = {
   [SEO_TABLE]: "meta_title",
 };
 
-/** The app's hook: each text column to 10 characters, `views` to bigint. */
-const overrides: SchemaHook = ({ schema }) => {
-  schema.overrideColumn(POSTS_TABLE, "city", col.varchar(10));
-  schema.overrideColumn(POSTS_TABLE, "views", col.bigint());
-  schema.overrideColumn(SITE_TABLE, "tagline", col.varchar(10));
-  schema.overrideColumn(SEO_TABLE, "metaTitle", col.varchar(10));
-};
+/** The app's hook: each text column to `width` characters, `views` to bigint. */
+const overrides =
+  (width: number): SchemaHook =>
+  ({ schema }) => {
+    schema.overrideColumn(POSTS_TABLE, "city", col.varchar(width));
+    schema.overrideColumn(POSTS_TABLE, "views", col.bigint());
+    schema.overrideColumn(SITE_TABLE, "tagline", col.varchar(width));
+    schema.overrideColumn(SEO_TABLE, "metaTitle", col.varchar(width));
+  };
 
 /** The app's config, its headline required or not, with a field added or not. */
-const appConfig = (required: boolean, added: boolean) =>
+const appConfig = (required: boolean, added: boolean, width = 10) =>
   defineConfig({
     fieldGroups: [
       defineFieldGroup({
@@ -121,7 +123,10 @@ const appConfig = (required: boolean, added: boolean) =>
         ],
       }),
     ],
-    db: { migrationsDir: "./migrations", schema: { extend: [overrides] } },
+    db: {
+      migrationsDir: "./migrations",
+      schema: { extend: [overrides(width)] },
+    },
   });
 
 let dir: string;
@@ -333,6 +338,18 @@ describeEachDialect(
       // `repair-columns` judges an overridden column against the override,
       // not the field's own storage, so it finds nothing to repair.
       expect(await repairFindings(appConfig(true, false))).toEqual([]);
+      // With the override changed and no migration yet, the column is still
+      // as applied: the new width is a change pending, not a repair.
+      expect((await repairFindings(appConfig(true, false, 20))).sort()).toEqual(
+        // SQLite keeps no width, so there the new one changes nothing.
+        dialect === "sqlite"
+          ? []
+          : [
+              `${POSTS_TABLE}.city pending-migration`,
+              `${SEO_TABLE}.meta_title pending-migration`,
+              `${SITE_TABLE}.tagline pending-migration`,
+            ].sort()
+      );
 
       // Within the width, and a number a 32-bit integer cannot hold.
       const posts = before.get(POSTS_TABLE)!;
