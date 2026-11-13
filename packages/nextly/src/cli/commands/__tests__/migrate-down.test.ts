@@ -11,6 +11,7 @@ import { resolveDataLossConsent } from "../../../domains/schema/migrate/data-los
 import { recordPluginSchemaVersionFromLedger } from "../../../domains/schema/migrate/plugin/plugin-schema-version";
 import type { SchemaEventRow } from "../../../domains/schema/events/schema-events-repository";
 import type { OwnerRecord } from "../../../domains/schema/ownership/owner-registry";
+import { NextlyError } from "../../../errors/nextly-error";
 import { createLogger } from "../../utils/logger";
 
 function row(
@@ -195,6 +196,51 @@ const quietFacts = async () => ({
   descendantsOf: () => [],
   liveTable: () => undefined,
   liveColumns: new Map(),
+});
+
+describe("a DOWN that stopped waiting for a busy table", () => {
+  const busy = (outcome: { kind: string; committed?: number[] }) =>
+    new NextlyError({
+      code: "NEXTLY_TABLE_BUSY",
+      publicMessage: "`a.sql` stopped: table busy.",
+      logContext: { reason: "table busy", stop: { outcome } },
+    });
+
+  it.each([
+    ["nothing changed", { kind: "nothing-changed" }, []],
+    ["stopped part-way", { kind: "part-way", committed: [1] }, ["a.sql"]],
+  ] as const)(
+    "records a failed rollback only where something of it stayed: %s",
+    async (_, outcome, failed) => {
+      const { deps, failures } = baseDeps({
+        // A DOWN that deletes nothing, so no consent stands before it.
+        readDownSql: async () =>
+          down('ALTER TABLE "t" ADD COLUMN "c" integer;'),
+        execDown: async () => {
+          throw busy(outcome);
+        },
+      });
+      await expect(
+        migrateDownCore(deps as Parameters<typeof migrateDownCore>[0])
+      ).rejects.toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
+      expect(failures).toEqual(failed);
+    }
+  );
+
+  it("keeps the busy report when the failed rollback cannot be recorded", async () => {
+    const { deps } = baseDeps({
+      readDownSql: async () => down('ALTER TABLE "t" ADD COLUMN "c" integer;'),
+      execDown: async () => {
+        throw busy({ kind: "part-way", committed: [1] });
+      },
+      recordFailed: async () => {
+        throw new Error("SQLITE_BUSY: database is locked");
+      },
+    });
+    await expect(
+      migrateDownCore(deps as Parameters<typeof migrateDownCore>[0])
+    ).rejects.toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
+  });
 });
 
 describe("a rollback's deletions, read as one run", () => {

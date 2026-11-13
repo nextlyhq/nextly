@@ -234,19 +234,25 @@ function calledAt(
   tokens: readonly StatementToken[],
   at: number
 ): string | undefined {
-  if (tokens[at + 1] !== "(") return undefined;
-  // A schema-qualified name (`"public"."users"(`) is read back to the word before its qualifier.
-  let beforeAt = at - 1;
-  while (tokens[beforeAt] === ".") beforeAt -= 2;
-  const before = tokens[beforeAt];
-  if (typeof before === "string" && NAME_FOLLOWS.has(before)) return undefined;
-  // In a schema statement, a size or a prefix length (`title(191)`, a MySQL prefix index): no
-  // call. A row change's `my_fn(1)` stays a call.
-  const schema = tokens[0] === "CREATE" || tokens[0] === "ALTER";
-  if (schema && onlyDigitsWithin(tokens, at + 1)) return undefined;
+  if (tokens[at + 1] !== "(" || namesNotCalls(tokens, at)) return undefined;
   const word = tokens[at];
   if (typeof word !== "string") return word?.kind === "name" ? "" : undefined;
   return QUALIFIED_WORD.test(word) ? word : undefined;
+}
+
+/**
+ * Whether the word at `at`, followed by a parenthesis, is no call: a name followed by its column
+ * list (`TABLE posts (`, schema-qualified `"public"."users"(` read back past its qualifier), or,
+ * in a schema statement, a size or a prefix length (`title(191)`). A row change's `my_fn(1)`
+ * stays a call.
+ */
+function namesNotCalls(tokens: readonly StatementToken[], at: number): boolean {
+  let beforeAt = at - 1;
+  while (tokens[beforeAt] === ".") beforeAt -= 2;
+  const before = tokens[beforeAt];
+  if (typeof before === "string" && NAME_FOLLOWS.has(before)) return true;
+  const schema = tokens[0] === "CREATE" || tokens[0] === "ALTER";
+  return schema && onlyDigitsWithin(tokens, at + 1);
 }
 
 /** Whether the parentheses opening at `open` hold nothing but digits. */

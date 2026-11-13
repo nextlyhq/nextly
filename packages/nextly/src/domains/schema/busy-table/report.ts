@@ -195,7 +195,7 @@ function nextStep(stop: BusyTableStop): string {
     return (
       `Run it again once the holder ends or the holding session is ended: \`${stop.change}\` ` +
       "was undone whole and applies from its start. Check what the statement named above keeps " +
-      "(for `setval`, the sequence's position) before it runs again. If `nextly migrate` refuses " +
+      "(for `setval`, the sequence's position) before it runs again. If the command refuses " +
       "the file for an unresolved attempt, clear it first with " +
       `\`nextly migrate:resolve --failed-cleanup ${stop.change}\`.`
     );
@@ -287,4 +287,17 @@ export function tableBusyError(stop: BusyTableStop): NextlyError {
     publicMessage: lines.join("\n"),
     logContext: { reason: why, stop: plainStop(stop) },
   });
+}
+
+/**
+ * Whether `error` is a busy-table stop that left nothing of its change: one whose attempt ends
+ * with nothing applied, recorded as no failure.
+ */
+export function busyTableLeftNothing(error: unknown): boolean {
+  if (!NextlyError.is(error) || error.code !== "NEXTLY_TABLE_BUSY")
+    return false;
+  const stop = (
+    error.logContext as { stop?: { outcome?: { kind?: unknown } } } | undefined
+  )?.stop;
+  return stop?.outcome?.kind === "nothing-changed";
 }

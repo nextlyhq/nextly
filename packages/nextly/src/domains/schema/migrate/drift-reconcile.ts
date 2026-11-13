@@ -26,6 +26,7 @@
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { describeError, NextlyError } from "../../../errors";
+import { busyTableLeftNothing } from "../busy-table/report";
 import { isPluginLedgerRow } from "../events/ledger-scope";
 import { standingOf } from "../events/migration-state";
 import {
@@ -266,16 +267,6 @@ async function markAppliedOrRefuse(
     direction: "up",
     partial: args.partial,
   });
-}
-
-/** Whether `error` is a busy-table stop that left nothing of its file. */
-function busyTableLeftNothing(error: unknown): boolean {
-  if (!NextlyError.is(error) || error.code !== "NEXTLY_TABLE_BUSY")
-    return false;
-  const stop = (
-    error.logContext as { stop?: { outcome?: { kind?: unknown } } } | undefined
-  )?.stop;
-  return stop?.outcome?.kind === "nothing-changed";
 }
 
 /**
