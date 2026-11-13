@@ -37,6 +37,12 @@ const SLUG_FIELD: FieldDefinition = {
   },
 };
 
+/** The names of the system `title` and `slug`, in the order they are added. */
+export const SYSTEM_TEXT_FIELD_NAMES: readonly string[] = [
+  TITLE_FIELD.name,
+  SLUG_FIELD.name,
+];
+
 /**
  * `fields` with the system `title` and `slug` first, each skipped where the
  * author declared a field of that name, which replaces the system column.

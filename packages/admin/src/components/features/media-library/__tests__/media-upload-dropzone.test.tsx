@@ -82,6 +82,19 @@ describe("the media picker's drop area", () => {
     ).toEqual(["id-a.png", "id-b.png", "id-c.png", "id-d.png"]);
   });
 
+  it("holds no control inside its one button, with the file input beside it", () => {
+    const { container } = renderWithProviders(
+      <MediaUploadDropzone onUploadComplete={vi.fn()} />
+    );
+    const target = screen.getByRole("button", { name: /^Upload files\./ });
+    // A control inside a button is nested interaction, which assistive
+    // technology can't reach: the input sits next to the target instead.
+    expect(target.querySelector("input, button, a, select, textarea")).toBe(
+      null
+    );
+    expect(container.querySelector('input[type="file"]')).not.toBe(null);
+  });
+
   it("reports the batch in the order the files were dropped, whatever order they finish in", async () => {
     const onUploadComplete = vi.fn();
     renderWithProviders(

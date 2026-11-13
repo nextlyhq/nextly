@@ -5,7 +5,8 @@
  * recorded in a stage its workflow no longer has (and that the definition
  * names nowhere for), and `nextly workflow:move-stranded`, which moves them to
  * a named stage in one transaction, recording one event per document as the
- * person `--as` names, with `--comment` as its note.
+ * person `--as` names, with `--comment` as its note. `--dry-run` lists the
+ * documents the move would take and what it would refuse, writing nothing.
  *
  * The workflows are the configuration's, checked as boot checks them; the
  * database is read and written through the workflows domain, which decides
@@ -32,12 +33,17 @@ import {
 } from "../../domains/workflows/registry";
 import {
   moveStrandedReviewStates,
+  planMoveStrandedReviewStates,
   strandedReviewStates,
+  type MovedStranded,
   type StrandedReviewState,
 } from "../../domains/workflows/stranded-stages";
+import { NextlyError } from "../../errors/nextly-error";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import type { CommandContext } from "../context";
+import { reportDryRun, type DryRunPlan } from "../dry-run";
 import { exitWithError } from "../errors";
+import { issueLines } from "../errors/areas/general";
 import {
   connectOrExit,
   requireDatabaseEnv,
@@ -163,12 +169,26 @@ export async function installStrandedRunResolver(
   adapter: DrizzleAdapter,
   workflows: Iterable<RegisteredWorkflow>
 ): Promise<void> {
+  const attached = [...workflows];
+  await installEntityTablesResolver(adapter, {
+    collections: attached.flatMap(each => each.collections),
+    singles: attached.flatMap(each => each.singles),
+  });
+}
+
+/**
+ * Installs the table resolver a command reads and writes documents through: the system tables,
+ * and the tables of the collections and Singles named, read from their registry rows.
+ */
+export async function installEntityTablesResolver(
+  adapter: DrizzleAdapter,
+  entities: { collections: readonly string[]; singles: readonly string[] }
+): Promise<void> {
   const schemaRegistry = installRegistryResolver(adapter);
   const { dialect } = adapter.getCapabilities();
-  const attached = [...workflows];
   const registries = [
-    ["dynamic_collections", attached.flatMap(each => each.collections)],
-    ["dynamic_singles", attached.flatMap(each => each.singles)],
+    ["dynamic_collections", [...new Set(entities.collections)]],
+    ["dynamic_singles", [...new Set(entities.singles)]],
   ] as const;
   for (const [registry, slugs] of registries) {
     if (slugs.length === 0) continue;
@@ -230,14 +250,73 @@ export async function workflowStrandedAction(
   }
 }
 
+/** What a move names besides its scope. */
+interface MoveOptions {
+  to: string;
+  as: string;
+  comment: string;
+}
+
+/** One document a move would take, as a dry run names it. */
+function dryRunChange(moved: MovedStranded, to: string) {
+  const { scopeKind, scopeSlug, entryId } = moved.document;
+  const parts = moved.parts.map(part => part ?? "shared").join(", ");
+  return {
+    action: "move",
+    target: `${scopeKind} ${scopeSlug} ${entryId} (${parts}) from ${moved.from.map(stage => `"${stage}"`).join(", ")} to "${to}"`,
+  };
+}
+
+/**
+ * The dry run of a move: the documents it would take, judged as the move judges them, or, where
+ * the move would be refused, the refusal in the words the real run prints. Writes nothing.
+ *
+ * @experimental
+ */
+export async function strandedMoveDryRun(
+  run: StrandedRun & MoveOptions
+): Promise<DryRunPlan> {
+  try {
+    const moved = await planMoveStrandedReviewStates(run.adapter, {
+      workflows: run.workflows,
+      ...scopeOf(run),
+      to: run.to,
+      as: run.as,
+      comment: run.comment,
+    });
+    return {
+      changes: moved.map(each => dryRunChange(each, run.to)),
+      notes:
+        moved.length > 0
+          ? [
+              `Each move would be recorded as ${run.as}, with the comment, and leave its approval behind.`,
+            ]
+          : [],
+    };
+  } catch (error) {
+    // A refusal is part of what the real run would do; any other failure ends the dry run too.
+    if (NextlyError.is(error) && error.code === "VALIDATION_ERROR") {
+      return { changes: [], refusals: issueLines(error) };
+    }
+    throw error;
+  }
+}
+
 /** The action of `nextly workflow:move-stranded`, loaded when it runs. */
 export async function workflowMoveStrandedAction(
-  cmdOptions: { to: string; as: string; comment: string } & StrandedOptions,
+  cmdOptions: MoveOptions & StrandedOptions & { dryRun?: boolean },
   cmd: Command
 ): Promise<void> {
   const { context, options } = commandRun(cmdOptions, cmd);
   try {
     context.logger.header("Move stranded documents");
+    if (cmdOptions.dryRun === true) {
+      const plan = await withStrandedRun(options, context, run =>
+        strandedMoveDryRun({ ...run, ...cmdOptions })
+      );
+      reportDryRun(context.logger, plan);
+      return;
+    }
     const moved = await withStrandedRun(options, context, run =>
       runMoveStranded({ ...run, ...cmdOptions })
     );

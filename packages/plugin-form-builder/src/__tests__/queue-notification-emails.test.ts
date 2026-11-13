@@ -36,7 +36,10 @@ const notification: FormEmailNotification = {
 
 function run(
   queueWithTemplate: ReturnType<typeof vi.fn>,
-  emails: FormEmailNotification[] = [notification]
+  emails: FormEmailNotification[] = [notification],
+  inTransaction:
+    | { tx: object; record: ReturnType<typeof vi.fn> }
+    | undefined = undefined
 ) {
   const logger = { info: vi.fn(), error: vi.fn() };
   const done = queueNotificationEmails({
@@ -46,6 +49,9 @@ function run(
     formSlug: "contact",
     submissionId: "sub-1",
     fileAttachments: [{ mediaId: "media-1" }],
+    ...(inTransaction
+      ? { tx: inTransaction.tx as never, record: inTransaction.record }
+      : {}),
   });
   return { logger, done };
 }
@@ -197,5 +203,96 @@ describe("queueing a form's notifications", () => {
       expect.objectContaining({ retryable: true })
     );
     expect(logged(outage.logger)).not.toContain(TO);
+  });
+
+  it("in a transaction, queues in it and throws what is not a refusal, so the submission rolls back with it", async () => {
+    const tx = {};
+    const record = vi.fn().mockResolvedValue(undefined);
+    const queued = vi.fn().mockResolvedValue({ id: "q-1", state: "waiting" });
+    await run(queued, [notification], { tx, record }).done;
+    expect(queued.mock.calls[0]![3]).toMatchObject({ tx });
+    expect(record).toHaveBeenCalledWith(
+      {
+        queuedId: "q-1",
+        sendKey: expect.stringMatching(
+          /^form-notification:sub-1:0:[0-9a-f]{16}$/
+        ),
+      },
+      {
+        notificationId: "notify-owner",
+        templateSlug: "form-notification",
+        providerId: "provider-1",
+        from: "forms@example.com",
+        to: "owner@example.com",
+        cc: ["team@example.com"],
+        bcc: ["audit@example.com"],
+        replyTo: "visitor@example.com",
+        variables: { name: "Visitor" },
+      }
+    );
+
+    const outage = new Error("storage read timed out");
+    await expect(
+      run(vi.fn().mockRejectedValue(outage), [notification], { tx, record })
+        .done
+    ).rejects.toBe(outage);
+
+    const unrecorded = new Error("record write failed");
+    await expect(
+      run(queued, [notification], {
+        tx,
+        record: vi.fn().mockRejectedValue(unrecorded),
+      }).done
+    ).rejects.toBe(unrecorded);
+
+    // A refusal of the email itself would be refused again: the others are
+    // still queued, and the submission is kept.
+    const refusedThenQueued = vi
+      .fn()
+      .mockRejectedValueOnce(
+        NextlyError.validation({
+          errors: [
+            { path: "to", code: "INVALID", message: "Invalid address." },
+          ],
+        })
+      )
+      .mockResolvedValueOnce({ id: "q-2", state: "waiting" });
+    await run(refusedThenQueued, [notification, notification], {
+      tx,
+      record,
+    }).done;
+    expect(refusedThenQueued).toHaveBeenCalledTimes(2);
+  });
+
+  it("queues each email with its own files, and the marked ones for an email a filter added", async () => {
+    const queueWithTemplate = vi.fn(async () => ({
+      id: "queued-1",
+      state: "sent",
+    }));
+    const { done } = run(queueWithTemplate, [
+      {
+        ...notification,
+        notificationId: "team",
+        attachments: [{ mediaId: "cv" }],
+      },
+      {
+        ...notification,
+        notificationId: "security",
+        attachments: [{ mediaId: "photo" }],
+      },
+      { ...notification, notificationId: "visitor", attachments: [] },
+      { ...notification, notificationId: undefined },
+    ]);
+    await done;
+
+    const attached = queueWithTemplate.mock.calls.map(
+      call => (call[3] as { attachments?: unknown }).attachments
+    );
+    expect(attached).toEqual([
+      [{ mediaId: "cv" }],
+      [{ mediaId: "photo" }],
+      undefined,
+      [{ mediaId: "media-1" }],
+    ]);
   });
 });

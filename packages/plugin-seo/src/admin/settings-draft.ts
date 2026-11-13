@@ -315,6 +315,9 @@ export const FROM_THE_PAGE: Readonly<
 > = {
   // The page's own share image, from the order of who wins.
   image: "The page's share image",
+  // A page's route can give the questions it shows, with no field holding
+  // them.
+  questions: "The questions the page's route gives",
 };
 
 /**
@@ -397,6 +400,120 @@ const same = (a: unknown, b: unknown): boolean =>
  * rather than overwritten. A document never saved has no version, and is
  * replaced. Null when nothing changed.
  */
+/**
+ * `draft` moved from the settings it was made from onto newer ones: each
+ * value edited since `before` stays as edited, and each other takes its
+ * value in `after`, so a change made elsewhere meanwhile is kept. A map kept
+ * per content type (patterns, structured data) is moved entry by entry, and
+ * a list (hidden types, production addresses, social profiles) item by item,
+ * so an edit to one type keeps another person's edit to another, and an
+ * item added elsewhere stays.
+ */
+export function rebasedDraft(
+  draft: SettingsDraft,
+  before: SettingsDraft,
+  after: SettingsDraft
+): SettingsDraft {
+  return {
+    ...after,
+    ...editedScalars(draft, before),
+    patterns: rebasedEntries(draft.patterns, before.patterns, after.patterns),
+    structuredData: rebasedEntries(
+      draft.structuredData,
+      before.structuredData,
+      after.structuredData
+    ),
+    hiddenTypes: rebasedSet(
+      draft.hiddenTypes,
+      before.hiddenTypes,
+      after.hiddenTypes
+    ),
+    productionAddresses: rebasedSet(
+      draft.productionAddresses,
+      before.productionAddresses,
+      after.productionAddresses
+    ),
+    socialProfiles: rebasedSet(
+      draft.socialProfiles,
+      before.socialProfiles,
+      after.socialProfiles
+    ),
+  };
+}
+
+/** The values moved as a whole map or list rather than as one value. */
+const MOVED_BY_PART: ReadonlySet<keyof SettingsDraft> = new Set([
+  "patterns",
+  "structuredData",
+  "hiddenTypes",
+  "productionAddresses",
+  "socialProfiles",
+]);
+
+/** The draft's own values, other than the per-type ones, edited since `before`. */
+function editedScalars(
+  draft: SettingsDraft,
+  before: SettingsDraft
+): Partial<SettingsDraft> {
+  const edited: Partial<SettingsDraft> = {};
+  for (const key of Object.keys(draft) as (keyof SettingsDraft)[]) {
+    if (MOVED_BY_PART.has(key)) continue;
+    if (!same(draft[key], before[key])) keepEdited(edited, draft, key);
+  }
+  return edited;
+}
+
+/** `target`'s `key` set to `source`'s, the value edited here. */
+function keepEdited<K extends keyof SettingsDraft>(
+  target: Partial<SettingsDraft>,
+  source: SettingsDraft,
+  key: K
+): void {
+  target[key] = source[key];
+}
+
+/** A map moved entry by entry: each entry edited here kept, every other the newer one. */
+function rebasedEntries<T>(
+  draft: Readonly<Record<string, T>>,
+  before: Readonly<Record<string, T>>,
+  after: Readonly<Record<string, T>>
+): Record<string, T> {
+  const next: Record<string, T> = { ...after };
+  for (const key of new Set([...Object.keys(draft), ...Object.keys(before)])) {
+    if (same(draft[key], before[key])) continue;
+    const edited = draft[key];
+    if (edited === undefined) delete next[key];
+    else next[key] = edited;
+  }
+  return next;
+}
+
+/**
+ * A list moved item by item, items told apart by value. Changed on one side
+ * only, it is that side's list as it is. Changed on both, it is the newer
+ * list, in its order, with what was taken out here taken out and what was
+ * added here put in at the place it holds here. Order matters (the first production
+ * address is the main one), so a main address changed elsewhere stays first
+ * unless one was put first here.
+ */
+function rebasedSet<T>(
+  draft: readonly T[],
+  before: readonly T[],
+  after: readonly T[]
+): T[] {
+  // Changed on one side only, the list is that side's, order and all.
+  if (same(after, before)) return [...draft];
+  if (same(draft, before)) return [...after];
+  const has = (list: readonly T[], item: T) =>
+    list.some(each => same(each, item));
+  const next = after.filter(item => !has(before, item) || has(draft, item));
+  draft.forEach((item, index) => {
+    if (has(before, item) || has(next, item)) return;
+    next.splice(Math.min(index, next.length), 0, item);
+  });
+  return next;
+}
+
 export function changesOf(
   stored: StoredSettings,
   draft: SettingsDraft,
@@ -522,7 +639,7 @@ export function networkOf(url: string): string {
 export interface AttentionItem {
   text: string;
   fix: string;
-  tab: "general" | "types" | "brand";
+  tab: "general" | "types" | "images" | "brand";
 }
 
 /** What a logo and share image still missing are, said as one item. */
@@ -537,7 +654,7 @@ function imagesItem(draft: SettingsDraft): AttentionItem | null {
   }
   return draft.logo === null
     ? { text: "No logo yet", fix: "Add a logo", tab: "brand" }
-    : { text: "No share image yet", fix: "Add a share image", tab: "general" };
+    : { text: "No share image yet", fix: "Add a share image", tab: "images" };
 }
 
 /**
@@ -547,10 +664,15 @@ function imagesItem(draft: SettingsDraft): AttentionItem | null {
  */
 export function attentionItems(
   draft: SettingsDraft,
-  types: readonly SeoContentType[]
+  types: readonly SeoContentType[],
+  /** The addresses the server names, which stand in for saved ones. */
+  serverAddresses: readonly string[] = []
 ): AttentionItem[] {
   const items: AttentionItem[] = [];
-  if (!draft.productionAddresses.some(address => address.trim() !== "")) {
+  if (
+    serverAddresses.length === 0 &&
+    !draft.productionAddresses.some(address => address.trim() !== "")
+  ) {
     items.push({
       text: "No production address is saved",
       fix: "Set the address",

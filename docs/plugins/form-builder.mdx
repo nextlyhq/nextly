@@ -156,9 +156,17 @@ formSubmissionOverrides: {
 }
 ```
 
+Fields you add show on each submission's page in the admin, under **Details**, with their
+values, except a field hidden from the admin (`admin: { hidden: true }`), one shown only
+when a condition holds (`admin.condition`), and one that holds fields of its own (a group,
+array or blocks). The page shows them read-only: it draws editors
+for a submission's answers, status and note, not for fields it does not know. Set them from your own code with the Direct API
+(`nextly.update({ collection: 'form-submissions', id, data: { priority: 'high' } })`) or the
+REST entries API.
+
 ## Field Types
 
-All 13 field types are enabled by default. Set any to `false` in the `fields` option to remove it from the builder.
+All 14 field types are enabled by default. Set any to `false` in the `fields` option to remove it from the builder.
 
 | Type       | Description                          | Key Options                         |
 | ---------- | ------------------------------------ | ----------------------------------- |
@@ -175,6 +183,7 @@ All 13 field types are enabled by default. Set any to `false` in the `fields` op
 | `date`     | Date picker                          | `min`, `max`                        |
 | `time`     | Time picker                          | `defaultValue` (HH:mm format)       |
 | `hidden`   | Hidden value (not shown to users)    | `defaultValue`                      |
+| `consent`  | Required box agreeing to a text      | `agreementText`                     |
 
 Every field supports these common properties: `name`, `label`, `placeholder`, `helpText`, `defaultValue`, `required`, `validation`, `conditionalLogic`, and `admin.width` (25% to 100%).
 
@@ -238,7 +247,24 @@ const contactFields = [
 
 The `option()` helper converts labels to slug values automatically (`'General Inquiry'` becomes `'general_inquiry'`). Pass a second argument for an explicit value: `option('United States', 'us')`.
 
-Additional field helpers: `number()`, `phone()`, `url()`, `radio()`, `file()`, `date()`, `time()`, `hidden()`.
+Additional field helpers: `number()`, `phone()`, `url()`, `radio()`, `file()`, `date()`, `time()`, `hidden()`, `consent()`.
+
+### Consent fields
+
+A consent field is a box the visitor ticks to agree to a text, such as your privacy policy. It is always required. The answer stores the choice with the text the form showed, so changing the text later leaves what earlier visitors agreed to as it was:
+
+```typescript
+import { consent } from "@nextlyhq/plugin-form-builder";
+
+consent({
+  name: "privacy",
+  label: "Privacy",
+  agreementText: "I agree to the privacy policy",
+});
+// A submission stores: { privacy: { agreed: true, text: "I agree to the privacy policy" } }
+```
+
+The text comes from the form, never from what the visitor sends. A site that renders the form can send the text it showed with the answer, `{ "agreed": true, "text": "I agree to the privacy policy" }`: if the author changed the text while the form was open, the submission is refused, asking the visitor to review it and agree again, rather than recorded as agreement to terms they never saw. A plain checkbox value (`on`, `true`) is taken as agreement to the text the form shows when it arrives. A submitted consent cannot be edited: an update that would change or drop it, from the admin or the API, is refused with a validation error, and an edit of other answers keeps it as it was.
 
 ### Utility Functions
 
@@ -360,12 +386,12 @@ it is supposed to depend on. An application that hosts its own route, as below, 
 
 A form's Settings can limit each person to one response. The server compares a keyed one-way digest of what tells people apart, never the value itself, and a unique index refuses a second submission with the same digest when it is stored, so two sent at once cannot both get in.
 
-| Setting (`settings.oneResponse`) | Compares | Notes |
-| --- | --- | --- |
-| `off` | nothing | The default: anyone may respond again. |
-| `email` | the answer to the chosen Email field (`settings.oneResponseField`), ignoring case | The field must be required and not hidden by a condition, so every response carries an address. Saving a form that breaks this is refused, and the builder will not delete the field, make it optional or give it a condition while it is chosen. |
-| `ip` | the network address | People sharing an office or home network count as one. Needs the trusted IP above. |
-| `browser` | a token the visitor's browser keeps | Counted from when it is chosen. Someone who clears their browser's data, or uses another browser, can respond again. |
+| Setting (`settings.oneResponse`) | Compares                                                                          | Notes                                                                                                                                                                                                                                             |
+| -------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`                            | nothing                                                                           | The default: anyone may respond again.                                                                                                                                                                                                            |
+| `email`                          | the answer to the chosen Email field (`settings.oneResponseField`), ignoring case | The field must be required and not hidden by a condition, so every response carries an address. Saving a form that breaks this is refused, and the builder will not delete the field, make it optional or give it a condition while it is chosen. |
+| `ip`                             | the network address                                                               | People sharing an office or home network count as one. Needs the trusted IP above.                                                                                                                                                                |
+| `browser`                        | a token the visitor's browser keeps                                               | Counted from when it is chosen. Someone who clears their browser's data, or uses another browser, can respond again.                                                                                                                              |
 
 A second response is refused: `submitForm` answers `outcome: "duplicate"`, and the built-in route answers `409` with the message "You have already submitted this form." A submission marked spam gives its place back.
 
@@ -425,9 +451,101 @@ When the sweep finishes it records that on the form, which moves the form's revi
 
 If a form's setting changes while a submission is on its way, the submission is refused with "This form's settings changed while your response was being sent. Please send it again." and is judged by the new setting when it is sent again.
 
+### The page a submission came from
+
+A submission through `POST /api/forms/:slug/submit` keeps the page it was sent from, taken from the
+browser's `Referer` header: the page's origin and path only. Its query string and fragment are dropped,
+since they can carry personal data, and an address that is not an `http` or `https` page is not kept.
+Each submission's page in the admin shows it under **Details › Page**. The browser reports it, so it is a
+hint for staff rather than proof; a site that sends no `Referer` keeps none. A server-side `submitForm`
+call can pass `metadata.page` itself.
+
 ### Privacy: not keeping IP addresses
 
 A form's **Settings › Privacy › Store IP address and browser** (`settings.storeIpAndBrowser`, on by default) decides whether a new submission keeps the address it came from and the visitor's browser. Off, it keeps neither. One per network still works on such a form: the address's keyed digest is made before the address is dropped, and only the digest is stored. Earlier submissions keep what they stored. A form that keeps no addresses cannot count its earlier responses by network after a change of setting, since it has none to count.
+
+### Privacy: deleting old submissions
+
+**Settings › Privacy › Delete submissions after** (`settings.keepDays`: Never, 30 days, 90 days or 1 year; none keeps them) sets how long a form keeps its submissions. A pass the plugin schedules each night (the job `form-builder:retention`, on the `@daily` schedule `form-builder-retention-nightly`) deletes every submission older than its form keeps them for, and spam older than 30 days whatever the setting. Age is when the submission was stored (`createdAt`).
+
+Each one is deleted the way any deletion is, so what it sent goes with it, and so do the files it holds (see [File uploads](#file-uploads)). The pass also deletes the uploads no submission claimed within a day, and finishes any file an earlier deletion could not remove. A pass that runs out of time queues its own continuation, and the next jobs run carries on. Like every schedule, it runs only while something calls the jobs route (`/admin/api/jobs/run` in a scaffolded app); a night missed is caught up by the next one, which deletes everything past keeping by then.
+
+### File uploads
+
+A `file` field's answer is a media id, or a list of them for a field with `multiple`. The visitor's browser uploads each file first, through a route the plugin contributes, and puts the id it answers with in the submission:
+
+```
+POST /admin/api/forms/:slug/upload
+Content-Type: multipart/form-data
+```
+
+| Part    | What it is                                         |
+| ------- | -------------------------------------------------- |
+| `field` | The name of one of the form's `file` fields.       |
+| `file`  | The file. One per request; upload several in turn. |
+
+It answers `201` with `{ message, mediaId, field, filename, mimeType, size }`. The file is refused unless:
+
+- the form exists and takes submissions now: a form that is not published, or one that has closed, answers as submitting to it would (`404`, or `409` with its closed message);
+- `field` names one of the form's file fields (`400`, error path `field`), and file uploads are enabled (`features.fileUploads` and `fields.file`);
+- the file is one the field takes (`400`, error path `file`): a type its `accept` lists (`.pdf`, `image/*`, `application/pdf`; the plugin's `uploads.allowedMimeTypes` when it lists none), no larger than its `maxFileSize`, which can never exceed the plugin's `uploads.maxFileSize` (10 MB by default) and is that when the field sets none. A body larger than the limit is refused without being read whole;
+- the visitor is within the rate limit: five uploads per submission `spamProtection.rateLimit` allows, per visitor and form, in the same window (`429`). As with submissions, a visitor whose address cannot be trusted is not limited.
+
+The file is stored in the media library as the plugin, and is judged there as every upload is: its contents against its type, blocked types, and its name. Its type is checked against the field again on what the library stored.
+
+The plugin records each upload, and a submission's file answer may only name uploads made through this route for the same form and field that no other submission has claimed. Anything else, such as another form's upload, an upload already part of another submission, or the id of a file the site uses, refuses the submission with a validation error on that field ("This file was not uploaded for this field. Please upload it again."). This holds for a visitor submitting and for staff writing through the API. An edit keeps the files a submission already holds: an update may send a field's stored ids back unchanged. A submission flagged as spam is stored without the refusal, as it is stored without validation.
+
+A write no request produced (the Direct API from your own server code, an import, a job) is trusted, as it was before uploads were recorded: nothing it names is refused, and an upload it names for the same form and field that no submission has claimed is claimed for it, so the file stays with that submission. An upload it names that another submission already holds is recorded as this submission's too, so the file stays while either of them names it.
+
+Deleting a submission deletes the files it holds, whichever way it is deleted: one at a time, in bulk, by the nightly pass, or with its form. The file is deleted once the deletion has committed, and only if no other submission holds it and nothing else uses it (a document's field, an avatar, a logo); a file in use is kept, and checked again each night. Its stored bytes are removed durably: a storage error is retried by the jobs queue until they are gone. An upload no submission claims within a day is deleted by the nightly pass. A file the submission names without holding it (one a trusted write named that was not uploaded through the route, and any file a submission stored before uploads were recorded names) is not deleted with it.
+
+The plugin ships no front-end form of its own, so your site's form does the upload. For example:
+
+```typescript
+/** Upload one file for `field` of the form at `slug`; answers its media id. */
+async function uploadFile(slug: string, field: string, file: File) {
+  const body = new FormData();
+  body.append("field", field);
+  body.append("file", file);
+  const res = await fetch(`/admin/api/forms/${slug}/upload`, {
+    method: "POST",
+    body,
+  });
+  const json = (await res.json()) as {
+    mediaId?: string;
+    error?: { message: string };
+  };
+  if (!res.ok || !json.mediaId) throw new Error(json.error?.message);
+  return json.mediaId;
+}
+
+async function uploadThenSubmit(form: HTMLFormElement, slug: string) {
+  const values = new FormData(form);
+  const answers: Record<string, unknown> = {};
+  for (const name of new Set(values.keys())) {
+    const input = form.elements.namedItem(name);
+    if (!(input instanceof HTMLInputElement && input.type === "file")) {
+      answers[name] = values.get(name);
+      continue;
+    }
+    const ids: string[] = [];
+    for (const file of values.getAll(name)) {
+      if (file instanceof File && file.size > 0) {
+        ids.push(await uploadFile(slug, name, file));
+      }
+    }
+    // A field with `multiple` answers with a list of ids, a single-file
+    // field with one id; an empty one is left out.
+    if (input.multiple) answers[name] = ids;
+    else if (ids[0] !== undefined) answers[name] = ids[0];
+  }
+  await fetch(`/admin/api/forms/${slug}/submit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ data: answers }),
+  });
+}
+```
 
 ### Validation
 
@@ -478,6 +596,16 @@ Each submission tracks its review state:
 
 Admins can also add internal notes to any submission -- these are not visible to the original submitter.
 
+### Deleting submissions
+
+Deleting a submission forgets the notifications it sent, in the same transaction: one not yet sent (waiting, retrying, or failed) is cancelled and its message cleared, so nothing goes out from data that is gone, and the delivery records of one that went out are erased. This holds for deleting one submission, deleting several at once, and deleting a form, which deletes its submissions with it.
+
+It also deletes the files the submission holds, once the deletion has committed (see [File uploads](#file-uploads)).
+
+Marking a submission as spam calls off its notifications the same way, in the transaction that marks it: one waiting to be sent or retried, or one that failed and could still be retried, is cancelled and its message cleared, so it is not sent and cannot be retried later. One that the provider is sending at that moment finishes: it ends sent if the provider takes it, and cancelled if that attempt fails. The delivery records of what already went out are kept until the submission is deleted.
+
+The plugin keeps what each submission sent in an internal `form-submission-sends` collection, which no caller can read or write. Existing installations receive it through their own migrations: run `nextly migrate:create` and then `nextly migrate` (or `nextly db:sync` in development). A notification queued before the upgrade was not recorded, so deleting its submission does not forget it. The uploads made through the upload route are kept the same way, in an internal `form-uploads` collection, which existing installations receive through the same migration.
+
 ### Statistics
 
 ```typescript
@@ -497,27 +625,53 @@ const stats = await getFormSubmissionStats("contact", {
 
 ## Email Notifications
 
-Notifications are configured per form in the admin UI under the **Notifications** tab. Each notification integration specifies:
+Notifications are configured per form in the admin UI under the **Notifications** tab, a list of the form's notifications with who each goes to, when it sends, its message and an Active switch. **Add notification** starts one from a preset: **Notify your team** (addresses you type, with Reply-To set to the visitor's Email field) or **Confirm to the visitor** (the address in one of the form's Email fields; unavailable until the form has one). Each notification opens on its own page, at the Notifications page's address with `?section=<id>`, where you choose who gets it (several addresses, Cc and Bcc, Reply-To), when it sends (every submission, or when all or any of several conditions hold), its message from **Settings › Email**, the file fields whose files go with it, and its From and Provider, which default to the message's own. Edits are saved with the form.
+
+Each notification specifies:
 
 | Setting         | Description                                                                 |
 | --------------- | --------------------------------------------------------------------------- |
 | `templateSlug`  | Email template to use (from your [email configuration](/docs/guides/email)) |
 | `recipientType` | `"static"` (fixed email) or `"field"` (value from a form field)             |
 | `to`            | Email address, or `{{fieldName}}` reference when using field recipient      |
+| `recipients`    | A team notification's addresses, when it sends to several                   |
+| `replyTo`       | Reply-To: an address, or `{{fieldName}}` for one of the form's Email fields |
+| `conditions`    | `{ match: "all" \| "any", list }`: send only when all, or any, hold         |
+| `attachFields`  | Names of the form's file fields whose files go with this email              |
 | `providerId`    | Email provider to use (optional, falls back to system default)              |
 | `cc` / `bcc`    | Additional recipients                                                       |
 
 Template variables available in your email templates: all submitted field values, plus `formName` and `submissionId`.
 
+A notification saved before `recipients`, `conditions` and `attachFields` existed reads as it always did: its single `to` is a list of one, its single `condition` is a list of one under `all`, and it attaches exactly the file fields whose "attach to notification emails" switch is on. An email with one recipient reaches a `beforeEmail` handler with `to` as a string, as before; one with several, as a list.
+
 ### Delivery and retries
 
-Each notification is queued once its submission is saved, then sent at once. A failure that a retry can help (the provider is down, or times out) is not dropped: it is tried again, with a growing wait between attempts, until it is sent or fails for good. Retries run when your site calls the jobs trigger (`POST /admin/api/jobs/run`, see [Jobs](/docs/jobs)), so schedule that call on any site that sends form notifications. A refusal no retry can change, such as an invalid address, fails at once.
+Each notification is queued in the same transaction that saves its submission, then sent as soon as that transaction commits. The submission and its queued notifications are kept together or not at all: a save that fails or is rolled back queues nothing, and a server that stops just after the save still sends them on the next jobs run. Only active notifications whose conditions the answers meet are queued. A submission flagged as spam queues none, and marking it "Not spam" later does not send them either.
+
+A failure that a retry can help (the provider is down, or times out) is not dropped: it is tried again, with a growing wait between attempts, until it is sent or fails for good. Retries run when your site calls the jobs trigger (`POST /admin/api/jobs/run`, see [Jobs](/docs/jobs)), so schedule that call on any site that sends form notifications. A refusal no retry can change, such as an invalid address, fails at once.
 
 A notification that fails for good is logged twice, and the two lines share the queued email's id (`queuedId`): the Form Builder's line names the form and the notification, and the server's own `queued-email-failed` line gives the reason. Neither names a recipient.
 
+### What each send did, and Resend
+
+A submission's page lists every notification it triggered under **Emails**, and each recipient with what became of it and when: Waiting, Retrying, Sending, Sent, Sent after N retries, Failed, or Cancelled (in Settings › Email, by marking the submission Spam, or by erasing the address). A notification whose recipients differ reads **Partly sent**. A notification's own page lists its **Recent sends** across the form's submissions.
+
+The plugin keeps this with the submission, in its internal `form-submission-sends` collection, written in the same transaction as each change of the queued email, so it never falls behind what was sent. Recipients are kept by a masked hint (`j•••@acme.test`) and a keyed digest, never by address. The record outlives core's delivery log, which is pruned after 90 days, does not change when the submission's answers or the notification are edited later, and is deleted with the submission.
+
+**Resend** sends a notification of a submission again, to the recipients who have not received it, built from the notification and the answers as they are now. You may tick a recipient who did receive it, among those the notification can address now, to send it to them again. A recipient a send filter added is left out once it has received it. When only copied (Cc or Bcc) recipients missed it, each gets a message addressed to them alone. A failed earlier send whose message is still held is retired in the same transaction, so it cannot be retried as well. Resend is not offered while a send of the notification is waiting, retrying or sending; the page says a send is in progress. It needs both `update-<submissions>` and `manage-email-deliveries`, and records who asked.
+
+The routes, under `/admin/api/plugins/@nextlyhq/plugin-form-builder`:
+
+- `GET /submissions/:id/sends` (reading submissions): each notification with its recipients and whether a send is in progress.
+- `GET /notification-sends?form=&notification=&limit=` (reading submissions): a notification's recent sends.
+- `POST /submissions/:id/resend` with `{ notification, tick? }` (updating submissions and managing email deliveries).
+
+Existing installations receive the new fields of `form-submission-sends` and the new internal `form-submission-resends` collection through their migrations: run `nextly migrate:create` and then `nextly migrate` (or `nextly db:sync` in development). A send recorded before the upgrade has no notification or recipients on record, so it is not listed.
+
 ### beforeEmail Hook
 
-Modify or filter outgoing emails before they are sent:
+Modify or filter outgoing emails before they are queued. The hook runs inside the transaction that saves the submission: a hook that throws refuses the submission, and the hook may run again if that transaction is retried, so keep it to changing the emails and do no other work in it.
 
 ```typescript
 const fb = formBuilder({

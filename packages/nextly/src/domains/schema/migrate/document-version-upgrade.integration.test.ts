@@ -15,12 +15,21 @@
  *
  * @module domains/schema/migrate/document-version-upgrade.integration.test
  */
-import { writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import type { FreshDatabase } from "../../../__tests__/helpers/fresh-database";
+import { noMigrationsDir } from "../../../__tests__/helpers/migrate-core";
 import {
   defineCollection,
   defineFieldGroup,
@@ -37,7 +46,6 @@ import {
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import type { SingleMetadataService } from "../../singles/services/single-metadata-service";
-import { DEFAULT_MIGRATIONS_DIR } from "../../../shared/types/migrations-dir-default";
 import { migrateCore } from "../../../cli/commands/migrate";
 import { ensureSchemaEventsTable } from "../events/schema-events-ddl";
 import { diffSnapshots } from "../pipeline/diff/diff";
@@ -54,6 +62,12 @@ const PER_DOCUMENT_COLUMNS = [
   "_changed_by_principal_kind",
   "_changed_at",
 ];
+
+const { dir: NO_MIGRATIONS, remove } = noMigrationsDir("nextly-docver-");
+
+/** The app's migrations folder, below the instance's base path. */
+const APP_MIGRATIONS = "migrations";
+afterAll(remove);
 
 // The Schema Builder runs the migration that creates a collection's tables
 // only in development; elsewhere it records a pending one.
@@ -83,14 +97,6 @@ const TABLES = {
 } as const;
 
 const ALL_TABLES = Object.values(TABLES);
-
-/**
- * The site's migrations folder, where its Schema Builder saves wrote the
- * files the ledger records as applied: `nextly migrate` reads the same
- * folder, and refuses a ledger naming applied files it lacks.
- */
-const migrationsOf = (t: TestNextly): string =>
-  resolve(t.basePath, DEFAULT_MIGRATIONS_DIR);
 
 // A field group's tables are no document of their own: the document holding
 // it is versioned, never the group, so its tables get none of the columns and
@@ -136,9 +142,23 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     collections: COLLECTIONS,
     singles: SINGLES,
     localization: { locales: ["en", "es"], defaultLocale: "en" },
+    // Stated, so `migrationsOf` names the folder the instance's saves write to.
+    db: { migrationsDir: APP_MIGRATIONS, uiSchemaFile: "./ui-schema.json" },
   });
   expect(current.adapter.dialect).toBe(dialect);
   return current;
+}
+
+/**
+ * The app's migrations folder: where a Schema Builder save of this instance
+ * writes its migration, and records it in the ledger as applied. `nextly
+ * migrate` refuses a ledger naming files its folder lacks, so the upgrade runs
+ * over this folder, as it would on the site.
+ */
+function migrationsOf(t: TestNextly): string {
+  const dir = join(t.basePath, APP_MIGRATIONS);
+  mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
 async function columnsOf(t: TestNextly, table: string): Promise<string[]> {
@@ -304,9 +324,8 @@ const silent = new Proxy(
 
 /**
  * `nextly migrate` with the app's own migration files, on the test's own
- * adapter. The site's Schema Builder saves wrote files the ledger records as
- * applied, so the run reads that folder and reaches the file phase, which
- * needs the whole adapter rather than a raw-statement stand-in.
+ * adapter: running a file needs the whole adapter. Every upgrade runs this way,
+ * since the folder always holds the migrations the Builder save wrote.
  */
 async function migrateWithFiles(t: TestNextly, dir: string): Promise<void> {
   await migrateCore({
@@ -438,6 +457,36 @@ describe.each(getConfiguredTestDialects())(
       );
     }, 240_000);
 
+    it("asked for some tables, reads and changes those and their translation tables alone", async () => {
+      const t = await boot(dialect);
+      await olderSite(t);
+
+      const { added } = await addDocumentColumns({
+        db: t.adapter.getDrizzle(),
+        dialect: t.adapter.dialect as FreshDatabase["dialect"],
+        tables: [TABLES.codeCollection],
+      });
+
+      expect(added).toBeGreaterThan(0);
+      for (const table of [
+        TABLES.codeCollection,
+        TABLES.codeCollectionLanguages,
+      ]) {
+        expect({ [table]: await columnsOf(t, table) }).toEqual({
+          [table]: expect.arrayContaining(PER_DOCUMENT_COLUMNS),
+        });
+      }
+      for (const table of ALL_TABLES.filter(
+        table =>
+          table !== TABLES.codeCollection &&
+          table !== TABLES.codeCollectionLanguages
+      )) {
+        expect({ [table]: await columnsOf(t, table) }).toEqual({
+          [table]: expect.not.arrayContaining(PER_DOCUMENT_COLUMNS),
+        });
+      }
+    }, 240_000);
+
     it("a run stopped part-way finishes on the next, keeping counters already there", async () => {
       const t = await boot(dialect);
       await seed(t);
@@ -544,9 +593,11 @@ describe.each(getConfiguredTestDialects())(
       // would fail on an existing site that has not had them added yet.
       const t = await boot(dialect);
       await olderSite(t);
+      // Written beside the save's migrations, named after them, as the app's
+      // next file would be.
       const dir = migrationsOf(t);
       writeFileSync(
-        join(dir, "0001_000000_reads_versions.sql"),
+        join(dir, "29991231_000000_000_reads_versions.sql"),
         `UPDATE ${TABLES.codeCollection} SET _revision = _revision WHERE 1 = 0;\n`
       );
       await migrateWithFiles(t, dir);
@@ -571,8 +622,8 @@ describe.each(getConfiguredTestDialects())(
           fieldGroups: FIELD_GROUPS,
           db: { uiSchemaFile: "ui-schema.json" },
         },
-        projectRoot: t.basePath,
-        migrationsDir: migrationsOf(t),
+        projectRoot: NO_MIGRATIONS,
+        migrationsDir: NO_MIGRATIONS,
         logger: silent as never,
       });
       const findings = await findColumnDifferences({

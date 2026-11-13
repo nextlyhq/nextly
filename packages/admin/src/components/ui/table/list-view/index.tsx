@@ -23,7 +23,11 @@ import type { JSX, ReactNode } from "react";
 
 import { cn } from "@admin/lib/utils";
 
-import { DataTableView, type DataTableViewProps } from "../data-table";
+import {
+  DataTableView,
+  isListEmpty,
+  type DataTableViewProps,
+} from "../data-table";
 
 import { ListEmptyState } from "./ListEmptyState";
 import { ListToolbar, isToolbarEmpty } from "./ListToolbar";
@@ -146,8 +150,13 @@ function resolveBody<Row extends object>({
   if (table.loading && skeleton) return skeleton;
 
   const emptyState = isFiltered ? (emptyFiltered ?? empty) : empty;
+  // The table's own rule for an empty list, so the two never disagree about a
+  // list of groups with no rows.
   const isEmpty =
-    !table.loading && !table.error && table.rows.length === 0 && !!emptyState;
+    !table.loading &&
+    !table.error &&
+    isListEmpty(table.rows, table.grouping) &&
+    !!emptyState;
 
   if (isEmpty && emptyState) return <ListEmptyState {...emptyState} />;
   return <DataTableView<Row> {...table} />;
@@ -155,6 +164,7 @@ function resolveBody<Row extends object>({
 
 export { ListEmptyState } from "./ListEmptyState";
 export { ListToolbar } from "./ListToolbar";
+export type { ListToolbarProps } from "./ListToolbar";
 export { ListColumnsMenu } from "./ListColumnsMenu";
 export { useListColumns } from "./useListColumns";
 export type { UseListColumnsOptions } from "./useListColumns";

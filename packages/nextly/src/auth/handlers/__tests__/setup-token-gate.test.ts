@@ -394,13 +394,14 @@ describe("setup in production", () => {
     const { deps, token } = await productionInstall();
     const res = await handleSetupStatus(
       new Request(`${ORIGIN}/admin/api/auth/setup-status`),
-      deps
+      { ...deps, allowRegistration: false }
     );
     const body = (await res.json()) as Record<string, unknown>;
     expect(body).toEqual({
       isSetup: false,
       requiresInitialUser: true,
       requiresSetupToken: true,
+      allowRegistration: false,
     });
     expect(JSON.stringify(body)).not.toContain(token);
   });
@@ -432,7 +433,7 @@ describe("setup-status while the database is busy", () => {
 
     const res = await handleSetupStatus(
       new Request(`${ORIGIN}/admin/api/auth/setup-status`),
-      deps
+      { ...deps, allowRegistration: false }
     );
 
     expect(res.status).toBe(503);
@@ -449,7 +450,7 @@ describe("setup-status while the database is busy", () => {
 
     const res = await handleSetupStatus(
       new Request(`${ORIGIN}/admin/api/auth/setup-status`),
-      deps
+      { ...deps, allowRegistration: false }
     );
 
     expect(res.status).toBe(503);

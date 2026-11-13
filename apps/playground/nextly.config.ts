@@ -60,6 +60,11 @@ import { blockFixturePlugin } from "./src/plugins/block-fixture/plugin";
 import { contributionsFixturePlugin } from "./src/plugins/contributions-fixture/plugin";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
 import { slowWidgetFixturePlugin } from "./src/plugins/slow-widget-fixture/plugin";
+import { startupReadFixturePlugin } from "./src/plugins/startup-read-fixture/plugin";
+import {
+  releaseNotesFixturePlugin,
+  whatsNewFixturePlugin,
+} from "./src/plugins/item-place-fixture/plugin";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
 import { widgetCheckFixturePlugin } from "./src/plugins/widget-check-fixture/plugin";
 import { widgetKitFixturePlugin } from "./src/plugins/widget-kit-fixture/plugin";
@@ -356,6 +361,11 @@ export default defineConfig({
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [styleFixturePlugin]
       : []),
+    // A plugin's own item at the rail's foot and in the person's menu, for the
+    // browser suite and the visual checks, which run with the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [releaseNotesFixturePlugin, whatsNewFixturePlugin]
+      : []),
     // Always on, because its widgets are drawn by their own components, which
     // the committed component map must hold; offered only from the add panel,
     // named as test fixtures.
@@ -365,6 +375,12 @@ export default defineConfig({
     // exists only on that suite's own server.
     ...(process.env.NEXTLY_E2E_WIDGET_CHECK === "1"
       ? [widgetCheckFixturePlugin]
+      : []),
+    // A plugin page that declares the read it makes as it opens, for the
+    // browser test that a tab opening on it asks for that read inside the
+    // admin's startup request. A test page, on the suite's own server only.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [startupReadFixturePlugin]
       : []),
     // Always on, for the same reason: the blocks it contributes reach the
     // editor through the committed component map. Offered only in the Add

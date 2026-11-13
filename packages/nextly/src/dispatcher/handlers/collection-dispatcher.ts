@@ -115,6 +115,7 @@ import {
   isTruthyParam,
   parseCountParam,
   parseRichTextFormat,
+  parseRichTextStyles,
   parseSelectParam,
   parseStatusParam,
   parseWhereParam,
@@ -123,7 +124,11 @@ import {
   readClientWhere,
   toNumber,
 } from "../helpers/validation";
-import { versionInputOf, versionInputOfQuery } from "../helpers/version-input";
+import {
+  restoreFieldsOf,
+  versionInputOf,
+  versionInputOfQuery,
+} from "../helpers/version-input";
 import type { MethodHandler, Params } from "../types";
 
 import { readListOwner, slugListsForOwner } from "./list-owner";
@@ -351,6 +356,8 @@ export const COLLECTION_VERSION_METHODS: Record<
         request,
         // The version the restore was made from, judged as its update is.
         version: versionInputOf(body),
+        // The fields chosen; every field the version holds when none are.
+        fields: restoreFieldsOf(body),
       });
       return respondAction("Version restored.", result);
     },
@@ -1294,6 +1301,8 @@ const COLLECTIONS_METHODS: Record<
         select: parseSelectParam(p.select),
         where: parseWhereParam(p.where, p.whereBrackets),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
+        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+        richTextStyles: parseRichTextStyles(p.richTextStyles),
         sort,
         status,
         // i18n M4: `?locale=` + `?fallback-locale=` select the content language.
@@ -1424,6 +1433,8 @@ const COLLECTIONS_METHODS: Record<
           p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
         select: parseSelectParam(p.select),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
+        // `?richTextStyles=none`: class-only rich text HTML for a site's own CSS.
+        richTextStyles: parseRichTextStyles(p.richTextStyles),
         status,
         // `?draft=true` overlays the pending working draft in place of the live
         // row (draft/published split), matching Payload's read-side `draft`

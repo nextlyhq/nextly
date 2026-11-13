@@ -78,6 +78,13 @@ import {
   resolveDraftOverlay,
   type DraftDocumentConfig,
 } from "../../versions/draft-overlay";
+import {
+  combinedDraft,
+  draftsKeptByPart,
+  findPartDrafts,
+  holdsPendingChange,
+  SHARED_DRAFT_SLOT,
+} from "../../versions/part-drafts";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import { VersionsRepository } from "../../versions/versions-repository";
 
@@ -1075,10 +1082,22 @@ async function pendingWorkingDraft(
   const provisional = overlay(null);
   if (!provisional.overlay) return undefined;
 
-  const draft = await new VersionsRepository(connection.db).findWorkingDraft(
-    { scopeKind: entity.kind, scopeSlug: entity.slug, entryId: id },
-    provisional.draftLocale
-  );
+  const ref = { scopeKind: entity.kind, scopeSlug: entity.slug, entryId: id };
+  const repo = new VersionsRepository(connection.db);
+  // Kept by part (`part-drafts`), the pending change is the shared draft and
+  // this language's, read as the one change they make together: a shared
+  // field's held edit lives in the shared draft whatever language asks, and a
+  // read of the language's draft alone would report the live value and no
+  // pending change.
+  const parts =
+    draftsKeptByPart() && provisional.draftLocale !== SHARED_DRAFT_SLOT
+      ? await findPartDrafts(repo, ref, provisional.draftLocale)
+      : undefined;
+  const draft = parts
+    ? holdsPendingChange(parts)
+      ? { snapshot: combinedDraft({}, parts) }
+      : undefined
+    : await repo.findWorkingDraft(ref, provisional.draftLocale);
   if (draft === undefined) return undefined;
 
   // The confirming half, against resolved schemas: a draft nothing could promote
@@ -1668,48 +1687,4 @@ function unknownForm(form: never): never {
   throw NextlyError.internal({
     logContext: { reason: "stored-form-unknown", form: String(form) },
   });
-}
-
-/**
- * A Single's first write's read of its row inside its transaction, for the
- * write called with `context`: none where it is not stored yet. A write
- * without a conditional write's expectation reads it with `plainRead`, the
- * write path's own read, as it always has.
- *
- * A write carrying an expectation reads under locks. On MySQL a transaction's
- * first plain read fixes the snapshot every later plain read answers from, and
- * the expectation is read plainly after the row lock; read before that lock,
- * the row could change under a snapshot the expectation would then trust. A
- * locking read takes its lock at once and fixes no snapshot, so the
- * expectation's snapshot is taken under the lock.
- *
- * The Single's registry row is locked first: it always exists, so the lock is
- * on that one record, and two first writes of one Single are made one after
- * the other. The second then finds the row the first inserted and judges its
- * expectation against it, rather than both locking the empty table's gap and
- * deadlocking on MySQL, or both inserting a row on PostgreSQL, where a lock
- * on no row holds nothing. An insert-if-absent cannot do this: a Single's
- * table has no key two first rows would collide on. The order, registry row
- * then the document's row, is the one every history write and deletion takes
- * (`history-locks`).
- *
- * An entry's update takes its row lock as its transaction's first
- * statement, so it reads nothing before the lock.
- */
-export async function firstWriteRead<T>(
-  tx: VersionsDbApi,
-  single: { readonly id: string; readonly tableName: string },
-  context: Record<string, unknown> | undefined,
-  plainRead: () => Promise<T | null>
-): Promise<T | null | undefined> {
-  if (context === undefined || !expectations.has(context)) return plainRead();
-  await tx.select("dynamic_singles", {
-    columns: ["id"],
-    where: { and: [{ column: "id", op: "=", value: single.id }] },
-    limit: 1,
-    forUpdate: true,
-  });
-  return (
-    await tx.select<T>(single.tableName, { limit: 1, forUpdate: true })
-  )[0];
 }

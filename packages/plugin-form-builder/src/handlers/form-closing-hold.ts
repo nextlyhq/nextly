@@ -46,6 +46,7 @@ import { NextlyError, type PluginContext } from "@nextlyhq/plugin-sdk";
 import { closedMessageOf, pastClosingTime } from "../utils/form-closing";
 import { normalizeFormSettings } from "../utils/form-settings";
 
+import { deletingForm } from "./forget-sends";
 import {
   ALREADY_RESPONDED,
   holdsKeyFor,
@@ -92,7 +93,7 @@ export interface FormLimitSlugs {
 }
 
 /** The id a submission's `form` names, as an id or a populated document. */
-function formIdOf(value: unknown): string | undefined {
+export function formIdOf(value: unknown): string | undefined {
   if (typeof value === "string" && value !== "") return value;
   if (typeof value === "number") return String(value);
   if (value && typeof value === "object" && "id" in value) {
@@ -409,6 +410,8 @@ async function handOffKey(
   const released = releasedKeyOf(write);
   if (released === undefined) return;
   const { key, formId, ipAddress } = released;
+  // Deleted with its form: the next holder is about to go as well.
+  if (deletingForm(write, formId)) return;
   const { settings } = await formOf(deps.own, write, slugs, formId, "update");
   if (keyVersionOf(key) !== (settings.oneResponseVersion ?? 0)) return;
   const next = await nextHolderOf(deps, write, slugs, {

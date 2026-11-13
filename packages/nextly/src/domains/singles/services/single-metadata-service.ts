@@ -61,7 +61,10 @@ import type { Logger } from "../../../shared/types";
 import { collectionTablesBySlug } from "../../dynamic-collections/services/collection-tables";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
-import { appLocalization } from "../../i18n/configured-locales";
+import {
+  appLanguageOrder,
+  appLocalization,
+} from "../../i18n/configured-locales";
 import {
   archiveFieldsLeavingTranslation,
   fieldsLeavingTranslationUnder,
@@ -936,6 +939,7 @@ export class SingleMetadataService {
       builtBy: "collection",
       tableName: input.existing.tableName,
       defaultLocale: defaultLocale,
+      languageOrder: appLanguageOrder(),
       adapter: this.adapter,
       entity: input.slug,
       kind: "single",

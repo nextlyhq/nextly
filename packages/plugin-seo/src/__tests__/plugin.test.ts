@@ -122,9 +122,11 @@ describe("seoPlugin", () => {
       ["DELETE", "/redirects/:id", undefined, undefined],
       ["POST", "/redirects/import", undefined, undefined],
       ["GET", "/not-found", undefined, undefined],
+      ["PATCH", "/not-found/:id", undefined, undefined],
+      // Whether the site's Proxy runs, which serves the redirects.
+      ["GET", "/proxy-status", undefined, undefined],
       // What search engines received: the pages it offers, and the check,
       // for anyone signed in.
-      ["GET", "/received/pages", undefined, undefined],
       ["POST", "/received", undefined, undefined],
       ["POST", "/resolve", undefined, undefined],
       // A Page Builder template's SEO panel's read.
@@ -132,7 +134,7 @@ describe("seoPlugin", () => {
       // The problem list, read and checked again by a signed-in reader.
       ["GET", "/problems", undefined, undefined],
       ["POST", "/problems/check", undefined, undefined],
-      // The Pages and addresses screen's list, and its save.
+      // The Pages screen's list, and its save.
       ["GET", "/pages", undefined, undefined],
       ["POST", "/pages/seo", undefined, undefined],
       // The bulk edit table, for a signed-in reader of each type.
@@ -143,6 +145,9 @@ describe("seoPlugin", () => {
       ["GET", "/import/groups", undefined, undefined],
       ["POST", "/import/dry-run", undefined, undefined],
       ["POST", "/import/apply", undefined, undefined],
+      // The Overview's setup checklist, read and hidden or shown.
+      ["GET", "/overview/checklist", undefined, undefined],
+      ["POST", "/overview/checklist", undefined, undefined],
     ]);
   });
 
@@ -181,7 +186,10 @@ describe("seoPlugin", () => {
 
     const asked = (plugin.contributes?.routes ?? [])
       .filter(
-        ({ path }) => path.startsWith("/redirects") || path === "/not-found"
+        ({ path }) =>
+          path.startsWith("/redirects") ||
+          path.startsWith("/not-found") ||
+          path === "/proxy-status"
       )
       .map(({ method, path, requiredPermission }) => [
         method,
@@ -196,6 +204,8 @@ describe("seoPlugin", () => {
       ["DELETE", "/redirects/:id", "manage-seo"],
       ["POST", "/redirects/import", "manage-seo"],
       ["GET", "/not-found", "manage-seo"],
+      ["PATCH", "/not-found/:id", "manage-seo"],
+      ["GET", "/proxy-status", "manage-seo"],
     ]);
   });
 
@@ -218,7 +228,8 @@ describe("seoPlugin", () => {
       "/redirects/:id",
       "/redirects/import",
       "/not-found",
-      "/received/pages",
+      "/not-found/:id",
+      "/proxy-status",
       "/received",
       "/resolve",
       "/template",
@@ -232,6 +243,8 @@ describe("seoPlugin", () => {
       "/import/groups",
       "/import/dry-run",
       "/import/apply",
+      "/overview/checklist",
+      "/overview/checklist",
     ]);
     // The SEO fields are still contributed.
     expect(plugin.contributes?.extend?.[0]?.target).toEqual(["pages"]);
@@ -260,7 +273,8 @@ describe("seoPlugin", () => {
       "/redirects/:id",
       "/redirects/import",
       "/not-found",
-      "/received/pages",
+      "/not-found/:id",
+      "/proxy-status",
       "/received",
       "/resolve",
       "/template",
@@ -274,6 +288,8 @@ describe("seoPlugin", () => {
       "/import/groups",
       "/import/dry-run",
       "/import/apply",
+      "/overview/checklist",
+      "/overview/checklist",
     ]);
   });
 
@@ -339,6 +355,57 @@ describe("seoPlugin", () => {
       "noindex",
       "structuredDataType",
     ]);
+  });
+});
+
+describe("how long a title or description may be", () => {
+  /** The `maxLength` each of a group's fields is saved with. */
+  function limits(group: unknown) {
+    const fields: readonly unknown[] =
+      typeof group === "object" &&
+      group !== null &&
+      "fields" in group &&
+      Array.isArray(group.fields)
+        ? group.fields
+        : [];
+    return Object.fromEntries(
+      fields
+        .filter(
+          (field): field is FieldConfig =>
+            typeof field === "object" && field !== null
+        )
+        .filter(field => "name" in field)
+        .map(field => [field.name, (field as { maxLength?: number }).maxLength])
+    );
+  }
+
+  it("saves a title or description of any length by default", () => {
+    // Google cuts a long title by width rather than refusing it, so the
+    // length is a warning in the SEO tab and the problem list.
+    const group = seoGroup(seoPlugin({ collections: ["pages"] }));
+    for (const read of [
+      limits(group),
+      limits({ fields: defaultSeoFields() }),
+    ]) {
+      expect(read).toHaveProperty("metaTitle", undefined);
+      expect(read).toHaveProperty("metaDescription", undefined);
+    }
+  });
+
+  it("refuses a longer one where the site asks for hard limits", () => {
+    const group = seoGroup(
+      seoPlugin({ collections: ["pages"], hardLengthLimits: true })
+    );
+    expect(limits(group)).toMatchObject({
+      metaTitle: 60,
+      metaDescription: 160,
+    });
+    expect(
+      limits({ fields: defaultSeoFields({ hardLengthLimits: true }) })
+    ).toMatchObject({
+      metaTitle: 60,
+      metaDescription: 160,
+    });
   });
 });
 
@@ -594,6 +661,41 @@ describe("the optional connections the plugin declares", () => {
     });
   });
 
+  it("declares the event a committed change to who holds an address is announced on", () => {
+    // Undeclared, every save that gains or releases an address would log a
+    // warning that the plugin emits an event it never declared.
+    const plugin = seoPlugin({ collections: ["pages"] });
+    expect(plugin.contributes?.events).toContainEqual({
+      name: "nextlyhq-plugin-seo.address-record-changed",
+    });
+  });
+
+  it("reads a client secret wrapped by another copy of the plugin SDK", () => {
+    // A site may install its own copy of the SDK beside the plugin's, whose
+    // `secret()` makes an object of a class the plugin's copy did not make.
+    class OtherCopySecret {
+      readonly #value: string;
+      constructor(value: string) {
+        this.#value = value;
+      }
+      reveal(): string {
+        return this.#value;
+      }
+      toString(): string {
+        return "[redacted]";
+      }
+    }
+    expect(() =>
+      seoPlugin({
+        collections: ["pages"],
+        searchConsole: {
+          clientId: "id",
+          clientSecret: new OtherCopySecret("s") as unknown as string,
+        },
+      })
+    ).not.toThrow();
+  });
+
   it("refuses a Search Console sign-in with a blank client id or secret", () => {
     expect(() =>
       seoPlugin({
@@ -607,5 +709,67 @@ describe("the optional connections the plugin declares", () => {
         searchConsole: { clientId: "id", clientSecret: "" },
       })
     ).toThrow(/clientId and a clientSecret/);
+  });
+});
+
+describe("the SEO section", () => {
+  const SECTION = "/admin/plugins/nextlyhq-plugin-seo";
+
+  it("lists its five screens in the order they are used, Overview first", () => {
+    const admin = seoPlugin({ collections: ["posts"] }).contributes?.admin;
+    expect((admin?.menu ?? []).map(item => [item.label, item.to])).toEqual([
+      ["Overview", `${SECTION}/overview`],
+      ["Pages", `${SECTION}/pages`],
+      ["Problems", `${SECTION}/problems`],
+      ["Redirects", `${SECTION}/redirects`],
+      ["Settings", `${SECTION}/settings`],
+    ]);
+  });
+
+  it("badges Problems with the count of its Needs attention line", () => {
+    const plugin = seoPlugin({ collections: ["posts"] });
+    const problems = plugin.contributes?.admin?.menu?.find(
+      item => item.label === "Problems"
+    );
+    expect(problems?.badge).toEqual({ attention: "seo/problems" });
+    expect(
+      plugin.contributes?.dashboard?.attention?.map(item => item.id)
+    ).toEqual(["seo/problems"]);
+  });
+
+  it("names no badge where no collection carries SEO, and so no line exists", () => {
+    const problems = seoPlugin({
+      collections: [],
+      singles: ["home"],
+    }).contributes?.admin?.menu?.find(item => item.label === "Problems");
+    expect(problems?.badge).toBeUndefined();
+  });
+
+  it("opens on its Overview", () => {
+    expect(seoPlugin({ collections: ["posts"] }).admin?.landing).toBe(
+      `${SECTION}/overview`
+    );
+  });
+
+  it("serves each screen, and the old addresses that send bookmarks on", () => {
+    const pages = seoPlugin({ collections: ["posts"] }).contributes?.admin
+      ?.pages;
+    expect(
+      (pages ?? []).map(page => [
+        page.path,
+        page.component.split("#")[1],
+        page.requiredPermission,
+      ])
+    ).toEqual([
+      ["overview", "SeoOverviewPage", "manage-seo"],
+      ["pages", "SeoPagesPage", "manage-seo"],
+      ["pages/import", "SeoImportPage", "manage-seo"],
+      ["pages/inspect", "SeoInspectPage", "check-seo"],
+      ["problems", "SeoProblemsPage", undefined],
+      ["redirects", "SeoRedirectsPage", "manage-seo"],
+      ["settings", "SeoSettingsPage", "manage-seo"],
+      ["bulk", "SeoBulkMoved", undefined],
+      ["received", "SeoReceivedMoved", undefined],
+    ]);
   });
 });

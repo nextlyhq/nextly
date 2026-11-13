@@ -131,6 +131,10 @@ import {
   historyEnabledFrom,
   historyRetentionFrom,
 } from "@admin/components/features/versions/history-enabled";
+import {
+  useEditorRestoreSurface,
+  useFormRestore,
+} from "@admin/components/features/versions/useEditorRestoreSurface";
 import { PREVIOUS_VERSION } from "@admin/components/features/versions/version-search-params";
 import { versionsHref } from "@admin/components/features/versions/versions-href";
 import {
@@ -454,6 +458,19 @@ function singleResetKey(document: SingleDocumentData, locale: unknown): string {
  * panel floats or is a sheet at, where it opens only when asked for. Without
  * it a single loses its language workflow whenever the column is away.
  */
+/**
+ * Whether the Single's shared fields hold unpublished changes, as its editor
+ * read says (`_sharedChangesPending`).
+ */
+function sharedChangesPendingOf(document: unknown): boolean {
+  return (
+    typeof document === "object" &&
+    document !== null &&
+    (document as { _sharedChangesPending?: unknown })._sharedChangesPending ===
+      true
+  );
+}
+
 function SingleFormLanguagePanel({
   actionsDisabled,
   navigationDisabled,
@@ -463,6 +480,7 @@ function SingleFormLanguagePanel({
   locale,
   onLocaleChange,
   panelDocked,
+  sharedChangesPending,
   translations,
 }: {
   actionsDisabled: boolean;
@@ -474,6 +492,8 @@ function SingleFormLanguagePanel({
   onLocaleChange?: (locale: string, options?: { seedFrom?: string }) => void;
   /** Whether the docked panel, which carries the language panel, is on screen. */
   panelDocked: boolean;
+  /** The Single's shared fields hold unpublished changes (`_sharedChangesPending`). */
+  sharedChangesPending: boolean;
   translations?: Record<string, { translated: boolean; status?: string }>;
 }) {
   if (!enabled) return null;
@@ -488,6 +508,7 @@ function SingleFormLanguagePanel({
         actionsDisabled={actionsDisabled}
         navigationDisabled={navigationDisabled}
         publishAllDisabled={publishAllDisabled}
+        sharedChangesPending={sharedChangesPending}
       />
     </div>
   );
@@ -728,6 +749,8 @@ export function SingleForm({
     defaultValues,
     mode: "onSubmit",
   });
+  // The values a restore puts into this form, whose sources the save names.
+  const formRestore = useFormRestore(form);
 
   // Keep the latest computed defaultValues in a ref so the reset effect can read
   // them without depending on the `defaultValues` object identity: React Query
@@ -989,10 +1012,26 @@ export function SingleForm({
       }),
     [locale, shownDefaultLocale, version, schema.slug, schema.draftsEnabled]
   );
+  // What a restore puts values back into: this form, under its lock.
+  const { getLocale: localeOf, defaultLocale: editingDefault } =
+    useLocalization();
+  // The language being edited: the default where the address names none.
+  const editingLocale = locale ?? editingDefault;
+  const editingLanguage = localeOf(editingLocale)?.label;
+  const editorRestore = useEditorRestoreSurface({
+    restore: formRestore,
+    form,
+    fields: allFields,
+    readOnly: () => lock.readOnly,
+    localized: schema.localized === true,
+    ...(editingLanguage ? { language: editingLanguage } : {}),
+    ...(editingLocale ? { locale: editingLocale } : {}),
+  });
   const viewedVersionHost = useViewedVersion(
     allFields,
     takeoverTypes,
-    versionFor
+    versionFor,
+    editorRestore
   );
   const {
     viewingVersion,
@@ -1112,6 +1151,15 @@ export function SingleForm({
     () => autosaveScopeFor("single", schema.slug, document?.id),
     [schema.slug, document?.id]
   );
+  /*
+   * Whether this Single keeps recovery points: autosave on, and a stored row
+   * to record against. The server refuses a recording anywhere else, so where
+   * this is false the editor records nothing, offers nothing back and shows no
+   * recording status. One answer for every recorder in the editor, the page
+   * builder's included, and for keeping a refused save's edits.
+   */
+  const keepsRecoveryPoints =
+    autosaveScope !== null && autosaveEnabledFor(schema);
   // Where a save and publishing every language wait for its recordings.
   const recordingsFor = documentRecordingKey(autosaveScope);
 
@@ -1157,6 +1205,8 @@ export function SingleForm({
           mayWrite: () => !writesHeldNow.current,
           // And the editor can move to another language.
           stillShown: () => scopeNow.current === startedIn,
+          // The values a restore put in, whose sources the save names.
+          restore: formRestore,
           // This Single's recovery points, addressed as its recorder does.
           recordingsFor,
           // Why: shared intent→payload helper mirrors the EntryForm
@@ -1217,6 +1267,7 @@ export function SingleForm({
     },
     [
       form,
+      formRestore,
       onSubmit,
       refusedForm,
       blankPasswordFields,
@@ -1294,8 +1345,6 @@ export function SingleForm({
   // the current version. When the point cannot be written, nothing is
   // replaced and the conflict stays open.
   // Whether the conflict's edits can be kept: a Single with autosave on.
-  const keepsRecoveryPoints =
-    autosaveScope !== null && autosaveEnabledFor(schema);
   lock.now.keepsEdits = keepsRecoveryPoints;
   // With `keepEdits` false, for a Single that keeps no recovery points, the
   // edits are discarded, as the conflict said they would be.
@@ -1425,6 +1474,9 @@ export function SingleForm({
     }
   )._translations;
 
+  // Read once: the rail's language panel and the inline one say it alike.
+  const sharedChangesPending = sharedChangesPendingOf(document);
+
   // Adapt the SingleDocumentData shape into what the document bar and the
   // rail panels expect (entry.id / entry.status / entry.created_at /
   // entry.updated_at). The structural alignment is straightforward — singles
@@ -1445,6 +1497,9 @@ export function SingleForm({
     // the per-language pills (DocumentPanel reads `entry._translations`). Absent for non-localized
     // singles / when translation-status wasn't requested → pills render nothing.
     _translations: singleTranslations,
+    // Forwarded for the rail's language panel, which says while the Single's
+    // shared fields hold unpublished changes, docked as inline.
+    _sharedChangesPending: sharedChangesPending,
   } as unknown as Parameters<typeof DocumentBar>[0]["entry"];
 
   // i18n: content-locale context for field components + the rail's language panel.
@@ -1563,8 +1618,12 @@ export function SingleForm({
     // colleague's claim deliberately does not stop it: the recovery point is
     // this author's own work, which is what a takeover preserves.
     // Nor is a reader's form recorded, which cannot change the document, nor
-    // one whose language's answer is on its way, which may not yet.
-    enabled: !updatesHeld && mayRecordRecovery(busy, viewingVersion),
+    // one whose language's answer is on its way, which may not yet. Nor a
+    // Single that keeps no recovery points at all.
+    enabled:
+      keepsRecoveryPoints &&
+      !updatesHeld &&
+      mayRecordRecovery(busy, viewingVersion),
     // The pace the Single configures, else the editor's default.
     debounceMs: autosaveIntervalFrom(schema),
     // Each point records the version its edits began from.
@@ -1574,7 +1633,7 @@ export function SingleForm({
     useAutosaveRecovery({
       // A reader is offered no recovery point: restoring one would make the
       // read-only form dirty with work it cannot save.
-      scope: readOnlyForReader ? null : autosaveScope,
+      scope: readOnlyForReader || !keepsRecoveryPoints ? null : autosaveScope,
       form,
       // The language the form shows: a point recorded in another is never
       // taken for the document.
@@ -1630,7 +1689,7 @@ export function SingleForm({
    * header's chip, and a document view's own through the host.
    */
   const recoveryPoint: RecoveryPointState = {
-    enabled: autosaveScope !== null,
+    enabled: keepsRecoveryPoints,
     storedAt: autosave.lastSavedAt,
     // A recovery point newer than the stored document, still on offer: its
     // edits are not stored, whatever the form says.
@@ -1713,6 +1772,8 @@ export function SingleForm({
           documentStatus={editedStatus}
           // The fields, so a field inside a repeater's row has an address.
           fields={schema.fields}
+          // So a field recording its own state stays quiet where this does.
+          keepsRecoveryPoints={keepsRecoveryPoints}
         >
           <EntryLocaleProvider value={localeCtx}>
             {/* Above the header — which mounts the history panel — and above
@@ -1957,6 +2018,9 @@ export function SingleForm({
                                       enabled={localizationEnabled}
                                       hasStatus={hasStatus}
                                       panelDocked={panel.docked}
+                                      sharedChangesPending={
+                                        sharedChangesPending
+                                      }
                                       {...(singleTranslations === undefined
                                         ? {}
                                         : { translations: singleTranslations })}

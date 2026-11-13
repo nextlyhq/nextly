@@ -20,7 +20,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { HookRegistry } from "@nextly/hooks/hook-registry";
-import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
+import type {
+  RichTextOutputFormat,
+  RichTextStyles,
+} from "@nextly/lib/rich-text-html";
 
 import {
   everyLanguageOf,
@@ -55,6 +58,7 @@ import {
 } from "../../domains/i18n/localization-source";
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import type { RetentionRunner } from "../../domains/retention/runner";
+import type { FieldSources } from "../../domains/versions/restored-from";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import { errorEnvelopeFields } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
@@ -306,6 +310,8 @@ export class CollectionEntryService extends BaseService {
       select?: Record<string, boolean>;
       where?: WhereFilter;
       richTextFormat?: RichTextOutputFormat;
+      /** How rich text HTML is styled: `"none"` for classes only. */
+      richTextStyles?: RichTextStyles;
       /** Draft/Published lifecycle scope; forwarded to the query service. */
       status?: "published" | "draft" | "all";
       overrideAccess?: boolean;
@@ -456,6 +462,8 @@ export class CollectionEntryService extends BaseService {
     depth?: number;
     select?: Record<string, boolean>;
     richTextFormat?: RichTextOutputFormat;
+    /** How rich text HTML is styled: `"none"` for classes only. */
+    richTextStyles?: RichTextStyles;
     overrideAccess?: boolean;
     /**
      * Which collections a trusted read may reach as relationships are expanded.
@@ -907,6 +915,18 @@ export class CollectionEntryService extends BaseService {
        * version it captures.
        */
       sourceVersionNo?: number;
+      /**
+       * The fields this write restored, and the version each came from,
+       * recorded per field on the version it captures (see `restored-from`).
+       *
+       * @experimental
+       */
+      restoredFrom?: FieldSources;
+      /**
+       * Set when this write restores a version: held as the working draft, and
+       * refused where the document cannot hold one rather than written live.
+       */
+      requireHeldDraft?: boolean;
       /**
        * The caller's authenticated scope. For a scoped API-key REST write the
        * publish/unpublish transition gate judges the key's OWN grants.

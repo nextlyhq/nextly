@@ -25,6 +25,7 @@ import {
   AI_CRAWLER_CHOICES,
   SEO_PLUGIN_NAME,
   SEO_SETTINGS_SLUG,
+  SETUP_STEPS,
   SITE_KINDS,
   type AiCrawlerChoice,
   type SiteKind,
@@ -286,6 +287,17 @@ export async function readSeoRules(
 }
 
 /**
+ * Whether first-time setup still waits to be asked: fewer than its steps
+ * answered, and not closed for later. The Overview sends a first visit on
+ * to it. Like {@link readSeoRules}, never awaited while the site starts.
+ */
+export async function setupWaiting(ctx: PluginContext): Promise<boolean> {
+  const document = await readSeoSettingsDocument(ctx);
+  const step = typeof document.setupStep === "number" ? document.setupStep : 0;
+  return step < SETUP_STEPS && document.setupDismissed !== true;
+}
+
+/**
  * The site's brand facts in `locale`, for structured data and the like. Like
  * {@link readSeoRules}, never awaited while the site starts.
  */
@@ -301,6 +313,8 @@ export interface StructuredDataSettings {
   /** The production address the language is served from. */
   origin?: string;
   siteName?: string;
+  /** The site's default description, which says what the site is. */
+  description?: string;
   brand: Omit<BrandFacts, "siteKind">;
   /** Per content type: the collection slug, or `single:<slug>` for a Single. */
   types: Readonly<Record<string, StructuredDataTypeRule>>;
@@ -384,8 +398,10 @@ export async function readStructuredDataSettings(
     document,
     mediaImages(ctx)
   );
+  const description = trimmed(document.description);
   return {
     ...(await identityOf(document, locale)),
+    ...(description === undefined ? {} : { description }),
     brand,
     types:
       checked<Record<string, StructuredDataTypeRule>>(
