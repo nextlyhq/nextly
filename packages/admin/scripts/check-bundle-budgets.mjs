@@ -7,7 +7,7 @@
  * - The shipped total — every browser-loaded chunk the package emits — stays
  *   at most 3,560 KB minified.
  * - The shell every route shares (the first screen's set) stays at most
- *   280 KB gzipped.
+ *   197 KB gzipped.
  * - Each route's own code — what its direct visit adds to the shell — stays
  *   at most its pinned size plus 10% (at least 2 KB). The pins live in
  *   `route-budgets.json`, measured when they were last set; a route with no
@@ -48,8 +48,11 @@ export const BUDGETS = {
   // and email setup screens, editors loaded on demand, and no unused code left
   // to remove, so the limit sits just above that measurement.
   totalMinifiedKB: 3740,
-  // Spec R-3: the shared shell, measured at 259 KB gzipped on 2026-10-27.
-  shellGzipKB: 280,
+  // The shared shell, measured at 178.8 KB gzipped on 2026-11-13 once the
+  // root entry exported only what an application mounts (it was 331 KB),
+  // plus the 10% a route's own code may grow above its pin. Held close to the
+  // measurement so the room the split made is not spent without a decision.
+  shellGzipKB: 197,
   // Spec R-3: each route's own code may grow this share above its pin...
   routeHeadroom: 0.1,
   // ...or this many KB, whichever is more, so a route that adds almost
