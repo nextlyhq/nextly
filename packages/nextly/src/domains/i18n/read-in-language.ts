@@ -59,6 +59,9 @@ export function publishedInLanguageCondition(args: {
     companionTableName: args.companion.companionTableName,
     mainIdColumn: args.mainIdColumn,
     localizedColumns: args.companion.localizedFields.map(field => field.column),
+    structuredColumns: args.companion.localizedFields
+      .filter(field => field.structured === true)
+      .map(field => field.column),
     hasStatus: true,
     defaultLocale: args.defaultLocale,
     filter: { locale: requested, state: "published" },
@@ -144,6 +147,26 @@ function stripEachLanguage(
     }
   }
   return stripped;
+}
+
+/**
+ * Decode every language's stored value of `name` beside a row
+ * (`_allLocales`) with `decode`, as the row's own value of the field was. The
+ * side map is read from the translations table as stored, so on a driver that
+ * keeps structured values as text each language's value arrives encoded.
+ */
+export function decodeEachLanguage(
+  row: Record<string, unknown>,
+  name: string,
+  decode: (stored: string) => unknown
+): void {
+  const every = row[ALL_LOCALES_KEY];
+  if (!isValues(every)) return;
+  const keyed = every[name];
+  if (!isValues(keyed)) return;
+  for (const [code, value] of Object.entries(keyed)) {
+    if (typeof value === "string") keyed[code] = decode(value);
+  }
 }
 
 /**

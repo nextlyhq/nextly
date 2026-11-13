@@ -51,6 +51,12 @@ export interface LocalizedFieldRef {
    * language's lookup can never find.
    */
   unique?: boolean;
+  /**
+   * The column stores JSON (PostgreSQL `jsonb`, MySQL `json`). Such a value is
+   * never an empty string, and comparing the column with one makes PostgreSQL
+   * parse `''` as JSON and fail the query, so it is non-blank when not null.
+   */
+  structured?: boolean;
 }
 
 /** Blank = "not translated": null, undefined, or empty string fall back. 0/false are real values. */
@@ -750,6 +756,11 @@ export function buildLocalizedOrderExpr(args: {
    * otherwise).
    */
   statusValues?: readonly string[];
+  /**
+   * The column stores JSON (`LocalizedFieldRef.structured`): never blank, and
+   * never compared with an empty string, which PostgreSQL would parse as JSON.
+   */
+  structured?: boolean;
 }): SQL {
   const {
     companionTableName,
@@ -761,10 +772,10 @@ export function buildLocalizedOrderExpr(args: {
   const t = sql.identifier(companionTableName);
   const col = sql.identifier(columnName);
   const statusPredicate = statusMembership(t, statusValues);
-  const perLocale = localeChain.map(
-    code =>
-      sql`NULLIF((SELECT ${t}.${col} FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${code}${statusPredicate}), '')`
-  );
+  const perLocale = localeChain.map(code => {
+    const value = sql`(SELECT ${t}.${col} FROM ${t} WHERE ${t}.${sql.identifier("_parent")} = ${mainIdColumn} AND ${t}.${sql.identifier("_locale")} = ${code}${statusPredicate})`;
+    return args.structured === true ? value : sql`NULLIF(${value}, '')`;
+  });
   // One language, as a read with fallback off asks: its value alone. SQLite
   // refuses COALESCE with a single argument.
   if (perLocale.length === 1) return perLocale[0];
@@ -833,6 +844,11 @@ export function buildTranslationStatusCondition(args: {
   mainIdColumn: unknown;
   /** Localized companion columns (snake_case) for the non-blank test. */
   localizedColumns: string[];
+  /**
+   * Those of `localizedColumns` that store JSON (`LocalizedFieldRef.structured`):
+   * non-blank when not null, never compared with an empty string.
+   */
+  structuredColumns?: readonly string[];
   /** Whether the companion carries `_status` (draft/published filters need it). */
   hasStatus: boolean;
   /**
@@ -868,12 +884,15 @@ export function buildTranslationStatusCondition(args: {
   // below needs the SAME non-blank rule applied to an ALIASED copy of this table. Two spellings of
   // "this locale has content" would let one filter disagree with another about the same row, which
   // is the two-tab defect this function already carries a fix for.
+  const structured = new Set(args.structuredColumns ?? []);
   const nonBlankOn = (ref: CompanionTableRef): SQL =>
     localizedColumns.length > 0
       ? sql.join(
           localizedColumns.map(c => {
             const col = sql.identifier(c);
-            return sql`(${ref}.${col} IS NOT NULL AND ${ref}.${col} <> '')`;
+            return structured.has(c)
+              ? sql`(${ref}.${col} IS NOT NULL)`
+              : sql`(${ref}.${col} IS NOT NULL AND ${ref}.${col} <> '')`;
           }),
           sql` OR `
         )

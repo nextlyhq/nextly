@@ -133,6 +133,7 @@ import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
   fillCompanionFields,
   populateCompanionFields,
+  populateCompanionFieldsAllLocales,
   populateTranslationStatus,
   selectEntryWithCompanion,
 } from "../../i18n/companion-join";
@@ -146,6 +147,8 @@ import {
   storesPerLanguage,
 } from "../../i18n/per-language-storage";
 import {
+  ALL_LOCALES_KEY,
+  judgeEachLanguage,
   narrowToRowFields,
   publishedInLanguageCondition,
 } from "../../i18n/read-in-language";
@@ -1033,6 +1036,16 @@ export class SingleQueryService extends BaseService {
         params.translations,
         options.sourceLocales === true
       );
+      // `translations: "all"`: every language's values beside the read's own,
+      // read as stored, so the decoding below reaches them with the row's.
+      if (options.translations === "all") {
+        await this.populateLocalizedAll(
+          slug,
+          singleMeta,
+          doc,
+          statusFilterValues
+        );
+      }
     } catch (error) {
       throw translationLoadFailure(slug, error);
     }
@@ -1200,6 +1213,21 @@ export class SingleQueryService extends BaseService {
       applyFieldReadAccess(fieldAccess, sourceRedactions)
     );
     await fieldGroupPass?.(doc, fieldGroupCaller);
+    // Every language's values beside the document go through the same field
+    // rules, asked in that language, as the document itself did: a rule
+    // answering by value or by language withholds each language's value as
+    // it would the document's.
+    if (!skipFieldRules) {
+      await judgeEachLanguage(doc, (inLanguage, locale) =>
+        withRuleLanguage({ locale, locales: [locale] }, async () => {
+          await applyFieldReadAccess({ ...fieldAccess, entry: inLanguage });
+          await fieldGroupPass?.(inLanguage, {
+            ...fieldGroupCaller,
+            redactions: new WeakMap(),
+          });
+        })
+      );
+    }
     // The side keys say only what the document says: a withheld field's
     // source language is withheld with it.
     narrowToRowFields(doc);
@@ -1777,6 +1805,44 @@ export class SingleQueryService extends BaseService {
       readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
       sources,
     });
+  }
+
+  /**
+   * Attach every language's values of the Single's translatable fields beside
+   * its own, under `_allLocales` (`{ field: { code: value } }`), as the
+   * collection read does. A public read holds published values only. No-op
+   * when localization is off or the Single keeps no translations.
+   */
+  private async populateLocalizedAll(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    doc: Record<string, unknown>,
+    statusFilterValues: readonly string[] | undefined
+  ): Promise<void> {
+    if (!this.localization || !storesPerLanguage(singleMeta)) return;
+    const companion = this.companionOf(slug, singleMeta);
+    if (!companion) return;
+    // Read into a copy keyed by id, then attached beside the document's own
+    // values: the document keeps every field in its own language and type.
+    const everyLanguage: Record<string, unknown> = { id: doc.id };
+    await populateCompanionFieldsAllLocales({
+      db: this.adapter.getDrizzle(),
+      companionTable: companion.table,
+      readiness: await resolveCompanionSchemaReadiness(this.adapter, companion),
+      localizedFields: companion.localizedFields,
+      rows: [everyLanguage],
+      locales: this.localization.locales.map(l => l.code),
+      statusValues:
+        companion.hasStatus && statusFilterValues
+          ? statusFilterValues
+          : undefined,
+    });
+    doc[ALL_LOCALES_KEY] = Object.fromEntries(
+      companion.localizedFields.map(field => [
+        field.name,
+        everyLanguage[field.name],
+      ])
+    );
   }
 
   /**

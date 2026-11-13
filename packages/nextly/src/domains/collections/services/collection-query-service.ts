@@ -74,6 +74,7 @@ import type {
 import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
 import {
   buildDrizzleCondition,
+  buildLocalizedFieldCondition,
   buildLocalizedWhereExists,
   type LocalizedQueryContext,
 } from "../../../services/collections/drizzle-condition";
@@ -157,7 +158,6 @@ import { readFieldGroupType } from "../../field-groups/storage/field-group-type-
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
-  buildCompanionExists,
   buildLocalizedOrderExpr,
   buildTranslationStatusCondition,
   TRANSLATION_FILTER_STATES,
@@ -3839,6 +3839,9 @@ export class CollectionQueryService extends BaseService {
                 column: named.column,
                 localeChain,
                 statusValues: localizedCtx?.statusValues, // don't sort by draft translations
+                structured: companion.localizedFields.some(
+                  field => field.column === named.column && field.structured
+                ),
               }),
               // A missing translation reads as NULL.
               nullable: true,
@@ -6084,28 +6087,22 @@ export class CollectionQueryService extends BaseService {
     const searchText = query.trim();
 
     // Build OR conditions for each searchable field. A localized searchable field lives in the
-    // companion table (absent from the main schema); match it via a companion EXISTS on the
-    // requested locale instead of silently dropping it. Non-localized fields match on the main
-    // table.
+    // companion table (absent from the main schema); match it on the value the reader is shown
+    // instead of silently dropping it. Non-localized fields match on the main table.
     const conditions = fields
       .map(fieldName => {
         const localizedField = localizedCtx?.localizedFields.find(
           f => f.name === fieldName
         );
         if (localizedCtx && localizedField) {
-          const t = sql.identifier(localizedCtx.companionTableName);
-          const col = sql.identifier(localizedField.column);
-          return buildCompanionExists({
-            companionTableName: localizedCtx.companionTableName,
-            mainIdColumn: localizedCtx.mainIdColumn,
-            locale: localizedCtx.locale,
-            valueCondition: caseInsensitiveContains(
-              this.dialect,
-              sql`${t}.${col}`,
-              searchText
-            ),
-            statusValues: localizedCtx.statusValues,
-          });
+          // Matched on the value the reader is shown, as a filter is.
+          return buildLocalizedFieldCondition(
+            localizedCtx,
+            localizedField,
+            "ICONTAINS",
+            searchText,
+            this.dialect
+          );
         }
         const column = schema[fieldName];
         if (!column) return undefined; // not on main table and not localized → skip

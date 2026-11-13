@@ -17,7 +17,7 @@ import type {
   SupportedDialect,
   TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, getTableColumns, isTable, sql } from "drizzle-orm";
 
 import type { RequestActor } from "../../../auth/request-actor";
 import { isUniqueViolation } from "../../../database/errors";
@@ -149,6 +149,30 @@ export function localizedFieldRefs(
 }
 
 /**
+ * `fields` with each one whose companion column stores JSON on this dialect
+ * marked `structured`, read off the companion table built for them: such a
+ * value is never blank text, and comparing it with an empty string makes
+ * PostgreSQL parse `''` as JSON and fail the query.
+ */
+export function markStructuredFields(
+  fields: readonly LocalizedFieldRef[],
+  table: unknown
+): LocalizedFieldRef[] {
+  const jsonColumns = new Set(
+    isTable(table)
+      ? Object.values(getTableColumns(table))
+          // Drizzle spells a JSON column's data type with "json" among its
+          // words ("object json" on PostgreSQL and MySQL).
+          .filter(column => column.dataType.split(" ").includes("json"))
+          .map(column => column.name)
+      : []
+  );
+  return fields.map(field =>
+    jsonColumns.has(field.column) ? { ...field, structured: true } : field
+  );
+}
+
+/**
  * Companion schemas already built, by everything that decides one. A Single's and a component's
  * reads ask for their companion on every read, once per dynamic-zone row for a component, and
  * building one makes a Drizzle table. The schema is a function of its inputs alone, so keying it
@@ -220,7 +244,7 @@ function companionSchemaOf(args: {
   return {
     table: companion.table,
     companionTableName: companion.companionTableName,
-    localizedFields,
+    localizedFields: markStructuredFields(localizedFields, companion.table),
     hasStatus: args.status === true,
     hasUpdatedAt: true,
   };

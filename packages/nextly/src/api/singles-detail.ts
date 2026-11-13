@@ -21,8 +21,10 @@ import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import { actorFromAuthContext } from "../auth/request-actor";
 import { getService } from "../di";
 import {
+  isTruthyParam,
   parseFallbackParam,
   parseRichTextStyles,
+  parseTranslationsParam,
 } from "../dispatcher/helpers/validation";
 import type { SingleResult } from "../domains/singles/types";
 import { errorFromServiceEnvelope } from "../errors/from-service-envelope";
@@ -161,6 +163,15 @@ export const GET = withErrorHandler(
     const wholeDocumentFallback = parseFallbackParam(
       searchParams.get("fallback") ?? undefined
     );
+    // `?source-locales=1` attaches `_sources`, each translatable value's
+    // language; `?translations=all` attaches every language's values
+    // (`_allLocales`), as an entry's read does.
+    const sourceLocales = isTruthyParam(
+      searchParams.get("source-locales") ?? undefined
+    );
+    const translations = parseTranslationsParam(
+      searchParams.get("translations") ?? undefined
+    );
     const richTextFormat = parseRichTextFormat(
       searchParams.get("richTextFormat")
     );
@@ -174,6 +185,8 @@ export const GET = withErrorHandler(
       fallbackLocale,
       translationStatus,
       wholeDocumentFallback,
+      sourceLocales,
+      translations,
     });
 
     if (!result.success) {

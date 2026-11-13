@@ -35,7 +35,10 @@ import {
   type LocalizationSource,
   localizationNow,
 } from "../../i18n/localization-source";
-import { readInFirstPublishedLanguage } from "../../i18n/read-in-language";
+import {
+  readInFirstPublishedLanguage,
+  readOfEveryLanguage,
+} from "../../i18n/read-in-language";
 import { resolveLocaleChain } from "../../i18n/resolve-locale";
 import { releaseVisibilityFor } from "../../releases/release-visibility";
 import type { WebhookFastDrainScheduler } from "../../webhooks/after-drain";
@@ -201,7 +204,9 @@ export class SingleEntryService extends BaseService {
           inLanguage.fallbackLocale,
           inLanguage
         ),
-        () => this.queryService.get(slug, inLanguage)
+        // The query reads what the request stands for: `locale=all` is the
+        // default language with every language's values beside it.
+        () => this.queryService.get(slug, readOfEveryLanguage(inLanguage))
       );
     };
     const [first, ...rest] = options?.wholeDocumentFallback

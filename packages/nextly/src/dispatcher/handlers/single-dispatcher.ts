@@ -125,6 +125,7 @@ import {
   isTruthyParam,
   parseFallbackParam,
   parseStatusParam,
+  parseTranslationsParam,
   requireParam,
   toNumber,
 } from "../helpers/validation";
@@ -765,6 +766,10 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // `?fallback=document`: answer in the first published language of the
         // chain where the Single is not published in the requested one.
         wholeDocumentFallback: parseFallbackParam(p.fallback),
+        // `?source-locales=1` attaches `_sources`, each translatable value's language.
+        sourceLocales: isTruthyParam(p["source-locales"]),
+        // `?translations=all` attaches every language's values (`_allLocales`).
+        translations: parseTranslationsParam(p.translations),
         translationStatus: p["translation-status"] === "1",
         // `?draft=1` opts into the working-draft overlay, matching the entry
         // read. Gated server-side on an actual update-capability probe, so a

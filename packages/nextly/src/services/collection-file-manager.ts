@@ -10,6 +10,7 @@ import {
 import {
   type CompanionSchema,
   localizedFieldRefs,
+  markStructuredFields,
 } from "../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../domains/i18n/runtime/companion-registration";
 import { applyMigrationWhole } from "../domains/schema/services/apply-migration-statements";
@@ -371,7 +372,7 @@ export class CollectionFileManager {
       return {
         table: cached,
         companionTableName,
-        localizedFields,
+        localizedFields: markStructuredFields(localizedFields, cached),
         hasStatus,
         hasUpdatedAt,
       };
@@ -391,7 +392,7 @@ export class CollectionFileManager {
     return {
       table: companion.table,
       companionTableName,
-      localizedFields,
+      localizedFields: markStructuredFields(localizedFields, companion.table),
       hasStatus,
       hasUpdatedAt,
     };

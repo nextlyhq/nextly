@@ -96,6 +96,9 @@ export interface GetSingleOptions {
   /** Attach `_sources`: for each translatable field, the language its value came from. */
   sourceLocales?: boolean;
 
+  /** `"all"`: attach every language's values beside the read's own (`_allLocales`). */
+  translations?: "all";
+
   /** User context for access control and hooks. */
   user?: UserContext;
 

@@ -42,7 +42,10 @@ import {
 import { SQLiteTimestamp } from "drizzle-orm/sqlite-core";
 
 import type { LocalizedFieldRef } from "../../domains/i18n/companion-join";
-import { buildCompanionExists } from "../../domains/i18n/companion-join";
+import {
+  buildCompanionExists,
+  buildLocalizedOrderExpr,
+} from "../../domains/i18n/companion-join";
 import { NextlyError } from "../../errors/nextly-error";
 import { toSnakeCase } from "../../shared/lib/case-conversion";
 import { readIsoDateOrInstant } from "../../shared/lib/iso-instant";
@@ -107,6 +110,104 @@ export type LocalizedExistsBuilder = (
 ) => SQL | undefined;
 
 /**
+ * A localized filter's operand, read as the companion column compares it: a
+ * date value is the instant it names, bound as this column compares — the
+ * same reading the main where builder applies. Bound raw, an ISO string
+ * beside an epoch column compares by type ordering on SQLite (numbers order
+ * before text, so nothing matches) and by each server's coercion on the
+ * others: one filter, three answers.
+ */
+function localizedOperand(
+  ctx: LocalizedQueryContext,
+  column: string,
+  op: string,
+  value: unknown
+): unknown {
+  const table = ctx.companionTable ?? ctx.table;
+  const companionColumn =
+    table !== undefined && table !== null && typeof table === "object"
+      ? findColumn(table, column)
+      : undefined;
+  if (!companionColumn || !COMPARISONS.has(op)) return value;
+  // The refusal names the field as the caller wrote it, not the
+  // companion's physical column spelling.
+  const apiName =
+    ctx.localizedFields.find(f => f.column === column)?.name ?? column;
+  if (
+    typeof value === "string" ||
+    (Array.isArray(value) && typeof value[0] === "string")
+  ) {
+    value = comparisonOperand(companionColumn, apiName, value);
+  }
+  // Bind through the column, as the main builder's eq() does: a Date
+  // bound raw reaches the driver as the driver zone's wall clock, while
+  // the companion column stores the UTC wall clock its encoder writes.
+  // Lists bind element-wise, each element through the column.
+  if (Array.isArray(value)) {
+    return value.map(v =>
+      v instanceof Date ? sql`${bindIfParam(v, companionColumn)}` : v
+    );
+  }
+  return value instanceof Date ? bindIfParam(value, companionColumn) : value;
+}
+
+/**
+ * `target` compared with `value` by `op`: the one mapping of a localized
+ * filter's operators, whether `target` is a companion column inside an
+ * EXISTS or the value a reader is shown. `IS NULL` is not here: its meaning
+ * depends on which of the two `target` is. `undefined` for an operator with
+ * no equivalent, or a list operator handed nothing to list.
+ */
+function localizedComparison(
+  target: SQL,
+  op: string,
+  value: unknown,
+  dialect: SupportedDialect
+): SQL | undefined {
+  switch (op) {
+    case "=":
+      return sql`${target} = ${value}`;
+    case "!=":
+      return sql`${target} <> ${value}`;
+    case ">":
+      return sql`${target} > ${value}`;
+    case ">=":
+      return sql`${target} >= ${value}`;
+    case "<":
+      return sql`${target} < ${value}`;
+    case "<=":
+      return sql`${target} <= ${value}`;
+    case "LIKE":
+      return sql`${target} LIKE ${value}`;
+    case "ILIKE":
+      // Case-folded on both sides, as the adapter compiles ILIKE: only PostgreSQL has the
+      // keyword, a bare LIKE follows the column's collation, and SQLite's lower() folds ASCII
+      // letters only.
+      return sql`${caseFolded(dialect, target)} like ${caseFolded(dialect, sql`${value}`)}`;
+    case "ICONTAINS":
+      return caseInsensitiveContains(dialect, target, String(value));
+    case "IS NOT NULL":
+      return sql`${target} IS NOT NULL`;
+    case "IN":
+    case "NOT IN":
+      if (Array.isArray(value) && value.length > 0) {
+        // Expand the array into an SQL list; a bare array bind would emit
+        // `col IN $1` and compare against the whole array as one value.
+        const list = sql.join(
+          value.map(v => sql`${v}`),
+          sql`, `
+        );
+        return op === "IN"
+          ? sql`${target} IN (${list})`
+          : sql`${target} NOT IN (${list})`;
+      }
+      return undefined;
+    default:
+      return undefined;
+  }
+}
+
+/**
  * Translate a filter on a localized field into a companion-table EXISTS.
  *
  * Sits beside the condition builder it feeds for the same reason that one is
@@ -127,121 +228,30 @@ export function buildLocalizedWhereExists(
 ): SQL | undefined {
   const t = sql.identifier(ctx.companionTableName);
   const col = sql.identifier(column);
-  // The companion column, resolved on its own table: a date value is read as
-  // the instant it names and bound as this column compares — the same reading
-  // the main where builder applies. Bound raw, an ISO string beside an epoch
-  // column compares by type ordering on SQLite (numbers order before text, so
-  // nothing matches) and by each server's coercion on the others: one filter,
-  // three answers.
-  const table = ctx.companionTable ?? ctx.table;
-  const companionColumn =
-    table !== undefined && table !== null && typeof table === "object"
-      ? findColumn(table, column)
-      : undefined;
-  if (companionColumn && COMPARISONS.has(op)) {
-    // The refusal names the field as the caller wrote it, not the
-    // companion's physical column spelling.
-    const apiName =
-      ctx.localizedFields.find(f => f.column === column)?.name ?? column;
-    if (
-      typeof value === "string" ||
-      (Array.isArray(value) && typeof value[0] === "string")
-    ) {
-      value = comparisonOperand(companionColumn, apiName, value);
-    }
-    // Bind through the column, as the main builder's eq() does: a Date
-    // bound raw reaches the driver as the driver zone's wall clock, while
-    // the companion column stores the UTC wall clock its encoder writes.
-    // Lists bind element-wise, each element through the column.
-    if (Array.isArray(value)) {
-      value = value.map(v =>
-        v instanceof Date ? sql`${bindIfParam(v, companionColumn)}` : v
-      );
-    } else if (value instanceof Date) {
-      value = bindIfParam(value, companionColumn);
-    }
+  if (op === "IS NULL") {
+    // A localized field is absent for the locale when no companion row holds
+    // a value — an untranslated entry usually has no companion row at all.
+    // Match those with NOT EXISTS(row with a value) rather than
+    // EXISTS(col IS NULL), which would require a companion row to exist.
+    const present = buildCompanionExists({
+      companionTableName: ctx.companionTableName,
+      mainIdColumn: ctx.mainIdColumn,
+      locale: ctx.locale,
+      valueCondition: sql`${t}.${col} IS NOT NULL`,
+      statusValues: ctx.statusValues,
+    });
+    return sql`NOT ${present}`;
   }
-  let valueCondition: SQL | undefined;
-  switch (op) {
-    case "=":
-      valueCondition = sql`${t}.${col} = ${value}`;
-      break;
-    case "!=":
-      valueCondition = sql`${t}.${col} <> ${value}`;
-      break;
-    case ">":
-      valueCondition = sql`${t}.${col} > ${value}`;
-      break;
-    case ">=":
-      valueCondition = sql`${t}.${col} >= ${value}`;
-      break;
-    case "<":
-      valueCondition = sql`${t}.${col} < ${value}`;
-      break;
-    case "<=":
-      valueCondition = sql`${t}.${col} <= ${value}`;
-      break;
-    case "LIKE":
-      valueCondition = sql`${t}.${col} LIKE ${value}`;
-      break;
-    case "ILIKE":
-      // Case-folded on both sides, as the adapter compiles ILIKE: only PostgreSQL has the
-      // keyword, a bare LIKE follows the column's collation, and SQLite's lower() folds ASCII
-      // letters only.
-      valueCondition = sql`${caseFolded(dialect, sql`${t}.${col}`)} like ${caseFolded(dialect, sql`${value}`)}`;
-      break;
-    case "ICONTAINS":
-      valueCondition = caseInsensitiveContains(
-        dialect,
-        sql`${t}.${col}`,
-        String(value)
-      );
-      break;
-    case "IS NULL": {
-      // A localized field is absent for the locale when no companion row holds
-      // a value — an untranslated entry usually has no companion row at all.
-      // Match those with NOT EXISTS(row with a value) rather than
-      // EXISTS(col IS NULL), which would require a companion row to exist.
-      const present = buildCompanionExists({
-        companionTableName: ctx.companionTableName,
-        mainIdColumn: ctx.mainIdColumn,
-        locale: ctx.locale,
-        valueCondition: sql`${t}.${col} IS NOT NULL`,
-        statusValues: ctx.statusValues,
-      });
-      return sql`NOT ${present}`;
-    }
-    case "IS NOT NULL":
-      valueCondition = sql`${t}.${col} IS NOT NULL`;
-      break;
-    case "IN":
-      if (Array.isArray(value) && value.length > 0) {
-        // Expand the array into an SQL list; a bare array bind would emit
-        // `col IN $1` and compare against the whole array as one value.
-        const inList = sql.join(
-          value.map(v => sql`${v}`),
-          sql`, `
-        );
-        valueCondition = sql`${t}.${col} IN (${inList})`;
-      }
-      break;
-    case "NOT IN":
-      if (Array.isArray(value) && value.length > 0) {
-        // Expand into an SQL list, mirroring the IN case; without this the
-        // localized not_in filter is silently dropped and excludes nothing.
-        const notInList = sql.join(
-          value.map(v => sql`${v}`),
-          sql`, `
-        );
-        valueCondition = sql`${t}.${col} NOT IN (${notInList})`;
-      } else if (Array.isArray(value)) {
-        // An empty list excludes nothing, whatever the companion holds.
-        return sql`1 = 1`;
-      }
-      break;
-    default:
-      return undefined;
+  // An empty list excludes nothing, whatever the companion holds.
+  if (op === "NOT IN" && Array.isArray(value) && value.length === 0) {
+    return sql`1 = 1`;
   }
+  const valueCondition = localizedComparison(
+    sql`${t}.${col}`,
+    op,
+    localizedOperand(ctx, column, op, value),
+    dialect
+  );
   if (!valueCondition) return undefined;
   return buildCompanionExists({
     companionTableName: ctx.companionTableName,
@@ -250,6 +260,49 @@ export function buildLocalizedWhereExists(
     valueCondition,
     statusValues: ctx.statusValues,
   });
+}
+
+/**
+ * A caller's own condition on a localized field — a filter or a search —
+ * judged on the value the reader is shown. A read that falls back shows a
+ * field from the first language of its chain holding a value
+ * (`buildLocalizedOrderExpr`, the expression its sort orders by), so the
+ * condition compares that value: a filter matches what the reader sees, and
+ * never a value the read does not show. A read in one language, and a unique
+ * field (read in its own language alone), are judged in the requested
+ * language by `buildLocalizedWhereExists`. A read rule's filter is not this:
+ * it holds in every language of the chain (`inEveryFallbackLanguage`).
+ */
+export function buildLocalizedFieldCondition(
+  ctx: LocalizedQueryContext,
+  field: LocalizedFieldRef,
+  op: string,
+  value: unknown,
+  dialect: SupportedDialect
+): SQL | undefined {
+  const chain = ctx.localeChain ?? [];
+  if (chain.length < 2 || field.unique === true) {
+    return buildLocalizedWhereExists(ctx, field.column, op, value, dialect);
+  }
+  const shown = buildLocalizedOrderExpr({
+    companionTableName: ctx.companionTableName,
+    mainIdColumn: ctx.mainIdColumn,
+    column: field.column,
+    localeChain: [...chain],
+    statusValues: ctx.statusValues,
+    structured: field.structured,
+  });
+  if (op === "IS NULL") return sql`${shown} IS NULL`;
+  // An empty list excludes nothing, whatever the reader is shown.
+  if (op === "NOT IN" && Array.isArray(value) && value.length === 0) {
+    return sql`1 = 1`;
+  }
+  return localizedComparison(
+    shown,
+    op,
+    localizedOperand(ctx, field.column, op, value),
+    dialect
+  );
 }
 
 /**
@@ -432,26 +485,37 @@ export function buildDrizzleCondition(
         companionColumn && COMPARISONS.has(op)
           ? comparisonOperand(companionColumn, column, value)
           : value;
-      // In every language the read may show the field from, where asked;
-      // else in the requested one.
-      const languages =
-        localizedCtx.inEveryFallbackLanguage && localizedCtx.localeChain?.length
+      // A read rule's filter holds in every language the read may show the
+      // field from; a caller's own filter is judged on the value the reader
+      // is shown (`buildLocalizedFieldCondition`).
+      let localizedCond: SQL | undefined;
+      if (localizedCtx.inEveryFallbackLanguage) {
+        const languages = localizedCtx.localeChain?.length
           ? localizedCtx.localeChain
           : [localizedCtx.locale];
-      const perLanguage = languages.map(locale =>
-        localizedExists?.(
-          { ...localizedCtx, locale },
-          localizedWhereField.column,
+        const perLanguage = languages.map(locale =>
+          localizedExists?.(
+            { ...localizedCtx, locale },
+            localizedWhereField.column,
+            op,
+            operand,
+            dialect
+          )
+        );
+        localizedCond = perLanguage.every(cond => cond !== undefined)
+          ? perLanguage.length === 1
+            ? perLanguage[0]
+            : and(...perLanguage)
+          : undefined;
+      } else {
+        localizedCond = buildLocalizedFieldCondition(
+          localizedCtx,
+          localizedWhereField,
           op,
-          operand,
+          value,
           dialect
-        )
-      );
-      const localizedCond = perLanguage.every(cond => cond !== undefined)
-        ? perLanguage.length === 1
-          ? perLanguage[0]
-          : and(...perLanguage)
-        : undefined;
+        );
+      }
       if (localizedCond) return localizedCond;
       // The field lives in the companion table, so the main table has no
       // column to fall back on: without a companion condition it cannot be

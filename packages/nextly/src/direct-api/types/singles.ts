@@ -60,6 +60,21 @@ export interface FindSingleArgs<TSlug extends SingleSlug = SingleSlug>
   wholeDocumentFallback?: boolean;
 
   /**
+   * Attach `_sources`: for each translatable field, the language its value
+   * came from, its own or a fallback one; `null` where no language holds one.
+   *
+   * @default false
+   */
+  sourceLocales?: boolean;
+
+  /**
+   * `"all"`: attach every language's values beside the read's own, under
+   * `_allLocales` (`{ field: { code: value } }`). Every field keeps its own
+   * type. A public read holds published values only.
+   */
+  translations?: "all";
+
+  /**
    * Return the pending working draft in place of the live document when one
    * exists (draft/published split). Mirrors `draft` on `findByID`, and forwards
    * to the same service option, so a Single and a collection entry are read the

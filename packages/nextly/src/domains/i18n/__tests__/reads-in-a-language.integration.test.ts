@@ -8,7 +8,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, defineSingle, text } from "../../../config";
+import { defineCollection, defineSingle, json, text } from "../../../config";
 import { createDynamicHandlers } from "../../../routeHandler";
 import {
   createTestNextly,
@@ -21,6 +21,10 @@ import {
 const DOCS = "rlang_docs";
 /** A translated Single. */
 const SITE = "rlang_site";
+// A collection and a Single with a translated structured value, and a field
+// withheld from a read in Spanish.
+const DATA = "rlang_data";
+const SITE_DATA = "rlang_site_data";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -53,6 +57,16 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           }),
         ],
       }),
+      defineCollection({
+        slug: DATA,
+        localized: true,
+        status: true,
+        access: { read: () => true },
+        fields: [
+          text({ name: "title" }),
+          json({ name: "meta", localized: true }),
+        ],
+      }),
     ],
     singles: [
       defineSingle({
@@ -61,6 +75,20 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         status: true,
         access: { read: () => true },
         fields: [text({ name: "title" }), text({ name: "tagline" })],
+      }),
+      defineSingle({
+        slug: SITE_DATA,
+        localized: true,
+        status: true,
+        access: { read: () => true },
+        fields: [
+          text({ name: "title" }),
+          json({ name: "meta", localized: true }),
+          text({
+            name: "regional",
+            access: { read: ({ locale }) => locale !== "es" },
+          }),
+        ],
       }),
     ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
@@ -565,6 +593,148 @@ describe.each(getConfiguredTestDialects())(
       expect(await search("?locale=es&search=Puerto")).toEqual([id]);
       expect(await search("?locale=all&search=Harbour")).toEqual([id]);
       expect(await search("?locale=all&search=Puerto")).toEqual([]);
+    }, 90_000);
+
+    // A read that falls back shows a field from the first language of its
+    // chain holding a value, so its filter and its search judge that value:
+    // a match is what the reader sees, never a value the read does not show.
+    it("filters and searches a read on the value it shows through fallback", async () => {
+      const t = await boot(dialect);
+      // Spanish holds no title of its own, so a read in Spanish shows English's.
+      const fallsBack = await publishedInEnglish(t, {
+        title: "Harbour",
+        slug: "a",
+      });
+      await publishIn(t, fallsBack, "es", { body: "Cuerpo", slug: "a-es" });
+      // Spanish holds its own title, so a read in Spanish never shows English's.
+      const ownTitle = await publishedInEnglish(t, {
+        title: "Harbour Bay",
+        slug: "b",
+      });
+      await publishIn(t, ownTitle, "es", { title: "Bahía", slug: "b-es" });
+      const ids = async (query: string) => {
+        const listed = await restGet(["collections", DOCS, "entries"], query);
+        expect(listed.status, JSON.stringify(listed.json)).toBe(200);
+        return (listed.json.items as { id: string }[]).map(item => item.id);
+      };
+
+      expect(await ids("?locale=es&where[title][equals]=Harbour")).toEqual([
+        fallsBack,
+      ]);
+      expect(await ids("?locale=es&search=Harbour")).toEqual([fallsBack]);
+      // Spanish's own value is matched where it is the one shown.
+      expect(await ids("?locale=es&search=Bah")).toEqual([ownTitle]);
+    }, 90_000);
+
+    // Every language's structured values beside a read are the field's own
+    // type, as the row's are: on a driver that stores JSON as text, a value
+    // left encoded would reach the reader as a string.
+    it("decodes each language's structured values beside a read", async () => {
+      const t = await boot(dialect);
+      const created = (await t.nextly.create({
+        collection: DATA,
+        locale: "en",
+        data: { title: "One", meta: { n: 1 }, status: "published" },
+      })) as { item: { id: string } };
+      const id = created.item.id;
+      await t.nextly.update({
+        collection: DATA,
+        id,
+        locale: "es",
+        data: {
+          title: "Uno",
+          meta: { n: 2 },
+          status: "published",
+          _overwrite: true,
+        },
+      });
+      const read = (await t.nextly.findByID({
+        collection: DATA,
+        id,
+        locale: "en",
+        status: "published",
+        translations: "all",
+      })) as Record<string, unknown>;
+      // The row's own value decodes, so the side map is the one in question.
+      expect(read.meta).toEqual({ n: 1 });
+      expect(read._allLocales).toMatchObject({
+        meta: { en: { n: 1 }, es: { n: 2 } },
+      });
+    }, 90_000);
+
+    // A Single reads as an entry does: one language, every field its own
+    // type, with every language's values beside it on request, `locale=all`
+    // as that accessor on the default language, and each value's language
+    // on request, through the service, REST and the Direct API.
+    it("reads a Single with every language's values and their sources beside it", async () => {
+      const t = await boot(dialect);
+      const singles = singlesOf(t);
+      for (const [locale, data] of [
+        ["en", { title: "Site", meta: { n: 1 }, regional: "Coastal" }],
+        ["es", { title: "Sitio", meta: { n: 2 }, regional: "Costero" }],
+      ] as const) {
+        const saved = await singles.update(
+          SITE_DATA,
+          { ...data, status: "published", _overwrite: true },
+          { locale, overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+      }
+      const expectEvery = (
+        read: Record<string, unknown> | null | undefined
+      ) => {
+        expect(read?.title).toBe("Site");
+        expect(read?.meta).toEqual({ n: 1 });
+        const every = read?._allLocales as Record<string, unknown>;
+        expect(every).toMatchObject({
+          title: { en: "Site", es: "Sitio" },
+          meta: { en: { n: 1 }, es: { n: 2 } },
+        });
+        // Withheld in Spanish by its read rule, beside the row as in it.
+        expect(every.regional).toEqual({ en: "Coastal" });
+      };
+
+      const asked = await singles.get(SITE_DATA, {
+        locale: "en",
+        status: "published",
+        translations: "all",
+        overrideAccess: false,
+      });
+      expectEvery(asked.data);
+      const alias = await singles.get(SITE_DATA, {
+        locale: "all",
+        status: "published",
+        overrideAccess: false,
+      });
+      expectEvery(alias.data);
+
+      for (const query of ["?locale=en&translations=all", "?locale=all"]) {
+        const rest = await restGet(["singles", SITE_DATA], query);
+        expect(rest.status, JSON.stringify(rest.json)).toBe(200);
+        expectEvery(rest.json);
+      }
+      const direct = (await t.nextly.findSingle({
+        slug: SITE_DATA,
+        locale: "en",
+        status: "published",
+        translations: "all",
+        overrideAccess: false,
+      })) as Record<string, unknown>;
+      expectEvery(direct);
+
+      const sources = await restGet(
+        ["singles", SITE_DATA],
+        "?locale=es&source-locales=1"
+      );
+      expect(sources.status, JSON.stringify(sources.json)).toBe(200);
+      expect(sources.json._sources).toMatchObject({ title: "es", meta: "es" });
+      const directSources = (await t.nextly.findSingle({
+        slug: SITE_DATA,
+        locale: "es",
+        status: "published",
+        sourceLocales: true,
+      })) as Record<string, unknown>;
+      expect(directSources._sources).toMatchObject({ title: "es", meta: "es" });
     }, 90_000);
   }
 );
