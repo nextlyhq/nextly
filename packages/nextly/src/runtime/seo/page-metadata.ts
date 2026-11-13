@@ -140,6 +140,61 @@ function directivesOf(value: unknown): RobotsDirectives | undefined {
   return directives;
 }
 
+/** Google's image preview sizes, smallest first. */
+const IMAGE_PREVIEWS = ["none", "standard", "large"];
+
+/** A snippet length as a limit to compare: no limit (`-1`) is the largest. */
+const snippetLimit = (value: unknown): number | undefined =>
+  typeof value !== "number" ? undefined : value < 0 ? Infinity : value;
+
+/** A date directive's moment, where it names one. */
+const momentOf = (value: unknown): number | undefined => {
+  if (typeof value !== "string") return undefined;
+  const at = Date.parse(value);
+  return Number.isNaN(at) ? undefined : at;
+};
+
+/**
+ * Where both the route and the answer limit how the page is shown, the
+ * stricter of the two: the smaller image preview and snippet, the earlier
+ * date to leave results. Each side may only narrow what the other allows, as
+ * with visibility, so a route's own limit stands against a looser site
+ * default and a page's own stricter choice stands against a looser route.
+ */
+function stricterLimits(
+  code: RobotsDirectives,
+  answer: RobotsDirectives
+): RobotsDirectives {
+  const stricter: RobotsDirectives = {};
+  const preview = [code["max-image-preview"], answer["max-image-preview"]]
+    .map(value => (typeof value === "string" ? value.toLowerCase() : value))
+    .filter(
+      value => typeof value === "string" && IMAGE_PREVIEWS.includes(value)
+    )
+    .sort(
+      (a, b) =>
+        IMAGE_PREVIEWS.indexOf(String(a)) - IMAGE_PREVIEWS.indexOf(String(b))
+    )[0];
+  if (preview !== undefined) stricter["max-image-preview"] = preview;
+  const snippets = [code["max-snippet"], answer["max-snippet"]].filter(
+    value => snippetLimit(value) !== undefined
+  );
+  if (snippets.length > 0) {
+    stricter["max-snippet"] = snippets.reduce((a, b) =>
+      (snippetLimit(a) ?? Infinity) <= (snippetLimit(b) ?? Infinity) ? a : b
+    );
+  }
+  const dates = [code.unavailable_after, answer.unavailable_after].filter(
+    value => momentOf(value) !== undefined
+  );
+  if (dates.length > 0) {
+    stricter.unavailable_after = dates.reduce((a, b) =>
+      (momentOf(a) ?? Infinity) <= (momentOf(b) ?? Infinity) ? a : b
+    );
+  }
+  return stricter;
+}
+
 /**
  * The robots a page is served: the answer's visibility, with the route's own
  * as a floor, and every other directive the route gave, such as Google's
@@ -157,7 +212,13 @@ function robotsOver(
   const code = directivesOf(own) ?? {};
   const index = answer.index !== false && code.index !== false;
   const follow = answer.follow !== false && code.follow !== false;
-  const robots: Record<string, unknown> = { ...code, ...answer, index, follow };
+  const robots: Record<string, unknown> = {
+    ...code,
+    ...answer,
+    ...stricterLimits(code, answer),
+    index,
+    follow,
+  };
   const googleBot = isRecord(own) ? own.googleBot : undefined;
   if (googleBot !== undefined) {
     const bot = directivesOf(googleBot) ?? {};
@@ -512,7 +573,22 @@ const pageMetadataAnswerSchema = z.object({
   title: z.string().optional(),
   description: z.string().optional(),
   canonical: z.string().optional(),
-  robots: z.object({ index: z.boolean(), follow: z.boolean() }).optional(),
+  // Google's display controls are optional, each in the form Google reads
+  // it: a size Google has no name for, or a fractional snippet length, is
+  // refused rather than served as a directive Google ignores.
+  robots: z
+    .object({
+      index: z.boolean(),
+      follow: z.boolean(),
+      maxImagePreview: z.enum(["none", "standard", "large"]).optional(),
+      maxSnippet: z.number().int().min(-1).optional(),
+      nosnippet: z.boolean().optional(),
+      noimageindex: z.boolean().optional(),
+      unavailableAfter: z.string().optional(),
+      noarchive: z.boolean().optional(),
+      nocache: z.boolean().optional(),
+    })
+    .optional(),
   social: z
     .object({
       title: z.string().optional(),

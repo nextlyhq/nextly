@@ -11,6 +11,7 @@
 import { isRecord } from "../plain-values";
 import {
   AI_CRAWLER_CHOICES,
+  largeImagePreviewsOn,
   SITE_KINDS,
   type AiCrawlerChoice,
   type SeoContentType,
@@ -102,6 +103,8 @@ export interface SettingsDraft {
   robotsRules: RobotsRulesDraft;
   /** The codes other services verify the site with. */
   verificationCodes: VerificationDraft;
+  /** Whether every listed page asks for large image previews. */
+  largeImagePreviews: boolean;
 }
 
 /** The stored Single as the admin reads it. */
@@ -285,6 +288,8 @@ export function draftOf(
     plainTextCopies: stored.plainTextCopies === true,
     robotsRules: robotsRulesDraftOf(stored.robotsRules),
     verificationCodes: verificationDraftOf(stored.verificationCodes),
+    // On unless stored as switched off.
+    largeImagePreviews: largeImagePreviewsOn(stored.largeImagePreviews),
   };
 }
 

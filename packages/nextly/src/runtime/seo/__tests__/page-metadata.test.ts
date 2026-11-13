@@ -659,6 +659,141 @@ describe("the route's own robots", () => {
   });
 });
 
+describe("the answer's display controls", () => {
+  it("places each control in the head as Google spells it", () => {
+    const metadata = metadataFromAnswer({
+      robots: {
+        index: true,
+        follow: true,
+        maxImagePreview: "standard",
+        maxSnippet: 80,
+        nosnippet: true,
+        noimageindex: true,
+        unavailableAfter: "2026-12-31T23:59:00.000Z",
+        noarchive: true,
+        nocache: true,
+      },
+    });
+    expect(metadata.robots).toEqual({
+      index: true,
+      follow: true,
+      "max-image-preview": "standard",
+      "max-snippet": 80,
+      nosnippet: true,
+      noimageindex: true,
+      unavailable_after: "2026-12-31T23:59:00.000Z",
+      noarchive: true,
+      nocache: true,
+    });
+  });
+
+  it("serves the answer's controls where the route gives none", async () => {
+    provide({
+      resolve: () => ({
+        robots: { index: true, follow: true, maxImagePreview: "large" },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: undefined,
+      tags: [],
+    });
+    expect(metadata.robots).toEqual({
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+    });
+  });
+
+  it("serves the stricter of the route's and the answer's limits", async () => {
+    provide({
+      resolve: () => ({
+        robots: {
+          index: true,
+          follow: true,
+          maxImagePreview: "large",
+          maxSnippet: 120,
+          unavailableAfter: "2027-01-01T00:00:00.000Z",
+        },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: {
+        robots:
+          "max-image-preview:standard, max-snippet:50, noarchive, unavailable_after: 2026-06-01T00:00:00.000Z",
+      },
+      tags: [],
+    });
+    expect(metadata.robots).toEqual({
+      index: true,
+      follow: true,
+      "max-image-preview": "standard",
+      "max-snippet": 50,
+      noarchive: true,
+      unavailable_after: "2026-06-01T00:00:00.000Z",
+    });
+  });
+
+  it("lets a page's own stricter choice win over the route's looser one", async () => {
+    provide({
+      resolve: () => ({
+        robots: {
+          index: true,
+          follow: true,
+          maxImagePreview: "none",
+          maxSnippet: 30,
+          nosnippet: true,
+        },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: {
+        robots: {
+          index: true,
+          follow: true,
+          "max-image-preview": "large",
+          "max-snippet": -1,
+        },
+      },
+      tags: [],
+    });
+    expect(metadata.robots).toEqual({
+      index: true,
+      follow: true,
+      "max-image-preview": "none",
+      "max-snippet": 30,
+      nosnippet: true,
+    });
+  });
+
+  it.each([
+    [
+      "an image preview size Google has no name for",
+      { maxImagePreview: "huge" },
+    ],
+    ["a snippet length that is not a whole number", { maxSnippet: 2.5 }],
+    ["a snippet length below no limit", { maxSnippet: -2 }],
+    ["a switch that is not on or off", { nosnippet: "yes" }],
+    ["a date that is not text", { unavailableAfter: 20261231 }],
+  ])("refuses an answer with %s", async (_, controls) => {
+    provide({
+      resolve: () =>
+        ({
+          title: "Answered",
+          robots: { index: true, follow: true, ...controls },
+        }) as unknown as PageMetadataAnswer,
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: { title: "Own" },
+      tags: [],
+    });
+    expect(metadata.title).toBe("Own");
+  });
+});
+
 describe("the route's own canonical", () => {
   it("is kept where the answer has none, such as a type with no public address", async () => {
     provide({ resolve: () => ({ title: "Feature" }) });

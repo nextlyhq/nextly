@@ -21,6 +21,17 @@ export type SiteKind = (typeof SITE_KINDS)[number];
 export const AI_CRAWLER_CHOICES = ["all", "search", "block"] as const;
 export type AiCrawlerChoice = (typeof AI_CRAWLER_CHOICES)[number];
 
+/**
+ * Whether the site asks for large image previews on its pages: on unless the
+ * settings store it switched off. Nothing stored, or empty, reads as on, so a
+ * site whose settings predate the switch, or whose database has no value for
+ * it yet, keeps the default. The settings screen and the page's answer both
+ * read it here.
+ */
+export function largeImagePreviewsOn(stored: unknown): boolean {
+  return stored !== false;
+}
+
 /** First-time setup's three steps; this many done means it is finished. */
 export const SETUP_STEPS = 3;
 

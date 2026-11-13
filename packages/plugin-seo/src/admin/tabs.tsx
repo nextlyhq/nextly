@@ -520,6 +520,24 @@ export function CrawlersTab({
           To keep pages out of search, hide them on the page or by content type.
         </ControlNote>
       </SettingsRowGroup>
+      {/* The site's default for every listed page; a page's own size under
+          its Advanced section wins over it. */}
+      <SettingsRowGroup
+        label="Large image previews"
+        description="Lets Google show a big picture from your pages in results and in Discover."
+      >
+        <Switch
+          aria-label="Large image previews"
+          checked={draft.largeImagePreviews}
+          onCheckedChange={largeImagePreviews =>
+            change(current => ({ ...current, largeImagePreviews }))
+          }
+        />
+        <ControlNote>
+          On by default. Google asks for pictures at least 1200 px wide for
+          this.
+        </ControlNote>
+      </SettingsRowGroup>
       <SettingsRowGroup
         label="AI tools"
         description="What tools that read pages for AI may do."

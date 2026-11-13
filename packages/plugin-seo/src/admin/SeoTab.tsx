@@ -24,6 +24,7 @@ import type { SeoTabContext } from "../tab/contract";
 import { problemsBadge, seoProblems, type SeoProblem } from "../tab/problems";
 import { SEO_GROUP } from "../tab/typed";
 
+import type { DISPLAY_FIELDS } from "./display-rows";
 import { SeoPanel } from "./SeoPanel";
 import { useShareImages } from "./share-images";
 import { publishSeoStatus, statusKeyOf } from "./status";
@@ -95,10 +96,18 @@ function useStatusLine(
   }, [key, from, count, typeLabel]);
 }
 
+/** One of the panel's values, as the document's form holds it. */
+type DocumentField = ReturnType<typeof useDocumentField>;
+
 /** Each of the panel's values, writable as the person typing it would. */
-function useSeoFields(): Record<
-  SeoPanelField,
-  ReturnType<typeof useDocumentField>
+function useSeoFields(): Record<SeoPanelField, DocumentField> {
+  return { ...usePageFields(), ...useDisplayFields() };
+}
+
+/** The values about what the page says and where it lives. */
+function usePageFields(): Record<
+  Exclude<SeoPanelField, (typeof DISPLAY_FIELDS)[number]>,
+  DocumentField
 > {
   return {
     metaTitle: useDocumentField(`${SEO_GROUP}.metaTitle`),
@@ -110,6 +119,22 @@ function useSeoFields(): Record<
     canonicalElsewhere: useDocumentField(`${SEO_GROUP}.canonicalElsewhere`),
     noindex: useDocumentField(`${SEO_GROUP}.noindex`),
     structuredDataType: useDocumentField(`${SEO_GROUP}.structuredDataType`),
+  };
+}
+
+/** The values about how search results may show the page. */
+function useDisplayFields(): Record<
+  (typeof DISPLAY_FIELDS)[number],
+  DocumentField
+> {
+  return {
+    maxImagePreview: useDocumentField(`${SEO_GROUP}.maxImagePreview`),
+    maxSnippet: useDocumentField(`${SEO_GROUP}.maxSnippet`),
+    nosnippet: useDocumentField(`${SEO_GROUP}.nosnippet`),
+    noimageindex: useDocumentField(`${SEO_GROUP}.noimageindex`),
+    unavailableAfter: useDocumentField(`${SEO_GROUP}.unavailableAfter`),
+    noarchive: useDocumentField(`${SEO_GROUP}.noarchive`),
+    nocache: useDocumentField(`${SEO_GROUP}.nocache`),
   };
 }
 

@@ -310,6 +310,43 @@ describe("pageProblems", () => {
     expect(kinds(problems)).toEqual(["brokenLink", "imageAlt"]);
   });
 
+  it("reports a page whose date to drop from search has passed, fixed on its SEO tab", () => {
+    const problems = pageProblems(
+      withAnswer({
+        robots: { value: { index: false, follow: true }, from: "page" },
+        display: {
+          unavailableAfter: {
+            value: "2026-11-01T00:00:00.000Z",
+            passed: true,
+          },
+        },
+      })
+    );
+    expect(problems).toEqual([
+      {
+        kind: "dropDatePassed",
+        subject: SUBJECT,
+        what: "Dropped from search after 2026-11-01 00:00 UTC",
+        action: "Remove the date",
+        fix: { place: "page", tab: "seo", field: "unavailableAfter" },
+      },
+    ]);
+  });
+
+  it("reports nothing for a date to drop from search still to come", () => {
+    const problems = pageProblems(
+      withAnswer({
+        display: {
+          unavailableAfter: {
+            value: "2099-01-01T00:00:00.000Z",
+            passed: false,
+          },
+        },
+      })
+    );
+    expect(problems).toEqual([]);
+  });
+
   it("reports a language left out of language links once, for the whole site", () => {
     const problems = pageProblems(
       facts({

@@ -118,17 +118,24 @@ bulk insert can omit it too, because that path does not apply nested defaults. S
 
 ### The default fields
 
-| Field                | Type     | Notes                                                                                                                                                           |
-| -------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `metaTitle`          | text     | Any length. Past about 60 characters Google cuts it to fit, so the SEO tab and the problem list warn, and the title is saved and served as typed                |
-| `metaDescription`    | textarea | Any length. Past about 160 characters the same warning applies                                                                                                  |
-| `socialTitle`        | text     | The title a shared link's card uses, where it should differ from `metaTitle`                                                                                    |
-| `socialDescription`  | textarea | The description a shared link's card uses, where it should differ from `metaDescription`                                                                        |
-| `ogImage`            | upload   | Relates to `media`. The social preview image                                                                                                                    |
-| `canonical`          | text     | A per-page canonical URL                                                                                                                                        |
-| `canonicalElsewhere` | checkbox | Says the page first appeared on another site, so a `canonical` there is used                                                                                    |
-| `noindex`            | checkbox | Defaults to `false`. Drops the entry from this plugin's sitemap. The `robots` directive that actually tells a crawler comes from `buildMetadata`, which is core |
-| `structuredDataType` | text     | The [structured data type](#structured-data) this page is described as, where it differs from its content type's. Empty uses the content type's                 |
+| Field                | Type     | Notes                                                                                                                                                                    |
+| -------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `metaTitle`          | text     | Any length. Past about 60 characters Google cuts it to fit, so the SEO tab and the problem list warn, and the title is saved and served as typed                         |
+| `metaDescription`    | textarea | Any length. Past about 160 characters the same warning applies                                                                                                           |
+| `socialTitle`        | text     | The title a shared link's card uses, where it should differ from `metaTitle`                                                                                             |
+| `socialDescription`  | textarea | The description a shared link's card uses, where it should differ from `metaDescription`                                                                                 |
+| `ogImage`            | upload   | Relates to `media`. The social preview image                                                                                                                             |
+| `canonical`          | text     | A per-page canonical URL                                                                                                                                                 |
+| `canonicalElsewhere` | checkbox | Says the page first appeared on another site, so a `canonical` there is used                                                                                             |
+| `noindex`            | checkbox | Defaults to `false`. Drops the entry from this plugin's sitemap. The `robots` directive that actually tells a crawler comes from `buildMetadata`, which is core          |
+| `structuredDataType` | text     | The [structured data type](#structured-data) this page is described as, where it differs from its content type's. Empty uses the content type's                          |
+| `maxImagePreview`    | text     | `large`, `standard` or `none`: the largest picture Google may show from the page. Empty uses the site's default. See [How results show a page](#how-results-show-a-page) |
+| `maxSnippet`         | number   | The most characters of text under the page's link. Empty is any length; 0 is refused, since `nosnippet` is how a page shows none                                         |
+| `nosnippet`          | checkbox | No text under the page's link in any Google result                                                                                                                       |
+| `noimageindex`       | checkbox | Asks Google not to index the pictures on the page                                                                                                                        |
+| `unavailableAfter`   | date     | When the page leaves search. After it, the page is served `noindex` and leaves the sitemap and `llms.txt`                                                                |
+| `noarchive`          | checkbox | Asks search engines not to keep a stored copy. Google doesn't use it                                                                                                     |
+| `nocache`            | checkbox | The same request, as some search engines spell it. Google doesn't use it                                                                                                 |
 
 <Callout type="warn">
 **Ticking `noindex` does not on its own keep a page out of search results.** The plugin
@@ -216,8 +223,9 @@ The tab shows, in order:
   defaults. Typing marks it **Typed for this page**, with one action, **Go back to
   automatic**, that empties it again.
 - **Advanced**, closed until opened: hiding the page from search, its official address
-  (the canonical), a different title and description when shared, the share image, and
-  the [structured data type](#structured-data), with what the type still lacks.
+  (the canonical), a different title and description when shared, the share image, the
+  [structured data type](#structured-data), with what the type still lacks, and
+  [how search results may show the page](#how-results-show-a-page).
 - **Check what search engines received**, once the page is saved and has an address: it
   opens [Inspect](#inspect-what-search-engines-receive) for this page.
 
@@ -799,14 +807,14 @@ address of its own (`?tab=general`, `types`, `images`, `brand`, `crawlers`, `con
 link lands on it, and **Save changes** under any tab saves every tab's changes; **Cancel** lets go of
 them:
 
-| Tab                   | What it holds                                                                                                                                                                                                                                   |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| General               | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, and the default description                                                                           |
-| Content types         | Each content type with SEO (set in code), whether it has a public address yet, its title pattern, whether the whole type is hidden from search, and what its pages are described as in structured data, with the field each detail is read from |
-| Share images          | The default share image, for a page with none of its own                                                                                                                                                                                        |
-| Organization          | The kind of site, the organization's name and other names, its logo, and its social profiles                                                                                                                                                    |
-| Search engines and AI | What AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none; and [llms.txt and plain-text copies](#llmstxt-and-plain-text-copies), each off until switched on                                  |
-| Connections           | Optional services, each off until switched on: [Search Console and IndexNow](#search-console-and-indexnow)                                                                                                                                      |
+| Tab                   | What it holds                                                                                                                                                                                                                                                                                         |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| General               | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, and the default description                                                                                                                                 |
+| Content types         | Each content type with SEO (set in code), whether it has a public address yet, its title pattern, whether the whole type is hidden from search, and what its pages are described as in structured data, with the field each detail is read from                                                       |
+| Share images          | The default share image, for a page with none of its own                                                                                                                                                                                                                                              |
+| Organization          | The kind of site, the organization's name and other names, its logo, and its social profiles                                                                                                                                                                                                          |
+| Search engines and AI | Whether pages ask for [large image previews](#how-results-show-a-page), on by default; what AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none; and [llms.txt and plain-text copies](#llmstxt-and-plain-text-copies), each off until switched on |
+| Connections           | Optional services, each off until switched on: [Search Console and IndexNow](#search-console-and-indexnow)                                                                                                                                                                                            |
 
 The production addresses saved on General are the ones the page's canonical, the sitemap,
 robots.txt and the staging guard all read; `NEXTLY_PRODUCTION_ADDRESSES`, where it is set, wins over
@@ -955,6 +963,43 @@ gap. What a person typed always wins, so a route's code fills only what nobody t
   so a page whose type declares no address is never served without the one it had.
 - **The share image** may be stored as a media id: the plugin looks it up, so a page read at
   `depth: 0` keeps its image.
+
+## How results show a page
+
+Google reads a few more [robots meta tag](https://developers.google.com/search/docs/crawling-indexing/robots-meta-tag)
+values that change how a page shows in its results, not whether it is listed. The plugin serves
+them in each listed page's `robots` tag; a page hidden from search is served none of them.
+
+- **Large image previews** (`max-image-preview:large`) are asked for on every listed page by
+  default, so Google may show a picture up to the width of the screen, in results and in
+  Discover, which asks for pictures at least 1200 px wide. Switch it off on **Settings ›
+  Search engines and AI**, and pages are served no `max-image-preview` at all, so Google's own
+  default applies.
+- Under each page's **Advanced** section, **How search results may show this page** offers:
+  - **Image preview size**: Large, Standard or None, for this page. The site's default shows
+    as **Automatic**; choosing the size the default already gives stores nothing.
+  - **Text under the link**: any length, **Shorter** (`max-snippet`, a number of characters
+    above 0), or **None** (`nosnippet`). None removes the page's text from every Google
+    result, and Google won't use the page as a direct source in AI Overviews or AI Mode;
+    the page stays in search. 0 characters is refused and points to None, so that cost is
+    always read before it is chosen. To keep one passage out instead, mark its section
+    "Never quote this" in the Page Builder.
+  - **Show this page's images in image search**: off serves `noimageindex`. A picture used
+    on another page can still appear from there.
+  - **Drop from search after a date** (`unavailable_after`), set in UTC. Google stops showing
+    the page after it; the page stays online. Once the date has passed the page is also
+    served `noindex` and leaves the sitemap and `llms.txt`, and while it is published the
+    problem list names it until the date is removed.
+  - **Controls for other search engines**: `noarchive` and `nocache`, closed away, each its
+    own switch and off by default. Google uses neither, and no other setting turns either on.
+
+A route that sets its own limits in `robots` keeps them where they are stricter: the smaller
+image preview and snippet, and the earlier date, are served.
+
+The sitemap and `llms.txt` are worked out on each request, so they leave the page out from the
+date. A page's head is cached until something it was built from changes, so the `noindex` a
+passed date adds is served from the page's next rebuild after the date. Google stops showing the
+page at the date either way, since `unavailable_after` is served from the start.
 
 ## Keeping copies out of search
 
@@ -1506,7 +1551,8 @@ it is published in and at its address there, as its head would be served, for:
 - structured data missing a detail its type needs;
 - a language the site's language links leave out, because search engines don't accept its code;
 - a robots.txt rule that keeps Googlebot, Bingbot or every crawler away from it, though the
-  sitemap lists it.
+  sitemap lists it;
+- a date to drop from search that has passed, which keeps the published page hidden.
 
 Each kind of problem has one severity. **Errors** keep the site, a content type or a page out of
 search, or keep what was set from reaching it: no production address, a content type with no
@@ -1519,7 +1565,7 @@ the Overview alike. Problems shows every severity or one at a time, each with it
 count on the Overview opens it showing that severity only.
 
 A page hidden from search on purpose, by its own setting, its whole type or its route's code, is
-checked only for broken links and alt text. The site as a
+checked only for broken links and alt text, and for a passed date to drop from search. The site as a
 whole is checked for a missing production address, a collection with no public address, a
 redirect whose To address redirects again, a page left out of the sitemap because another page
 holds its address, and sitemap dates that keep matching the day they are checked: more than half

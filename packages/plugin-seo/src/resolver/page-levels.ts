@@ -60,6 +60,8 @@ export interface SiteRules {
   robotsRules?: StoredRobotsRules;
   /** Why the stored own lines are not served, where they fail their rule. */
   robotsRulesRefused?: string;
+  /** Whether listed pages ask for large image previews: on unless `false`. */
+  largeImagePreviews?: boolean;
 }
 
 /** No rules set: every value comes from the page, its route or its content. */
@@ -351,6 +353,7 @@ export async function levelsOf(
       // The environment's addresses win over the settings', as the staging
       // guard reads them, so the two never disagree about the site's own.
       productionAddresses: productionAddressesOf(rules.productionAddresses),
+      largeImagePreviews: rules.largeImagePreviews,
     }),
     ...(address === undefined ? {} : { address }),
     ...(rules.hiddenTypes?.includes(key) === true ? { typeHidden: true } : {}),

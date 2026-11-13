@@ -15,6 +15,7 @@
  */
 import type { PageMetadataImage } from "@nextlyhq/plugin-sdk";
 
+import { typedDisplay } from "../resolver/display";
 import type { Levels } from "../resolver/order";
 
 /** The group the plugin adds to each content type. */
@@ -30,6 +31,13 @@ const TYPED_SEO_FIELDS = [
   "canonical",
   "canonicalElsewhere",
   "noindex",
+  "maxImagePreview",
+  "maxSnippet",
+  "nosnippet",
+  "noimageindex",
+  "unavailableAfter",
+  "noarchive",
+  "nocache",
 ] as const;
 
 /** A group's values, or none where the group is not an object. */
@@ -66,6 +74,8 @@ export function typedPageLevel(
   if (image !== undefined && image.url.trim() !== "") level.image = image;
   if (typed.canonicalElsewhere === true) level.canonicalElsewhere = true;
   if (typed.noindex === true) level.hidden = true;
+  const display = typedDisplay(typed);
+  if (Object.keys(display).length > 0) level.display = display;
   return level;
 }
 

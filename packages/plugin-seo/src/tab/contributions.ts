@@ -46,6 +46,13 @@ const TAB_FIELDS: Readonly<Record<string, readonly string[]>> = {
   canonicalElsewhere: ["checkbox"],
   noindex: ["checkbox"],
   [STRUCTURED_DATA_FIELD]: ["text"],
+  maxImagePreview: ["text"],
+  maxSnippet: ["number"],
+  nosnippet: ["checkbox"],
+  noimageindex: ["checkbox"],
+  unavailableAfter: ["date"],
+  noarchive: ["checkbox"],
+  nocache: ["checkbox"],
 };
 
 /**

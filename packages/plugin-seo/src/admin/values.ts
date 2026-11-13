@@ -21,6 +21,13 @@ export const SEO_PANEL_FIELDS = [
   "canonicalElsewhere",
   "noindex",
   "structuredDataType",
+  "maxImagePreview",
+  "maxSnippet",
+  "nosnippet",
+  "noimageindex",
+  "unavailableAfter",
+  "noarchive",
+  "nocache",
 ] as const;
 
 /** One value the panel edits. */

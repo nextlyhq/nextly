@@ -35,6 +35,7 @@ export type ProblemKind =
   | "languageCode"
   | "notListed"
   | "robotsBlocked"
+  | "dropDatePassed"
   | "noTitle"
   | "noDescription"
   | "sharedTitle"
@@ -100,6 +101,12 @@ export const KIND_TEXT: Readonly<
     title: "Page in the sitemap that robots.txt blocks",
     explain:
       "The sitemap lists the page for search engines, but robots.txt asks them not to read it, so what was set for it doesn't reach search. To keep a page out of search, use Hide from search; robots.txt only stops crawling.",
+    siteWide: false,
+  },
+  dropDatePassed: {
+    title: "Page past its date to drop from search",
+    explain:
+      "The page is still published, but it is now hidden from search, and Google may already have dropped it. Remove the date to bring it back.",
     siteWide: false,
   },
   noAddress: {
@@ -201,6 +208,7 @@ export const KIND_SEVERITY: Readonly<Record<ProblemKind, ProblemSeverity>> = {
   datesToday: "warning",
   languageCode: "warning",
   notListed: "warning",
+  dropDatePassed: "warning",
   brokenLink: "warning",
   noDescription: "warning",
   sharedTitle: "warning",
@@ -265,6 +273,7 @@ export const KIND_ORDER: readonly ProblemKind[] = [
   "languageCode",
   "notListed",
   "robotsBlocked",
+  "dropDatePassed",
   "noTitle",
   "sharedTitle",
   "canonical",

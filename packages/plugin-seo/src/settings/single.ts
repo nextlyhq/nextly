@@ -3,8 +3,8 @@
  * production addresses, default description and share image, the title
  * pattern of each content type, the brand facts every output reads, what kind
  * of site it is, what AI tools may do, which optional outputs for AI tools
- * are switched on, the codes other services verify the site with, and how
- * far first-time setup got.
+ * are switched on, the codes other services verify the site with, whether
+ * pages ask for large image previews, and how far first-time setup got.
  *
  * A Single rather than plugin settings because it is content: its text is
  * kept per language where the site is translated, its images are media
@@ -157,6 +157,13 @@ export function seoSettingsSingle(): SingleConfig {
       checkbox({
         name: "plainTextCopies",
         label: "Plain-text copies of pages",
+      }),
+      // On by default: only a stored `false` turns it off, so a site whose
+      // database has no value for it yet asks for large previews too.
+      checkbox({
+        name: "largeImagePreviews",
+        label: "Large image previews",
+        defaultValue: true,
       }),
       number({
         name: "setupStep",
