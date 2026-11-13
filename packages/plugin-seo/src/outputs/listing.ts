@@ -20,6 +20,7 @@
 import {
   publicAddressOf,
   type AddressHolder,
+  type PageMetadataImage,
   type PublicAddress,
   type PluginContext,
   type PublicAddressType,
@@ -45,9 +46,12 @@ import {
   standingOf,
   type HeldLanguages,
 } from "../languages/versions";
+import { singleKey } from "../problems/page-types";
 import type { SeoAnswer } from "../resolver/order";
 import type { ReadRules } from "../resolver/provider";
 import { publishedWhere, toLastModified } from "../sitemap";
+import { mappedImageOf } from "../structured-data/graph";
+import type { ReadStructuredDataRules } from "../structured-data/rules";
 
 import type { SitemapPage } from "./sitemap-files";
 
@@ -90,6 +94,11 @@ export interface ListingOptions {
   origin: string;
   /** The site's rules, as the page's head reads them. */
   readRules?: ReadRules;
+  /**
+   * Structured data's rules, where a content type maps a field its pages'
+   * structured data reads an image from: that image is listed too.
+   */
+  readStructuredDataRules?: ReadStructuredDataRules;
   /** Only these collections, where given; Singles are listed either way. */
   collections?: readonly string[];
   /**
@@ -232,6 +241,10 @@ export async function listPages(
   // once a page; nothing is kept past it, so the next listing reads afresh.
   const readRules =
     options.readRules === undefined ? undefined : onceEach(options.readRules);
+  const readStructuredDataRules =
+    options.readStructuredDataRules === undefined
+      ? undefined
+      : onceEach(options.readStructuredDataRules);
   for await (const batch of candidates(ctx, options)) {
     await listBatch(
       ctx,
@@ -240,6 +253,9 @@ export async function listPages(
         ...options,
         language,
         ...(readRules === undefined ? {} : { readRules }),
+        ...(readStructuredDataRules === undefined
+          ? {}
+          : { readStructuredDataRules }),
       },
       found
     );
@@ -262,6 +278,18 @@ export async function listPages(
 }
 
 /**
+ * Whether the route serving a page built in code calls the metadata
+ * function: its call is recorded, or the page was declared for the build,
+ * which counts before it renders, since the build may list it first.
+ */
+function callsMetadata(
+  route: CodeRoute,
+  row: { connected?: boolean } | undefined
+): boolean {
+  return row?.connected === true || route.declared === true;
+}
+
+/**
  * The pages built in code whose route calls the metadata function, listed
  * into `found` in the site's language where their answer lets search
  * engines index them at their own address. An address an entry already
@@ -274,16 +302,17 @@ async function listCodePages(
   found: { pages: ListedPage[]; problems: ListingProblem[] }
 ): Promise<void> {
   const connected = await codePages(ctx, routes, options.readRules);
+  const siteImage = await siteImageIn(ctx, options.readRules, options.language);
   // Who holds each address, read once per language for every connected one.
   const held = await heldByDocuments(
     ctx,
     connected.flatMap(({ route, row }) =>
-      row?.connected === true ? [route.path] : []
+      callsMetadata(route, row) ? [route.path] : []
     ),
     options.origin
   );
   for (const { route, row, answer } of connected) {
-    if (row?.connected !== true) continue;
+    if (!callsMetadata(route, row)) continue;
     // An entry holds it in its language, hidden from search or not: the
     // address is the entry's.
     if (held.has(route.path)) continue;
@@ -293,8 +322,13 @@ async function listCodePages(
       loc: at.loc,
       path: route.path,
       language: options.language,
-      holder: { collection: codePagesSlug(ctx), id: row.id },
-      images: ownImage(answer, options.origin),
+      // A declared page not recorded yet is known by its address alone.
+      holder: { collection: codePagesSlug(ctx), id: row?.id ?? route.path },
+      images: ownImages(
+        answer,
+        options.origin,
+        siteImage === undefined ? {} : { siteImage }
+      ),
     });
   }
 }
@@ -404,11 +438,59 @@ async function listIn(
   });
 }
 
-/** The page's own image as an absolute address, not the site's default. */
-function ownImage(answer: SeoAnswer, origin: string): string[] {
-  if (answer.image === undefined || answer.image.from === "site") return [];
-  const image = absolute(answer.image.value.url, origin);
-  return image === null ? [] : [image];
+/**
+ * The page's own images as absolute addresses, each once: its share image,
+ * and the image its structured data reads from a mapped field. Never the
+ * site's default share image, whichever level names it: a route handing its
+ * page the site's card, or a page set to it, is no image of the page's own.
+ */
+function ownImages(
+  answer: SeoAnswer,
+  origin: string,
+  also: { siteImage?: string; mapped?: PageMetadataImage }
+): string[] {
+  const site =
+    also.siteImage === undefined ? null : absolute(also.siteImage, origin);
+  const share = answer.image?.from === "site" ? undefined : answer.image?.value;
+  const urls = [share, also.mapped].map(image =>
+    image === undefined ? null : absolute(image.url, origin)
+  );
+  return [
+    ...new Set(
+      urls.filter((url): url is string => url !== null && url !== site)
+    ),
+  ];
+}
+
+/** The site's default share image in `language`, where its rules name one. */
+async function siteImageIn(
+  ctx: PluginContext,
+  readRules: ReadRules | undefined,
+  language: string
+): Promise<string | undefined> {
+  return (await readRules?.(ctx, language))?.image?.url;
+}
+
+/** The images `candidate` is listed with in `language`, from its `answer`. */
+async function entryImages(
+  ctx: PluginContext,
+  candidate: Candidate,
+  answer: SeoAnswer,
+  language: string,
+  options: ListingOptions
+): Promise<string[]> {
+  const { type, document } = candidate;
+  const rules = await options.readStructuredDataRules?.(ctx, language);
+  const key = type.kind === "single" ? singleKey(type.slug) : type.slug;
+  const mapped =
+    rules === undefined
+      ? undefined
+      : await mappedImageOf(ctx, key, document, rules);
+  const siteImage = await siteImageIn(ctx, options.readRules, language);
+  return ownImages(answer, options.origin, {
+    ...(siteImage === undefined ? {} : { siteImage }),
+    ...(mapped === undefined ? {} : { mapped }),
+  });
 }
 
 /**
@@ -453,7 +535,7 @@ async function listed(
       path: own.path,
       language,
       holder,
-      images: ownImage(answer, options.origin),
+      images: await entryImages(ctx, candidate, answer, language, options),
       ...(lastModified === undefined ? {} : { lastModified }),
     },
   };

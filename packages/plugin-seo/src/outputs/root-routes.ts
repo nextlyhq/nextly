@@ -13,6 +13,7 @@ import {
 } from "../address-record/catch-up";
 import type { CodeRoute } from "../code-pages/routes";
 import type { ReadRules } from "../resolver/provider";
+import type { ReadStructuredDataRules } from "../structured-data/rules";
 
 import { llmsTxtOf } from "./ai-outputs";
 import { listPages } from "./listing";
@@ -29,6 +30,8 @@ export interface RootFilesConfig {
    */
   origin?: string;
   readRules: ReadRules;
+  /** Structured data's rules, for the images a content type maps. */
+  readStructuredDataRules?: ReadStructuredDataRules;
   /** Whether the sitemap is served, and what it lists and splits by. */
   sitemap?: { collections?: readonly string[]; limits: SitemapLimits };
   /** Whether robots.txt is served, and what it asks AI crawlers. */
@@ -102,6 +105,9 @@ export async function sitemapResponse(
   const { pages } = await listPages(ctx, {
     origin,
     readRules: config.readRules,
+    ...(config.readStructuredDataRules === undefined
+      ? {}
+      : { readStructuredDataRules: config.readStructuredDataRules }),
     ...(config.codeRoutes === undefined
       ? {}
       : { codeRoutes: config.codeRoutes }),

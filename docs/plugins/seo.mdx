@@ -339,9 +339,11 @@ Each entry carries:
   each of its languages, itself included, and `x-default`, the same links as its head;
 - `<lastmod>`, when the published page last changed. Saving a working draft leaves it as
   it was;
-- the page's main image as an `<image:image>`: its share image, or the cover image its
-  content offers, as the page's head uses it. The site's default share image, which every
-  page shares, is not listed.
+- the page's main images as `<image:image>`: its share image, or the cover image its
+  content offers, as the page's head uses it, and the image its
+  [structured data](#structured-data) reads where the content type maps one, such as a
+  post's cover. The site's default share image, which every page shares, is never listed,
+  whichever level names it: a route that hands its page the default card lists none.
 
 **Large sites get a sitemap index.** One file holds at most 50,000 addresses and 50 MB.
 Past either, `/sitemap.xml` answers a sitemap index naming each file as
@@ -1736,6 +1738,44 @@ The screen marks **Not connected** each route that has not called `seoMetadata`.
 for its address is kept, and reaches the page once the line is in. A route records that it is
 connected when it renders: while `next build` renders the site, or later for an address the
 site knows of. A request for any other address records nothing.
+
+### Pages a sitemap lists while `next build` runs
+
+Next.js writes the addresses a route declares through `generateStaticParams` to its prerender
+manifest only once every page is built. A sitemap or `llms.txt` the site renders during the
+build, from its own `app/sitemap.ts` reading `listedPages`, would otherwise list none of them.
+Wrap the route's `generateStaticParams` in `seoStaticParams` (experimental), with the route's
+address as Next.js names it, route groups left out:
+
+```tsx
+// src/app/integrations/[name]/page.tsx
+import { seoStaticParams } from "@nextlyhq/plugin-seo";
+
+export const generateStaticParams = seoStaticParams(
+  "/integrations/[name]",
+  () => [{ name: "wordpress" }, { name: "webflow" }]
+);
+```
+
+Use it on a route that calls `seoMetadata` and whose pages search engines may list: a page it
+declares is listed during the build as one whose route does, even before the page has rendered
+and said otherwise. A route that hides its pages through its own metadata has nothing to add to
+a sitemap, so leave it unwrapped. It returns the route's own params
+unchanged. During `next build` only, it also records the
+addresses they make in the build directory, where the listing reads them until Next.js writes
+its prerender manifest, which wins from then on. A catch-all (`/docs/[...slug]`) and a nested
+route, which Next.js hands its parent's params, are filled the same way. A record that can't be
+written warns once and changes nothing the route gets. If `next.config` sets `distDir`, pass it
+as `{ buildDir }`, as `nextBuildDir`. An address the build answered not found, such as a topic
+whose page calls `notFound()` because it has no posts yet, is left out once Next.js has written
+its prerender manifest. While the build runs, nothing has said yet which declared pages will
+answer not found, so a sitemap made then lists every address the params make: return params only
+for pages that exist, leaving out a topic with no posts.
+
+A sitemap rendered per request needs none of this: the plugin's own `/sitemap.xml` is answered
+per request, as is a site's `app/sitemap.ts` with `export const dynamic = "force-dynamic"`. One
+with a `revalidate` is still first made during the build, so without `seoStaticParams` it lists
+those pages only from its first refresh.
 
 <Callout type="info">
 **The list of routes comes from the build.** The plugin reads the routes and the addresses
