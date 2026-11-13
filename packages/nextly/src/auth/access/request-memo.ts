@@ -120,6 +120,14 @@ const keptKeyOf = (caller: string, language: RuleLanguageOf): string =>
 export const JUDGED_OTHERWISE = "judged-otherwise";
 
 /**
+ * Whether a request or a Direct API call is under way: its memo is open. A call made inside one
+ * belongs to it, and keeps what that one chose at its start.
+ */
+export function insideAccessMemo(): boolean {
+  return lookups.getStore() !== undefined;
+}
+
+/**
  * Runs `operation` with a memo for the request. A memo already open is kept,
  * so a route reached inside another request's handling shares its lookups.
  */

@@ -9,7 +9,10 @@
  * @packageDocumentation
  */
 
-import { runWithAccessMemo } from "../../auth/access/request-memo";
+import {
+  insideAccessMemo,
+  runWithAccessMemo,
+} from "../../auth/access/request-memo";
 import { readsAsVisitor } from "../../auth/access/resolve-actor";
 import {
   scopeHoldsSuperAdmin,
@@ -42,6 +45,7 @@ import { withCurrentLanguages } from "../../domains/i18n/configured-locales";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
 import { assertRunnableAsPrincipal } from "../../plugins/principals/run-as";
+import { servedSchemaVersion } from "../../route-handler/schema-version";
 import type { TrustBound } from "../../services/collections/trust-grant";
 import type { RequestContext } from "../../shared/types/index";
 import type {
@@ -108,9 +112,22 @@ export async function runAsCaller<
   // reads only through the reader it is handed, whose reads leave the frame.
   const refused = refusedInsideNamedQuery("a collection or Single operation");
   if (refused !== undefined) throw refused;
-  return withCurrentLanguages(() =>
-    runWithAccessMemo(() => runAsCallerInMemo(defaultConfig, args, operation))
+  return withServedSchema(() =>
+    withCurrentLanguages(() =>
+      runWithAccessMemo(() => runAsCallerInMemo(defaultConfig, args, operation))
+    )
   );
+}
+
+/**
+ * Brings this process's definitions up to the stored schema version before a Direct API call, as
+ * a request's start does (`servedSchemaVersion`), so a change made on another server copy is
+ * served by a process no request reaches. A call made inside a request or another call keeps the
+ * definitions that one started with: they are never reloaded under it.
+ */
+async function withServedSchema<T>(operation: () => Promise<T>): Promise<T> {
+  if (!insideAccessMemo()) await servedSchemaVersion();
+  return operation();
 }
 
 /**
@@ -127,8 +144,10 @@ export function withLanguagesPinned<N extends object>(namespace: N): N {
         ? (...args: unknown[]) =>
             // Every method of these namespaces returns a promise; wrapped, a value one returned
             // directly still reaches the caller as a resolved promise.
-            withCurrentLanguages(() =>
-              Promise.resolve(member.apply(namespace, args))
+            withServedSchema(() =>
+              withCurrentLanguages(() =>
+                Promise.resolve(member.apply(namespace, args))
+              )
             )
         : member,
     ])
