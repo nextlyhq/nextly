@@ -17,10 +17,10 @@
  * @module components/features/notifications/NotificationDropdown
  */
 
+import { Button } from "@nextlyhq/ui";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
-import { Button } from "@admin/components/ui";
 import { JOURNAL_PAGE_SIZE, useJournal } from "@admin/hooks/queries/useJournal";
 import { journalApi, type JournalRow } from "@admin/services/journalApi";
 

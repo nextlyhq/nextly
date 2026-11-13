@@ -27,8 +27,11 @@ import {
   mappedSegments,
   outputIds,
   readChunk,
+  partOf,
   registryReader,
+  visitSize,
 } from "./check-consumer-bundle.mjs";
+import { gzipSync } from "node:zlib";
 
 // ---------------------------------------------------------------------------
 // Source maps written here
@@ -357,6 +360,62 @@ describe("consumerFindings", () => {
     );
   });
 
+  it("lets the first load hold the code of the kit areas the fixture plugin imports", () => {
+    const input = passing();
+    input.pkg.modules.add("kit/plugin-parts.mjs");
+    input.pkg.modules.add("stepper-PPPPPPPP.mjs");
+    input.pkg.closureOf = file =>
+      new Set(
+        file === "kit/plugin-parts.mjs"
+          ? ["kit/plugin-parts.mjs", "stepper-PPPPPPPP.mjs"]
+          : []
+      );
+    addFactory(
+      input,
+      "static/chunks/shell.js",
+      [41],
+      [src("kit/plugin-parts.mjs"), src("stepper-PPPPPPPP.mjs")]
+    );
+    input.record = {
+      chunks: {
+        "kit/plugin-parts.mjs": ["src/kit/plugin-parts.ts"],
+        "stepper-PPPPPPPP.mjs": ["src/components/ui/stepper.tsx"],
+      },
+    };
+    expect(kinds(input)).toEqual([]);
+  });
+
+  it("reports a part of the kit the fixture plugin does not import, naming it", () => {
+    const input = passing();
+    input.pkg.modules.add("media-MMMMMMMM.mjs");
+    addFactory(
+      input,
+      "static/chunks/shell.js",
+      [42],
+      [src("media-MMMMMMMM.mjs")]
+    );
+    input.record = {
+      chunks: {
+        "media-MMMMMMMM.mjs": [
+          "src/components/features/media-library/MediaLibrary.tsx",
+        ],
+      },
+    };
+    const { problems } = consumerFindings(input);
+    const found = problems.find(
+      p => p.kind === "first-load-holds-unimported-kit"
+    );
+    expect(found?.message).toMatch(
+      /holds media-MMMMMMMM\.mjs, code of the media library/
+    );
+  });
+
+  it("cannot judge the kit's areas without the build's record of its modules", () => {
+    const input = passing();
+    input.record = null;
+    expect(kinds(input)).toContain("nothing-read");
+  });
+
   it("reports a pinned route nothing loads on demand", () => {
     const input = passing();
     input.output.chunks.get("static/chunks/shell.js").factories.splice(3, 1);
@@ -618,5 +677,61 @@ describe("registryReader", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("visitSize", () => {
+  const ADMIN_DIR = "app/node_modules/@nextlyhq/admin";
+
+  it("names whose code a module is, by its sources", () => {
+    expect(partOf(new Set([`${ADMIN_DIR}/dist/index.mjs`]), ADMIN_DIR)).toBe(
+      "admin"
+    );
+    expect(partOf(new Set(["packages/ui/dist/button.mjs"]), ADMIN_DIR)).toBe(
+      "@nextlyhq/ui"
+    );
+    expect(
+      partOf(
+        new Set([
+          "node_modules/.pnpm/react-dom@19.3.0/node_modules/react-dom/cjs/x.js",
+        ]),
+        ADMIN_DIR
+      )
+    ).toBe("react and next");
+    expect(
+      partOf(new Set(["node_modules/next/dist/client/x.js"]), ADMIN_DIR)
+    ).toBe("react and next");
+    expect(
+      partOf(new Set(["node_modules/lucide-react/dist/x.js"]), ADMIN_DIR)
+    ).toBe("other");
+  });
+
+  it("shares each chunk's gzipped size between its modules by their bytes, the rest to the runtime", () => {
+    const code = "a".repeat(600) + "b".repeat(300) + "c".repeat(100);
+    const output = {
+      chunks: new Map([
+        [
+          "static/chunks/one.js",
+          {
+            code,
+            factories: [
+              { bytes: 600, sources: new Set([`${ADMIN_DIR}/dist/a.mjs`]) },
+              { bytes: 300, sources: new Set(["packages/ui/dist/b.mjs"]) },
+            ],
+          },
+        ],
+      ]),
+    };
+    const size = visitSize(
+      output,
+      ["static/chunks/one.js", "static/chunks/one.js"],
+      ADMIN_DIR
+    );
+    const zipped = gzipSync(code).length;
+    expect(size).toMatchObject({ chunks: 1, bytes: 1000, gzipped: zipped });
+    expect(size.parts.admin).toBeCloseTo(zipped * 0.6);
+    expect(size.parts["@nextlyhq/ui"]).toBeCloseTo(zipped * 0.3);
+    expect(size.parts["react and next"]).toBeCloseTo(zipped * 0.1);
+    expect(size.parts.other).toBe(0);
   });
 });

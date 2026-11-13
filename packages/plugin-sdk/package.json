@@ -16,6 +16,17 @@
   "main": "dist/index.mjs",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
+  "sideEffects": [
+    "./dist/blocks.mjs",
+    "./dist/client.mjs",
+    "./dist/db.mjs",
+    "./dist/index.mjs",
+    "./dist/routing.mjs",
+    "./dist/schema.mjs",
+    "./dist/testing.mjs",
+    "./dist/testing/**",
+    "./dist/widgets.mjs"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
