@@ -15,6 +15,7 @@ import {
   type MoveContext,
 } from "@admin/lib/builder/move-rule";
 import { fieldGroupFieldHolding } from "@admin/lib/builder/outline/move-targets";
+import type { BlockCatalog } from "@admin/lib/builder/outline/block-rows";
 import {
   buildOutline,
   flattenOutline,
@@ -29,29 +30,38 @@ import type { OutlineCallbacks } from "../outline-types";
 export interface MoveHarnessProbe {
   fields: readonly BuilderField[];
   commits: number;
+  /** The selected field, as the page would keep it. */
+  selectedId: string | null;
 }
 
 export function MoveHarness({
   initial,
   context,
   fieldGroups = new Map(),
+  blockCatalogs,
   probe,
 }: {
   initial: BuilderField[];
   /** The rule's context, less what the harness reads from the outline. */
   context: MoveContext;
   fieldGroups?: ReadonlyMap<string, LoadedFieldGroup>;
+  /** The blocks each blocks field accepts, so its block and prop rows are drawn. */
+  blockCatalogs?: ReadonlyMap<string, BlockCatalog>;
   probe: MoveHarnessProbe;
 }): JSX.Element {
   const [fields, setFields] = useState(initial);
+  // Selection as the page keeps it: the field whose settings are open.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   probe.fields = fields;
+  probe.selectedId = selectedId;
   const nodes = useMemo(
     () =>
       buildOutline(fields, {
         entityReadOnly: context.entityReadOnly,
         fieldGroups,
+        blockCatalogs,
       }),
-    [fields, context.entityReadOnly, fieldGroups]
+    [fields, context.entityReadOnly, fieldGroups, blockCatalogs]
   );
   const byId = useMemo(
     () => new Map(flattenOutline(nodes).map(node => [node.id, node])),
@@ -63,7 +73,7 @@ export function MoveHarness({
     fieldGroupFieldHolding: rowId => fieldGroupFieldHolding(byId, rowId),
   };
   const callbacks: OutlineCallbacks = {
-    select: vi.fn(),
+    select: id => setSelectedId(id),
     addAt: vi.fn(),
     duplicate: vi.fn(),
     remove: vi.fn(),
@@ -85,7 +95,7 @@ export function MoveHarness({
         systemFields={[]}
         errors={new Map()}
         foldKey="test:moves"
-        selectedId={null}
+        selectedId={selectedId}
         readOnly={context.entityReadOnly}
         callbacks={callbacks}
         renderPreview={() => null}
@@ -96,7 +106,7 @@ export function MoveHarness({
 
 /** A fresh probe for one test. */
 export function newProbe(): MoveHarnessProbe {
-  return { fields: [], commits: 0 };
+  return { fields: [], commits: 0, selectedId: null };
 }
 
 /** A plain field, as the Builder holds one. */
