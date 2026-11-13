@@ -112,11 +112,12 @@ export function BuilderPageLayout(props: Props): JSX.Element {
   // While changes are pending, every way out asks first: an in-app link, the
   // field group's editor, the browser's back, a reload and closing the tab.
   // The guard is the admin's one, which entries use too. A read-only entity
-  // holds no changes to lose, and while a save is on its way the guard offers
-  // no Discard Changes, so leaving cannot drop what the save is writing.
+  // holds no changes to lose. While a save is on its way the guard asks even
+  // with nothing pending (an undo since may have brought the count to none)
+  // and offers no Discard Changes, so leaving cannot let the save land unseen.
   return (
     <UnsavedChangesGuard
-      isDirty={unsavedCount > 0}
+      isDirty={unsavedCount > 0 || isSaving}
       disabled={locked}
       busy={isSaving}
     >
