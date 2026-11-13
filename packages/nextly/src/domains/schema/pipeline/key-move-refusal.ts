@@ -38,6 +38,11 @@ export async function refuseKeysRowsWouldBreak(args: {
 }): Promise<void> {
   const lower = (name: string) => name.toLowerCase();
   const renames = renamesOf(args.operations);
+  const created = new Set(
+    args.operations.flatMap(op =>
+      op.type === "add_table" ? [lower(op.table.name)] : []
+    )
+  );
   const liveColumns = new Map(
     args.live.tables.map(table => [
       lower(table.name),
@@ -59,7 +64,8 @@ export async function refuseKeysRowsWouldBreak(args: {
     }
     const target = liveTableName(referencesTable, renames);
     // A target this apply creates holds no rows yet, so every value the column holds breaks it.
-    const targetIsLive = liveColumns.has(lower(target));
+    // Any other target is read as it stands, a core table such as `users` among them.
+    const targetIsLive = !created.has(lower(referencesTable));
     const [row] = await querySqlRows<{ n: number | string }>(
       args.db,
       args.dialect,

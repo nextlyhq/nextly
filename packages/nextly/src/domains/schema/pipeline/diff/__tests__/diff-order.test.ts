@@ -288,3 +288,38 @@ describe("diffSnapshots — a key moved off a table this diff drops", () => {
     );
   });
 });
+
+describe("diffSnapshots — a key renamed while its column is retyped", () => {
+  it("drops the old key before the type change, which MySQL refuses under a key", () => {
+    const before: TableSpec = {
+      ...table("posts", ["authors"]),
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+        { name: "author", type: "int", nullable: true },
+      ],
+      foreignKeys: [key("posts", "author", "authors")],
+    };
+    const after: TableSpec = {
+      ...before,
+      columns: [
+        { name: "id", type: "varchar(36)", nullable: false, primaryKey: true },
+        { name: "author", type: "bigint", nullable: true },
+      ],
+      foreignKeys: [
+        { ...key("posts", "author", "authors"), name: "fk_posts_author_2" },
+      ],
+    };
+    const ops = diffSnapshots(
+      { tables: [table("authors"), before] },
+      { tables: [table("authors"), after] }
+    );
+    const at = (pred: (op: Operation) => boolean) => ops.findIndex(pred);
+    expect(
+      at(
+        op =>
+          op.type === "drop_foreign_key" &&
+          op.foreignKey.name === "fk_posts_author"
+      )
+    ).toBeLessThan(at(op => op.type === "change_column_type"));
+  });
+});

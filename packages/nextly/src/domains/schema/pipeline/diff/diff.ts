@@ -205,13 +205,27 @@ export function diffSnapshots(
   }
   const dropIndexBeforeColumns: Operation[] = [];
   const dropIndexAfterAdds: Operation[] = [];
-  // A replaced key whose old target this diff drops is dropped first after all: kept until its
-  // replacement is added, it would block the drop of the table it points at.
+  // A replaced key that something in this diff needs gone is dropped first after all: kept until
+  // its replacement is added, it would block the drop of the table it points at, or (MySQL) a
+  // change of type of a column at either end.
   const droppedNames = new Set(droppedTables.map(table => table.name));
+  const retyped = new Set(
+    columnOps.flatMap(op =>
+      op.type === "change_column_type"
+        ? [`${op.tableName}\u0000${op.columnName}`]
+        : []
+    )
+  );
+  const blocksThisDiff = (fk: ForeignKeySpec, tableName: string) =>
+    droppedNames.has(fk.referencesTable) ||
+    fk.columns.some(c => retyped.has(`${tableName}\u0000${c}`)) ||
+    fk.referencesColumns.some(c =>
+      retyped.has(`${fk.referencesTable}\u0000${c}`)
+    );
   const ordered = dropIndexOps.map(op =>
     op.type === "drop_foreign_key" &&
     op.afterReplacement === true &&
-    droppedNames.has(op.foreignKey.referencesTable)
+    blocksThisDiff(op.foreignKey, op.tableName)
       ? {
           type: op.type,
           tableName: op.tableName,
