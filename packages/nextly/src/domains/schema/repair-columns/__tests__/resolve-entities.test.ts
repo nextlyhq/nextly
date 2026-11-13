@@ -297,3 +297,45 @@ describe("resolveRepairEntities: user fields", () => {
     ).toEqual([]);
   });
 });
+
+describe("resolveRepairEntities: the app's column overrides", () => {
+  const city = {
+    column: "title",
+    kind: "shortText" as const,
+    length: 10,
+    owner: { kind: "app" as const },
+  };
+  const overrides = { byTable: new Map([["dc_posts", [city]]]) };
+
+  it("reads the applied storage from what the snapshot recorded, whatever the configuration says now", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured()],
+        registry: [registry()],
+        snapshots: [
+          snapshot({
+            table: "dc_posts",
+            columnTypes: { title: "varchar(20)" },
+          }),
+        ],
+        overrides,
+      })
+    );
+    expect(entity?.applied?.recordedTypes).toEqual({ title: "varchar(20)" });
+    expect(entity?.applied?.columnOverrides).toBeUndefined();
+    expect(entity?.configured?.columnOverrides).toEqual([city]);
+  });
+
+  it("takes the configuration's where only a registry row says what was applied", () => {
+    const entity = only(
+      resolveRepairEntities({
+        configured: [configured()],
+        registry: [registry()],
+        snapshots: [],
+        overrides,
+      })
+    );
+    expect(entity?.applied?.columnOverrides).toEqual([city]);
+    expect(entity?.applied?.recordedTypes).toBeUndefined();
+  });
+});
