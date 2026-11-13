@@ -79,12 +79,16 @@ import {
   walk,
 } from "@nextlyhq/module-specifiers/parse-source";
 
+import { gzipSync } from "node:zlib";
+
 import { measureBundle } from "./bundle-report.mjs";
-import { routeKey } from "./check-bundle-budgets.mjs";
+import { readBundleModules, routeKey } from "./check-bundle-budgets.mjs";
 import { option, packInto, unreported } from "./check-published-build.mjs";
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURE = join(PACKAGE_ROOT, "__fixtures__", "consumer-app");
+/** The plugin SDK, which the fixture's plugin imports the admin's parts through. */
+const SDK_ROOT = resolve(PACKAGE_ROOT, "..", "plugin-sdk");
 
 /** The fixture's admin page, as Next.js names its route. */
 export const ADMIN_ROUTE = "/admin/[[...params]]";
@@ -98,6 +102,24 @@ export const PLUGIN_PAGE_KEY =
 
 /** The `data-testid` the fixture's plugin page renders, which tells it apart. */
 export const PLUGIN_PAGE_MARK = "fixture-plugin-page";
+
+/**
+ * The kit areas the fixture plugin's admin module imports from, through
+ * `@nextlyhq/plugin-sdk/admin`: it builds its page from plugin-page parts and
+ * nothing else. The generated map imports that module with the admin's first
+ * load, so the first load may hold these areas' code beside the shell.
+ */
+export const FIXTURE_PLUGIN_AREAS = ["kit/plugin-parts.mjs"];
+
+/**
+ * Parts of the kit the fixture plugin does not import, by where their source
+ * lives, which the first load must therefore not hold: a plugin naming one
+ * part would otherwise bring every area the SDK re-exports.
+ */
+export const UNIMPORTED_KIT_PARTS = [
+  ["the media library", "src/components/features/media-library/"],
+  ["the field-UI kit", "src/components/field-ui/"],
+];
 
 /** The link Lexical's production build gives in place of each message. */
 export const LEXICAL_PRODUCTION_TEXT = "lexical.dev/docs/error";
@@ -507,10 +529,26 @@ export function packageGraph(distDir) {
     root: route.root,
     uses: new Set([...shell, ...route.beyondFirstScreen]),
   }));
+  const imports = new Map(
+    report.chunks.map(chunk => [chunk.file, chunk.staticImports])
+  );
+  /** A module's static closure: what loading it loads. */
+  const closureOf = file => {
+    const seen = new Set();
+    const pending = [file];
+    while (pending.length > 0) {
+      const next = pending.pop();
+      if (seen.has(next) || !imports.has(next)) continue;
+      seen.add(next);
+      pending.push(...imports.get(next));
+    }
+    return seen;
+  };
   return {
     shell,
     routes,
     modules: new Set(report.chunks.map(chunk => chunk.file)),
+    closureOf,
   };
 }
 
@@ -626,14 +664,59 @@ function ownersOf(pkg, module) {
   return ` (code of ${owners.slice(0, 5).join(", ")}${more})`;
 }
 
-/** The first load holds nothing the package keeps out of the shell. */
+/**
+ * What the first load may hold: the shell, and the code of the kit areas the
+ * fixture plugin's admin module imports, which the generated map imports with
+ * the first load.
+ */
+function firstLoadAllowed(pkg) {
+  const allowed = new Set(pkg.shell);
+  for (const area of FIXTURE_PLUGIN_AREAS) {
+    for (const module of pkg.closureOf?.(area) ?? []) allowed.add(module);
+  }
+  return allowed;
+}
+
+/**
+ * The first load holds nothing the package keeps out of the shell, beyond the
+ * areas the fixture plugin imports.
+ */
 function shellProblems(model, pkg, route) {
+  const allowed = firstLoadAllowed(pkg);
   return [...model.shellModules]
-    .filter(module => !pkg.shell.has(module))
+    .filter(module => !allowed.has(module))
     .map(module =>
       problem(
         "shell-loads-route-code",
         `${route}'s first load holds ${module}, which the shell does not use${ownersOf(pkg, module)}`
+      )
+    );
+}
+
+/**
+ * The first load holds no part of the kit the fixture plugin does not import,
+ * read from the record of each chunk's modules the package's build writes
+ * (`dist/bundle-modules.json`, beside the chunks the packed package holds).
+ */
+export function kitAreaProblems(model, pkg, record, route = ADMIN_ROUTE) {
+  if (record === null) {
+    return [
+      problem(
+        "nothing-read",
+        "the package's build left no record of its chunks' modules (dist/bundle-modules.json): rebuild it"
+      ),
+    ];
+  }
+  return [...model.shellModules]
+    .filter(module => !pkg.shell.has(module))
+    .flatMap(module =>
+      UNIMPORTED_KIT_PARTS.filter(([, start]) =>
+        (record.chunks[module] ?? []).some(source => source.startsWith(start))
+      ).map(([part]) =>
+        problem(
+          "first-load-holds-unimported-kit",
+          `${route}'s first load holds ${module}, code of ${part}, which the fixture plugin does not import`
+        )
       )
     );
 }
@@ -882,6 +965,7 @@ export function consumerFindings({
   registration,
   developmentTexts,
   pinned,
+  record,
   route = ADMIN_ROUTE,
 }) {
   const model = outputModel({ pkg, output, adminDir, route });
@@ -889,6 +973,7 @@ export function consumerFindings({
   const problems = [
     ...firstLoadProblems(model, output, route),
     ...shellProblems(model, pkg, route),
+    ...(record === undefined ? [] : kitAreaProblems(model, pkg, record, route)),
     ...onDemandProblems(model, pinned),
     ...foreignCodeProblems(model, pkg),
     ...fetchedTwiceProblems(model, pkg),
@@ -1139,14 +1224,21 @@ export async function askRegistry({
  * lockfile pins. A build from the same commit is therefore the same build.
  */
 function buildFixture() {
-  const placed = join(FIXTURE, "node_modules", "@nextlyhq", "admin");
   rmSync(join(FIXTURE, ".next"), { recursive: true, force: true });
-  rmSync(placed, { recursive: true, force: true });
-  const scratch = mkdtempSync(join(tmpdir(), "nx-admin-consumer-"));
-  try {
-    cpSync(packInto(scratch), placed, { recursive: true });
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
+  // The admin, and the SDK the fixture's plugin imports the admin's parts
+  // through, each packed as a release packs it.
+  for (const [packageRoot, name] of [
+    [PACKAGE_ROOT, "admin"],
+    [SDK_ROOT, "plugin-sdk"],
+  ]) {
+    const placed = join(FIXTURE, "node_modules", "@nextlyhq", name);
+    rmSync(placed, { recursive: true, force: true });
+    const scratch = mkdtempSync(join(tmpdir(), "nx-admin-consumer-"));
+    try {
+      cpSync(packInto(scratch, packageRoot), placed, { recursive: true });
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   }
   const next = createRequire(join(PACKAGE_ROOT, "package.json")).resolve(
     "next/dist/bin/next"
@@ -1171,6 +1263,19 @@ function projectRoot() {
     dir = up;
   }
   return dir;
+}
+
+/** The size of a route's first load, its chunks as the output writes them and gzipped. */
+export function firstLoadSize(output, route = ADMIN_ROUTE) {
+  const names = output.firstLoads.get(route) ?? [];
+  let bytes = 0;
+  let gzipped = 0;
+  for (const name of names) {
+    const code = output.chunks.get(name)?.code ?? "";
+    bytes += Buffer.byteLength(code);
+    gzipped += gzipSync(code).length;
+  }
+  return { chunks: names.length, bytes, gzipped };
 }
 
 function kb(bytes) {
@@ -1228,6 +1333,8 @@ async function main(argv) {
     registration,
     developmentTexts,
     pinned,
+    // The packed package leaves the record out; it is the workspace build's.
+    record: readBundleModules(join(PACKAGE_ROOT, "dist")),
   });
   const seconds = ms => `${(ms / 1000).toFixed(1)} s`;
   console.log(
@@ -1252,6 +1359,10 @@ async function main(argv) {
   }, 0);
   console.log(
     `  measured, not judged: ${copied.length} admin modules sit in more than one chunk, ${kb(copiedBytes)} of extra copies, the bundler's own chunking.`
+  );
+  const firstLoad = firstLoadSize(output);
+  console.log(
+    `  measured, not judged: ${ADMIN_ROUTE}'s first load is ${firstLoad.chunks} chunks, ${kb(firstLoad.gzipped)} gzipped (${kb(firstLoad.bytes)} as written).`
   );
   const expected = option(argv, "--must-fail-with")?.split(",");
   if (expected) return expectedFailure(expected, problems);
