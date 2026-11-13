@@ -287,6 +287,7 @@ export default function SingleBuilderEditPage({
       ),
     onNoChanges: saveSettingsOnly,
     onApplied: onSchemaApplied,
+    previewedWith: { localized },
   });
 
   // ---------------------------- Loading / error guards ----------------------
@@ -335,7 +336,7 @@ export default function SingleBuilderEditPage({
           context="single"
         />
       }
-      isSaving={isSaving || confirmation.isApplying}
+      isSaving={isSaving || confirmation.isBusy}
       savingLabel="Saving Single changes…"
     >
       <BuilderSchemaChangeDialogs

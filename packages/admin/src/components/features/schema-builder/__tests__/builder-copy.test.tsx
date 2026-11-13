@@ -195,9 +195,12 @@ function confirmation(
     previewId: 1,
     isOpen: true,
     isApplying: false,
+    isBusy: false,
     request: () => {},
     setOpen: () => {},
     settle: () => {},
+    beginPreview: () => {},
+    endPreview: () => {},
     beginApply: () => {},
     endApply: () => {},
   };

@@ -505,6 +505,12 @@ export interface SchemaChangeConfirmation {
   /** True from the moment the user confirms until the apply settles. */
   isApplying: boolean;
   /**
+   * True while a save is on its way: from asking for its preview until it is
+   * answered, and while the apply runs. What the save was started with is
+   * kept meanwhile, so nothing that would clear it is offered.
+   */
+  isBusy: boolean;
+  /**
    * Which preview this is, counting from the first.
    *
    * The dialog carries the author's unsaved answers — which rename to apply,
@@ -521,6 +527,9 @@ export interface SchemaChangeConfirmation {
   setOpen: (open: boolean) => void;
   /** The apply succeeded: close, and forget the preview it was describing. */
   settle: () => void;
+  /** Bracket the request for a preview, which the page shows as busy. */
+  beginPreview: () => void;
+  endPreview: () => void;
   /** Bracket the apply itself; also raises the flag that tells the fetcher
    *  this tab is the one changing the schema. */
   beginApply: () => void;

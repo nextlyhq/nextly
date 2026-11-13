@@ -22,7 +22,11 @@ import type {
   resolvedCollectionDraftSplit,
 } from "@nextlyhq/plugin-sdk";
 
-/** What the dynamic registry stores: `versions` already resolved. */
+/**
+ * What the dynamic registry stores: `versions` already resolved. It names no
+ * `localized`, the shape a plugin built against the earlier input passes, so
+ * `registryRecordIsAccepted` below is also the check that this shape compiles.
+ */
 type RegistryRecord = {
   status: true;
   versions: { drafts: { enabled: true } };

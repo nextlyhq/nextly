@@ -159,11 +159,14 @@ describe("BuilderToolbar", () => {
     ).toHaveAttribute("href", "/admin/builder/collections");
   });
 
-  it("asks before leaving with unsaved changes, and not when clean", () => {
-    // No builder page mounts a navigation guard, so the crumb — the page's
-    // only exit — must stand in front of unsaved work itself.
+  // The page's guard asks before every way out — this link, the browser's
+  // back, a reload, closing the tab — so the crumb does not ask again itself:
+  // one question, not two. It moves through the admin's own history, the one
+  // the guard watches; a link routed any other way would leave unasked.
+  it("leaves the question to the page's guard rather than asking itself", () => {
+    const start = window.location.pathname;
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
-    const { rerender } = render(
+    render(
       <BuilderToolbar
         config={collectionConfig}
         name="Posts"
@@ -175,24 +178,10 @@ describe("BuilderToolbar", () => {
       />
     );
     fireEvent.click(screen.getByRole("link", { name: /back to collections/i }));
-    expect(confirmSpy).toHaveBeenCalledOnce();
-    expect(confirmSpy.mock.calls[0][0]).toMatch(/unsaved changes/i);
-
-    confirmSpy.mockClear();
-    rerender(
-      <BuilderToolbar
-        config={collectionConfig}
-        name="Posts"
-        unsavedCount={0}
-        pending={noPending}
-        onAddField={vi.fn()}
-        onOpenSettings={vi.fn()}
-        onSave={vi.fn()}
-      />
-    );
-    fireEvent.click(screen.getByRole("link", { name: /back to collections/i }));
     expect(confirmSpy).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe("/admin/builder/collections");
     confirmSpy.mockRestore();
+    window.history.replaceState(null, "", start);
   });
 
   it("disables Save when no unsaved changes", () => {

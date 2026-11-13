@@ -35,6 +35,11 @@ type Props = {
   /** The number of pending changes, the entity's settings included. */
   count: number;
   locked?: boolean;
+  /**
+   * A save is on its way. Discard all waits for it: clearing the editor then
+   * would not stop the save, which could still keep the discarded values.
+   */
+  saving?: boolean;
 };
 
 /**
@@ -65,6 +70,7 @@ export function PendingChangesControls({
   pending,
   count,
   locked = false,
+  saving = false,
 }: Props): JSX.Element | null {
   const [announcement, setAnnouncement] = useState("");
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
@@ -155,7 +161,7 @@ export function PendingChangesControls({
         variant="ghost"
         size="sm"
         aria-label="Discard all changes"
-        disabled={count === 0}
+        disabled={count === 0 || saving}
         onClick={() => setConfirmingDiscard(true)}
       >
         <RotateCcw className="h-4 w-4 sm:hidden" />
