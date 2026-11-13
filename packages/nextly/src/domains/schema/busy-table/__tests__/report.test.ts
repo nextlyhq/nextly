@@ -246,6 +246,47 @@ describe("tableBusyError", () => {
     }
   );
 
+  describe("for a DOWN (migrate:down)", () => {
+    it("has a part-way DOWN recorded rolled back once finished, never marked applied", () => {
+      const error = tableBusyError(
+        stopWith({
+          direction: "down",
+          outcome: { kind: "part-way", committed: [1] },
+        })
+      );
+      const next = error.publicMessage.split("\n").at(-1) ?? "";
+      expect(next).toContain(
+        "nextly migrate:resolve --rolled-back 0007_add_keys.sql"
+      );
+      expect(next).toContain("`nextly migrate:down` again");
+      // Either would record the file the opposite way from its tables.
+      expect(error.publicMessage).not.toContain("--applied");
+      expect(error.publicMessage).not.toContain("--failed-cleanup");
+    });
+
+    it("runs a DOWN undone whole again as migrate:down, clearing no attempt", () => {
+      const error = tableBusyError(
+        stopWith({
+          direction: "down",
+          outcome: {
+            kind: "no-retry",
+            statementNumber: 2,
+            reason: "setval",
+            restUndone: true,
+          },
+        })
+      );
+      const next = error.publicMessage.split("\n").at(-1) ?? "";
+      expect(next).toMatch(/^Run `nextly migrate:down` again/);
+      expect(error.publicMessage).not.toContain("--failed-cleanup");
+    });
+
+    it("keeps its direction in the log context", () => {
+      const stop = stopWith({ direction: "down" });
+      expect(tableBusyError(stop).logContext?.stop).toEqual(stop);
+    });
+  });
+
   it("says nothing was undone where a no-retry statement ran outside a transaction", () => {
     const error = tableBusyError(
       stopWith({

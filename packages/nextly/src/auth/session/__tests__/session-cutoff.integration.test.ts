@@ -4,8 +4,8 @@
  * read, within the bound the documentation states.
  *
  * Each token here is a real one: signed by the login endpoint, or by the
- * Direct API's `nextly.login()`, whose token lives thirty days and is the
- * longest a cut-off has to reach. Each change is made the way an
+ * Direct API's `nextly.login()`, whose token lives a day and is the longest
+ * a cut-off has to reach. Each change is made the way an
  * administrator makes it, and each place is the production function a
  * request reaches, so a place that skips the check fails here by name.
  */
@@ -134,7 +134,7 @@ describe.each(getConfiguredTestDialects())(
       );
     }
 
-    /** The thirty-day token trusted server code gets from the Direct API. */
+    /** The day-long token trusted server code gets from the Direct API. */
     async function directApiToken({ t }: Signed): Promise<string> {
       const { token } = await t.nextly.login({
         email: EMAIL,
@@ -236,9 +236,96 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    /**
+     * A Direct API sign-in that `change` lands inside: after its password
+     * check has read the account, before its token is signed. The roles read
+     * sits between the two, so the change is made there, committed before
+     * the sign-in goes on.
+     */
+    async function racedToken(
+      s: Signed,
+      change: (s: Signed) => Promise<unknown>
+    ): Promise<string> {
+      const real = s.t.nextly.directLoginDeps;
+      let raced = false;
+      Object.defineProperty(s.t.nextly, "directLoginDeps", {
+        configurable: true,
+        value: {
+          ...real,
+          fetchSessionRoles: async (userId: string) => {
+            await change(s);
+            raced = true;
+            return real.fetchSessionRoles(userId);
+          },
+        },
+      });
+      try {
+        const token = await directApiToken(s);
+        // The sign-in really ran past the change, so the token below is the
+        // one the raced read earned.
+        expect(raced).toBe(true);
+        return token;
+      } finally {
+        Object.defineProperty(s.t.nextly, "directLoginDeps", {
+          configurable: true,
+          value: real,
+        });
+      }
+    }
+
+    describe.each(Object.entries(CHANGES))(
+      "when %s while nextly.login() is signing in",
+      (_change, change) => {
+        it("refuses the token that read earned everywhere once the bound has passed", async () => {
+          const s = await signedUp();
+          const clock = testClock();
+          resetSessionStandingForTests({ now: clock.now });
+
+          const token = await racedToken(s, change);
+          clock.passTheBound();
+
+          expect(await admittedAt(token, s)).toEqual(everywhere(false));
+        });
+      }
+    );
+
+    it("keeps a token whose sign-in a deactivation raced refused after the account is reactivated", async () => {
+      // While the account is deactivated, every token for it is refused
+      // whatever epoch it carries. Reactivating it leaves only the epoch to
+      // tell the raced token from a fresh one, so a sign-in that signed with
+      // the raised epoch would be let back in here.
+      const s = await signedUp();
+      const clock = testClock();
+      resetSessionStandingForTests({ now: clock.now });
+
+      const token = await racedToken(s, CHANGES["the account is deactivated"]);
+      await s.t.nextly.users.update({ id: s.userId, data: { isActive: true } });
+      clock.passTheBound();
+
+      expect(await admittedAt(token, s)).toEqual(everywhere(false));
+    });
+
+    it("admits a Direct API token whose sign-in nothing raced", async () => {
+      // The control for the raced cases: the same sign-in, with the roles
+      // read wrapped but no change made, is a session everywhere.
+      const s = await signedUp();
+      const clock = testClock();
+      resetSessionStandingForTests({ now: clock.now });
+      const real = s.t.nextly.directLoginDeps;
+      Object.defineProperty(s.t.nextly, "directLoginDeps", {
+        configurable: true,
+        value: { ...real },
+      });
+
+      const token = await directApiToken(s);
+      clock.passTheBound();
+
+      expect(await admittedAt(token, s)).toEqual(everywhere(true));
+    });
+
     it("keeps a token issued before a deactivation refused after the account is reactivated", async () => {
       // Reactivating clears the deactivation, so a check that only read
-      // whether the account is active would let the thirty-day token back in.
+      // whether the account is active would let the day-long token back in.
       const s = await signedUp();
       const clock = testClock();
       resetSessionStandingForTests({ now: clock.now });

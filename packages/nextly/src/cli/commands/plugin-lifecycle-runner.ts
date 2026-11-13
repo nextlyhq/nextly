@@ -980,7 +980,8 @@ async function connect(
   // state.
   const recordLifecycle = async (
     plugin: LifecyclePlugin,
-    record: PluginLifecycleRecord
+    record: PluginLifecycleRecord,
+    options: { recordEvent?: boolean } = {}
   ): Promise<void> => {
     const access = accessOf(plugin, record);
     // A process that already started an instance (a test that booted one) has
@@ -992,6 +993,9 @@ async function connect(
     if (!inside) await access?.();
     await writeRegistryRows(drizzleAdapter, async tx => {
       if (inside) await access?.();
+      // A repeat install keeps the record it has: the access above still
+      // commits, with the release record, and no second event is appended.
+      if (options.recordEvent === false) return;
       await recordPluginLifecycle(
         new SchemaEventsRepository(tx.getDrizzle(), dialect),
         plugin.name,

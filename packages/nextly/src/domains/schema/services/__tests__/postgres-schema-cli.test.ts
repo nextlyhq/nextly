@@ -25,16 +25,12 @@ afterEach(() => {
 });
 
 describe("the schema a CLI command resolves in", () => {
-  it("refuses a schema other than public when the config is loaded", () => {
+  it("publishes a named schema when the config is loaded", () => {
     // What `loadConfig` does on every command that reads nextly.config.ts, so
-    // `migrate`, `migrate:create` and `plugins install` refuse exactly as the
-    // server does: the push cannot yet create tables anywhere but `public`.
-    expect(() =>
-      setActivePostgresSchema(resolvePostgresSchema("cms", "postgresql"))
-    ).toThrow(
-      expect.objectContaining({ code: "NEXTLY_POSTGRES_SCHEMA_UNSUPPORTED" })
-    );
-    expect(activePostgresSchema()).toBe(DEFAULT_POSTGRES_SCHEMA);
+    // `migrate`, `migrate:create` and `plugins install` work in the schema the
+    // server uses.
+    setActivePostgresSchema(resolvePostgresSchema("cms", "postgresql"));
+    expect(activePostgresSchema()).toBe("cms");
   });
 
   it("accepts public named explicitly", () => {

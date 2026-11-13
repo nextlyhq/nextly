@@ -1902,8 +1902,12 @@ export async function runPluginPhase(
       // still returns it — so the live table matched neither side and a valid
       // upgrade was refused as drift. The registry has recorded
       // `elementKind: "column"` all along; this simply asks it.
+      //
+      // Foreign keys and checks too: a plugin depending on this one may add
+      // either to its table, recorded as `fk` and `check` elements, and the
+      // owner's next module must not read them as drift.
       const ownedByAnother = (
-        kind: "column" | "index",
+        kind: "column" | "index" | "fk" | "check",
         tableName: string,
         elementName: string
       ): boolean => {
@@ -1917,10 +1921,21 @@ export async function runPluginPhase(
         table.columns = table.columns.filter(
           column => !ownedByAnother("column", table.name, column.name)
         );
-        if (table.indexes === undefined) continue;
-        table.indexes = table.indexes.filter(
-          index => !ownedByAnother("index", table.name, index.name)
-        );
+        if (table.indexes !== undefined) {
+          table.indexes = table.indexes.filter(
+            index => !ownedByAnother("index", table.name, index.name)
+          );
+        }
+        if (table.foreignKeys !== undefined) {
+          table.foreignKeys = table.foreignKeys.filter(
+            fk => !ownedByAnother("fk", table.name, fk.name)
+          );
+        }
+        if (table.checks !== undefined) {
+          table.checks = table.checks.filter(
+            check => !ownedByAnother("check", table.name, check.name)
+          );
+        }
       }
       return live;
     },

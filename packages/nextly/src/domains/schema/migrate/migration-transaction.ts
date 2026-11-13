@@ -600,6 +600,15 @@ async function runUnitStatements(
     );
     return statements.length;
   }
+  // On SQLite outside a transaction each statement takes the write lock anew, and the busy timeout
+  // bounds each wait on its own, so several waits could add up past the try. The try has one
+  // deadline instead: before each statement the timeout is set to what is left of it, at least a
+  // millisecond, so the waits together end within the try. A statement that has the lock at once
+  // waits for nothing, whatever is left.
+  const sqliteDeadline =
+    dialect === "sqlite" && bound !== undefined
+      ? performance.now() + bound.tryMs
+      : undefined;
   const runEach = async (
     execute: (statement: string) => Promise<unknown>,
     // What the checkpoints read through: the connection the statements run on where a session
@@ -623,6 +632,14 @@ async function runUnitStatements(
       await checkpoint?.(checkpointDb, index);
       // A cancel the checkpoint's wait drew is settled before the statement is sent.
       await bound?.beforeStatement?.();
+      if (sqliteDeadline !== undefined) {
+        // A whole number of milliseconds, never caller input.
+        const left = Math.max(
+          1,
+          Math.round(sqliteDeadline - performance.now())
+        );
+        await adapter.executeQuery(`PRAGMA busy_timeout = ${String(left)}`);
+      }
       try {
         await execute(sent(statement));
       } catch (error) {
