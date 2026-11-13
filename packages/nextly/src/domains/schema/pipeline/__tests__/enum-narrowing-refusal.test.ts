@@ -34,6 +34,16 @@ const addCheck = (table: string, sql: string): Operation => ({
 const WIDE = `"state" IN ('draft', 'live')`;
 const NARROW = `"state" IN ('draft')`;
 
+/** `state` renamed to `status` in the same apply. */
+const renameState: Operation = {
+  type: "rename_column",
+  tableName: "t__items",
+  fromColumn: "state",
+  toColumn: "status",
+  fromType: "text",
+  toType: "text",
+};
+
 describe("checkNarrowings", () => {
   it("pairs a drop and add of the same column into the values taken away", () => {
     const narrowings = checkNarrowings([
@@ -41,7 +51,13 @@ describe("checkNarrowings", () => {
       addCheck("t__items", NARROW),
     ]);
     expect(narrowings).toEqual([
-      { table: "t__items", column: "state", values: ["live"], kept: ["draft"] },
+      {
+        table: "t__items",
+        column: "state",
+        liveColumn: "state",
+        values: ["live"],
+        kept: ["draft"],
+      },
     ]);
   });
 
@@ -77,13 +93,31 @@ describe("checkNarrowings", () => {
     expect(checkNarrowings([addCheck("t__items", NARROW)])).toEqual([]);
   });
 
-  it("does not pair sides naming different columns, as a rename leaves", () => {
+  it("does not pair sides naming different columns no rename joins", () => {
     expect(
       checkNarrowings([
         dropCheck("t__items", WIDE),
         addCheck("t__items", `"status" IN ('draft')`),
       ])
     ).toEqual([]);
+  });
+
+  it("pairs through a rename of the column in the same apply", () => {
+    expect(
+      checkNarrowings([
+        renameState,
+        dropCheck("t__items", WIDE),
+        addCheck("t__items", `"status" IN ('draft')`),
+      ])
+    ).toEqual([
+      {
+        table: "t__items",
+        column: "status",
+        liveColumn: "state",
+        values: ["live"],
+        kept: ["draft"],
+      },
+    ]);
   });
 
   it("does not pair checks that are not enum value sets", () => {
@@ -267,5 +301,31 @@ describe("refuseEnumNarrowingsOverRows", () => {
       ],
     });
     expect(seen[0]).toContain("t__old");
+  });
+
+  it("refuses a narrowing through a column rename, counting the live column", async () => {
+    const seen: string[] = [];
+    const db = {
+      all: (query: unknown): Array<{ n: number }> => {
+        seen.push(JSON.stringify(query));
+        return [{ n: 3 }];
+      },
+    };
+    const refused = await refuseEnumNarrowingsOverRows({
+      db,
+      dialect: "sqlite",
+      desired: emptyDesired,
+      operations: [
+        renameState,
+        dropCheck("t__items", WIDE),
+        addCheck("t__items", `"status" IN ('draft')`),
+      ],
+    }).catch((error: unknown) => error);
+    expect(NextlyError.isValidation(refused)).toBe(true);
+    const messages = JSON.stringify((refused as NextlyError).publicData);
+    expect(messages).toContain("ENUM_VALUE_HELD_BY_ROWS");
+    expect(messages).toContain("'live'");
+    expect(seen[0]).toContain("state");
+    expect(seen[0]).not.toContain("status");
   });
 });

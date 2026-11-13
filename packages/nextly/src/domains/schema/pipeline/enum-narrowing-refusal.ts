@@ -17,9 +17,10 @@
  *
  * A pair is matched by the COLUMN each side constrains, read from the check's
  * own expression, so renaming the constraint (`col.enum(..., { name })`)
- * still narrows rather than falling to the database. Sides naming different
- * columns are not read as a pair — a column rename the check cannot be
- * followed through — and stay with the database's own judgement.
+ * still narrows rather than falling to the database. A column the same apply
+ * renames is followed through the rename: the old check, naming the live
+ * column, pairs with the new one naming the desired column, and the rows are
+ * counted under the live name, which is the one they hold before anything runs.
  *
  * @module domains/schema/pipeline/enum-narrowing-refusal
  */
@@ -43,8 +44,10 @@ import type { DesiredSchema } from "./types";
 interface Narrowing {
   /** The table as the operations name it. */
   table: string;
-  /** The column both sides of the pair constrain. */
+  /** The column the replacement check constrains, as the desired schema names it. */
   column: string;
+  /** The same column as it is named now, before a rename in the apply runs. */
+  liveColumn: string;
   /** The values the pair takes away, in the order the old check listed them. */
   values: string[];
   /** The values the replacement check keeps, evaluated by the database. */
@@ -56,21 +59,32 @@ function pairKey(table: string, column: string): string {
   return `${table.toLowerCase()} ${column.toLowerCase()}`;
 }
 
+/** A dropped enum check, with the live column it constrained. */
+interface DroppedCheck {
+  sql: string;
+  liveColumn: string;
+}
+
 /**
- * Each dropped enum check's SQL, by the table and column it constrained. A
- * drop that is not an enum set constrains nothing this refusal can read.
+ * Each dropped enum check, by the table and the column it constrains once the
+ * apply's column renames have run. A drop that is not an enum set constrains
+ * nothing this refusal can read.
  */
 function droppedEnumChecks(
   operations: readonly Operation[]
-): Map<string, string[]> {
-  const dropped = new Map<string, string[]>();
+): Map<string, DroppedCheck[]> {
+  const renamed = renamesOf(operations).desiredColumn;
+  const dropped = new Map<string, DroppedCheck[]>();
   for (const op of operations) {
     if (op.type !== "drop_check") continue;
-    const column = enumColumnIn(op.check.sql);
-    if (column === null) continue;
+    const liveColumn = enumColumnIn(op.check.sql);
+    if (liveColumn === null) continue;
+    const column =
+      renamed.get(op.tableName.toLowerCase())?.get(liveColumn.toLowerCase()) ??
+      liveColumn;
     const key = pairKey(op.tableName, column);
     const list = dropped.get(key) ?? [];
-    list.push(op.check.sql);
+    list.push({ sql: op.check.sql, liveColumn });
     dropped.set(key, list);
   }
   return dropped;
@@ -79,9 +93,8 @@ function droppedEnumChecks(
 /**
  * The check narrowings among the operations: each `add_check` whose expression
  * is an enum set, paired with the `drop_check` of the same table constraining
- * the same column. Sides that are not enum sets, pairs that only add, and a
- * pair read through a column rename (the sides naming different columns) are
- * not narrowings.
+ * the same column, followed through a rename of that column. Sides that are
+ * not enum sets and pairs that only add are not narrowings.
  */
 export function checkNarrowings(operations: readonly Operation[]): Narrowing[] {
   const dropped = droppedEnumChecks(operations);
@@ -92,9 +105,15 @@ export function checkNarrowings(operations: readonly Operation[]): Narrowing[] {
     const kept = enumValuesIn(op.check.sql);
     if (column === null || kept === null) continue;
     for (const before of dropped.get(pairKey(op.tableName, column)) ?? []) {
-      const values = removedEnumValues(before, op.check.sql);
+      const values = removedEnumValues(before.sql, op.check.sql);
       if (values.length === 0) continue;
-      narrowings.push({ table: op.tableName, column, values, kept });
+      narrowings.push({
+        table: op.tableName,
+        column,
+        liveColumn: before.liveColumn,
+        values,
+        kept,
+      });
     }
   }
   return narrowings;
@@ -184,7 +203,7 @@ export async function refuseEnumNarrowingsOverRows(args: {
     const [row] = await querySqlRows<{ n: number | string }>(
       args.db,
       args.dialect,
-      rowsHolding(table, narrowing.column, narrowing.kept)
+      rowsHolding(table, narrowing.liveColumn, narrowing.kept)
     );
     const count = Number(row?.n ?? 0);
     if (count === 0) continue;

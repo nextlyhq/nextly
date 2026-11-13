@@ -17,8 +17,6 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { enumColumnIn } from "../extension/enum-check";
-
 import { tableConstraintOps } from "./ddl-emitter";
 import type {
   AddCheckOp,
@@ -28,6 +26,7 @@ import type {
 } from "./diff/types";
 import { foreignKeysBlockingTypeChanges } from "./foreign-key-lift";
 import { generateSQL, replaceMysqlCheckSql } from "./sql-templates";
+import { mysqlCheckReplacements } from "./sql-templates/mysql-check-replacement";
 
 /** Statements to run before the kit's batch, and after it. */
 export interface KitRouteConstraintStatements {
@@ -135,104 +134,21 @@ function partitionConstraintOps(
   return { before, after };
 }
 
-interface AlteredScope {
-  droppedTables: Set<string>;
-  tablesWithAlteredColumns: Set<string>;
-  alteredColumns: Set<string>;
-}
-
-/** Collects tables and columns modified by the apply, which a live check could block. */
-function collectAlteredScope(ops: readonly Operation[]): AlteredScope {
-  const droppedTables = new Set<string>();
-  const tablesWithAlteredColumns = new Set<string>();
-  const alteredColumns = new Set<string>();
-  const markColumn = (table: string, column: string) => {
-    const t = table.toLowerCase();
-    tablesWithAlteredColumns.add(t);
-    alteredColumns.add(`${t}.${column.toLowerCase()}`);
-  };
-  for (const op of ops) {
-    if (op.type === "drop_table") {
-      droppedTables.add(op.tableName.toLowerCase());
-    } else if (
-      op.type === "drop_column" ||
-      op.type === "change_column_type" ||
-      op.type === "change_column_nullable" ||
-      op.type === "change_column_default"
-    ) {
-      markColumn(op.tableName, op.columnName);
-    } else if (op.type === "rename_column") {
-      markColumn(op.tableName, op.fromColumn);
-      markColumn(op.tableName, op.toColumn);
-    }
-  }
-  return { droppedTables, tablesWithAlteredColumns, alteredColumns };
-}
-
-/** Whether `drop` can stay in place until `after` for atomic replacement on MySQL. */
-function canDeferMysqlCheckDrop(
-  drop: DropCheckOp,
-  dropColumn: string | null,
-  scope: AlteredScope
-): boolean {
-  const tableKey = drop.tableName.toLowerCase();
-  if (scope.droppedTables.has(tableKey)) return false;
-  if (dropColumn !== null) {
-    return !scope.alteredColumns.has(`${tableKey}.${dropColumn.toLowerCase()}`);
-  }
-  return !scope.tablesWithAlteredColumns.has(tableKey);
-}
-
-/** Finds an unpaired `add_check` replacing `drop` on the same table and column/name. */
-function findMatchingAddCheck(
-  drop: DropCheckOp,
-  dropColumn: string | null,
-  adds: readonly AddCheckOp[],
-  pairedAdds: ReadonlySet<AddCheckOp>
-): AddCheckOp | undefined {
-  const tableKey = drop.tableName.toLowerCase();
-  const targetColumn = dropColumn?.toLowerCase();
-  const targetName = drop.check.name.toLowerCase();
-  return adds.find(add => {
-    if (pairedAdds.has(add) || add.tableName.toLowerCase() !== tableKey) {
-      return false;
-    }
-    if (targetColumn !== undefined) {
-      return enumColumnIn(add.check.sql)?.toLowerCase() === targetColumn;
-    }
-    return add.check.name.toLowerCase() === targetName;
-  });
-}
-
 /**
- * Pairs each MySQL `drop_check` + `add_check` that can run as one atomic
- * `ALTER TABLE` when neither the table nor the constrained column is dropped,
- * renamed, or altered in the same apply.
+ * Each MySQL check replacement (`mysqlCheckReplacements`) as one atomic
+ * `ALTER TABLE`, with the drops and adds it takes over.
  */
 function mysqlAtomicCheckReplacements(ops: readonly Operation[]): {
   pairedDrops: Set<DropCheckOp>;
   pairedAdds: Set<AddCheckOp>;
   statements: string[];
 } {
-  const scope = collectAlteredScope(ops);
-  const drops = ops.filter((op): op is DropCheckOp => op.type === "drop_check");
-  const adds = ops.filter((op): op is AddCheckOp => op.type === "add_check");
-
-  const pairedDrops = new Set<DropCheckOp>();
-  const pairedAdds = new Set<AddCheckOp>();
-  const statements: string[] = [];
-
-  for (const drop of drops) {
-    const dropColumn = enumColumnIn(drop.check.sql);
-    if (!canDeferMysqlCheckDrop(drop, dropColumn, scope)) continue;
-    const match = findMatchingAddCheck(drop, dropColumn, adds, pairedAdds);
-    if (match === undefined) continue;
-    pairedDrops.add(drop);
-    pairedAdds.add(match);
-    statements.push(
-      replaceMysqlCheckSql(match.tableName, drop.check.name, match.check)
-    );
-  }
-
-  return { pairedDrops, pairedAdds, statements };
+  const pairs = mysqlCheckReplacements(ops);
+  return {
+    pairedDrops: new Set(pairs.values()),
+    pairedAdds: new Set(pairs.keys()),
+    statements: [...pairs].map(([add, drop]) =>
+      replaceMysqlCheckSql(add.tableName, drop.check.name, add.check)
+    ),
+  };
 }

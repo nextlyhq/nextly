@@ -20,7 +20,8 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import type { Operation, TableSpec } from "../diff/types";
 
-import { generateMysqlSQL } from "./mysql";
+import { generateMysqlSQL, replaceMysqlCheckSql } from "./mysql";
+import { mysqlCheckReplacements } from "./mysql-check-replacement";
 import { mysqlLiveStatements } from "./mysql-live-restate";
 import { generatePgSQL } from "./postgres";
 import { generateSqliteSQL } from "./sqlite";
@@ -97,7 +98,8 @@ export function generateSQL(
  * On PostgreSQL this is exactly `generateSQL` per operation. On MySQL too,
  * except a nullability change and a column rename, which are each a short run
  * of statements built from the live catalog when the file runs
- * (`mysql-live-restate.ts`). SQLite cannot add or drop a check or a foreign
+ * (`mysql-live-restate.ts`), and a check dropped and added back, which is
+ * one `ALTER TABLE` replacing it (`mysql-check-replacement.ts`). SQLite cannot add or drop a check or a foreign
  * key on an existing table, nor change a column's nullability or default, and
  * one such operation does not say what the rest of the table looks like, so
  * there every such change on a table becomes ONE rebuild of that table to its
@@ -122,10 +124,19 @@ export function generateStatements(
   // A MySQL nullability change and a rename are built from the live catalog when the file runs, so
   // they keep the comment, character set, collation and checks the snapshot does not record
   // (`mysql-live-restate.ts`).
+  // A replaced check is one statement at its add, so a failing add leaves the old check in place
+  // rather than a dropped one already committed (`mysql-check-replacement.ts`).
   if (dialect === "mysql") {
-    return ops.flatMap(
-      op => mysqlLiveStatements(op) ?? [generateSQL(op, dialect, tablesAfter)]
-    );
+    const replacements = mysqlCheckReplacements(ops);
+    const replacedDrops = new Set<Operation>(replacements.values());
+    return ops.flatMap(op => {
+      if (replacedDrops.has(op)) return [];
+      const drop = op.type === "add_check" ? replacements.get(op) : undefined;
+      if (op.type === "add_check" && drop !== undefined) {
+        return [replaceMysqlCheckSql(op.tableName, drop.check.name, op.check)];
+      }
+      return mysqlLiveStatements(op) ?? [generateSQL(op, dialect, tablesAfter)];
+    });
   }
   return ops.map(op => generateSQL(op, dialect));
 }
