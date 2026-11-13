@@ -60,6 +60,11 @@ export function saveOfSchemaChange(args: {
   table: string;
   /** The definition file as it stands. */
   definition: UiSchemaManifest;
+  /**
+   * The entity as the registry stores it, every setting included, for one the
+   * definition lacks; the `row` below is read only where this is absent.
+   */
+  stored?: UiSchemaEntity;
   /** The collection's registry row, for a collection the definition lacks. */
   row: {
     labels?: { singular: string; plural: string };
@@ -68,9 +73,9 @@ export function saveOfSchemaChange(args: {
   fields: readonly FieldDefinition[];
   localized: boolean;
   answers: SchemaChangeAnswers;
-  /** A collection's junction statements; a Single and a field group have none here. */
+  /** The entity's junction statements, where it has many-to-many fields. */
   junctions?: NonNullable<CollectionSave["junctions"]>;
-  /** A collection's relationship keys; a Single and a field group have none here. */
+  /** The entity's relationship keys, before the change and after it. */
   keys?: NonNullable<CollectionSave["keys"]>;
 }): { save: CollectionSave; fields: FieldDefinition[] } {
   const listed =
@@ -81,6 +86,7 @@ export function saveOfSchemaChange(args: {
         : args.definition.collections;
   const previous =
     listed.find(c => c.slug === args.slug) ??
+    args.stored ??
     ({
       slug: args.slug,
       labels: args.row.labels ?? { singular: args.slug, plural: args.slug },

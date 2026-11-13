@@ -17,8 +17,10 @@
 import { container } from "../../di/container";
 import {
   checkSaveHistory,
+  previewCollectionSave,
   writeCollectionSave,
   type BuilderSaveSetup,
+  type CollectionSave,
   type CollectionSaveDeps,
 } from "../../domains/schema/builder-save/collection-save";
 import {
@@ -27,6 +29,7 @@ import {
 } from "../../domains/schema/builder-save/schema-change-save";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { NextlyError } from "../../errors/nextly-error";
+import type { UiSchemaEntity } from "../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { consoleLogger } from "../../shared/types";
 
@@ -76,13 +79,17 @@ export async function writeBuilderSchemaChange(
     kind: "single" | "fieldGroup";
     slug: string;
     table: string;
-    row: {
-      labels?: { singular: string; plural: string };
-      fields?: FieldDefinition[];
-    };
+    /**
+     * The entity as the registry stores it, every setting included: what the
+     * save starts from where the definition file does not list it yet.
+     */
+    stored: UiSchemaEntity;
     fields: readonly FieldDefinition[];
     localized: boolean;
     answers: SchemaChangeAnswers;
+    /** A Single's junction statements and relationship keys (`singleRelations`). */
+    junctions?: NonNullable<CollectionSave["junctions"]>;
+    keys?: NonNullable<CollectionSave["keys"]>;
   }
 ): Promise<void> {
   if (deps === undefined) {
@@ -91,12 +98,36 @@ export async function writeBuilderSchemaChange(
   }
   const { save } = saveOfSchemaChange({
     ...change,
+    row: { labels: change.stored.labels, fields: change.stored.fields },
     definition: await loadUiSchema({
       projectRoot: deps.projectRoot,
       uiSchemaFile: deps.config.db.uiSchemaFile,
     }),
   });
   await writeThenApply(deps, save, apply);
+}
+
+/**
+ * What the save would write beyond the person's change, for the schema
+ * dialog's review to show before they confirm: each conversion an adoption
+ * makes, each fill and each delete (`previewCollectionSave`). A conversion
+ * shown here is one the dialog can acknowledge, which the save then writes.
+ * None without a writer.
+ */
+export async function reviewBuilderSchemaChange(
+  deps: CollectionSaveDeps | undefined,
+  change: Parameters<typeof writeBuilderSchemaChange>[2]
+): Promise<string[]> {
+  if (deps === undefined) return [];
+  const { save } = saveOfSchemaChange({
+    ...change,
+    row: { labels: change.stored.labels, fields: change.stored.fields },
+    definition: await loadUiSchema({
+      projectRoot: deps.projectRoot,
+      uiSchemaFile: deps.config.db.uiSchemaFile,
+    }),
+  });
+  return (await previewCollectionSave(deps, save)).notices;
 }
 
 /**
@@ -135,10 +166,11 @@ export async function writeBuilderDelete(
   removed: {
     kind: "single" | "fieldGroup";
     slug: string;
-    row: {
-      labels?: { singular: string; plural: string };
-      fields?: FieldDefinition[];
-    };
+    /** The entity as the registry stored it, every setting included. */
+    stored: UiSchemaEntity;
+    /** A Single's junction statements and relationship keys, as they go. */
+    junctions?: NonNullable<CollectionSave["junctions"]>;
+    keys?: NonNullable<CollectionSave["keys"]>;
   }
 ): Promise<void> {
   if (deps === undefined) {
@@ -151,14 +183,9 @@ export async function writeBuilderDelete(
   });
   const listed =
     removed.kind === "single" ? definition.singles : definition.components;
-  const previous = listed.find(entity => entity.slug === removed.slug) ?? {
-    slug: removed.slug,
-    labels: removed.row.labels ?? {
-      singular: removed.slug,
-      plural: removed.slug,
-    },
-    fields: removed.row.fields ?? [],
-  };
+  const previous =
+    listed.find(entity => entity.slug === removed.slug) ?? removed.stored;
+
   await writeThenApply(
     deps,
     {
@@ -167,6 +194,10 @@ export async function writeBuilderDelete(
       previous,
       entity: null,
       change: "delete",
+      ...(removed.junctions === undefined
+        ? {}
+        : { junctions: removed.junctions }),
+      ...(removed.keys === undefined ? {} : { keys: removed.keys }),
     },
     apply
   );

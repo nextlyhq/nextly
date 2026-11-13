@@ -258,6 +258,10 @@ function builderRecovery(items: readonly DriftItem[]): string[] {
     "  a Single made in the Schema Builder before its saves wrote migrations,",
     "  open it there and save it once: the save writes the migration that",
     "  records its table. Then run migrate again.",
+    "  If it is translated, its values also stand in a second table that one",
+    "  save cannot record. Record both first: run `nextly migrate:create`, then",
+    "  `nextly migrate:resolve --applied <file>` for each file it writes, and",
+    "  save it again in the Builder.",
     "",
   ];
 }

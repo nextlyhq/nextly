@@ -22,6 +22,8 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { CollectionService } from "../../../collections/services/collection-service";
 import { FieldGroupMetadataService } from "../../../field-groups/services/field-group-metadata-service";
+import { SingleMetadataService } from "../../../singles/services/single-metadata-service";
+import { resolveBuilderVersions } from "../../../versions/builder-versions";
 
 let instance: TestNextly | undefined;
 afterEach(async () => {
@@ -272,6 +274,202 @@ describe.each(getConfiguredTestDialects())(
 
       expect(latestSnapshotTables(t)).toContain("comp_legacy");
       expect(latestColumns(t, "comp_legacy")).toContain("byline");
+    });
+
+    /** The Builder's definition file, as the saves wrote it. */
+    function definition(t: TestNextly): {
+      singles: Record<string, unknown>[];
+      components: Record<string, unknown>[];
+    } {
+      return JSON.parse(
+        readFileSync(join(t.basePath, "schema", "builder.json"), "utf-8")
+      ) as {
+        singles: Record<string, unknown>[];
+        components: Record<string, unknown>[];
+      };
+    }
+
+    /** A dispatched answer's body, whatever envelope wraps it. */
+    async function bodyOf(answer: unknown): Promise<Record<string, unknown>> {
+      const parsed = (await (answer as Response).json()) as Record<
+        string,
+        unknown
+      >;
+      return (parsed.data as Record<string, unknown> | undefined) ?? parsed;
+    }
+
+    it("shows a conversion an old field group's table needs, and writes it once confirmed", async () => {
+      const t = await boot();
+      const registry = t.getService("fieldGroupRegistryService");
+      await new FieldGroupMetadataService(
+        registry,
+        console as never,
+        t.adapter as never
+      ).createFieldGroup({
+        slug: "older",
+        label: "Older",
+        tableName: "comp_older",
+        fields: [
+          { name: "note", type: "text" },
+          { name: "extra", type: "text" },
+        ],
+        source: "ui",
+        locked: false,
+        schemaHash: "unrecorded",
+        schemaVersion: 1,
+      } as never);
+      // The registry no longer names `extra`, and its column stands: the table
+      // differs from what the field group declares.
+      await registry.updateComponent("older", {
+        fields: [{ name: "note", type: "text" }],
+      } as never);
+      const change = {
+        fields: [
+          { name: "note", type: "text" },
+          { name: "byline", type: "text" },
+        ],
+        confirmed: true,
+        schemaVersion: (await registry.getComponent("older")).schemaVersion,
+      };
+
+      const preview = await bodyOf(
+        await dispatchComponents(
+          "previewComponentSchemaChanges",
+          { slug: "older" },
+          { fields: change.fields }
+        )
+      );
+      expect(JSON.stringify(preview.notices)).toContain("extra");
+      await expect(
+        dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "older" },
+          change
+        )
+      ).rejects.toMatchObject({ code: "NEXTLY_SCHEMA_CONVERSION_UNCONFIRMED" });
+
+      await dispatchComponents(
+        "applyComponentSchemaChanges",
+        { slug: "older" },
+        { ...change, acknowledgedConversions: ["extra"] }
+      );
+      expect(latestSnapshotTables(t)).toContain("comp_older");
+    });
+
+    it("writes a Single's history, revalidation and webhook settings as the definition file spells them", async () => {
+      const t = await boot();
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          fields: [{ name: "heading", type: "text" }],
+          versions: true,
+          versionsMaxPerDoc: 10,
+          revalidate: false,
+          webhooks: false,
+        }
+      );
+
+      expect(
+        definition(t).singles.find(s => s.slug === "notice")
+      ).toMatchObject({
+        versions: true,
+        versionsMaxPerDoc: 10,
+        revalidate: false,
+        webhooks: false,
+      });
+    });
+
+    it("keeps an old Single's stored settings when it is first saved", async () => {
+      const t = await boot();
+      await new SingleMetadataService(
+        t.getService("singleRegistryService"),
+        console as never,
+        t.adapter as never
+      ).createSingle({
+        slug: "about",
+        label: "About",
+        tableName: "single_about",
+        description: "Who we are",
+        fields: [{ name: "heading", type: "text" }],
+        status: true,
+        versions: resolveBuilderVersions(true, 5),
+        source: "ui",
+        locked: false,
+        schemaHash: "unrecorded",
+        schemaVersion: 1,
+      } as never);
+
+      await dispatchSingles(
+        "applySingleSchemaChanges",
+        { slug: "about" },
+        {
+          fields: [
+            { name: "heading", type: "text" },
+            { name: "body", type: "text" },
+          ],
+          confirmed: true,
+          schemaVersion: (
+            await t.getService("singleRegistryService").getSingle("about")
+          ).schemaVersion,
+        }
+      );
+
+      expect(definition(t).singles.find(s => s.slug === "about")).toMatchObject(
+        {
+          description: "Who we are",
+          status: true,
+          versions: true,
+          versionsMaxPerDoc: 5,
+        }
+      );
+    });
+
+    it("writes a Single's many-to-many junction table into its migration", async () => {
+      const t = await boot();
+      await t.getService("collectionService").createCollection(
+        {
+          name: "articles",
+          label: "Article",
+          fields: [{ name: "body", type: "text" }],
+        } as Parameters<CollectionService["createCollection"]>[0],
+        {}
+      );
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "picks",
+          label: "Picks",
+          fields: [
+            {
+              name: "featured",
+              type: "relationship",
+              relationTo: "articles",
+              hasMany: true,
+            },
+          ],
+        }
+      );
+
+      const junction = (
+        await (
+          t.adapter as unknown as { listTables(): Promise<string[]> }
+        ).listTables()
+      ).find(
+        name => name.startsWith("single_picks") && name.includes("featured")
+      );
+      expect(junction).toBeDefined();
+      const created = migrationFiles(t).find(f =>
+        /_picks_create\.sql$/.test(f)
+      )!;
+      expect(
+        readFileSync(join(t.basePath, "database", "history", created), "utf-8")
+      ).toContain(junction);
     });
   }
 );

@@ -41,6 +41,11 @@ describe("migrationDriftError", () => {
     expect(err.publicMessage).toMatch(
       /made in the Schema Builder[\s\S]*open it there and save it once/
     );
+    // A translated one keeps its values in a second table, which one save
+    // cannot adopt: the steps that record both are named instead.
+    expect(err.publicMessage).toMatch(
+      /If it is translated[\s\S]*nextly migrate:create[\s\S]*nextly migrate:resolve --applied <file>[\s\S]*save it again/
+    );
   });
 
   it("says nothing of the Builder for a table that is neither", () => {

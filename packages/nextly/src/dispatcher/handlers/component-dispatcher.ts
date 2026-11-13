@@ -45,6 +45,8 @@ import {
 } from "../../domains/i18n/migration/archive-preflight";
 import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { storesPerLanguage } from "../../domains/i18n/per-language-storage";
+import type { SchemaChangeAnswers } from "../../domains/schema/builder-save/schema-change-save";
+import { fieldGroupEntity } from "../../domains/schema/builder-save/stored-entity";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
@@ -71,6 +73,7 @@ import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import {
   builderSaveDeps,
   checkBuilderSaveHistory,
+  reviewBuilderSchemaChange,
   writeBuilderDelete,
   writeBuilderSchemaChange,
 } from "../helpers/builder-save-change";
@@ -576,21 +579,43 @@ export const COMPONENTS_METHODS: Record<
         recordedFields: recordedFieldsOf(component),
       };
 
-      return respondData(
-        await builderSchemaPreviewBody({
-          desired,
-          db,
-          dialect,
-          slug: slug,
-          tableName,
-          builtBy: "fieldGroup",
-          entity: component,
-          currentFields,
-          newFields: fields as FieldDefinition[],
-          requestedLocalized: readRequestLocalized(body),
-          schemaVersion: component.schemaVersion,
-        })
-      );
+      const preview = await builderSchemaPreviewBody({
+        desired,
+        db,
+        dialect,
+        slug: slug,
+        tableName,
+        builtBy: "fieldGroup",
+        entity: component,
+        currentFields,
+        newFields: fields as FieldDefinition[],
+        requestedLocalized: readRequestLocalized(body),
+        schemaVersion: component.schemaVersion,
+      });
+      // What the save writes beyond the person's change, for the review to show before they
+      // confirm, as a collection's does: each conversion an adoption makes, each fill and delete.
+      const answers = body as SchemaChangeAnswers;
+      const notices = await reviewBuilderSchemaChange(builderSaveDeps(), {
+        kind: "fieldGroup",
+        slug,
+        table: tableName,
+        stored: fieldGroupEntity(component),
+        fields: fields as FieldDefinition[],
+        localized:
+          readRequestLocalized(body) ??
+          (component as { localized?: boolean }).localized === true,
+        answers: {
+          renameResolutions: answers.renameResolutions ?? [],
+          eventResolutions: answers.eventResolutions ?? [],
+          ...(answers.resolutions === undefined
+            ? {}
+            : { resolutions: answers.resolutions }),
+          ...(answers.acknowledgedConversions === undefined
+            ? {}
+            : { acknowledgedConversions: answers.acknowledgedConversions }),
+        },
+      });
+      return respondData({ ...preview, notices });
     },
   },
 
@@ -629,6 +654,7 @@ export const COMPONENTS_METHODS: Record<
         renameResolutions,
         eventResolutions,
         localized: requestLocalized,
+        acknowledgedConversions,
       } = body as {
         fields: unknown[];
         confirmed: boolean;
@@ -639,6 +665,7 @@ export const COMPONENTS_METHODS: Record<
         // i18n: the builder sends the current toggle so a save that flips i18n AND changes fields
         // provisions the companion in the same apply. Undefined = leave the persisted value.
         localized?: boolean;
+        acknowledgedConversions?: string[];
       };
 
       if (!confirmed) throw new Error("Schema changes must be confirmed");
@@ -899,17 +926,17 @@ export const COMPONENTS_METHODS: Record<
               kind: "fieldGroup",
               slug,
               table: tableName,
-              row: {
-                labels: { singular: component.label, plural: component.label },
-                fields: (component.fields ??
-                  []) as unknown as FieldDefinition[],
-              },
+              stored: fieldGroupEntity(component),
               fields: fields as unknown as FieldDefinition[],
               localized: isLocalized,
               answers: {
                 renameResolutions: renameResolutions ?? [],
                 eventResolutions: eventResolutions ?? [],
                 ...(resolutions ? { resolutions } : {}),
+                // The conversions an adoption makes that the review showed and the person confirmed.
+                ...(acknowledgedConversions === undefined
+                  ? {}
+                  : { acknowledgedConversions }),
               },
             }
           );
@@ -1189,10 +1216,7 @@ export const COMPONENTS_METHODS: Record<
         {
           kind: "fieldGroup",
           slug,
-          row: {
-            labels: { singular: removed.label, plural: removed.label },
-            fields: (removed.fields ?? []) as unknown as FieldDefinition[],
-          },
+          stored: fieldGroupEntity(removed),
         }
       );
 

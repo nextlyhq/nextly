@@ -34,7 +34,6 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { readRequestLocalized } from "../../../dispatcher/helpers/request-localized";
 import { NextlyError } from "../../../errors";
-import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type {
   DynamicFieldGroupInsert,
@@ -54,6 +53,7 @@ import {
   type BuilderSaveSetup,
   type CollectionSaveDeps,
 } from "../../schema/builder-save/collection-save";
+import { fieldGroupEntity } from "../../schema/builder-save/stored-entity";
 import { writeRegistryRowsWith } from "../../schema/schema-version";
 import { identifierBytes } from "../../schema/services/index-name";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
@@ -1330,19 +1330,4 @@ export class FieldGroupMetadataService {
 
     return "applied";
   }
-}
-
-/**
- * A field group as the Builder's definition file records it: what the save
- * writer reads and writes for it, as it does a collection's entity.
- */
-function fieldGroupEntity(input: CreateFieldGroupInput): UiSchemaEntity {
-  return {
-    slug: input.slug,
-    labels: { singular: input.label, plural: input.label },
-    ...(input.description == null ? {} : { description: input.description }),
-    ...(input.admin == null ? {} : { admin: input.admin }),
-    ...(input.localized == null ? {} : { localized: input.localized }),
-    fields: input.fields as unknown as UiSchemaEntity["fields"],
-  };
 }

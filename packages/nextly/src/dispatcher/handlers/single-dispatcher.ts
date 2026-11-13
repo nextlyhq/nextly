@@ -53,6 +53,9 @@ import { resolveCompanionRename } from "../../domains/i18n/migration/companion-r
 import { translationLayoutChange } from "../../domains/i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { assertLanguageStatesAgreeWithEntry } from "../../domains/i18n/runtime/language-states-agree";
+import type { SchemaChangeAnswers } from "../../domains/schema/builder-save/schema-change-save";
+import { singleRelations } from "../../domains/schema/builder-save/single-relations";
+import { singleEntity } from "../../domains/schema/builder-save/stored-entity";
 import { refuseCompanionRenameSwitch } from "../../domains/schema/pipeline/companion-shape-switches";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
@@ -100,6 +103,7 @@ import {
 import {
   builderSaveDeps,
   checkBuilderSaveHistory,
+  reviewBuilderSchemaChange,
   writeBuilderDelete,
   writeBuilderSchemaChange,
 } from "../helpers/builder-save-change";
@@ -939,13 +943,17 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         {
           kind: "single",
           slug,
-          row: {
-            labels: {
-              singular: single.label ?? slug,
-              plural: single.label ?? slug,
-            },
-            fields: (single.fields ?? []) as unknown as FieldDefinition[],
-          },
+          stored: singleEntity(single),
+          // Its junction tables and relationship keys, as they go with it.
+          ...(builderSave === undefined
+            ? {}
+            : await singleRelations(
+                builderSave.adapter,
+                builderSave.logger,
+                single.tableName,
+                (single.fields ?? []) as unknown as FieldDefinition[],
+                []
+              )),
         }
       );
 
@@ -1239,24 +1247,53 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         recordedFields: recordedFieldsOf(single),
       };
 
-      return respondData(
-        await builderSchemaPreviewBody({
-          desired,
-          db,
-          dialect,
-          slug: slug,
+      const preview = await builderSchemaPreviewBody({
+        desired,
+        db,
+        dialect,
+        slug: slug,
+        tableName,
+        builtBy: "collection",
+        entity: single,
+        currentFields,
+        newFields: fields as FieldDefinition[],
+        requestedLocalized: readRequestLocalized(body),
+        // Legacy rows (schema_version NULL) read as 1, so the editor always has a concrete
+        // version to echo back on Apply; JSON omits an undefined one and the guard would reject
+        // the first save as version-less.
+        schemaVersion: single.schemaVersion ?? 1,
+      });
+      // What the save writes beyond the person's change, for the review to show before they
+      // confirm, as a collection's does: each conversion an adoption makes, each fill and delete.
+      const answers = body as SchemaChangeAnswers;
+      const notices = await reviewBuilderSchemaChange(builderSaveDeps(), {
+        kind: "single",
+        slug,
+        table: tableName,
+        stored: singleEntity(single),
+        fields: fields as FieldDefinition[],
+        localized:
+          readRequestLocalized(body) ??
+          (single as { localized?: boolean }).localized === true,
+        answers: {
+          renameResolutions: answers.renameResolutions ?? [],
+          eventResolutions: answers.eventResolutions ?? [],
+          ...(answers.resolutions === undefined
+            ? {}
+            : { resolutions: answers.resolutions }),
+          ...(answers.acknowledgedConversions === undefined
+            ? {}
+            : { acknowledgedConversions: answers.acknowledgedConversions }),
+        },
+        ...(await singleRelations(
+          adapter,
+          getLoggerFromDI() ?? consoleLogger,
           tableName,
-          builtBy: "collection",
-          entity: single,
           currentFields,
-          newFields: fields as FieldDefinition[],
-          requestedLocalized: readRequestLocalized(body),
-          // Legacy rows (schema_version NULL) read as 1, so the editor always has a concrete
-          // version to echo back on Apply; JSON omits an undefined one and the guard would reject
-          // the first save as version-less.
-          schemaVersion: single.schemaVersion ?? 1,
-        })
-      );
+          fields as FieldDefinition[]
+        )),
+      });
+      return respondData({ ...preview, notices });
     },
   },
 
@@ -1271,6 +1308,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         resolutions,
         renameResolutions,
         eventResolutions,
+        acknowledgedConversions,
       } = body as {
         fields: unknown[];
         confirmed: boolean;
@@ -1282,6 +1320,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // i18n AND changes fields in one shot provisions the companion in the same apply, rather
         // than reading a stale registry flag. Undefined = leave the persisted value untouched.
         localized?: boolean;
+        acknowledgedConversions?: string[];
       };
 
       if (!confirmed) throw new Error("Schema changes must be confirmed");
@@ -1538,20 +1577,26 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
               kind: "single",
               slug,
               table: tableName,
-              row: {
-                labels: {
-                  singular: single.label ?? slug,
-                  plural: single.label ?? slug,
-                },
-                fields: (single.fields ?? []) as unknown as FieldDefinition[],
-              },
+              stored: singleEntity(single),
               fields: fields as unknown as FieldDefinition[],
               localized: isLocalized,
               answers: {
                 renameResolutions: renameResolutions ?? [],
                 eventResolutions: eventResolutions ?? [],
                 ...(resolutions ? { resolutions } : {}),
+                // The conversions an adoption makes that the review showed and the person confirmed.
+                ...(acknowledgedConversions === undefined
+                  ? {}
+                  : { acknowledgedConversions }),
               },
+              // Its junction tables and relationship keys, which the writer does not derive itself.
+              ...(await singleRelations(
+                adapter,
+                getLoggerFromDI() ?? consoleLogger,
+                tableName,
+                (single.fields ?? []) as unknown as FieldDefinition[],
+                fields as unknown as FieldDefinition[]
+              )),
             }
           );
 
