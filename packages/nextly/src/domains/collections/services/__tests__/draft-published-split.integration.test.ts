@@ -2477,7 +2477,7 @@ describe("draft/published split — schema and component eligibility (integratio
     expect(await workingDraftCount(id)).toBe(0);
   });
 
-  it("shows the draft a publish would ship when an embedded component turns localized", async () => {
+  it("keeps the draft held before an embedded component turned localized, shown and never shipped", async () => {
     const entries = await bootFile(withHero(false));
     const ctx = { collectionName: COLLECTION, overrideAccess: true };
 
@@ -2497,8 +2497,9 @@ describe("draft/published split — schema and component eligibility (integratio
 
     // Re-open with the component now localized. An unlocalized collection
     // reaching a localized component holds no new draft without per-language
-    // storage, but the draft written before is still shown, and a publish puts
-    // it live: an author is never shown one document and ships another.
+    // storage. The draft written before is still shown, but it names no
+    // language, so it is never shipped: a publish is refused, and the live row
+    // and the draft stay as they were until the draft is discarded.
     const reopened = await bootFile(withHero(true));
 
     const draftRead = await reopened.getEntry({
@@ -2508,20 +2509,20 @@ describe("draft/published split — schema and component eligibility (integratio
       includeWorkingDraft: true,
     });
 
-    // The invariant, asserted as the pair rather than as two separate facts:
-    // what the editor is shown and what a publish would ship must be the same
-    // document. Either alone can be right while the two disagree.
+    // Shown, as the pair: the editor sees the draft while the live row keeps
+    // its own value, and a refused publish changes neither.
     const published = await reopened.updateEntry(
       { ...ctx, entryId: id },
       { status: "published", _overwrite: true }
     );
-    expect(published.success).toBe(true);
+    expect(published.success).toBe(false);
+    expect(published.statusCode).toBe(409);
     const [afterPublish] = await handle!.adapter.select<LiveRow>(TABLE);
     expect({
       shown: (draftRead.data as { title?: string }).title,
-      shipped: afterPublish?.title,
-    }).toEqual({ shown: "draft-title", shipped: "draft-title" });
-    expect(await workingDraftCount(id)).toBe(0);
+      live: afterPublish?.title,
+    }).toEqual({ shown: "draft-title", live: "live" });
+    expect(await workingDraftCount(id)).toBe(1);
   });
 
   it("rejects a publish when the pending draft violates a tightened schema rule", async () => {

@@ -3,7 +3,7 @@
  * document: when the collection holds drafts, and when it stopped holding
  * them only because it reaches a translated component (`localized-component`)
  * and so may still hold one saved before. Such a draft stays shown, and the
- * editor can publish or discard it.
+ * editor can copy from it and discard it; the server refuses to publish it.
  *
  * @module lib/held-draft
  */

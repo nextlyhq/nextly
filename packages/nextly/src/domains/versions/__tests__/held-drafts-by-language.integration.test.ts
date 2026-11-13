@@ -346,10 +346,11 @@ describe.each(getConfiguredTestDialects())(
       }, 90_000);
 
       // Such a collection held one draft with no language before the rule
-      // refused it. That draft is still shown and can be published or
-      // discarded, and a save over it is refused rather than writing live
-      // beside it: nothing of it is lost.
-      it("keeps a draft held before the rule, refusing a save until it is published or discarded", async () => {
+      // refused it, so nothing says which language its component values
+      // were read in. That draft is read-only: still shown and discardable,
+      // while a save, a publish of one language and a publish of every
+      // language are refused and leave it, and every row, as they were.
+      it("keeps a draft held before the rule read-only until it is discarded", async () => {
         const t = await boot(dialect, false);
         const entries = entriesOf(t);
         const notes = collectionDoc(entries, NOTES);
@@ -372,6 +373,8 @@ describe.each(getConfiguredTestDialects())(
           snapshot: {
             ...(live.data as Record<string, unknown>),
             title: "Held before",
+            // A component value held from a read in Spanish.
+            banner: { words: "es held" },
           },
         });
         const editorTitle = async () =>
@@ -401,6 +404,35 @@ describe.each(getConfiguredTestDialects())(
         expect(refused.success).toBe(false);
         expect(refused.statusCode).toBe(409);
         expect(await heldIn(id)).toEqual(["shared"]);
+        expect(await editorTitle()).toBe("Held before");
+
+        // A publish of one language would fold the held component value
+        // into that language's row, whichever language it was read in.
+        const publishedOne = await entries.updateEntry(
+          {
+            collectionName: NOTES,
+            entryId: id,
+            overrideAccess: true,
+            locale: "en",
+          },
+          { status: "published", _overwrite: true }
+        );
+        expect(publishedOne.success).toBe(false);
+        expect(publishedOne.statusCode).toBe(409);
+        expect(await notes.words(id, "en")).toBe("en words");
+
+        // A publish of every language would consume it with nothing of it
+        // written.
+        const publishedEvery = await entries.publishAllLocales({
+          collectionName: NOTES,
+          entryId: id,
+          overrideAccess: true,
+          data: { _overwrite: true },
+        });
+        expect(publishedEvery.success).toBe(false);
+        expect(publishedEvery.statusCode).toBe(409);
+        expect(await heldIn(id)).toEqual(["shared"]);
+        expect(await notes.words(id, "en")).toBe("en words");
         expect(await editorTitle()).toBe("Held before");
 
         await entries.discardWorkingDraft({

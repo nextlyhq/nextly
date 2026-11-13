@@ -559,7 +559,8 @@ export function useDocumentActionBindings({
   // overlay read with `_isWorkingDraft`, and overlays only a draft it holds.
   // Read off the entry rather than the collection's `draftsEnabled`, since a
   // collection that stopped holding drafts can still hold one saved before,
-  // which the editor must be able to publish or discard.
+  // which the editor must be able to see and discard (the server refuses to
+  // publish it, since it names no language).
   const hasWorkingDraft =
     (entry as { _isWorkingDraft?: boolean } | null | undefined)
       ?._isWorkingDraft === true;

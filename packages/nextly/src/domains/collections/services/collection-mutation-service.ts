@@ -9236,6 +9236,23 @@ export class CollectionMutationService extends BaseService {
         : null;
     const documentLocalized =
       (publishCollection as { localized?: boolean }).localized === true;
+    // A collection the `localized-component` rule now refuses may hold a
+    // draft saved before the rule. Such a draft is never promoted: its one
+    // slot names no language, so a publish could not tell which language's
+    // row its component values belong to. Judged by the shared predicate on
+    // what the promotion context already resolved.
+    const refusesEarlierDraft =
+      promotionContext !== null &&
+      promotionContext.promoteRestoreCtx === null &&
+      heldBeforeTheRule(
+        evaluateDraftSplitEligibility({
+          collectionHasStatus: true,
+          draftsVersioningEnabled: true,
+          fields: promotionContext.fields as unknown as FieldConfig[],
+          componentSchemas: promotionContext.splitComponentSchemas,
+          documentLocalized,
+        })
+      );
     const draftRef: VersionRef = {
       scopeKind: "collection",
       scopeSlug: params.collectionName,
@@ -9258,6 +9275,7 @@ export class CollectionMutationService extends BaseService {
         promotion,
         documentLocalized,
         draftRef,
+        refusesEarlierDraft,
       },
     };
   }
@@ -9520,6 +9538,7 @@ export class CollectionMutationService extends BaseService {
         promotion,
         documentLocalized,
         draftRef,
+        refusesEarlierDraft,
       } = preconditions.ready;
       // Every language this moves is judged, so the version must name each
       // one: a read of one language cannot say whether another changed since.
@@ -9691,6 +9710,18 @@ export class CollectionMutationService extends BaseService {
         const lockedStatusRaw = (lockedRow as { status?: unknown }).status;
         lockedPreviousStatus =
           typeof lockedStatusRaw === "string" ? lockedStatusRaw : null;
+
+        // A draft held before the `localized-component` rule is read-only:
+        // never promoted, and never consumed unwritten by the cleanup below.
+        // The publish is refused under the lock, before anything is written,
+        // while one is there; it stays to be copied from and discarded.
+        if (
+          refusesEarlierDraft &&
+          (await new VersionsRepository(tx).listWorkingDraftLocales(draftRef))
+            .length > 0
+        ) {
+          throw heldBeforeTheRuleRefusal(params.collectionName, params.entryId);
+        }
 
         // The committed pre-publish row in the main-table schema shape, read on
         // the TRANSACTION connection (never the pool: the transaction already
@@ -14760,8 +14791,8 @@ export class CollectionMutationService extends BaseService {
       });
       const splitEnabled = splitVerdict.eligible;
       // A document the `localized-component` rule now refuses may still hold
-      // a draft saved before the rule: it stays shown and publishable, and a
-      // save is refused until it is published or discarded.
+      // a draft saved before the rule. It is read-only: shown, discardable,
+      // never promoted, and every live write is refused while it is there.
       const mayHoldEarlierDraft = heldBeforeTheRule(splitVerdict);
       // No status named ⇒ neither the main row nor the write-locale companion
       // `_status` is being set (matches the transition guard's own build gate at
@@ -14794,10 +14825,7 @@ export class CollectionMutationService extends BaseService {
       // restore payload directly and leave any working draft in place.
       const isRestoreWrite =
         params.sourceVersionNo !== undefined && params.sourceVersionNo !== null;
-      const promotePossible =
-        (splitEnabled || mayHoldEarlierDraft) &&
-        !namesNoStatus &&
-        !isRestoreWrite;
+      const promotePossible = splitEnabled && !namesNoStatus && !isRestoreWrite;
       // The caller's grants, resolved HERE, before the write transaction opens.
       //
       // The promotion gate runs under the row lock, on the draft that
@@ -15155,12 +15183,12 @@ export class CollectionMutationService extends BaseService {
           defaultLocale: this.localization?.defaultLocale ?? null,
         }).hold;
 
-        // A save over a draft held before the `localized-component` rule
-        // would write live beside it, and its next publish would put the
-        // older draft back: refused until the draft is published or discarded.
+        // A draft held before the `localized-component` rule names no
+        // language, so neither a save beside it nor a publish of it can say
+        // which language's row its component values belong to: every live
+        // write is refused while it is there, until it is discarded.
         if (
           mayHoldEarlierDraft &&
-          namesNoStatus &&
           !isRestoreWrite &&
           (await new VersionsRepository(tx).findWorkingDraft(
             {

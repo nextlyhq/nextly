@@ -187,16 +187,19 @@ export function evaluateDraftSplitEligibility(
 /**
  * Whether a document the verdict refuses may still hold a draft saved before
  * it was refused: the `localized-component` rule refuses documents that held
- * drafts before it, and such a draft stays shown and publishable, never lost.
+ * drafts before it. Such a draft is read-only: shown and discardable, never
+ * promoted and never lost.
  */
 export function heldBeforeTheRule(verdict: DraftSplitEligibility): boolean {
   return verdict.reason === "localized-component";
 }
 
 /**
- * The refusal of a save over a draft held before the `localized-component`
- * rule: the save would write live beside it, and the draft's publish would
- * then put its older values back.
+ * The refusal of a live write (a save, a publish of one language or of every
+ * language) while a draft held before the `localized-component` rule is
+ * there. That draft names no language, so a publish could put one language's
+ * component values into another's row, and a save beside it would leave it
+ * to resurface.
  */
 export function heldBeforeTheRuleRefusal(
   collection: string,
@@ -205,7 +208,7 @@ export function heldBeforeTheRuleRefusal(
   return NextlyError.conflict({
     reason: "state",
     message:
-      "This document has a draft saved before it stopped holding drafts. Publish or discard that draft first, then save again.",
+      "This document has a draft held from before it stopped holding drafts. Copy what you need from it, then discard it.",
     logContext: { reason: "held-before-the-rule", collection, entryId },
   });
 }
