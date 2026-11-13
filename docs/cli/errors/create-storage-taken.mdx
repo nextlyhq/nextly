@@ -7,13 +7,14 @@ description: "A field group or Single would be created where tables or views tha
 
 A field group or Single would be created where tables or views that nothing registered owns already stand.
 
-Before it builds anything, a field group's or Single's create checks the tables it would use. An empty table an earlier attempt left behind is replaced. It refuses instead, and changes nothing, when what stands there is not its own to replace: a table that holds rows, a leftover table other tables reference, a table standing where it would build one of its own, or a view reading the tables it would replace. The message names each one.
+Before it builds anything, a field group's or Single's create checks the tables it would use. An empty table an earlier attempt left behind is replaced. It refuses instead, and changes nothing, when what stands there is not its own to replace: a table that holds rows, a leftover table other tables reference, a table standing where it would build one of its own, or, for a Single, rows in the shared field-group tables that still name its table as their parent. On PostgreSQL, a view reading the tables it would replace refuses it too. The message names each one.
 
 ## Fix
 
 - Check the tables the message names. If they hold data you need, back it up first.
 - For a table that holds rows, or one standing where the create would build, drop or rename it, then retry the create.
 - For a leftover table other tables reference, drop those tables or their references to it, or rename the leftover table itself, then retry the create. Renaming a referencing table is not enough: under its new name it still references the leftover.
+- For rows in a shared field-group table, delete only the rows whose `_parent_table` is the leftover table, then retry the create. Keep the table: it belongs to a field group and holds other entities' rows.
 - For a view, drop it, or redefine it to read other tables, then retry the create. Renaming a view is not enough: under its new name it still reads the same tables.
 
 ## Example

@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A command that creates a field group or Single over tables nothing registered owns now ends as `CREATE_STORAGE_TAKEN`, with what happened, why and what to do, instead of an unexpected error. The code covers each refusal of that create: a table holding rows, a leftover table other tables reference, and an object standing where it would build.
+A field group's or Single's create refused over tables nothing registered owns now ends, wherever a command meets the refusal, as `CREATE_STORAGE_TAKEN`, with what happened, why and what to do, instead of an unexpected error. Each refusal names a remedy that clears it: a view reading the leftover is dropped or redefined rather than renamed, a table referencing it drops its reference or the leftover is renamed, and rows a Single left in a shared field-group table are deleted without touching the table.

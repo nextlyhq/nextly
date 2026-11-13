@@ -71,6 +71,41 @@ describe("a create refused over storage nothing registered owns", () => {
     });
   }
 
+  // A shared field-group table holds other entities' rows, so the advice keeps the table and
+  // removes only the rows naming the leftover as their parent.
+  it("tells the owner of shared field-group rows to delete only those rows, never the table", () => {
+    const ended = toCliError(
+      occupiedRefusal(SINGLE, [], [{ table: "comp_chip", rows: 1 }])
+    );
+    expect(ended.code).toBe("CREATE_STORAGE_TAKEN");
+    expect(ended.why).toBe(
+      'The shared field-group table "comp_chip" (1 row) holds rows whose `_parent_table` is "single_home", which nothing registered owns.'
+    );
+    expect(ended.next).toBe(
+      'Delete only the rows whose `_parent_table` is "single_home" from that table, keeping the table and every other row, then retry the create.'
+    );
+    expect(ended.next).not.toMatch(/drop|rename/i);
+  });
+
+  it("gives each remedy when the leftover's own tables and shared rows both hold content", () => {
+    const ended = toCliError(
+      occupiedRefusal(
+        SINGLE,
+        [{ table: "single_home", rows: 3 }],
+        [
+          { table: "comp_chip", rows: 1 },
+          { table: "comp_card", rows: 2 },
+        ]
+      )
+    );
+    expect(ended.why).toBe(
+      '"single_home" (3 rows) already exists and holds rows, but nothing registered describes them. The shared field-group tables "comp_chip" (1 row), "comp_card" (2 rows) hold rows whose `_parent_table` is "single_home", which nothing registered owns.'
+    );
+    expect(ended.next).toBe(
+      'Drop or rename "single_home", and delete only the rows whose `_parent_table` is "single_home" from "comp_chip", "comp_card", keeping the tables and every other row, then retry the create.'
+    );
+  });
+
   // Renaming a view keeps it reading the same table, so the advice for one must not offer it.
   it("never tells a view's owner to rename it", () => {
     expect(toCliError(viewedRefusal(SINGLE, ["home_report"])).next).not.toMatch(

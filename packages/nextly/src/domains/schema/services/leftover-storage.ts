@@ -197,7 +197,7 @@ export async function clearLeftoverStorage(
   // none standing would take them over as its own, so they refuse it either way.
   const elsewhere = (await args.ownedElsewhere?.()) ?? [];
   if (!mainStands && !companionStands && plannedStanding.length === 0) {
-    if (elsewhere.length > 0) throw occupiedRefusal(args, elsewhere);
+    if (elsewhere.length > 0) throw occupiedRefusal(args, [], elsewhere);
     return;
   }
 
@@ -230,11 +230,10 @@ export async function clearLeftoverStorage(
     ...(companionStands ? [companion] : []),
     ...ownJunctions,
   ];
-  const occupied = [
-    ...(await occupiedAmong(db, dialect, family)),
-    ...elsewhere,
-  ];
-  if (occupied.length > 0) throw occupiedRefusal(args, occupied);
+  const occupied = await occupiedAmong(db, dialect, family);
+  if (occupied.length > 0 || elsewhere.length > 0) {
+    throw occupiedRefusal(args, occupied, elsewhere);
+  }
   // A view reading one of these tables would go with it, unasked, under PostgreSQL's CASCADE.
   const views = await viewsOver(db, dialect, family);
   if (views.length > 0) throw viewedRefusal(args, views);
@@ -381,29 +380,102 @@ export function referencedRefusal(
   });
 }
 
-/** The refusal of a create whose leftover family holds rows, naming each table and its rows. */
-export function occupiedRefusal(
-  args: LeftoverRefusalSubject,
-  occupied: readonly OccupiedTable[]
-): NextlyError {
-  const { kind, slug, tableName } = args;
-  const named = occupied
+/** `"comp_card" (2 rows), …`: each table with how many rows it holds. */
+function tablesWithRows(tables: readonly OccupiedTable[]): string {
+  return tables
     .map(
       ({ table, rows }) => `"${table}" (${rows} ${rows === 1 ? "row" : "rows"})`
     )
     .join(", ");
+}
+
+/** One kind of content a refusal names: why it refuses, and what clears it. */
+interface ContentPart {
+  found: string;
+  remedy: string;
+}
+
+/** `"a", "b"`: the tables, quoted. */
+function quotedTables(tables: readonly OccupiedTable[]): string {
+  return tables.map(({ table }) => `"${table}"`).join(", ");
+}
+
+/**
+ * Rows in the leftover's own tables, which nothing registered describes: the tables are dropped or
+ * renamed. `named` spells the tables out in the remedy, for a refusal naming other tables too.
+ */
+function ownTablesPart(
+  occupied: readonly OccupiedTable[],
+  named: boolean
+): ContentPart {
+  const one = occupied.length === 1;
+  return {
+    found:
+      `${tablesWithRows(occupied)} already ${one ? "exists and holds" : "exist and hold"} ` +
+      "rows, but nothing registered describes them.",
+    remedy: `drop or rename ${named ? quotedTables(occupied) : "those tables"}`,
+  };
+}
+
+/**
+ * Rows in the shared field-group tables naming the leftover as their parent. Such a table holds
+ * other entities' rows too and belongs to a registered field group, so only those rows are removed,
+ * never the table. `named` spells the tables out, as above; `first` starts the reason.
+ */
+function sharedRowsPart(
+  shared: readonly OccupiedTable[],
+  tableName: string,
+  { named, first }: { named: boolean; first: boolean }
+): ContentPart {
+  const one = shared.length === 1;
+  const where = named
+    ? quotedTables(shared)
+    : one
+      ? "that table"
+      : "those tables";
+  return {
+    found:
+      `${first ? "the" : "The"} shared field-group ${one ? "table" : "tables"} ` +
+      `${tablesWithRows(shared)} ${one ? "holds" : "hold"} rows whose \`_parent_table\` is ` +
+      `"${tableName}", which nothing registered owns.`,
+    remedy:
+      `delete only the rows whose \`_parent_table\` is "${tableName}" from ${where}, ` +
+      `keeping the ${one ? "table" : "tables"} and every other row`,
+  };
+}
+
+/**
+ * The refusal of a create whose leftover holds content: rows in tables of its own family, and rows
+ * in the shared field-group tables that name its table as their parent, each with its own remedy.
+ * With both, each remedy names its tables, so "those tables" cannot be read as the other kind's.
+ */
+export function occupiedRefusal(
+  args: LeftoverRefusalSubject,
+  occupied: readonly OccupiedTable[],
+  shared: readonly OccupiedTable[] = []
+): NextlyError {
+  const { kind, slug, tableName } = args;
+  const both = occupied.length > 0 && shared.length > 0;
+  const parts = [
+    ...(occupied.length > 0 ? [ownTablesPart(occupied, both)] : []),
+    ...(shared.length > 0
+      ? [sharedRowsPart(shared, tableName, { named: both, first: !both })]
+      : []),
+  ];
+  const remedy = parts.map(part => part.remedy).join(", and ");
   return NextlyError.conflict({
     reason: "state",
     message:
-      `Creating the ${KIND_NAMES[kind]} "${slug}" was refused: ${named} already ` +
-      `${occupied.length === 1 ? "exists and holds" : "exist and hold"} rows, but nothing ` +
-      "registered describes them. Drop or rename those tables, then retry the create.",
+      `Creating the ${KIND_NAMES[kind]} "${slug}" was refused: ` +
+      `${parts.map(part => part.found).join(" ")} ` +
+      `${remedy.charAt(0).toUpperCase()}${remedy.slice(1)}, then retry the create.`,
     logContext: {
       reason: "create-table-occupied",
       kind,
       slug,
       tableName,
       occupied,
+      shared,
     },
   });
 }
