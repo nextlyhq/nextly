@@ -379,8 +379,8 @@ describe.each(getConfiguredTestDialects())(
       }));
       await t.nextly.find({ collection: "first" });
       await asIfJustStarted(async () => {
-        await writeRegistryRows(t.adapter, async () => {
-          await t.adapter.update(
+        await writeRegistryRows(t.adapter, async tx => {
+          await tx.update(
             "dynamic_collections",
             { description: "Written at boot" },
             { and: [{ column: "slug", op: "=", value: "first" }] }
