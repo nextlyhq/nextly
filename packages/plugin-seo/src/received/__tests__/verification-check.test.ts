@@ -44,9 +44,11 @@ const ctx = {} as PluginContext;
 function setup(
   addresses: string[],
   tags: Record<string, string>,
-  transport: Transport
+  transport: Transport,
+  baseUrl?: string
 ) {
   return {
+    ...(baseUrl === undefined ? {} : { baseUrl }),
     readRules: () =>
       Promise.resolve({
         productionAddresses: addresses,
@@ -196,5 +198,57 @@ describe("a site with more production addresses than one check reads", () => {
       message: "Not checked: one check reads the first 5 addresses.",
     });
     expect(body.tags[0]?.foundAt).toHaveLength(5);
+  });
+});
+
+describe("where the tag must be", () => {
+  it("does not count a tag in the body, only in the head", async () => {
+    const transport = serving({
+      "https://example.com/": {
+        status: 200,
+        body: '<html><head><title>Home</title></head><body><meta name="msvalidate.01" content="8A2F"></body></html>',
+      },
+    });
+    const body = await checkVerification(
+      ctx,
+      setup(["https://example.com"], { "msvalidate.01": "8A2F" }, transport)
+    );
+    expect(body.tags).toEqual([{ name: "msvalidate.01", foundAt: [] }]);
+  });
+});
+
+describe("which addresses are checked", () => {
+  it("checks the production addresses, and the configured origin only where none is known", async () => {
+    const pages = {
+      "https://example.com/": {
+        status: 200,
+        body: HOME('<meta name="msvalidate.01" content="8A2F">'),
+      },
+      "https://old.example.com/": { status: 503, body: "" },
+    };
+    const both = await checkVerification(
+      ctx,
+      setup(
+        ["https://example.com"],
+        { "msvalidate.01": "8A2F" },
+        serving(pages),
+        "https://old.example.com"
+      )
+    );
+    expect(both.homePages).toEqual([
+      { address: "https://example.com", read: true },
+    ]);
+    const fallback = await checkVerification(
+      ctx,
+      setup(
+        [],
+        { "msvalidate.01": "8A2F" },
+        serving(pages),
+        "https://example.com"
+      )
+    );
+    expect(fallback.homePages).toEqual([
+      { address: "https://example.com", read: true },
+    ]);
   });
 });

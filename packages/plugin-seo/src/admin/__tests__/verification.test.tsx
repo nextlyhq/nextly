@@ -419,3 +419,32 @@ describe("a full Other services", () => {
     expect(saveButton().disabled).toBe(true);
   });
 });
+
+describe("a database not migrated for the new settings", () => {
+  it("says what to run, in plain words, instead of the raw error", () => {
+    serving({});
+    const notMigrated = Object.assign(
+      new Error(
+        'The database has not been migrated for the field "verificationCodes" of the Single "seo-settings". Run `nextly migrate`.'
+      ),
+      { status: 409, code: "ENTITY_NOT_MIGRATED" }
+    );
+    vi.mocked(useSingleDocument).mockImplementation(
+      () =>
+        ({
+          data: undefined,
+          error: notMigrated,
+          refetch: vi.fn(),
+        }) as unknown as ReturnType<typeof useSingleDocument>
+    );
+    render(<SeoSettingsPage />);
+    expect(
+      screen.getByText(
+        /The database needs `nextly migrate` for the new SEO settings\./
+      )
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(/has not been migrated for the field/)
+    ).toBeNull();
+  });
+});

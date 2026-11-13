@@ -14,6 +14,7 @@ import {
   Alert,
   AlertDescription,
   apiErrorMessage,
+  isApiError,
   Badge,
   Button,
   FormActions,
@@ -182,7 +183,7 @@ export function SeoSettingsPage(): JSX.Element {
           <Alert variant="warning" className="mb-4">
             <AlertDescription>
               The SEO settings could not be read again. What is on screen is
-              kept. {apiErrorMessage(failed)}
+              kept. {readFailure(failed)}
             </AlertDescription>
           </Alert>
         ) : null}
@@ -206,7 +207,7 @@ export function SeoSettingsPage(): JSX.Element {
     body = (
       <Alert variant="destructive">
         <AlertDescription>
-          The SEO settings could not be read. {apiErrorMessage(failed)}
+          The SEO settings could not be read. {readFailure(failed)}
         </AlertDescription>
       </Alert>
     );
@@ -460,6 +461,18 @@ function SetupBanner({
       </AlertDescription>
     </Alert>
   );
+}
+
+/**
+ * Why the settings could not be read, for a person: a database not migrated
+ * for a field the settings gained says what to run, in plain words, rather
+ * than core's message naming the field and the Single.
+ */
+function readFailure(failed: Error): string {
+  if (isApiError(failed) && failed.code === "ENTITY_NOT_MIGRATED") {
+    return "The database needs `nextly migrate` for the new SEO settings. A developer runs `nextly migrate:create` and then `nextly migrate`; the site keeps serving its pages meanwhile.";
+  }
+  return apiErrorMessage(failed);
 }
 
 /** The open tab's rows. */

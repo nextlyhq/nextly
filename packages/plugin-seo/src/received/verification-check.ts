@@ -16,6 +16,8 @@ import {
   type PluginRoute,
 } from "@nextlyhq/plugin-sdk";
 
+import { productionAddressesOf } from "../canonical";
+import { originOf } from "../origin";
 import type { ReadVerificationTags } from "../outputs/verification";
 import { MANAGE_SEO_PERMISSION } from "../permissions";
 import {
@@ -83,25 +85,43 @@ async function readHomePage(
   return { page: { address: origin, read: true }, tags };
 }
 
+/**
+ * The addresses whose home pages carry the codes: the site's production
+ * addresses, and the plugin's configured origin only where none is known, as
+ * every output names the site.
+ */
+async function targetsOf(
+  ctx: PluginContext,
+  setup: VerificationCheckSetup
+): Promise<string[]> {
+  const rules = await setup.readRules(ctx, undefined);
+  const production = productionAddressesOf(rules.productionAddresses);
+  if (production.length > 0) return production;
+  const configured = originOf(setup.baseUrl);
+  return configured === undefined ? [] : [configured];
+}
+
 /** Reads each production address's home page and looks for each saved tag. */
 export async function checkVerification(
   ctx: PluginContext,
   setup: VerificationCheckSetup
 ): Promise<VerificationCheckBody> {
   const saved = Object.entries(await setup.readTags(ctx));
-  const origins = await originsOf(ctx, setup);
+  const targets = await targetsOf(ctx, setup);
   const checkedAt = new Date().toISOString();
-  if (saved.length === 0 || origins.length === 0) {
+  if (saved.length === 0 || targets.length === 0) {
     return { checkedAt, homePages: [], tags: [] };
   }
+  // Every hop may reach any of the site's own addresses, as Inspect's may.
+  const origins = await originsOf(ctx, setup);
   const read = await Promise.all(
-    origins
+    targets
       .slice(0, MAX_HOME_PAGES)
       .map(origin => readHomePage(origin, origins, setup))
   );
   // Addresses past the bound are listed as not read, so a code is never
   // called found where its home page was never looked at.
-  const unread: CheckedHomePage[] = origins
+  const unread: CheckedHomePage[] = targets
     .slice(MAX_HOME_PAGES)
     .map(address => ({
       address,
