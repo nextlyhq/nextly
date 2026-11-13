@@ -40,6 +40,13 @@ import {
   PANEL_TOGGLE_RULE,
 } from "@admin/components/features/entries/EntryForm/bar-controls";
 import {
+  HISTORY_FRAME,
+  HISTORY_HEAD,
+  HISTORY_RAIL,
+  HISTORY_SPLIT,
+  HISTORY_TITLES,
+} from "@admin/components/features/versions/history-layout";
+import {
   cardSpanClass,
   GRID_CLASS,
 } from "@admin/components/features/widgets/sizes";
@@ -740,6 +747,44 @@ export function EditorOutline({
         </PageContainer>
       </ScreenOutline>
     </>
+  );
+}
+
+/**
+ * A document's version history: its header, with the way back, the title and
+ * the document's name, over the rail of versions beside the comparison. Laid
+ * out by the page's own frame, so the header stands where the page draws it.
+ */
+export function HistoryOutline(): JSX.Element {
+  return (
+    <ScreenOutline className={HISTORY_FRAME}>
+      <div data-frame-part="history-head" className={HISTORY_HEAD}>
+        {/* The back button's own box, so the titles start where it ends. */}
+        <span className={buttonVariants({ variant: "ghost", size: "sm" })}>
+          <OutlineBar soft className="size-4" />
+        </span>
+        <div className={HISTORY_TITLES}>
+          <div className="flex h-6 items-center">
+            <OutlineBar className="h-3.5 w-[120px]" />
+          </div>
+          <div className="flex h-4 items-center">
+            <OutlineBar soft className="h-3 w-[160px]" />
+          </div>
+        </div>
+      </div>
+      <div className={HISTORY_SPLIT}>
+        <div className={HISTORY_RAIL}>
+          <div className="flex flex-col gap-4 p-4">
+            {[0, 1, 2, 3].map(row => (
+              <div key={row} className="flex flex-col gap-1">
+                <OutlineBar className="h-4 w-28" />
+                <OutlineBar soft className="h-3 w-36" />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </ScreenOutline>
   );
 }
 

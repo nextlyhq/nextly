@@ -624,6 +624,67 @@ describe("paging when a tab shrinks", () => {
   });
 });
 
+describe("the search while the counts read again", () => {
+  it("keeps the search box, its focus and its text while a search recounts", async () => {
+    const user = userEvent.setup();
+    const recounting = {
+      counts: {
+        upcoming: undefined,
+        attention: undefined,
+        drafts: undefined,
+        done: undefined,
+      },
+      isPending: true,
+      isError: false,
+    };
+    const answered = counts({ upcoming: 3, attention: 1, drafts: 2, done: 12 });
+    mocks.tabCounts.mockImplementation(({ search }: { search: string }) =>
+      search ? recounting : answered
+    );
+    render(<ReleaseList />);
+    const box = screen.getByPlaceholderText("Search by title or description");
+    await user.click(box);
+    await user.type(box, "spring");
+    await waitFor(() =>
+      expect(mocks.tabCounts).toHaveBeenLastCalledWith(
+        expect.objectContaining({ search: "spring" })
+      )
+    );
+    const still = screen.getByPlaceholderText("Search by title or description");
+    expect(still).toBe(box);
+    expect(document.activeElement).toBe(box);
+    expect((box as HTMLInputElement).value).toBe("spring");
+    // The counts being read again show as empty pills, not as stale numbers.
+    expect(screen.queryByText("12")).toBeNull();
+  });
+});
+
+describe("the counts' first read", () => {
+  it("holds the toolbar back until the counts first answer, then draws it", () => {
+    mocks.tabCounts.mockReturnValue({
+      counts: {
+        upcoming: undefined,
+        attention: undefined,
+        drafts: undefined,
+        done: undefined,
+      },
+      isPending: true,
+      isError: false,
+    });
+    const { rerender } = render(<ReleaseList />);
+    expect(
+      screen.queryByPlaceholderText("Search by title or description")
+    ).toBeNull();
+    mocks.tabCounts.mockReturnValue(
+      counts({ upcoming: 3, attention: 1, drafts: 2, done: 12 })
+    );
+    rerender(<ReleaseList />);
+    expect(
+      screen.getByPlaceholderText("Search by title or description")
+    ).toBeTruthy();
+  });
+});
+
 describe("the single-document filter", () => {
   it("hides single-document releases from the list and from the counts", async () => {
     const user = userEvent.setup();
