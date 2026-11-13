@@ -30,7 +30,7 @@
 -- Settings: seo (field group): added
 -- Permissions: @nextlyhq/plugin-form-builder: + export-submissions
 -- Permissions: @nextlyhq/plugin-page-builder: + lock-page-builder-shared-styles, + manage-page-builder-site, + manage-template-routing
--- Generated at: 2026-11-13T16:08:24.189Z
+-- Generated at: 2026-11-13T16:17:11.884Z
 -- Dialect: MySQL
 
 -- UP

@@ -30,20 +30,20 @@
 -- Settings: seo (field group): added
 -- Permissions: @nextlyhq/plugin-form-builder: + export-submissions
 -- Permissions: @nextlyhq/plugin-page-builder: + lock-page-builder-shared-styles, + manage-page-builder-site, + manage-template-routing
--- Generated at: 2026-11-13T16:08:16.529Z
--- Dialect: PostgreSQL
+-- Generated at: 2026-11-13T16:16:52.549Z
+-- Dialect: SQLite
 
 -- UP
 CREATE TABLE "comp_seo" (
   "id" text PRIMARY KEY NOT NULL,
   "_parent_id" text NOT NULL,
-  "_parent_table" varchar NOT NULL,
-  "_parent_field" varchar NOT NULL,
-  "_order" int4 DEFAULT 0,
-  "_component_type" varchar,
+  "_parent_table" text NOT NULL,
+  "_parent_field" text NOT NULL,
+  "_order" integer DEFAULT 0,
+  "_component_type" text,
   "og_image" text,
-  "created_at" timestamp NOT NULL DEFAULT NOW(),
-  "updated_at" timestamp NOT NULL DEFAULT NOW()
+  "created_at" integer NOT NULL DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer NOT NULL DEFAULT (strftime('%s', 'now'))
 );
 CREATE INDEX IF NOT EXISTS "idx_comp_seo_parent" ON "comp_seo" ("_parent_id", "_parent_table", "_parent_field");
 CREATE INDEX IF NOT EXISTS "idx_comp_seo_created_at" ON "comp_seo" ("created_at");
@@ -51,19 +51,19 @@ CREATE INDEX IF NOT EXISTS "idx_comp_seo_og_image" ON "comp_seo" ("og_image");
 
 CREATE TABLE "dc_authors" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
-  "status" varchar NOT NULL DEFAULT 'draft',
-  "first_published_at" timestamp,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "status" text NOT NULL DEFAULT 'draft',
+  "first_published_at" integer,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
-  "article_count" int4,
+  "article_count" integer,
   "avatar" text
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_dc_authors_slug" ON "dc_authors" ("slug");
@@ -73,19 +73,19 @@ CREATE INDEX IF NOT EXISTS "idx_dc_authors_avatar" ON "dc_authors" ("avatar");
 
 CREATE TABLE "dc_block_pages" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
-  "status" varchar NOT NULL DEFAULT 'draft',
-  "first_published_at" timestamp,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "status" text NOT NULL DEFAULT 'draft',
+  "first_published_at" integer,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
-  "content" jsonb
+  "content" text
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_dc_block_pages_slug" ON "dc_block_pages" ("slug");
 CREATE INDEX IF NOT EXISTS "idx_dc_block_pages_created_by" ON "dc_block_pages" ("created_by");
@@ -93,14 +93,14 @@ CREATE INDEX IF NOT EXISTS "idx_dc_block_pages_created_at" ON "dc_block_pages" (
 
 CREATE TABLE "dc_categories" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
   "description" text,
@@ -112,22 +112,22 @@ CREATE INDEX IF NOT EXISTS "idx_dc_categories_created_at" ON "dc_categories" ("c
 
 CREATE TABLE "dc_components" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
-  "status" varchar NOT NULL DEFAULT 'draft',
-  "first_published_at" timestamp,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "status" text NOT NULL DEFAULT 'draft',
+  "first_published_at" integer,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
   "description" text,
   "category" text,
   "area" text,
-  "content" jsonb
+  "content" text
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_dc_components_slug" ON "dc_components" ("slug");
 CREATE INDEX IF NOT EXISTS "idx_dc_components_created_by" ON "dc_components" ("created_by");
@@ -137,23 +137,23 @@ CREATE TABLE "dc_form_submissions" (
   "id" text PRIMARY KEY NOT NULL,
   "title" text NOT NULL,
   "slug" text NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "form" text,
-  "data" jsonb NOT NULL,
+  "data" text NOT NULL,
   "status" text NOT NULL,
   "spam_reason" text,
   "notes" text,
   "ip_address" text,
   "user_agent" text,
-  "submitted_at" timestamp NOT NULL,
-  "edited_at" timestamp,
+  "submitted_at" integer NOT NULL,
+  "edited_at" integer,
   "edited_by" text,
   "response_key" text
 );
@@ -168,22 +168,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uq_dc_form_submissions_form_response_key_1ak9
 CREATE TABLE "dc_forms" (
   "id" text PRIMARY KEY NOT NULL,
   "title" text NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "name" text NOT NULL,
   "slug" text NOT NULL,
   "description" text,
-  "fields" jsonb NOT NULL,
-  "settings" jsonb,
-  "notifications" jsonb,
+  "fields" text NOT NULL,
+  "settings" text,
+  "notifications" text,
   "status" text NOT NULL,
-  "went_live_at" timestamp,
+  "went_live_at" integer,
   "closed_message" text
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_dc_forms_slug" ON "dc_forms" ("slug");
@@ -192,20 +192,20 @@ CREATE INDEX IF NOT EXISTS "idx_dc_forms_created_at" ON "dc_forms" ("created_at"
 
 CREATE TABLE "dc_layouts" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
-  "status" varchar NOT NULL DEFAULT 'draft',
-  "first_published_at" timestamp,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "status" text NOT NULL DEFAULT 'draft',
+  "first_published_at" integer,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
   "description" text,
-  "areas" jsonb
+  "areas" text
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_dc_layouts_slug" ON "dc_layouts" ("slug");
 CREATE INDEX IF NOT EXISTS "idx_dc_layouts_created_by" ON "dc_layouts" ("created_by");
@@ -213,14 +213,14 @@ CREATE INDEX IF NOT EXISTS "idx_dc_layouts_created_at" ON "dc_layouts" ("created
 
 CREATE TABLE "dc_nx_pb_address_claims" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
   "claim_key" text NOT NULL,
@@ -244,14 +244,14 @@ CREATE INDEX IF NOT EXISTS "idx_dc_nx_pb_address_claims_blocked_by" ON "dc_nx_pb
 
 CREATE TABLE "dc_nx_pb_class_usage" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
   "scope" text,
@@ -270,14 +270,14 @@ CREATE INDEX IF NOT EXISTS "idx_dc_nx_pb_class_usage_class_id" ON "dc_nx_pb_clas
 
 CREATE TABLE "dc_nx_pb_component_retired" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
   "identity" text NOT NULL,
@@ -293,14 +293,14 @@ CREATE INDEX IF NOT EXISTS "idx_dc_nx_pb_component_retired_component_id" ON "dc_
 
 CREATE TABLE "dc_nx_pb_component_usage" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
   "scope" text,
@@ -320,14 +320,14 @@ CREATE INDEX IF NOT EXISTS "idx_dc_nx_pb_component_usage_component_id" ON "dc_nx
 
 CREATE TABLE "dc_nx_pb_usage_backfill" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
   "scope_key" text,
@@ -341,21 +341,21 @@ CREATE INDEX IF NOT EXISTS "idx_dc_nx_pb_usage_backfill_generation" ON "dc_nx_pb
 
 CREATE TABLE "dc_pages" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
-  "status" varchar NOT NULL DEFAULT 'draft',
-  "first_published_at" timestamp,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "status" text NOT NULL DEFAULT 'draft',
+  "first_published_at" integer,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
-  "content" jsonb,
+  "content" text,
   "layout" text,
-  "no_header_footer" bool
+  "no_header_footer" integer
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_dc_pages_slug" ON "dc_pages" ("slug");
 CREATE INDEX IF NOT EXISTS "idx_dc_pages_created_by" ON "dc_pages" ("created_by");
@@ -364,23 +364,23 @@ CREATE INDEX IF NOT EXISTS "idx_dc_pages_layout" ON "dc_pages" ("layout");
 
 CREATE TABLE "dc_patterns" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
-  "status" varchar NOT NULL DEFAULT 'draft',
-  "first_published_at" timestamp,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "status" text NOT NULL DEFAULT 'draft',
+  "first_published_at" integer,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
   "description" text,
   "category" text,
   "keywords" text,
   "granularity" text NOT NULL,
-  "content" jsonb
+  "content" text
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_dc_patterns_slug" ON "dc_patterns" ("slug");
 CREATE INDEX IF NOT EXISTS "idx_dc_patterns_created_by" ON "dc_patterns" ("created_by");
@@ -388,16 +388,16 @@ CREATE INDEX IF NOT EXISTS "idx_dc_patterns_created_at" ON "dc_patterns" ("creat
 
 CREATE TABLE "dc_posts" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
-  "status" varchar NOT NULL DEFAULT 'draft',
-  "first_published_at" timestamp,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "status" text NOT NULL DEFAULT 'draft',
+  "first_published_at" integer,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
   "excerpt" text,
@@ -406,12 +406,12 @@ CREATE TABLE "dc_posts" (
   "editor_mode" text,
   "content" text,
   "custom_script" text,
-  "settings" jsonb,
-  "sections" jsonb,
-  "categories" jsonb,
-  "tags" jsonb,
+  "settings" text,
+  "sections" text,
+  "categories" text,
+  "tags" text,
   "featured_image" text,
-  "published_at" timestamp
+  "published_at" integer
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_dc_posts_slug" ON "dc_posts" ("slug");
 CREATE INDEX IF NOT EXISTS "idx_dc_posts_created_by" ON "dc_posts" ("created_by");
@@ -420,14 +420,14 @@ CREATE INDEX IF NOT EXISTS "idx_dc_posts_featured_image" ON "dc_posts" ("feature
 
 CREATE TABLE "dc_tags" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
   "description" text
@@ -438,16 +438,16 @@ CREATE INDEX IF NOT EXISTS "idx_dc_tags_created_at" ON "dc_tags" ("created_at");
 
 CREATE TABLE "dc_templates" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
   "created_by" text,
-  "status" varchar NOT NULL DEFAULT 'draft',
-  "first_published_at" timestamp,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "status" text NOT NULL DEFAULT 'draft',
+  "first_published_at" integer,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "slug" text NOT NULL,
   "title" text NOT NULL,
   "collection" text,
@@ -456,7 +456,7 @@ CREATE TABLE "dc_templates" (
   "entry_id" text,
   "forked_from" text,
   "address" text,
-  "content" jsonb
+  "content" text
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_dc_templates_slug" ON "dc_templates" ("slug");
 CREATE INDEX IF NOT EXISTS "idx_dc_templates_created_by" ON "dc_templates" ("created_by");
@@ -469,15 +469,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uq_dc_templates_address" ON "dc_templates" ("
 
 CREATE TABLE "single_announcement" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
-  "status" varchar NOT NULL DEFAULT 'draft',
-  "first_published_at" timestamp,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
+  "status" text NOT NULL DEFAULT 'draft',
+  "first_published_at" integer,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
   "campaign" text
@@ -487,47 +487,47 @@ CREATE INDEX IF NOT EXISTS "idx_single_announcement_created_at" ON "single_annou
 
 CREATE TABLE "single_homepage" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "slug" text NOT NULL,
   "title" text,
-  "layout" jsonb
+  "layout" text
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_homepage_slug" ON "single_homepage" ("slug");
 CREATE INDEX IF NOT EXISTS "idx_single_homepage_created_at" ON "single_homepage" ("created_at");
 
 CREATE TABLE "single_landing_page" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
-  "status" varchar NOT NULL DEFAULT 'draft',
-  "first_published_at" timestamp,
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
+  "status" text NOT NULL DEFAULT 'draft',
+  "first_published_at" integer,
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "slug" text NOT NULL,
   "title" text,
-  "hero" jsonb
+  "hero" text
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_landing_page_slug" ON "single_landing_page" ("slug");
 CREATE INDEX IF NOT EXISTS "idx_single_landing_page_created_at" ON "single_landing_page" ("created_at");
 
 CREATE TABLE "single_page_builder_settings" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
   "default_layout" text,
@@ -541,19 +541,19 @@ CREATE INDEX IF NOT EXISTS "idx_single_page_builder_settings_seeded_layout" ON "
 
 CREATE TABLE "single_page_builder_site_code" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
   "head_source" text,
   "body_source" text,
-  "head" jsonb,
-  "body" jsonb,
+  "head" text,
+  "body" text,
   "changed_by" text
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_page_builder_site_code_slug" ON "single_page_builder_site_code" ("slug");
@@ -561,13 +561,13 @@ CREATE INDEX IF NOT EXISTS "idx_single_page_builder_site_code_created_at" ON "si
 
 CREATE TABLE "single_site_settings" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
   "site_name" text NOT NULL
@@ -577,70 +577,70 @@ CREATE INDEX IF NOT EXISTS "idx_single_site_settings_created_at" ON "single_site
 
 CREATE TABLE "single_site_style" (
   "id" text PRIMARY KEY NOT NULL,
-  "created_at" timestamp DEFAULT now(),
-  "updated_at" timestamp DEFAULT now(),
-  "_revision" int4 NOT NULL DEFAULT 1,
-  "_changed_by_kind" varchar,
+  "created_at" integer DEFAULT (strftime('%s', 'now')),
+  "updated_at" integer DEFAULT (strftime('%s', 'now')),
+  "_revision" integer NOT NULL DEFAULT 1,
+  "_changed_by_kind" text,
   "_changed_by_id" text,
-  "_changed_by_principal_kind" varchar,
-  "_changed_at" timestamp,
+  "_changed_by_principal_kind" text,
+  "_changed_at" integer,
   "title" text NOT NULL,
   "slug" text NOT NULL,
-  "tokens" jsonb,
-  "fonts" jsonb,
-  "classes" jsonb,
-  "breakpoints" jsonb
+  "tokens" text,
+  "fonts" text,
+  "classes" text,
+  "breakpoints" text
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "idx_single_site_style_slug" ON "single_site_style" ("slug");
 CREATE INDEX IF NOT EXISTS "idx_single_site_style_created_at" ON "single_site_style" ("created_at");
 
 -- DOWN
-DROP TABLE "single_site_style" CASCADE;
+DROP TABLE "single_site_style";
 
-DROP TABLE "single_site_settings" CASCADE;
+DROP TABLE "single_site_settings";
 
-DROP TABLE "single_page_builder_site_code" CASCADE;
+DROP TABLE "single_page_builder_site_code";
 
-DROP TABLE "single_page_builder_settings" CASCADE;
+DROP TABLE "single_page_builder_settings";
 
-DROP TABLE "single_landing_page" CASCADE;
+DROP TABLE "single_landing_page";
 
-DROP TABLE "single_homepage" CASCADE;
+DROP TABLE "single_homepage";
 
-DROP TABLE "single_announcement" CASCADE;
+DROP TABLE "single_announcement";
 
-DROP TABLE "dc_templates" CASCADE;
+DROP TABLE "dc_templates";
 
-DROP TABLE "dc_tags" CASCADE;
+DROP TABLE "dc_tags";
 
-DROP TABLE "dc_posts" CASCADE;
+DROP TABLE "dc_posts";
 
-DROP TABLE "dc_patterns" CASCADE;
+DROP TABLE "dc_patterns";
 
-DROP TABLE "dc_pages" CASCADE;
+DROP TABLE "dc_pages";
 
-DROP TABLE "dc_nx_pb_usage_backfill" CASCADE;
+DROP TABLE "dc_nx_pb_usage_backfill";
 
-DROP TABLE "dc_nx_pb_component_usage" CASCADE;
+DROP TABLE "dc_nx_pb_component_usage";
 
-DROP TABLE "dc_nx_pb_component_retired" CASCADE;
+DROP TABLE "dc_nx_pb_component_retired";
 
-DROP TABLE "dc_nx_pb_class_usage" CASCADE;
+DROP TABLE "dc_nx_pb_class_usage";
 
-DROP TABLE "dc_nx_pb_address_claims" CASCADE;
+DROP TABLE "dc_nx_pb_address_claims";
 
-DROP TABLE "dc_layouts" CASCADE;
+DROP TABLE "dc_layouts";
 
-DROP TABLE "dc_forms" CASCADE;
+DROP TABLE "dc_forms";
 
-DROP TABLE "dc_form_submissions" CASCADE;
+DROP TABLE "dc_form_submissions";
 
-DROP TABLE "dc_components" CASCADE;
+DROP TABLE "dc_components";
 
-DROP TABLE "dc_categories" CASCADE;
+DROP TABLE "dc_categories";
 
-DROP TABLE "dc_block_pages" CASCADE;
+DROP TABLE "dc_block_pages";
 
-DROP TABLE "dc_authors" CASCADE;
+DROP TABLE "dc_authors";
 
-DROP TABLE "comp_seo" CASCADE;
+DROP TABLE "comp_seo";

@@ -1,4 +1,4 @@
--- Migration: 20261113_160824_193_create_localization_seo
+-- Migration: 20261113_161711_888_create_localization_seo
 -- Field groups: seo
 -- Entity scope: touched
 -- Generated: localization companion (create-only) (i18n)

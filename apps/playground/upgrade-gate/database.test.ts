@@ -32,6 +32,22 @@ describe("restorablePostgresDump", () => {
     "\\unrestrict abc",
   ].join("\n");
 
+  it("leaves a value's text whole, however its lines read", () => {
+    const insert = [
+      "INSERT INTO public.notes VALUES ('first",
+      "-- user content",
+      "\\ backslash line",
+      "SET x = 1;",
+      "",
+      "",
+      "",
+      "last');",
+    ].join("\n");
+    expect(restorablePostgresDump(`SET a = 0;\n${insert}\n-- end`)).toBe(
+      insert
+    );
+  });
+
   it("keeps the statements and drops psql commands, comments and session settings", () => {
     const kept = restorablePostgresDump(dumped);
     // A setting a newer server knows (transaction_timeout is PostgreSQL 17's)
@@ -248,6 +264,66 @@ describe("a SQLite dump", () => {
         expect(restored.prepare(`SELECT * FROM "t"`).all()).toEqual([
           { price: 2, quantity: 3, total: 6 },
         ]);
+      } finally {
+        restored.close();
+      }
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("whitespace in SQLite definitions", () => {
+  it("reads a generated column whose string literal's spacing changed as a change", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "upgrade-gate-space-"));
+    try {
+      const read = async (name: string, literal: string) => {
+        const file = join(scratch, `${name}.sqlite`);
+        const db = new Sqlite(file);
+        db.exec(
+          `CREATE TABLE "t" ("x" text, "y" text GENERATED ALWAYS AS (${literal} || "x"))`
+        );
+        db.close();
+        return readCatalog("sqlite", `file:${file}`);
+      };
+      expect(
+        operationsBetween(
+          await read("one", "'a b'"),
+          await read("two", "'a  b'")
+        )
+      ).toEqual([
+        "change column t.y: text null as ('a b' || \"x\") virtual -> text null as ('a  b' || \"x\") virtual",
+      ]);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("a SQLite dump of an AUTOINCREMENT table", () => {
+  it("restores the sequence's high-water mark, not one the restored rows imply", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "upgrade-gate-sequence-"));
+    try {
+      const from = join(scratch, "from.sqlite");
+      const db = new Sqlite(from);
+      db.exec(
+        `CREATE TABLE "t" ("id" integer PRIMARY KEY AUTOINCREMENT, "v" text);
+         INSERT INTO "t" ("id", "v") VALUES (1, 'kept'), (10, 'gone');
+         DELETE FROM "t" WHERE "id" = 10;`
+      );
+      db.close();
+      const to = join(scratch, "to.sqlite");
+      await restore(
+        "sqlite",
+        `file:${to}`,
+        await dump("sqlite", `file:${from}`)
+      );
+      const restored = new Sqlite(to);
+      try {
+        restored.exec(`INSERT INTO "t" ("v") VALUES ('next')`);
+        expect(
+          restored.prepare(`SELECT "id" FROM "t" WHERE "v" = 'next'`).get()
+        ).toEqual({ id: 11 });
       } finally {
         restored.close();
       }

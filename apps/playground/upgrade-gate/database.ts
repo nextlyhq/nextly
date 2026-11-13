@@ -164,6 +164,12 @@ function dumpSqlite(url: string): string {
         ? ["sqlite_sequence"]
         : []),
     ]) {
+      // Restoring the rows above has already written each AUTOINCREMENT
+      // table's sequence from the highest id it holds, which is lower than the
+      // recorded one when the highest row was deleted. The recorded state
+      // replaces it whole.
+      if (table === "sqlite_sequence")
+        lines.push("DELETE FROM sqlite_sequence;");
       // The columns a row stores and an insert may write: a generated
       // column is computed again by the restore, and refuses a value.
       const writable = (
@@ -292,16 +298,46 @@ async function dumpPostgres(url: string, container?: string): Promise<string> {
  * and none of them changes what the restore builds.
  */
 export function restorablePostgresDump(script: string): string {
-  return script
-    .split("\n")
-    .filter(
-      line =>
-        !line.startsWith("\\") &&
-        !line.startsWith("--") &&
-        !/^SET \w+ = .*;$/.test(line)
-    )
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n");
+  const kept: string[] = [];
+  // The quote a line starts inside: none, a string's `'`, or a dollar
+  // quote's tag. A line that starts inside one is part of a value, kept
+  // whatever it reads like.
+  let open: string | undefined;
+  for (const line of script.split("\n")) {
+    const directive =
+      line.startsWith("\\") ||
+      line.startsWith("--") ||
+      /^SET \w+ = .*;$/.test(line);
+    if (open !== undefined || !directive) kept.push(line);
+    open = quoteOpenAfter(line, open);
+  }
+  return kept.join("\n");
+}
+
+/** The quote still open at the end of `line`, given the one open at its start. */
+function quoteOpenAfter(line: string, start: string | undefined) {
+  let open = start;
+  let at = 0;
+  while (at < line.length) {
+    if (open !== undefined) {
+      const close = line.indexOf(open, at);
+      if (close < 0) return open;
+      at = close + open.length;
+      // A doubled quote inside a string is one quote, and the string goes on.
+      if (open === "'" && line[at] === "'") {
+        at += 1;
+        continue;
+      }
+      open = undefined;
+      continue;
+    }
+    if (line.startsWith("--", at)) return undefined;
+    const dollar = /^\$\w*\$/.exec(line.slice(at));
+    if (line[at] === "'") open = "'";
+    else if (dollar !== null) open = dollar[0];
+    at += open === undefined ? 1 : open.length;
+  }
+  return open;
 }
 
 /** Everything `url` holds, as SQL that `restore` replays into an empty database. */
@@ -379,6 +415,24 @@ function pastQuoted(sql: string, start: number): number {
     at += 1;
   }
   return at;
+}
+
+/** `text` with each run of whitespace outside quoted text made one space. */
+function collapseSpace(text: string): string {
+  let collapsed = "";
+  let at = 0;
+  while (at < text.length) {
+    if (QUOTES.has(text[at])) {
+      const end = pastQuoted(text, at);
+      collapsed += text.slice(at, end);
+      at = end;
+      continue;
+    }
+    const space = /^\s+/.exec(text.slice(at));
+    collapsed += space === null ? text[at] : " ";
+    at += space === null ? 1 : space[0].length;
+  }
+  return collapsed.trim();
 }
 
 /** The index just past the parenthesised expression that opens at `start`. */
@@ -503,7 +557,7 @@ function listItems(sql: string, open: number): string[] {
     at += 1;
   }
   items.push(inner.slice(from));
-  return items.map(item => item.replace(/\s+/g, " ").trim());
+  return items.map(collapseSpace);
 }
 
 /** The key list of a CREATE INDEX statement, one entry per key. */
@@ -673,9 +727,8 @@ function readSqliteCatalog(url: string): Catalog {
       )
       .all() as { name: string; tableName: string; sql: string }[];
     for (const trigger of triggers) {
-      tableIn(catalog, trigger.tableName).triggers[trigger.name] = trigger.sql
-        .replace(/\s+/g, " ")
-        .trim();
+      tableIn(catalog, trigger.tableName).triggers[trigger.name] =
+        collapseSpace(trigger.sql);
     }
     return catalog;
   } finally {
@@ -903,7 +956,7 @@ async function mysqlChecksAndTriggers(query: MysqlQuery, catalog: Catalog) {
        FROM information_schema.triggers WHERE trigger_schema = DATABASE()`
   )) {
     tableIn(catalog, trigger.tableName).triggers[trigger.name] =
-      `${trigger.timing.toLowerCase()} ${trigger.event.toLowerCase()} ${trigger.statement.replace(/\s+/g, " ").trim()}`;
+      `${trigger.timing.toLowerCase()} ${trigger.event.toLowerCase()} ${collapseSpace(trigger.statement)}`;
   }
 }
 
