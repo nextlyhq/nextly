@@ -76,6 +76,7 @@ import {
   introspectSqliteRebuildLosses,
 } from "./diff/introspect-live";
 import type { Operation, NextlySchemaSnapshot, TableSpec } from "./diff/types";
+import { refuseEnumNarrowingsOverRows } from "./enum-narrowing-refusal";
 import { describePrecondition } from "./errors";
 // Index restore uses the all-dialect templates, not ddl-emitter/: that module
 // is the PostgreSQL fast path and throws for the dialect this exists for.
@@ -1044,6 +1045,15 @@ export class PushSchemaPipeline {
         dialect: args.dialect,
         desired: args.desired,
         live: liveSnapshot,
+        operations: resolvedOps,
+      });
+      // An enum's values narrowed while a row still holds one of them: the
+      // database would refuse the check's re-add after its drop had run, so
+      // the rows are counted and the narrowing named before anything does.
+      await refuseEnumNarrowingsOverRows({
+        db: args.db,
+        dialect: args.dialect,
+        desired: args.desired,
         operations: resolvedOps,
       });
 
