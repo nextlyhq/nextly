@@ -582,6 +582,30 @@ describe("a draft moved onto newer settings", () => {
     ]);
   });
 
+  it("keeps a main address changed elsewhere first while one is added here", () => {
+    const listed = draftOf({
+      id: "s1",
+      productionAddresses: ["https://old.example", "https://fr.example"],
+    });
+    const draft = {
+      ...listed,
+      productionAddresses: [
+        "https://old.example",
+        "https://fr.example",
+        "https://de.example",
+      ],
+    };
+    const after = {
+      ...listed,
+      productionAddresses: ["https://new.example", "https://fr.example"],
+    };
+    expect(rebasedDraft(draft, listed, after).productionAddresses).toEqual([
+      "https://new.example",
+      "https://fr.example",
+      "https://de.example",
+    ]);
+  });
+
   it("takes the newer list as it is, in its order, where it wasn't edited here", () => {
     const listed = draftOf({
       id: "s1",
