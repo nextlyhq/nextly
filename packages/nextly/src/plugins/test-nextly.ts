@@ -280,6 +280,12 @@ export interface CreateTestNextlyOptions {
    * variable for `dialect`. The database named in it is only used to connect.
    */
   serverUrl?: string;
+  /**
+   * The PostgreSQL schema the installation lives in, as `db.postgres.schema`
+   * gives it: the provisioned adapter is built on it and the config names it.
+   * Only meaningful with `dialect: "postgresql"`.
+   */
+  postgresSchema?: string;
   /** Plugins to boot (their full lifecycle runs). */
   plugins?: PluginDefinition[];
   /**
@@ -572,7 +578,8 @@ async function releaseActiveDatabase(): Promise<(() => void) | undefined> {
  */
 async function provisionDatabase(
   dialect: ProvisionableDialect,
-  serverUrl: string
+  serverUrl: string,
+  postgresSchema?: string
 ): Promise<ProvisionedDatabase> {
   // Random, not derived from the process id: containers routinely run node as
   // PID 1, so two runners sharing one server would pick the same name and
@@ -608,6 +615,7 @@ async function provisionDatabase(
     const adapter = await createAdapter({
       type: dialect,
       url: databaseUrl.toString(),
+      ...(postgresSchema === undefined ? {} : { schema: postgresSchema }),
     });
 
     // A handle destroyed twice — an explicit cleanup plus an `afterEach` — must
@@ -768,7 +776,8 @@ export async function createTestNextly(
     try {
       provisioned = await provisionDatabase(
         opts.dialect,
-        resolveServerUrl(opts.dialect, opts.serverUrl)
+        resolveServerUrl(opts.dialect, opts.serverUrl),
+        opts.postgresSchema
       );
     } catch (error) {
       // `provisionDatabase` restores its own snapshot; this is the abandoned
@@ -904,7 +913,18 @@ async function bootServices(
         : {}),
       singles: opts.singles,
       fieldGroups: opts.fieldGroups,
-      ...(opts.db === undefined ? {} : { db: opts.db }),
+      ...(opts.db === undefined && opts.postgresSchema === undefined
+        ? {}
+        : {
+            db: {
+              migrationsDir: "./migrations",
+              uiSchemaFile: "./ui-schema.json",
+              ...opts.db,
+              ...(opts.postgresSchema === undefined
+                ? {}
+                : { postgres: { schema: opts.postgresSchema } }),
+            },
+          }),
       localization: opts.localization
         ? normalizeLocalization(opts.localization)
         : undefined,
