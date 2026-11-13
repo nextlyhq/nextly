@@ -492,7 +492,7 @@ export default defineConfig({
 });
 ```
 
-Set it in the config rather than passing `passwordHasher` to `getNextly`: Nextly starts once per process, and a request to the route handler can start it before your code calls `getNextly`. Every way it starts reads the config. Two different hashers, one in each place, are refused at startup.
+Set it in the config rather than passing `passwordHasher` to `getNextly`: Nextly starts once per process, and a request to the route handler can start it before your code calls `getNextly`. Every way it starts reads the config, and so does `nextly users:create-admin`, which hashes the administrator it creates with your hasher. Two different hashers, one in each place, are refused at startup.
 
 - `reach` (or `validate`) is required: it tells the password rules how much of a password your hasher reads, so a longer one is refused rather than cut short.
 - `isHash` is optional. Without it, any stored value that is not core's bcrypt goes to your `verify`. If your hasher writes bcrypt itself (a peppered bcrypt, say), declare `isHash` so its values can be told from core's older ones: without it, every bcrypt value counts as yours, and an older one signs in only if your `verify` accepts it.

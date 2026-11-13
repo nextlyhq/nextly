@@ -6,7 +6,10 @@
  * setup at a time.
  */
 import { poolWaitTimeoutError } from "@nextlyhq/adapter-drizzle/types";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { useLoadedPasswordHasher } from "../../../di/password-digester";
+import type { PasswordHasher } from "../../password/policy";
 
 import { claimFirstSetup } from "../../setup-token/setup-gate";
 import {
@@ -417,6 +420,44 @@ describe("setup in development", () => {
     };
     expect((await handleSetup(setupRequest(), dev)).status).toBe(201);
     expect(createSuperAdmin).toHaveBeenCalledTimes(1);
+  });
+
+  describe("with the app's own password hasher", () => {
+    /** An unbounded app hasher: it reads a password longer than bcrypt's 72 bytes whole. */
+    const unbounded: PasswordHasher = {
+      name: "unbounded",
+      reach: "unbounded",
+      hash: password => Promise.resolve(`own$${password}`),
+      verify: (password, stored) =>
+        Promise.resolve(stored === `own$${password}`),
+    };
+    /** 80 bytes: past bcrypt's 72. */
+    const LONG = `Str0ng-P@ss-${"x".repeat(68)}`;
+    afterEach(() => useLoadedPasswordHasher(undefined));
+
+    async function devSetup(password: string) {
+      const { deps, createSuperAdmin } = await productionInstall();
+      const dev: SetupHandlerDeps = {
+        ...deps,
+        isProduction: false,
+        setupToken: { ...deps.setupToken, required: false },
+      };
+      const res = await handleSetup(setupRequest(undefined, { password }), dev);
+      return {
+        status: res.status,
+        created: createSuperAdmin.mock.calls.length,
+      };
+    }
+
+    it("judges the first password by the hasher, which reads it whole", async () => {
+      useLoadedPasswordHasher(unbounded);
+      expect(await devSetup(LONG)).toEqual({ status: 201, created: 1 });
+    });
+
+    it("judges it by bcrypt's 72 bytes without one", async () => {
+      // The control: the same password is refused where bcrypt hashes it.
+      expect(await devSetup(LONG)).toEqual({ status: 400, created: 0 });
+    });
   });
 });
 
