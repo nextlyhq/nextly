@@ -15,12 +15,12 @@
  *
  * Applying works the import out again and refuses unless it is exactly the
  * one the dry run showed (`plan`, a digest of every change and each
- * version's revision), then writes a collection's published pages and
- * pages never published, in the default language, and adds every redirect,
- * in one transaction: in full, or, where anything is refused part-way, not
- * at all. A working draft, a Single's page and a page in another language
- * are each written first, as a step of its own, read back as stored, and
- * put back as it was where any later step is refused.
+ * version's revision), then writes every version of a collection's page in
+ * the default language, and adds every redirect, in one transaction: in
+ * full, or, where anything is refused part-way, not at all. A Single's page,
+ * a page in another language, and the working draft of a type that is not
+ * translated are each written first, as a step of its own, read back as
+ * stored, and put back as it was where any later step is refused.
  *
  * The engine holds no request and draws nothing: `planImport(engine, args)`
  * and `applyImport(plan)` take the site's context and who the import is made
@@ -1638,9 +1638,8 @@ function inOrder(pages: readonly PlannedPage[]): PlannedPage[] {
 }
 
 /**
- * Write every version's changes that go on `transaction` (a collection's
- * published page, or a page never published, in the default language) and
- * add every redirect. Any refusal is thrown,
+ * Write every version's changes that go on `transaction` (a collection's,
+ * in the default language) and add every redirect. Any refusal is thrown,
  * which undoes everything written before it.
  */
 async function writeAll(
@@ -1669,12 +1668,17 @@ async function writeAll(
         revKey(page),
         typeof saved._rev === "string" ? saved._rev : undefined
       );
-      await refuseIfNotStored(
-        ctx,
-        transaction,
-        { type: page.type, id: page.id, locale: page.locale ?? plan.locale },
-        page.writes
-      );
+      if (page.write === "held") {
+        // A held save's draft can't be read on the transaction.
+        refuseShownDropped(saved, page);
+      } else {
+        await refuseIfNotStored(
+          ctx,
+          transaction,
+          { type: page.type, id: page.id, locale: page.locale ?? plan.locale },
+          page.writes
+        );
+      }
     } catch (error) {
       throw refusalAbout(error, page.label);
     }
@@ -1754,6 +1758,30 @@ async function writeVersion(
   return typeof next === "string" ? next : undefined;
 }
 
+/** Whether a version read as stored holds every value the import wrote it. */
+function holds(stored: unknown, page: PlannedPage): boolean {
+  try {
+    refuseDroppedValues(stored, page.writes, page.id);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Refuse a held save on the transaction whose answer shows a value sent as
+ * something else. The answer is the person's read of the draft, which leaves
+ * out a value they may not read, so only what it shows is judged.
+ */
+function refuseShownDropped(saved: unknown, page: PlannedPage): void {
+  const seo =
+    isRecord(saved) && isRecord(saved[SEO_GROUP]) ? saved[SEO_GROUP] : {};
+  const shown = Object.fromEntries(
+    Object.entries(page.writes).filter(([name]) => name in seo)
+  );
+  refuseDroppedValues(saved, shown, page.id);
+}
+
 /** A version written as a step of its own, which a later refusal puts back. */
 type Written = PlannedPage[];
 
@@ -1789,16 +1817,27 @@ async function writeStep(
  * Put each version written as a step back as it was stored, newest first,
  * as the site, at the revision the import left it at.
  */
-async function putBack(
-  plan: ImportPlan,
-  written: Written,
-  revs: Revs
-): Promise<void> {
+async function putBack(plan: ImportPlan, written: Written): Promise<void> {
   for (const page of [...written].reverse()) {
     try {
-      revs.set(
-        revKey(page),
-        await writeVersion(plan, page, page.seo, revFor(revs, page), "site")
+      // Read again, as stored: put back at the revision it is at now, and
+      // only while it still holds what the import wrote, so a save someone
+      // made since is never undone.
+      const now = await storedVersion(page);
+      const rev = isRecord(now) ? now._rev : undefined;
+      if (!holds(now, page)) {
+        plan.engine.ctx.logger.warn(
+          "An imported version changed before it could be put back, so it is left as it is",
+          { type: page.type, id: page.id, locale: page.locale, form: page.form }
+        );
+        continue;
+      }
+      await writeVersion(
+        plan,
+        page,
+        page.seo,
+        typeof rev === "string" ? rev : undefined,
+        "site"
       );
     } catch (error) {
       // Logged rather than thrown, so the refusal that undid the import is
@@ -1834,11 +1873,12 @@ async function recordImport(ctx: PluginContext): Promise<void> {
 }
 
 /**
- * Write what `plan` worked out, in full or not at all: a collection's
- * published pages and pages never published, in the default language, and
- * every redirect, in one transaction; each working draft, each Single's page
- * and each page in another language as a step of its own before it, read
- * back as stored and put back as it was where any later write is refused.
+ * Write what `plan` worked out, in full or not at all: every version of a
+ * collection's page in the default language, and every redirect, in one
+ * transaction; each Single's page, each page in another language and the
+ * working draft of a type that is not translated as a step of its own
+ * before it, read back as stored and put back as it was where any later
+ * write is refused.
  * Each write names the revision its page was read at, so a page changed
  * since the plan is refused rather than written over. Applied again, a plan worked out again sets nothing: every place it
  * filled is filled.
@@ -1867,7 +1907,7 @@ export async function applyImport(
       writeAll(transaction, plan, new Map(before))
     );
   } catch (error) {
-    await putBack(plan, written, revs);
+    await putBack(plan, written);
     throw error;
   }
   // Committed: each changed page is checked again for the problem list.

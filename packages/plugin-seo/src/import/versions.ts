@@ -16,9 +16,8 @@
  *
  * How a version is written follows from core's lifecycle. A status-less
  * save of a published page of a type keeping drafts is held as its working
- * draft, so a draft is written status-less, as a step of its own read back
- * as stored, and a published version naming its status, which writes the
- * live row. On a transaction (the default language of a collection) that
+ * draft, so a draft is written status-less, and a published version naming
+ * its status, which writes the live row. On a transaction (the default language of a collection) that
  * leaves the working draft waiting; anywhere else it would publish it, so
  * there a published version whose draft waits is left to the draft (`LeftOut`).
  *
@@ -458,9 +457,14 @@ function versionsOfPage(
     "draft",
     "held"
   );
-  // A held save is a step of its own wherever it is, read back as stored:
-  // what a save on the transaction answers is the person's read of it.
-  if (read.inTransaction) return [version, { ...held, inTransaction: false }];
+  // A held save is a step of its own, read back as stored, since what a save
+  // on the transaction answers is the person's read of it; but a translated
+  // type's draft keeps a group only from a save on the transaction, so its
+  // draft in the default language is written there.
+  if (read.inTransaction) {
+    const translated = read.locale.code !== undefined;
+    return [version, translated ? held : { ...held, inTransaction: false }];
+  }
   // A collection's draft in another language does not keep a group a save
   // outside the transaction sends; a Single's draft does.
   const inLanguage = pageTypeOf(read.key).kind === "collection";

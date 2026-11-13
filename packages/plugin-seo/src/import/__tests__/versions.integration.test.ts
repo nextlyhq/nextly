@@ -46,11 +46,12 @@ let failing: number | undefined;
 /** How many saves of the watched types have run, while counted. */
 let saves: number | undefined;
 
-/** Counts each save, and fails the one `failing` names. */
+/** Counts each save, and fails the one `failing` names, once. */
 function counted({ data }: { data?: unknown }) {
   if (saves !== undefined) {
     saves += 1;
     if (failing !== undefined && saves === failing) {
+      failing = undefined;
       throw new Error("this save fails");
     }
   }
