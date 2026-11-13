@@ -46,7 +46,6 @@ import { isMissingColumnError } from "../../../database/missing-column";
 import { NextlyError } from "../../../errors/nextly-error";
 import { consoleLogger } from "../../../shared/types";
 import { pluginMigratedTableSet } from "../ownership/drop-guard";
-import { pushInActiveSchema } from "./pg-active-schema-push";
 
 import { currentMysqlDatabaseName } from "./database-url";
 import {
@@ -54,6 +53,7 @@ import {
   filterUnsafeStatements,
   findUnexpectedDestructiveStatements,
 } from "./filter-unsafe-statements";
+import { pushInActiveSchema } from "./pg-active-schema-push";
 import { assertSchemaLockHeld, markedForSchemaLock } from "./schema-lock";
 import { isIdempotencyError, splitStatements } from "./sql-statement-utils";
 

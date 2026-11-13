@@ -192,7 +192,9 @@ describe("an installation the setting moved away from", () => {
 
   it("refuses a named schema while the installation is in public, naming both", () => {
     const error = refusal("cms", ["public"]);
-    expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(true);
+    expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(
+      true
+    );
     expect(error?.publicMessage).toContain('db.postgres.schema is "cms"');
     expect(error?.publicMessage).toContain('installation is in "public"');
     expect(error?.publicMessage).toContain("remove db.postgres.schema");
@@ -203,7 +205,9 @@ describe("an installation the setting moved away from", () => {
 
   it("refuses public while the installation is in a named schema, naming both", () => {
     const error = refusal("public", ["cms"]);
-    expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(true);
+    expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(
+      true
+    );
     expect(error?.publicMessage).toContain(
       'db.postgres.schema is not set (so "public")'
     );

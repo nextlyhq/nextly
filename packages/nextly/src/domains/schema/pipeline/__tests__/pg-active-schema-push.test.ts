@@ -78,7 +78,9 @@ describe("pushInActiveSchema", () => {
     expect(answer.sqlStatements).toEqual([
       'CREATE TABLE "users" ("id" text PRIMARY KEY);',
     ]);
-    expect(answer.hints).toEqual([{ hint: "x", statement: 'DROP TABLE "old";' }]);
+    expect(answer.hints).toEqual([
+      { hint: "x", statement: 'DROP TABLE "old";' },
+    ]);
     expect(getTableConfig(users).schema).toBeUndefined();
     expect(getTableConfig(posts).schema).toBeUndefined();
   });

@@ -147,7 +147,9 @@ suite("an installation in a named PostgreSQL schema", () => {
       "public",
       {}
     ).catch((caught: unknown) => caught);
-    expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(true);
+    expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(
+      true
+    );
     expect((error as NextlyError).publicMessage).toContain(`"${SCHEMA}"`);
     expect((error as NextlyError).publicMessage).toContain('"public"');
   });
@@ -165,7 +167,9 @@ suite("an installation in a named PostgreSQL schema", () => {
       "nx_other",
       {}
     ).catch((caught: unknown) => caught);
-    expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(true);
+    expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(
+      true
+    );
     expect((error as NextlyError).publicMessage).toContain('"nx_other"');
     expect((error as NextlyError).publicMessage).toContain('"public"');
     // A separate installation, started on purpose, is let through.

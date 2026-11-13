@@ -505,7 +505,10 @@ describe("what a message tells the user to type", () => {
     const retired = codes.filter(code => CLI_ERROR_CODES[code].retired);
     for (const code of retired) {
       expect(CLI_ERROR_CODES[code].from ?? [], code).toEqual([]);
-      expect(CLI_ERROR_MAPPINGS.filter(m => m.to === code), code).toEqual([]);
+      expect(
+        CLI_ERROR_MAPPINGS.filter(m => m.to === code),
+        code
+      ).toEqual([]);
       const page = readFileSync(
         join(DOCS, `${code.toLowerCase().replaceAll("_", "-")}.mdx`),
         "utf8"

@@ -141,7 +141,10 @@ describe("the first boot, and where first-run's push looks", () => {
   });
 
   it("refuses the setting removed from an installation in a named schema", async () => {
-    const error = await bootError(postgresAdapter(undefined, ["cms"]), undefined);
+    const error = await bootError(
+      postgresAdapter(undefined, ["cms"]),
+      undefined
+    );
 
     expect(NextlyError.isCode(error, "NEXTLY_POSTGRES_SCHEMA_MOVED")).toBe(
       true

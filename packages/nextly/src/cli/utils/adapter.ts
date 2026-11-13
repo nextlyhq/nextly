@@ -328,7 +328,10 @@ async function createUnderEnv(
     // installation in the newly named schema.
     if (dialect === "postgresql") {
       try {
-        await assertInstallationInConfiguredSchema(adapter.getDrizzle(), schema);
+        await assertInstallationInConfiguredSchema(
+          adapter.getDrizzle(),
+          schema
+        );
       } catch (error) {
         await adapter.disconnect().catch(() => {});
         throw error;
