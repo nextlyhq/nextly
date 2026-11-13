@@ -1166,17 +1166,25 @@ describe.each(LOCK_DIALECTS)(
       120_000
     );
 
+    // The Builder's own database: its edit leaves the row `pending`, and the run records it applied
+    // once its table is there, so the same run lets go of the inline UNIQUE.
     it.skipIf(dialect === "sqlite")(
-      "keeps the inline UNIQUE while the profiles' definition waits for its migration",
+      "lets go of the inline UNIQUE in the run that records a waiting definition as applied",
       async () => {
         await earlierInlineUnique();
         await run([
           `UPDATE ${q("dynamic_collections")} SET ${q("migration_status")} = 'pending' WHERE ${q("slug")} = 'profiles'`,
         ]);
+        await run([profile("p1", "ada")]);
 
         await migrate();
 
-        expect((await profileIndexes()).has(inlineName("person"))).toBe(true);
+        const [row] = await adapter.executeQuery<{ status: string }>(
+          `SELECT ${q("migration_status")} AS ${q("status")} FROM ${q("dynamic_collections")} WHERE ${q("slug")} = 'profiles'`
+        );
+        expect(row?.status).toBe("applied");
+        expect((await profileIndexes()).has(inlineName("person"))).toBe(false);
+        expect(await refusedAsRepeat(profile("p2", "ada"))).toBe(false);
       },
       120_000
     );
@@ -1246,6 +1254,23 @@ describe.each(LOCK_DIALECTS)(
         await earlierInlineUnique();
         await run([
           `DROP INDEX ${q(`idx_${PROFILES}_person`)} ON ${q(PROFILES)}`,
+        ]);
+
+        await migrate();
+
+        expect((await profileIndexes()).has(inlineName("person"))).toBe(true);
+      },
+      120_000
+    );
+
+    // An index over the column's first characters only cannot serve the foreign key either.
+    it.runIf(dialect === "mysql")(
+      "keeps the inline UNIQUE where the column's other index holds only a prefix of it",
+      async () => {
+        await earlierInlineUnique();
+        await run([
+          `DROP INDEX ${q(`idx_${PROFILES}_person`)} ON ${q(PROFILES)}`,
+          `CREATE INDEX ${q("person_prefix")} ON ${q(PROFILES)} (${q("person")}(8))`,
         ]);
 
         await migrate();
