@@ -172,8 +172,10 @@ export const PageTabs: ForwardRefExoticComponent<
     const setRow = useCallback(
       (node: HTMLElement | null) => {
         row.current = node;
-        if (typeof ref === "function") ref(node);
-        else if (ref) ref.current = node;
+        // A callback ref's RETURN is the caller's cleanup, and React runs it
+        // instead of calling the ref again with null, so it is handed back.
+        if (typeof ref === "function") return ref(node);
+        if (ref) ref.current = node;
       },
       [ref]
     );

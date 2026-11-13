@@ -10,7 +10,7 @@
  * (`entity-settings.ts`), whose fields this reads on both sides. Without this the file carried only
  * the settings change, and every stored row stayed keyed by the old name, where nothing reads it.
  *
- * Which pairs may be a rename is the Schema Builder's answer (`keepsFieldGroupRows`), and the
+ * Which pairs may be a rename is the Schema Builder's answer (`fieldGroupRenamePairs`), and the
  * statements are the ones its save writes (`fieldGroupRowMoves`). Only the pairing differs: a
  * Builder save holds one rename and refuses more, while this asks about every compatible pair and
  * refuses only answers that give one field two names.
@@ -22,9 +22,8 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { NextlyError } from "../../../errors/nextly-error";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import {
+  fieldGroupRenamePairs,
   fieldGroupRowMoves,
-  keepsFieldGroupRows,
-  removedAndAddedFieldGroups,
   type RenamedFieldShape,
 } from "../../field-groups/storage/field-group-rename";
 import type { I18nTransitionKind } from "../../i18n/migration/transition-state";
@@ -109,33 +108,29 @@ export async function planFieldGroupRenames(args: {
   for (const { kind, entity } of args.entities) {
     const before = args.previous?.[RECORD_KEYS[kind]][entity.slug];
     if (before === undefined || entity.settings === undefined) continue;
-    const { oldOnly, newOnly } = removedAndAddedFieldGroups(
+    const candidates = fieldGroupRenamePairs(
       declaredFields(before),
       declaredFields(entity.settings)
-    );
-    const candidates = oldOnly.flatMap(from =>
-      newOnly.flatMap((to): RenameCandidate[] => {
-        if (!keepsFieldGroupRows(from, to)) return [];
-        const tables = fieldGroupSlugList(to).flatMap(slug => {
-          const table = args.groupTables.get(slug);
-          return table === undefined ? [] : [table];
-        });
-        if (tables.length === 0) return [];
-        return [
-          {
-            tableName: entity.tableName,
-            fromColumn: from.name,
-            toColumn: to.name,
-            fromType: "field group",
-            toType: "field group",
-            typesCompatible: true,
-            preservesValues: true,
-            defaultSuggestion: "rename",
-            fieldGroupTables: tables,
-          },
-        ];
-      })
-    );
+    ).flatMap(({ from, to }): RenameCandidate[] => {
+      const tables = fieldGroupSlugList(to).flatMap(slug => {
+        const table = args.groupTables.get(slug);
+        return table === undefined ? [] : [table];
+      });
+      if (tables.length === 0) return [];
+      return [
+        {
+          tableName: entity.tableName,
+          fromColumn: from.name,
+          toColumn: to.name,
+          fromType: "field group",
+          toType: "field group",
+          typesCompatible: true,
+          preservesValues: true,
+          defaultSuggestion: "rename",
+          fieldGroupTables: tables,
+        },
+      ];
+    });
     if (candidates.length === 0) continue;
     const accepted = (await args.decide(candidates))
       .filter(decision => decision.accepted)

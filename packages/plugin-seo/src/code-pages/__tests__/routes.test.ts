@@ -3,7 +3,13 @@
  * `next build` wrote: routes with no variable part, and the addresses a
  * route with one declared, never a framework, admin or API route.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -166,5 +172,32 @@ describe("reading the build", () => {
     const appDir = app();
 
     expect(readCodeRoutes({ appDir, buildDir: "missing" })).toEqual([]);
+  });
+});
+
+describe("the source file lookup in a Next.js build", () => {
+  // Turbopack traces a filesystem call whose path it cannot bound, and a path
+  // joined from the working directory and a route's name bounds to the whole
+  // project, which the build then ships as server code. The annotation is
+  // what keeps it out, and it is read where Turbopack reads it: in the call.
+  it("marks each call that builds or reads the page's path for Turbopack to ignore", () => {
+    const source = readFileSync(
+      join(import.meta.dirname, "../routes.ts"),
+      "utf8"
+    );
+    const body = /function sourceFileOf\([^)]*\): string \{([\s\S]*?)\n\}/.exec(
+      source
+    )?.[1];
+    expect(body).toBeDefined();
+    const calls = [...(body ?? "").matchAll(/\b(existsSync|join)\(([^)]*)\)/g)];
+    expect(calls.map(([, name]) => name).sort()).toEqual([
+      "existsSync",
+      "join",
+    ]);
+    for (const [call, , args] of calls) {
+      expect(args?.trimStart(), call).toMatch(
+        /^\/\*turbopackIgnore: true\*\/ /
+      );
+    }
   });
 });

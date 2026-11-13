@@ -244,6 +244,20 @@ describe("how the admin's parts were drawn", () => {
     confirmLabels({ ...LABELS, user: "user-2" });
     expect(recallLayout("list-rows:posts")).toBeUndefined();
   });
+
+  it("outlives a change to the site's schema or to anyone's access, for the same person", () => {
+    // A size says how a part was drawn, not what may be read: another
+    // person's role or a new field elsewhere leaves it as true as it was.
+    confirmLabels(LABELS);
+    rememberLayout("card-height:p1:20", 361);
+    resetDeviceMemoryForTests();
+    confirmLabels({
+      ...LABELS,
+      schemaVersion: "8",
+      permissionVersion: "perm-b",
+    });
+    expect(recallLayout("card-height:p1:20")).toBe(361);
+  });
 });
 
 describe("the labels", () => {
