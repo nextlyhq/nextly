@@ -146,6 +146,7 @@ import {
   versionAwareToolbarSlots,
 } from "@admin/components/features/versions/viewed-version-host";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
+import { useEditorRevealHold } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { useDiscardSingleWorkingDraft } from "@admin/hooks/queries/useDiscardSingleWorkingDraft";
 import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
@@ -323,6 +324,17 @@ export interface SingleFormProps {
    * absent, it unlocks as it stands.
    */
   latest?: DocumentLatest;
+  /**
+   * The page's outline of this editor, drawn in its place a moment longer
+   * while what finishes the editor is on its way (`useEditorRevealHold`): the claim
+   * on the Single, and `revealWaiting`. Absent, the editor is drawn at once.
+   */
+  revealOutline?: React.ReactNode;
+  /**
+   * Whether reads the page started for the editor's parts are still on their
+   * way (`usePlaceStartupReads`): the editor holds its outline for them too.
+   */
+  revealWaiting?: boolean;
   /** Additional CSS classes */
   className?: string;
 }
@@ -704,6 +716,8 @@ export function SingleForm({
   documentBanner,
   documentView,
   latest,
+  revealOutline,
+  revealWaiting = false,
 }: SingleFormProps): React.JSX.Element {
   // Generate Zod schema from field configurations. Singles render title/slug
   // read-only from config, so relax their required rule — submitting must not
@@ -957,6 +971,16 @@ export function SingleForm({
     // the latest copy: one that cannot would say it shows what it does not.
     version: latest ? version.startedFrom : undefined,
   });
+  // Drawn whole: the outline stays until the claim says who holds the Single
+  // and the parts' started reads are in, briefly at most, as the entry
+  // editor's does.
+  const holdReveal = useEditorRevealHold(
+    revealOutline !== undefined,
+    { claim: lockSurface.settling, reads: revealWaiting },
+    // Each document waits for its own claim and reads: the same editor moved
+    // straight to the next one begins its hold again.
+    `single:${schema.slug}/${document.id ?? ""}`
+  );
   // A gained Single's latest version starts the whole form again, whatever
   // its `updatedAt` says, and the lock holds until it has; the document views
   // key on the count it carries. Someone else's change is said over it.
@@ -1743,6 +1767,8 @@ export function SingleForm({
     onCancel: handleCancel,
     ...(onViewApi === undefined ? {} : { onViewApi }),
   };
+
+  if (holdReveal) return <>{revealOutline}</>;
 
   return (
     // A single is only ever edited standalone, so unlike the entry editor there

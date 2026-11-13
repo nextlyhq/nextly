@@ -2,13 +2,104 @@
   "racy": {},
   "sqlite": {
     "start": {
-      "statements": 107
+      "statements": 109
     },
     "screens": {
       "login": {
         "requests": 4,
         "rounds": 2,
-        "statements": 4,
+        "statements": 7,
+        "kinds": {
+          "GET /admin/api/startup": 1,
+          "GET /admin/api/general-settings": 1,
+          "GET /admin/api/admin-meta/workspace": 1,
+          "GET /admin/api/auth/ui": 1
+        },
+        "occasional": [],
+        "unanswered": []
+      },
+      "signin": {
+        "requests": 8,
+        "rounds": 6,
+        "statements": 109,
+        "kinds": {
+          "GET /admin/api/auth/csrf": 1,
+          "POST /admin/api/auth/login": 1,
+          "GET /admin/api/startup": 1,
+          "GET /admin/api/notices/count": 1,
+          "GET /admin/api/schema/journal": 1,
+          "GET /admin/api/dashboard/layout": 1,
+          "POST /admin/api/dashboard/query": 1,
+          "HEAD /admin/api/seed": 1
+        },
+        "occasional": [],
+        "unanswered": []
+      },
+      "dashboard": {
+        "requests": 6,
+        "rounds": 4,
+        "statements": 98,
+        "kinds": {
+          "GET /admin/api/startup": 1,
+          "GET /admin/api/notices/count": 1,
+          "GET /admin/api/schema/journal": 1,
+          "GET /admin/api/dashboard/layout": 1,
+          "POST /admin/api/dashboard/query": 1,
+          "HEAD /admin/api/seed": 1
+        },
+        "occasional": [],
+        "unanswered": []
+      },
+      "list": {
+        "requests": 7,
+        "rounds": 4,
+        "statements": 23,
+        "kinds": {
+          "GET /admin/api/startup": 1,
+          "GET /admin/api/notices/count": 1,
+          "GET /admin/api/schema/journal": 1,
+          "GET /admin/api/singles": 1,
+          "GET /admin/api/collections/posts": 1,
+          "GET /admin/api/collections/posts/entries": 1,
+          "GET /admin/api/plugins/@nextlyhq/plugin-page-builder/templates/entry-designs": 1
+        },
+        "occasional": [],
+        "unanswered": []
+      },
+      "edit": {
+        "requests": 16,
+        "rounds": 6,
+        "statements": 48,
+        "kinds": {
+          "GET /admin/api/startup": 1,
+          "GET /admin/api/notices/count": 1,
+          "GET /admin/api/schema/journal": 1,
+          "GET /admin/api/singles": 1,
+          "GET /admin/api/collections/schema/posts": 1,
+          "GET /admin/api/dashboard/pins": 1,
+          "GET /admin/api/collections/posts/entries/:id": 2,
+          "GET /admin/api/media/folders": 1,
+          "GET /admin/api/media": 2,
+          "POST /admin/api/document-lock": 1,
+          "GET /admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/page-collection": 1,
+          "GET /admin/api/releases": 1,
+          "GET /admin/api/plugins/@nextlyhq/plugin-page-builder/templates/entry-designs": 1,
+          "GET /admin/api/collections/posts/entries/:id/versions/autosave": 1
+        },
+        "occasional": [],
+        "unanswered": []
+      }
+    }
+  },
+  "postgresql": {
+    "start": {
+      "statements": 113
+    },
+    "screens": {
+      "login": {
+        "requests": 4,
+        "rounds": 2,
+        "statements": 7,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/general-settings": 1,
@@ -37,99 +128,8 @@
       },
       "dashboard": {
         "requests": 6,
-        "rounds": 4,
-        "statements": 93,
-        "kinds": {
-          "GET /admin/api/startup": 1,
-          "GET /admin/api/notices/count": 1,
-          "GET /admin/api/schema/journal": 1,
-          "GET /admin/api/dashboard/layout": 1,
-          "POST /admin/api/dashboard/query": 1,
-          "HEAD /admin/api/seed": 1
-        },
-        "occasional": [],
-        "unanswered": []
-      },
-      "list": {
-        "requests": 7,
-        "rounds": 4,
-        "statements": 18,
-        "kinds": {
-          "GET /admin/api/startup": 1,
-          "GET /admin/api/notices/count": 1,
-          "GET /admin/api/schema/journal": 1,
-          "GET /admin/api/singles": 1,
-          "GET /admin/api/collections/posts": 1,
-          "GET /admin/api/collections/posts/entries": 1,
-          "GET /admin/api/plugins/@nextlyhq/plugin-page-builder/templates/entry-designs": 1
-        },
-        "occasional": [],
-        "unanswered": []
-      },
-      "edit": {
-        "requests": 16,
-        "rounds": 6,
-        "statements": 44,
-        "kinds": {
-          "GET /admin/api/startup": 1,
-          "GET /admin/api/notices/count": 1,
-          "GET /admin/api/schema/journal": 1,
-          "GET /admin/api/singles": 1,
-          "GET /admin/api/collections/schema/posts": 1,
-          "GET /admin/api/dashboard/pins": 1,
-          "GET /admin/api/collections/posts/entries/:id": 2,
-          "GET /admin/api/media/folders": 1,
-          "GET /admin/api/media": 2,
-          "POST /admin/api/document-lock": 1,
-          "GET /admin/api/plugins/@nextlyhq/plugin-page-builder/layouts/page-collection": 1,
-          "GET /admin/api/releases": 1,
-          "GET /admin/api/plugins/@nextlyhq/plugin-page-builder/templates/entry-designs": 1,
-          "GET /admin/api/collections/posts/entries/:id/versions/autosave": 1
-        },
-        "occasional": [],
-        "unanswered": []
-      }
-    }
-  },
-  "postgresql": {
-    "start": {
-      "statements": 110
-    },
-    "screens": {
-      "login": {
-        "requests": 4,
-        "rounds": 2,
-        "statements": 4,
-        "kinds": {
-          "GET /admin/api/startup": 1,
-          "GET /admin/api/general-settings": 1,
-          "GET /admin/api/admin-meta/workspace": 1,
-          "GET /admin/api/auth/ui": 1
-        },
-        "occasional": [],
-        "unanswered": []
-      },
-      "signin": {
-        "requests": 8,
-        "rounds": 6,
-        "statements": 104,
-        "kinds": {
-          "GET /admin/api/auth/csrf": 1,
-          "POST /admin/api/auth/login": 1,
-          "GET /admin/api/startup": 1,
-          "GET /admin/api/notices/count": 1,
-          "GET /admin/api/schema/journal": 1,
-          "GET /admin/api/dashboard/layout": 1,
-          "POST /admin/api/dashboard/query": 1,
-          "HEAD /admin/api/seed": 1
-        },
-        "occasional": [],
-        "unanswered": []
-      },
-      "dashboard": {
-        "requests": 6,
         "rounds": 3,
-        "statements": 90,
+        "statements": 94,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -144,7 +144,7 @@
       "list": {
         "requests": 7,
         "rounds": 4,
-        "statements": 18,
+        "statements": 21,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -160,7 +160,7 @@
       "edit": {
         "requests": 16,
         "rounds": 6,
-        "statements": 44,
+        "statements": 47,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -184,13 +184,13 @@
   },
   "mysql": {
     "start": {
-      "statements": 120
+      "statements": 122
     },
     "screens": {
       "login": {
         "requests": 4,
         "rounds": 2,
-        "statements": 4,
+        "statements": 7,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/general-settings": 1,
@@ -220,7 +220,7 @@
       "dashboard": {
         "requests": 6,
         "rounds": 3,
-        "statements": 93,
+        "statements": 96,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -235,7 +235,7 @@
       "list": {
         "requests": 7,
         "rounds": 4,
-        "statements": 18,
+        "statements": 21,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,
@@ -251,7 +251,7 @@
       "edit": {
         "requests": 16,
         "rounds": 6,
-        "statements": 42,
+        "statements": 47,
         "kinds": {
           "GET /admin/api/startup": 1,
           "GET /admin/api/notices/count": 1,

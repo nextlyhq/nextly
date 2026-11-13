@@ -33,6 +33,7 @@ import { seoPlugin } from "../../plugin";
 import { lastCatchUp } from "../../address-record/catch-up";
 import { recordProxySeen } from "../../redirects/proxy-seen";
 import { putRedirect } from "../../redirects/store";
+import { SEO_SETTINGS_SLUG } from "../../settings/contract";
 import { readSeoRules } from "../../settings/rules";
 import { structuredDataFromSettings } from "../../settings/structured-data-rules";
 import { noSocialCardRules } from "../../social/card";
@@ -831,6 +832,67 @@ describe.each(getConfiguredTestDialects())(
 
       expect(inTransaction.length).toBeGreaterThan(0);
       expect(inTransaction).not.toContain(true);
+    });
+
+    it("lists a page the sitemap holds while an own robots.txt rule blocks it, and drops it once the rule goes", async () => {
+      const { t, ctx } = await boot(dialect);
+      const id = await publish(t, {
+        title: "Harbour at dawn",
+        slug: "harbour",
+        excerpt: "A walk along the harbour.",
+      });
+      await until(t, checkedSince(id));
+      await checkSite(ctx, CHECKS);
+      expect((await problemList(ctx, CHECKS, everything)).outOfDate).toBe(
+        false
+      );
+
+      const text = "User-agent: *\nDisallow: /search\nDisallow: /blog";
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, robotsRules: { text } },
+      });
+      // A settings save can change many pages' results: the full check says so.
+      await until(t, found => found.some(row => row.outOfDate === true));
+      // The sitemap lists every collection here.
+      const listed = { ...CHECKS, sitemap: {} };
+      await checkSite(ctx, listed);
+      let list = await problemList(ctx, listed, everything);
+      expect(list.problems.find(p => p.kind === "robotsBlocked")).toMatchObject(
+        {
+          subject: { type: "posts", id, detail: "/blog/harbour" },
+          what: "Line 3 of your own robots.txt rules keeps crawlers away: Disallow: /blog",
+          fix: { place: "settings", tab: "crawlers" },
+        }
+      );
+
+      // A site that serves its own robots.txt, the plugin's switched off,
+      // is not told the plugin's rules block anything.
+      await checkSite(ctx, { ...listed, servesRobots: false });
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
+      // Nor is a site whose own robots.txt file wins over the plugin's.
+      await checkSite(ctx, {
+        ...listed,
+        siteServesOwnRobots: () => Promise.resolve(true),
+      });
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
+      // A page the sitemap does not list is not one it lists and blocks.
+      await checkSite(ctx, { ...listed, sitemap: { collections: ["notes"] } });
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
+      await checkSite(ctx, listed);
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).toContain("robotsBlocked");
+
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, robotsRules: null },
+      });
+      await checkSite(ctx, listed);
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
     });
   }
 );
