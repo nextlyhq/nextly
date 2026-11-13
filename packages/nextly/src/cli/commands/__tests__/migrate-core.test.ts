@@ -428,7 +428,13 @@ describe("the extension schema migrateCore is handed", () => {
     const d = deps({
       extensionSchema: await pluginSchema(),
       pluginsWithMigrations: new Set(["fx"]),
-      adapter: { tableExists: vi.fn(), executeQuery: vi.fn() },
+      // `listTables` answers the prefix check's "is there an owner
+      // registry": none here, so nothing is recorded and nothing judged.
+      adapter: {
+        tableExists: vi.fn(),
+        executeQuery: vi.fn(),
+        listTables: vi.fn().mockResolvedValue([]),
+      },
     });
     await expect(migrateCore(d as never)).resolves.toBeDefined();
   });
