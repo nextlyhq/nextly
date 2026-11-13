@@ -628,6 +628,13 @@ exports[`each code, as a command ends with it > CORE_TABLES_NOT_RECONCILED 1`] =
   Docs: https://nextlyhq.com/docs/cli/errors/core-tables-not-reconciled  (CORE_TABLES_NOT_RECONCILED)"
 `;
 
+exports[`each code, as a command ends with it > CREATE_BLOCKED_BY_LEFTOVER_TABLE 1`] = `
+"✗ Creating the Single "home" was refused.
+  Why:  "comp_hero" (2 rows) already exists and holds rows, but nothing registered describes them.
+  Next: Drop or rename those tables, then retry the create.
+  Docs: https://nextlyhq.com/docs/cli/errors/create-blocked-by-leftover-table  (CREATE_BLOCKED_BY_LEFTOVER_TABLE)"
+`;
+
 exports[`each code, as a command ends with it > DATA_LOSS_CONSENT_MALFORMED 1`] = `
 "✗ --accept-data-loss=dc_posts summary is not a list of tables and table.column pairs: "dc_posts summary" is not one.
   Why:  Each target is a table or a \`table.column\` pair, separated by commas. Nothing was changed.

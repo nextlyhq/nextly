@@ -157,7 +157,9 @@ function readGuard(
       unavailable: status === "error" && fetchStatus !== "fetching",
       settled: session !== undefined,
       confirmed: session !== undefined && redirect === null,
-      hasRole: session?.hasRole === true,
+      // Only a session that says it holds no role is role-less: one that does
+      // not say is drawn as before, and the server refuses what it may not do.
+      hasRole: session?.hasRole !== false,
       signedInHere,
       signInInPlace,
     }),

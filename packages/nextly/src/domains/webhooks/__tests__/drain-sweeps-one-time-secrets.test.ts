@@ -88,7 +88,12 @@ function idleDb(): never {
   } as never;
 }
 
-/** An adapter holding one expired secret, which the sweep removes. */
+/**
+ * An adapter holding one expired secret, which the sweep removes. The secret is
+ * a link, with no place in a code's issue order, so it takes no older codes with
+ * it. The sweep reads the batch again inside its transaction, so the
+ * transaction offers `select` as a real adapter's does.
+ */
 function oneExpiredSecret() {
   const tables: string[] = [];
   let left = 1;
@@ -97,18 +102,22 @@ function oneExpiredSecret() {
     left = 0;
     return removed;
   });
+  const select = async (table: string) => {
+    tables.push(table);
+    return left > 0 ? [{ id: "expired", kind: "link", issueSeq: null }] : [];
+  };
   return {
     tables,
     remove,
     adapter: {
-      select: async (table: string) => {
-        tables.push(table);
-        return left > 0 ? [{ id: "expired" }] : [];
-      },
+      select,
       delete: remove,
       transaction: async (
-        fn: (tx: { delete: typeof remove }) => Promise<unknown>
-      ) => fn({ delete: remove }),
+        fn: (tx: {
+          delete: typeof remove;
+          select: typeof select;
+        }) => Promise<unknown>
+      ) => fn({ delete: remove, select }),
     },
   };
 }
@@ -214,14 +223,24 @@ describe("the scheduled drain and the cache tag expiry ledger", () => {
       return 500;
     };
     const ledger = ledgerWithRowsToPrune();
+    // Links, outside any code's issue order, read again inside each batch's
+    // transaction: every batch removes a full one, so the backlog never ends.
+    const select = async () =>
+      Array.from({ length: 500 }, (_, i) => ({
+        id: `row-${i}`,
+        kind: "link",
+        issueSeq: null,
+      }));
     const adapter = {
       ...ledger.adapter,
-      select: async () =>
-        Array.from({ length: 500 }, (_, i) => ({ id: `row-${i}` })),
+      select,
       delete: remove,
       transaction: async (
-        fn: (tx: { delete: typeof remove }) => Promise<unknown>
-      ) => fn({ delete: remove }),
+        fn: (tx: {
+          delete: typeof remove;
+          select: typeof select;
+        }) => Promise<unknown>
+      ) => fn({ delete: remove, select }),
     };
 
     const result = await drain(
@@ -236,6 +255,8 @@ describe("the scheduled drain and the cache tag expiry ledger", () => {
       1_000
     );
 
+    // The secrets backlog was swept, not skipped by a failing sweep.
+    expect(result.pruned.oneTimeSecrets).toBeGreaterThan(0);
     expect(ledger.deleted.length).toBeGreaterThan(0);
     expect(result.pruned.cacheTagExpiries).toBeGreaterThan(0);
   });
@@ -477,18 +498,28 @@ describe("the scheduled drain and recorded preview links", () => {
       clock += 50;
       return 500;
     };
+    // Links, outside any code's issue order, read again inside each batch's
+    // transaction: every batch removes a full one, so the backlog never ends.
+    const select = async (table: string) => {
+      tables.push(table);
+      return Array.from({ length: 500 }, (_, i) => ({
+        id: `row-${i}`,
+        kind: "link",
+        issueSeq: null,
+      }));
+    };
     const adapter = {
-      select: async (table: string) => {
-        tables.push(table);
-        return Array.from({ length: 500 }, (_, i) => ({ id: `row-${i}` }));
-      },
+      select,
       delete: remove,
       transaction: async (
-        fn: (tx: { delete: typeof remove }) => Promise<unknown>
-      ) => fn({ delete: remove }),
+        fn: (tx: {
+          delete: typeof remove;
+          select: typeof select;
+        }) => Promise<unknown>
+      ) => fn({ delete: remove, select }),
     };
 
-    await drain(
+    const result = await drain(
       {
         oneTimeSecrets: true,
         previewLinks: true,
@@ -499,6 +530,8 @@ describe("the scheduled drain and recorded preview links", () => {
       1_000
     );
 
+    // The secrets backlog was swept, not skipped by a failing sweep.
+    expect(result.pruned.oneTimeSecrets).toBeGreaterThan(0);
     expect(tables).toContain("nextly_one_time_secrets");
     expect(tables).toContain("nextly_preview_links");
   });
