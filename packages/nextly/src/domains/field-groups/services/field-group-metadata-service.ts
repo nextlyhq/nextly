@@ -207,8 +207,7 @@ export class FieldGroupMetadataService {
     // process-global field-type registry from inside this same exclusion. A declaration the old
     // registration accepted would otherwise be built and stored against the new one, and every
     // later write to the field group would fail on options the active plugin rejects.
-    await this.assertAddressAllowed(input.slug);
-    await this.assertTableUnowned(input);
+    await this.assertNewAddressAvailable(input.slug, input.tableName);
     const { assertValidPluginFieldOptions } = await import(
       "../../../api/fields-payload"
     );
@@ -1088,6 +1087,20 @@ export class FieldGroupMetadataService {
     });
   }
 
+  /**
+   * Whether a new field group may take `slug`, its table named `tableName`: the address rule,
+   * another field group's address of the same snake_case form, and a table another field group
+   * owns. Public so the Schema Builder's address check asks these very preconditions before a
+   * create, rather than a copy of them that could drift from what the create refuses.
+   */
+  async assertNewAddressAvailable(
+    slug: string,
+    tableName: string
+  ): Promise<void> {
+    await this.assertAddressAllowed(slug);
+    await this.assertTableUnowned({ slug, tableName });
+  }
+
   private async assertAddressAllowed(slug: string): Promise<void> {
     assertAddressAllowed("fieldGroup", slug);
     const twin = findSameSnakeCaseAddress(
@@ -1121,7 +1134,7 @@ export class FieldGroupMetadataService {
    * unique, so the second insert is rejected by the database rather than by this.
    */
   private async assertTableUnowned(
-    input: CreateFieldGroupInput
+    input: Pick<CreateFieldGroupInput, "slug" | "tableName">
   ): Promise<void> {
     const owner = (await this.registry.getAllComponents()).find(
       existing => existing.tableName === input.tableName

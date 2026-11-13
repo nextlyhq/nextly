@@ -306,7 +306,7 @@ export function addressSnakeForm(address: string): string {
  * Single's from every collection's and Single's, a field group's from every
  * other field group's.
  */
-function sharesNamespace(kind: AddressKind, other: AddressKind): boolean {
+export function sharesNamespace(kind: AddressKind, other: AddressKind): boolean {
   return (kind === "fieldGroup") === (other === "fieldGroup");
 }
 
