@@ -104,7 +104,7 @@ const STRIKETHROUGH = 4;
 const CODE = 16;
 
 /** Inline code, fenced with more backticks than it holds, as Markdown spells it. */
-function inlineCode(code: string): string {
+export function inlineCode(code: string): string {
   const longest = Math.max(
     0,
     ...(code.match(/`+/g) ?? []).map(run => run.length)
@@ -169,12 +169,18 @@ function escapeText(text: string): string {
   return text
     .replace(/[\\`*_[\]()<>|&]/g, "\\$&")
     .split("\n")
-    .map(line =>
-      line
-        .replace(/^(\s*)(#|[-+])/, "$1\\$2")
-        .replace(/^(\s*\d+)([.)])/, "$1\\$2")
-    )
+    .map(escapedLineStart)
     .join("\n");
+}
+
+/**
+ * `line`, the start of a line of Markdown, with what would begin a
+ * heading or a list there escaped, so it reads as the words it is.
+ */
+export function escapedLineStart(line: string): string {
+  return line
+    .replace(/^(\s*)(#|[-+])/, "$1\\$2")
+    .replace(/^(\s*\d+)([.)])/, "$1\\$2");
 }
 
 /**
@@ -272,13 +278,21 @@ function itemsOf(
  * it, so a fence the code holds stays part of the code.
  */
 function codeBlock(node: Node): string {
-  const code = rawInline(childrenOf(node));
+  return fencedCode(rawInline(childrenOf(node)), textOf(node.language) ?? "");
+}
+
+/**
+ * `code` as a fenced block, its fence longer than any run of backticks
+ * inside it, so a fence the code holds stays part of the code; `info`, the
+ * language, follows the opening fence.
+ */
+export function fencedCode(code: string, info = ""): string {
   const longest = Math.max(
     0,
     ...(code.match(/`+/g) ?? []).map(run => run.length)
   );
   const fence = "`".repeat(Math.max(3, longest + 1));
-  return `${fence}${textOf(node.language) ?? ""}\n${code}\n${fence}`;
+  return `${fence}${info}\n${code}\n${fence}`;
 }
 
 /** Text that shows no words is nothing; anything else is `drawn` from it. */
@@ -554,7 +568,12 @@ export function plainCopyOf(source: CopySource): string {
   const body = `${parts.join("\n\n")}\n`;
   return source.about === undefined
     ? body
-    : `${frontMatterOf(source.about)}\n\n${body}`;
+    : withFrontMatter(source.about, body);
+}
+
+/** `body`, a copy's Markdown, begun by front matter naming its page. */
+export function withFrontMatter(about: CopyAbout, body: string): string {
+  return `${frontMatterOf(about)}\n\n${body.trim()}\n`;
 }
 
 /**

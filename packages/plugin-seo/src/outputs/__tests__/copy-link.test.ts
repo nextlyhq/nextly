@@ -128,7 +128,7 @@ describe("the head's link to a page's plain-text copy", () => {
     ).toBeUndefined();
   });
 
-  it("is not there for a page built in code, which has no copy of its own", async () => {
+  it("is there for a page built in code, whose copy is made from the page as it renders", async () => {
     expect(
       (
         await answered(LISTED, {
@@ -136,6 +136,6 @@ describe("the head's link to a page's plain-text copy", () => {
           source: { kind: "entry", collection: "nx_seo_code_pages", entry: {} },
         })
       ).formats
-    ).toBeUndefined();
+    ).toEqual({ "text/markdown": "https://acme.example/blog/hello.md" });
   });
 });

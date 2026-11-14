@@ -744,8 +744,20 @@ answered by the site's [Proxy](/docs/plugins/proxy), so the site needs its `prox
 that leaves out every address with a dot in its last part leaves the copies to the site. A
 site that ships its own `public/llms.txt` or `app/llms.txt/route.ts` keeps serving it.
 
-A copy is made from the page as it is stored, the fields the site renders, not from the
-rendered page: the words of a Page Builder layout are not in it.
+A copy is made from the page as it is stored, the fields the site renders, wherever those
+hold its words. A page with no stored words of its own is copied from the page as it renders
+instead: a page built in the site's code (one that calls `seoMetadata`), and a page whose
+fields hold nothing beyond its title, such as a Page Builder layout. The plugin asks the site
+for that page as a visitor with no session does, at the page's own address on the site's
+production address (or `baseUrl`), never at a host a request names, so it does so only once
+the site names one; it reads its `<main>` (or its body, without the header and footer every page shares) and writes
+its headings, paragraphs, lists, links, quotes, code, tables and described images as
+Markdown; scripts, styles, navigation, forms, dialogs and anything hidden are left out, and an
+image with no alt text is decoration, said nothing of. Such a copy is kept for five minutes.
+Its front matter is the page's head. Where the page does not answer with HTML in ten seconds,
+a page built in code has no copy, and the request is the site's to answer; a page whose fields
+hold only its title keeps the copy made from them. With copies on, llms.txt links these pages'
+copies too, and their head links them.
 
 ## Languages
 
