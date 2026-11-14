@@ -171,28 +171,67 @@ function providerContext(
   };
 }
 
+/** What the providers registered for one list gave it, from one pass. */
+interface ProvidedColumns {
+  /** Their columns, in registration order, before any transform. */
+  readonly columns: readonly NextlyColumn[];
+  /** Whether any of them is still deciding (`ctx.deciding`). */
+  readonly deciding: boolean;
+}
+
+/**
+ * Each registrations snapshot's provider pass, by list. Providers are asked
+ * once per snapshot and list, and every reader (the columns a list draws,
+ * whether it holds its rows for one on its way) derives its view from that
+ * one answer: a provider may start a read when asked, and two passes could
+ * see it in two states. A snapshot is replaced whole on any change, a
+ * decision settling included, so a new one asks again.
+ */
+const providedBySnapshot = new WeakMap<
+  DataTablePluginRegistrations,
+  Map<DataTableTarget, ProvidedColumns>
+>();
+
+/** The providers' answer for `target` in `from`, asked once. */
+function providedColumns(
+  target: DataTableTarget,
+  from: DataTablePluginRegistrations
+): ProvidedColumns {
+  let byTarget = providedBySnapshot.get(from);
+  if (byTarget === undefined) {
+    byTarget = new Map();
+    providedBySnapshot.set(from, byTarget);
+  }
+  const known = byTarget.get(target);
+  if (known !== undefined) return known;
+  let deciding = false;
+  const ctx = providerContext(target, () => {
+    deciding = true;
+  });
+  const columns: NextlyColumn[] = [];
+  for (const provider of collect(from.columnProviders, target)) {
+    try {
+      columns.push(...provider(ctx));
+    } catch (error) {
+      console.warn(`registerColumns provider for "${target}" failed:`, error);
+    }
+  }
+  const answer = { columns, deciding };
+  byTarget.set(target, answer);
+  return answer;
+}
+
 /**
  * Whether any provider registered for `target` (or every list) says its
- * columns there are still being decided (`ctx.deciding`). Asks the same
- * providers `resolvePluginColumns` does, so a list can hold its rows for a
- * column on its way. A provider that throws is not deciding.
+ * columns there are still being decided (`ctx.deciding`), so a list can hold
+ * its rows for a column on its way. From the same pass as the list's columns
+ * (`resolvePluginColumns`). A provider that throws is not deciding.
  */
 export function pluginColumnsDeciding(
   target: DataTableTarget,
   from: DataTablePluginRegistrations = registrations
 ): boolean {
-  let deciding = false;
-  const ctx = providerContext(target, () => {
-    deciding = true;
-  });
-  for (const provider of collect(from.columnProviders, target)) {
-    try {
-      provider(ctx);
-    } catch {
-      // Reported where the columns are resolved; here it decides nothing.
-    }
-  }
-  return deciding;
+  return providedColumns(target, from).deciding;
 }
 
 /** The registrations as they stand, for `useSyncExternalStore`. */
@@ -334,15 +373,10 @@ export function resolvePluginColumns<Row extends object>(
   base: NextlyColumn<Row>[],
   from: DataTablePluginRegistrations = registrations
 ): NextlyColumn<Row>[] {
-  let columns = [...(base as NextlyColumn[])];
-
-  for (const provider of collect(from.columnProviders, target)) {
-    try {
-      columns = [...columns, ...provider(providerContext(target, () => {}))];
-    } catch (error) {
-      console.warn(`registerColumns provider for "${target}" failed:`, error);
-    }
-  }
+  let columns = [
+    ...(base as NextlyColumn[]),
+    ...providedColumns(target, from).columns,
+  ];
   const ctx: DataTableContext = { target };
   for (const transform of collect(from.columnTransforms, target)) {
     try {

@@ -129,6 +129,10 @@ function askAbout(target: string): void {
     },
     () => {
       pending.delete(target);
+      // A failed read stands as "no column" for as long as that answer
+      // would: the list is asked again when this read settles, and asking
+      // the server again at once would repeat a failure on every draw.
+      noColumnAt.set(target, Date.now());
     }
   );
   pending.set(target, read);

@@ -389,6 +389,40 @@ describe("the Design column", () => {
   });
 });
 
+describe("a read of the collection that fails", () => {
+  // The list is asked again once the read settles, failed or not, so the
+  // property separating this from a plausible broken column is that the
+  // failure is remembered: one that forgot it would ask the server again on
+  // every draw while the failure lasts.
+  it("is not asked again at once when the list draws again", async () => {
+    answers = {};
+    const failing = "failing";
+    let refuse: (reason: Error) => void = () => {};
+    const before = reads.length;
+    const mocked = await import("@nextlyhq/plugin-sdk/admin");
+    const spy = vi.spyOn(mocked, "readPluginRoute").mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          refuse = reject;
+        })
+    );
+    try {
+      columnsOf(failing);
+      const out = decidingOn.get(failing);
+      expect(out).toBeDefined();
+      refuse(new Error("offline"));
+      await out;
+      // Drawn again, as the list is once the read settles.
+      expect(columnsOf(failing)).toEqual([]);
+      expect(decidingOn.has(failing)).toBe(false);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(reads.length).toBe(before);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe("the rows on screen, past a capped answer", () => {
   it("marks a row whose own design lies past the cap, from one lookup for the page", async () => {
     // The collection's answer is cut at its bound and lists none of these

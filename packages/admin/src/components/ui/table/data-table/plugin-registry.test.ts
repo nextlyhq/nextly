@@ -168,6 +168,25 @@ describe("data-table plugin-registry", () => {
     expect(pluginColumnsDeciding("posts")).toBe(false);
   });
 
+  // Whether a list holds its rows and the columns it draws come from one ask
+  // of its providers, which may start a read when asked: two passes could
+  // see that read in two states.
+  it("asks a list's providers once for its columns and whether it is deciding", () => {
+    let asked = 0;
+    registerColumns("posts", () => {
+      asked += 1;
+      return [{ name: "seo", header: "SEO" }];
+    });
+    expect(pluginColumnsDeciding("posts")).toBe(false);
+    resolvePluginColumns("posts", base);
+    resolvePluginColumns("posts", [...base]);
+    expect(asked).toBe(1);
+    // A new snapshot asks again.
+    registerColumns("tags", () => []);
+    resolvePluginColumns("posts", base);
+    expect(asked).toBe(2);
+  });
+
   it("is deciding nothing where no provider says so, or one throws", () => {
     registerColumns("*", () => {
       throw new Error("broken provider");
