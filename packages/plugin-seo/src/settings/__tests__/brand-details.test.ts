@@ -88,6 +88,16 @@ describe("stored brand details", () => {
       },
       "whole address",
     ],
+    // A blank way to reach it is none: it would replace the code's
+    // contact points with one that reaches nobody.
+    [
+      { contactPoints: [{ contactType: "customer support", email: "" }] },
+      "one way to reach it",
+    ],
+    [
+      { contactPoints: [{ contactType: "sales", telephone: "   " }] },
+      "one way to reach it",
+    ],
     [{ colour: "blue" }, "colour"],
   ])("refuses %j", (value, said) => {
     expect(brandDetailsProblem(value)).toMatch(said);

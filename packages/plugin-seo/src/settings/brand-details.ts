@@ -150,7 +150,14 @@ function contactPointProblem(point: unknown): string | null {
   }
   const ways = WAYS.filter(way => point[way] !== undefined);
   const [way] = ways;
-  if (ways.length !== 1 || way === undefined) {
+  // A blank way reaches nobody: kept, it would still stand in for the
+  // code's contact points.
+  const reach = way === undefined ? undefined : point[way];
+  if (
+    ways.length !== 1 ||
+    way === undefined ||
+    (typeof reach === "string" && reach.trim() === "")
+  ) {
     return `The ${point.contactType} contact point needs one way to reach it.`;
   }
   return factProblem(way, point[way]);
