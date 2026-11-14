@@ -87,6 +87,24 @@ export default async function TopicPage({
   return <h1>{topic}</h1>;
 }
 `,
+  // The control: a route whose generateStaticParams returns a readonly
+  // array, as seoStaticParams did, which Next.js's check must refuse.
+  "control/[id]/page.tsx":
+    () => `const PAGES: readonly { id: string }[] = [{ id: "one" }];
+
+export async function generateStaticParams(): Promise<readonly { id: string }[]> {
+  return PAGES;
+}
+
+export default async function ControlPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  return <h1>{id}</h1>;
+}
+`,
   // Params a site keeps as a constant, and a catch-all.
   "docs/[...slug]/page.tsx":
     source => `import { seoStaticParams } from "${source}/code-pages/static-params";
@@ -157,15 +175,32 @@ describe("the plugin's route exports under Next.js's own route type check", () =
       join(app, ".next", "types", "validator.ts"),
       "utf8"
     );
-    for (const route of ["/pricing", "/topics/[topic]", "/docs/[...slug]"]) {
+    for (const route of [
+      "/pricing",
+      "/topics/[topic]",
+      "/docs/[...slug]",
+      "/control/[id]",
+    ]) {
       expect(validator, route).toContain(`AppPageConfig<"${route}">`);
     }
   });
 
-  it("finds no route export of the plugin's that Next.js refuses", () => {
+  it("refuses the control's readonly params, and no route export of the plugin's", () => {
     const diagnostics = compile(["-p", join(app, "tsconfig.json")], app);
+    const isControl = (message: string) =>
+      message.includes(`AppPageConfig<"/control/[id]">`);
+    // The control moves: Next.js's own check refuses a readonly array, so a
+    // compile that reported nothing could not pass here.
+    const control = diagnostics.filter(each => isControl(each.message));
+    expect(control.map(each => each.file)).toEqual([
+      ".next/types/validator.ts",
+    ]);
+    expect(control[0]?.message).toContain("generateStaticParams");
+    expect(control[0]?.message).toContain("readonly");
     expect(
-      diagnostics.map(each => `${each.file ?? ""}: ${each.message}`)
+      diagnostics
+        .filter(each => !isControl(each.message))
+        .map(each => `${each.file ?? ""}: ${each.message}`)
     ).toEqual([]);
   }, 60_000);
 });
