@@ -181,28 +181,23 @@ async function expectedColumnTypeResolver(
 }
 
 /**
- * The type the main table's creator gave a field before a Builder save wrote its migration
- * (`FieldGroupSchemaService`'s own map): the one earlier spelling the planner accepts beside
- * {@link expectedColumnTypeResolver}'s, because field groups built that way still exist. It is also
- * what that creator writes where no save writer is set up. Named here, in one place, so it can be
- * retired with that creator. None for the companion, whose builder has not changed.
+ * The type the main table's creator gave a field before it built its columns from the column
+ * descriptor (`preBuilderSaveColumnType`): the one earlier spelling the planner accepts beside
+ * {@link expectedColumnTypeResolver}'s, because field groups built that way still exist and nothing
+ * migrates their columns. None for the companion, whose builder has not changed.
  */
 async function preBuilderSaveColumnTypeResolver(
   dialect: SupportedDialect
 ): Promise<
   (field: FieldDefinition, table: ReconcileTable) => string | undefined
 > {
-  const { FieldGroupSchemaService } = await import(
-    "./field-group-schema-service"
+  const { preBuilderSaveColumnType } = await import(
+    "./pre-builder-save-column-type"
   );
-  const creator = new FieldGroupSchemaService(dialect);
   return (field, table) =>
     table === "companion"
       ? undefined
-      : // The parameter's own declared type. `FieldDefinition` and the config shape describe the
-        // same stored field from two layers, and naming the target keeps the compiler checking
-        // this call.
-        (creator.columnTypeFor(asCreatorField(field)) ?? undefined);
+      : (preBuilderSaveColumnType(asCreatorField(field), dialect) ?? undefined);
 }
 
 /**
