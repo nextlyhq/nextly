@@ -17,9 +17,15 @@
  *
  * @module tests/loading-frame.spec
  */
-import { expect, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { ADMIN } from "./support/admin";
+import { LOCK } from "./support/locks";
+import {
+  leaveReleasesAsTheRunnerWould,
+  type RunnerOutcome,
+} from "./support/release-states";
+import { cancel, post, release, schedule } from "./support/releases-api";
 import { mainColumnBox } from "./support/shell-geometry";
 import {
   fileAccount,
@@ -28,6 +34,37 @@ import {
   ownSeat,
   test,
 } from "./support/test";
+
+// The screens below are loaded with releases, scheduled and needing
+// attention, which the Releases page draws parts of from reads that answer late.
+// Releases are shared, so this file holds their lock while it makes and
+// removes its own.
+test.describe.configure({ lock: [LOCK.releases] });
+
+/**
+ * A seat of the file's account for the data below, made once for the file:
+ * a dozen releases are more writes than one test's account may make in a
+ * minute beside the loads it measures.
+ */
+const DATA_SEAT = 41;
+let removeFileData: Array<() => Promise<void>> = [];
+let dataApi: APIRequestContext | null = null;
+
+test.beforeAll(async ({ playwright, baseURL }, testInfo) => {
+  test.setTimeout(120_000);
+  dataApi = await playwright.request.newContext({
+    baseURL,
+    storageState: await fileAccount(baseURL ?? "", testInfo, DATA_SEAT),
+  });
+  removeFileData = [await ownReleases(dataApi, testInfo.workerIndex)];
+});
+
+test.afterAll(async () => {
+  test.setTimeout(120_000);
+  for (const remove of removeFileData.splice(0)) await remove();
+  await dataApi?.dispose();
+  dataApi = null;
+});
 
 /** The admin's record that this browser has signed in here before. */
 const SIGNED_IN_HERE_KEY = "nextly:admin:signed-in-here";
@@ -686,6 +723,40 @@ async function ownList(
   return `/collections/${slug}?where=${where}`;
 }
 
+/**
+ * Releases of the file's own: a dozen scheduled, so a tab's count has two
+ * digits, and one each stopped and overdue, so the Releases page draws its
+ * attention strip and the dashboard's Needs attention names them. Answers
+ * their removal: each is cancelled, which takes it out of every count but
+ * Done's and off the strip and the cards.
+ */
+async function ownReleases(
+  api: APIRequestContext,
+  workerIndex: number
+): Promise<() => Promise<void>> {
+  const page = { request: api };
+  const stamp = `${Date.now().toString(36)}-${workerIndex}`;
+  const postId = await post(page, `frame-${stamp}`);
+  const made: string[] = [];
+  const DAY = 24 * 60 * 60 * 1000;
+  for (let index = 0; index < 12; index += 1) {
+    const id = await release(page, `Frame upcoming ${index} ${stamp}`, postId);
+    await schedule(page, id, new Date(Date.now() + (index + 2) * DAY), "UTC");
+    made.push(id);
+  }
+  const needing: { id: string; outcome: RunnerOutcome }[] = [];
+  for (const outcome of ["overdue", "stopped"] as const) {
+    const id = await release(page, `Frame ${outcome} ${stamp}`, postId);
+    await schedule(page, id, new Date(Date.now() + 40 * DAY), "UTC");
+    needing.push({ id, outcome });
+    made.push(id);
+  }
+  await leaveReleasesAsTheRunnerWould(page, needing);
+  return async () => {
+    for (const id of made) await cancel(page, id);
+  };
+}
+
 /** A form of the test's own, which no other test holds open. */
 async function ownForm(page: Page, made: string[]): Promise<string> {
   const stamp = `${Date.now().toString(36)}-${test.info().repeatEachIndex}-${test.info().workerIndex}`;
@@ -785,11 +856,6 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
           await expectStillLoad(page, path, mode);
         });
 
-        test(`moves no part of the releases, ${mode}`, async ({ page }) => {
-          test.setTimeout(90_000);
-          await expectStillLoad(page, "/releases", mode);
-        });
-
         test(`moves no part of the users on a revisit, ${mode}`, async ({
           page,
         }) => {
@@ -800,6 +866,29 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
           await expectStillLoad(page, "/users", mode, { revisit: true });
         });
       }
+
+      test.describe("the releases", () => {
+        // A further account per width: with releases in every tab, the page
+        // reads its list, each tab's count, the strip and the rows' checks,
+        // and polls them, past what the account above has left.
+        ownSeat(51 + index);
+
+        for (const mode of ["held", "unheld"] as const) {
+          test(`moves no part of the releases, ${mode}`, async ({ page }) => {
+            test.setTimeout(90_000);
+            // With the file's releases in every part the page draws late: the
+            // attention strip above the tabs, the tabs' counts and each row's
+            // readiness line.
+            await expectStillLoad(page, "/releases", mode);
+            // The control: the strip the page waited for is drawn.
+            await expect(
+              page.getByRole("region", {
+                name: /^\d+ releases? needs? attention$/,
+              })
+            ).toBeVisible();
+          });
+        }
+      });
 
       test.describe("the dashboard", () => {
         // A further account per width: the dashboard's reads are many, and

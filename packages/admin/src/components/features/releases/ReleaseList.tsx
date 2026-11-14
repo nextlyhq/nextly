@@ -48,6 +48,7 @@ import type { PaginationProps } from "@admin/components/shared/pagination/types"
 import {
   Button,
   Label,
+  Skeleton,
   Switch,
   Tabs,
   TabsContent,
@@ -291,9 +292,15 @@ function filteredEmptyFor(
   };
 }
 
-/** The count pill's shape, the same whether it holds a count or waits for one. */
+/**
+ * The count pill's shape, the same whether it holds a count or waits for one.
+ * At least two digits wide (`2ch` of tabular figures, plus its padding): the
+ * pill waiting for a count cannot know how many digits it will hold, and a
+ * count past nine widening its tab once it lands would move every tab after
+ * it. A count past 99 still widens it.
+ */
 const COUNT_PILL =
-  "ml-2 inline-flex min-w-5 justify-center rounded-full px-1.5 text-xs font-medium tabular-nums leading-5";
+  "ml-2 inline-flex min-w-[calc(2ch+0.75rem)] justify-center rounded-full px-1.5 text-xs font-medium tabular-nums leading-5";
 
 /**
  * A tab's label with its count drawn as a pill. The pill is hidden from
@@ -622,6 +629,12 @@ function useReleaseListData(q: ReturnType<typeof useReleaseListQuestion>) {
     placeholder: list.isPlaceholderData,
   });
   const total = list.data?.meta.total ?? 0;
+  // Whether the counts have first answered, and whether the page has too. The
+  // toolbar is drawn with the table, once both have: drawn while the outline
+  // still stands, it would sit above the outline's own toolbar and push the
+  // whole outline down.
+  const firstCount = useFirstAnswerPending(counts.isPending);
+  const firstAnswer = useFirstAnswerPending(counts.isPending || list.isPending);
   // A failed read is shown as a failure, with a retry, and never as an empty
   // tab: "Nothing needs attention" read from a request that failed tells an
   // editor a stopped release is fine.
@@ -633,6 +646,8 @@ function useReleaseListData(q: ReturnType<typeof useReleaseListQuestion>) {
     total,
     rows: list.data?.items ?? [],
     anyRelease: anyReleaseMayExist(q, counts, total),
+    firstCount,
+    firstAnswer,
     failure: failed ? (
       <ReleaseReadFailure
         listFailed={list.isError}
@@ -675,6 +690,38 @@ function ReleaseListOutline({
 }
 
 /**
+ * The release list's outline drawn before the page knows what stands above
+ * it (whether the attention strip is drawn): the tab strip and the list, as
+ * the list's own outline draws them, so the list replaces it whole and
+ * nothing that was drawn is pushed down when the strip arrives above.
+ */
+export function ReleaseBodyOutline(): JSX.Element {
+  const headers = releaseColumns("upcoming", "UTC", 0, () => ({
+    status: "pending",
+  })).map(column => column.header);
+  return (
+    <ScreenOutline>
+      <div className="space-y-6">
+        {/* The tab strip's height, under its rule, as the strip draws it. */}
+        <div className="flex h-10 items-center gap-6 border-b border-border">
+          {RELEASE_LIST_TABS.map(tab => (
+            <Skeleton key={tab} still className="h-3.5 w-20" />
+          ))}
+        </div>
+        <div className="space-y-4">
+          <ListToolbarOutline />
+          <TableOutline
+            headers={headers}
+            rows={outlineRowsFor(RELEASES_LIST)}
+            list={RELEASES_LIST}
+          />
+        </div>
+      </div>
+    </ScreenOutline>
+  );
+}
+
+/**
  * Whether a read is still waiting for its first answer. Once it has answered,
  * a later read (the same question asked again, or a new one) is a recount,
  * and what was drawn from the first answer stays.
@@ -687,7 +734,8 @@ function useFirstAnswerPending(pending: boolean): boolean {
 
 /**
  * The list toolbar's search and filter, offered once any release exists, and
- * held back altogether while the counts that decide it have not first said.
+ * held back altogether while the counts that decide it, or the page it is
+ * drawn above, have not first answered.
  */
 function toolbarFor(
   q: ReturnType<typeof useReleaseListQuestion>,
@@ -777,14 +825,14 @@ export function ReleaseList({ onCreate }: ReleaseListProps): JSX.Element {
   // whole: a toolbar drawn on a guess and then taken away would move the list.
   // A later recount (a search, the filter) keeps the toolbar it already has,
   // so the search box keeps its focus and text; only the pills wait.
-  const firstCount = useFirstAnswerPending(counts.isPending);
+  const { firstCount, firstAnswer } = data;
   const panel = (
     <ListView<Release>
       {...toolbarFor(
         q,
         anyRelease,
         list.isFetching && Boolean(q.search),
-        firstCount
+        firstAnswer
       )}
       skeleton={
         <ReleaseListOutline

@@ -717,6 +717,30 @@ describe("the list's outline while its reads answer", () => {
     expect(toolbarOutlines()).toBe(1);
   });
 
+  // The counts often answer before the page. A toolbar drawn then would
+  // stand above the outline's own toolbar and push the whole outline down
+  // by its height; held until the page answers too, it arrives with the
+  // table, replacing the outline whole.
+  it("draws no toolbar over the outline while the page is still on its way", () => {
+    mocks.tabCounts.mockReturnValue(unanswered);
+    mocks.listPage.mockReturnValue(pendingPage);
+    const { rerender } = render(<ReleaseList />);
+    mocks.tabCounts.mockReturnValue(
+      counts({ upcoming: 12, attention: 1, drafts: 2, done: 3 })
+    );
+    rerender(<ReleaseList />);
+    expect(
+      screen.queryByPlaceholderText("Search by title or description")
+    ).toBeNull();
+    expect(toolbarOutlines()).toBe(1);
+    mocks.listPage.mockReturnValue(page([release()]));
+    rerender(<ReleaseList />);
+    expect(
+      screen.getByPlaceholderText("Search by title or description")
+    ).toBeTruthy();
+    expect(toolbarOutlines()).toBe(0);
+  });
+
   it("never draws a toolbar for a failed count and then takes it away", () => {
     const toolbars = () =>
       document.querySelectorAll('[data-slot="list-toolbar"]').length;
