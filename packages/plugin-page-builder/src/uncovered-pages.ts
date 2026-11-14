@@ -87,17 +87,8 @@ export async function variablesOnUncoveredPages(args: {
       if (next === TIMED_OUT) return { kind: "unlisted" };
       if (next.done === true) break;
       const page = next.value;
-      if (left() <= 0) return { kind: "unread", page };
-      let forms: readonly unknown[] | typeof TIMED_OUT;
-      try {
-        forms = await within(args.pages.forms(page), left());
-      } catch {
-        return { kind: "unread", page };
-      }
-      if (forms === TIMED_OUT) return { kind: "unread", page };
-      // The stored forms as the database holds them, serialized as the
-      // reference's spelling is derived: JSON.stringify, no whitespace.
-      const text = JSON.stringify(forms);
+      const text = await pageText(args.pages, page, left);
+      if (text === undefined) return { kind: "unread", page };
       for (const [identity, needle] of needles) {
         if (!text.includes(needle)) continue;
         uses.set(identity, [...(uses.get(identity) ?? []), page]);
@@ -110,6 +101,28 @@ export async function variablesOnUncoveredPages(args: {
     listing.return?.().catch(() => undefined);
   }
   return uses.size === 0 ? { kind: "clear" } : { kind: "used", uses };
+}
+
+/**
+ * A page's stored forms as one text, or nothing where they were not read
+ * whole in the time `left`: the time was already spent, the read failed, or it
+ * did not finish first.
+ */
+async function pageText(
+  pages: UncoveredPages,
+  page: UncoveredPage,
+  left: () => number
+): Promise<string | undefined> {
+  if (left() <= 0) return undefined;
+  let forms: readonly unknown[] | typeof TIMED_OUT;
+  try {
+    forms = await within(pages.forms(page), left());
+  } catch {
+    return undefined;
+  }
+  // The stored forms as the database holds them, serialized as the
+  // reference's spelling is derived: JSON.stringify, no whitespace.
+  return forms === TIMED_OUT ? undefined : JSON.stringify(forms);
 }
 
 /** What a read held to the time box answers when the time ran out first. */
