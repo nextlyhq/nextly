@@ -36,6 +36,7 @@ import {
   type TestNextly,
 } from "../../../../plugins/test-nextly";
 import type { UiSchemaEntity } from "../../../../schemas/_zod/ui-schema";
+import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import { _resetEnvCache } from "../../../../shared/lib/env";
 import { parseSqlSections } from "../../migrate/sql-sections";
 import { splitSqlStatements } from "../../migrate/split-sql";
@@ -44,6 +45,8 @@ import {
   writeCollectionSave,
   type CollectionSaveDeps,
 } from "../collection-save";
+import { entityRelations } from "../single-relations";
+import { singleEntity, type StoredSingle } from "../stored-entity";
 
 type Field = UiSchemaEntity["fields"][number];
 
@@ -138,6 +141,16 @@ async function liveColumns(
     .sort();
 }
 
+/** The foreign keys `table` has in the database. */
+async function keysOf(t: TestNextly, table: string) {
+  const adapter = t.adapter as unknown as DrizzleAdapter;
+  const dialect = adapter.getCapabilities().dialect;
+  const live = await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
+    table,
+  ]);
+  return live.tables.find(entry => entry.name === table)?.foreignKeys;
+}
+
 describe.each(getConfiguredTestDialects())(
   "a Builder save of an entity holding a group with no name (%s)",
   dialect => {
@@ -204,6 +217,49 @@ describe.each(getConfiguredTestDialects())(
       expect(await liveColumns(t, dialect, "dc_posts")).toEqual(
         [...created!, "extra"].sort()
       );
+    });
+
+    it("stores and reads a JSON and a repeater field inside the group as values", async () => {
+      const t = await boot(dialect);
+      await writeCollectionSave(deps(t), {
+        slug: "posts",
+        previous: null,
+        entity: collection("posts", [
+          text("title"),
+          {
+            type: "group",
+            label: "Extras",
+            fields: [
+              { name: "meta", type: "json" },
+              {
+                name: "links",
+                type: "repeater",
+                fields: [{ name: "label", type: "text" }],
+              },
+            ],
+          } as Field,
+        ]),
+        change: "create",
+      });
+
+      // Written as JSON and read back as values, as fields beside the group are, on a dialect
+      // whose JSON column is plain text as well as the others.
+      const created = await t.nextly.create({
+        collection: "posts",
+        data: {
+          title: "First",
+          meta: { tone: "warm" },
+          links: [{ label: "Home" }],
+        },
+      });
+      const found = await t.nextly.findByID({
+        collection: "posts",
+        id: String(created.item.id),
+      });
+      expect(found).toMatchObject({
+        meta: { tone: "warm" },
+        links: [expect.objectContaining({ label: "Home" })],
+      });
     });
 
     it("judges a unique field inside the group as one beside it is judged", async () => {
@@ -291,65 +347,6 @@ describe.each(getConfiguredTestDialects())(
       expect(await liveColumns(t, dialect, "dc_posts")).toEqual(posts);
     });
 
-    it("creates a Single with the group's fields as columns of its row, stores and reads them there, and a later save adds only what was added", async () => {
-      const t = await boot(dialect, {
-        db: { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" },
-        basePath: dir,
-      });
-      // As the Builder runs: each save is applied, and recorded, here.
-      vi.stubEnv("NODE_ENV", "development");
-      const before = [text("heading"), laidOut];
-
-      await dispatchSingles(
-        "createSingle",
-        {},
-        { slug: "notice", label: "Notice", fields: before }
-      );
-
-      const created = await liveColumns(t, dialect, "single_notice");
-      expect(created).toEqual(
-        expect.arrayContaining(["heading", "subtitle", "rank"])
-      );
-
-      // The entry write stores the group's fields on the row, and the read returns them.
-      const singles = t.getService("singleEntryService");
-      const saved = await singles.update(
-        "notice",
-        {
-          heading: "Hello",
-          subtitle: "Below",
-          rank: 3,
-          _overwrite: true,
-        },
-        { overrideAccess: true }
-      );
-      expect(saved.success, JSON.stringify(saved)).toBe(true);
-      const read = await singles.get("notice", { overrideAccess: true });
-      expect(read.data).toMatchObject({
-        heading: "Hello",
-        subtitle: "Below",
-        rank: 3,
-      });
-
-      await dispatchSingles(
-        "updateSingleSchema",
-        { slug: "notice" },
-        { fields: [...before, text("extra")] }
-      );
-
-      addsExtraAlone(migration(/_notice_update\.sql$/), "single_notice");
-      expect(await liveColumns(t, dialect, "single_notice")).toEqual(
-        [...created!, "extra"].sort()
-      );
-      // The values written before the save are where they were.
-      expect(
-        (await singles.get("notice", { overrideAccess: true })).data
-      ).toMatchObject({
-        subtitle: "Below",
-        rank: 3,
-      });
-    });
-
     /** A Single app, run as the Builder runs it, with a collection `people` defined in code. */
     async function singleApp(
       extra: Partial<Parameters<typeof createTestNextly>[0]> = {}
@@ -369,143 +366,103 @@ describe.each(getConfiguredTestDialects())(
       return t;
     }
 
-    it("keys a relationship inside the group on a Single's row, as one beside it is keyed", async () => {
-      const t = await singleApp();
-      const owner = {
-        name: "owner",
-        type: "relationship",
-        options: { target: "people", onDelete: "set null" },
-      } as Field;
+    /**
+     * A Single as the definition file holds it, saved through the Builder save writer: the road a
+     * Single holding a group with no name takes, since the Single API refuses one. Its keys and
+     * field-group row moves are handed beside it, as the Single API's own saves hand them.
+     */
+    async function writeSingle(
+      t: TestNextly,
+      previous: StoredSingle | null,
+      next: StoredSingle
+    ): Promise<void> {
+      const fieldsOf = (single: StoredSingle | null) =>
+        (single?.fields ?? []) as FieldDefinition[];
+      await writeCollectionSave(deps(t), {
+        kind: "single",
+        slug: next.slug,
+        previous: previous === null ? null : singleEntity(previous),
+        entity: singleEntity(next),
+        change: previous === null ? "create" : "update",
+        ...(await entityRelations(
+          t.adapter as unknown as DrizzleAdapter,
+          { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+          `single_${next.slug.replace(/-/g, "_")}`,
+          fieldsOf(previous),
+          fieldsOf(next)
+        )),
+      });
+    }
 
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: "notice",
-          label: "Notice",
-          fields: [
-            text("heading"),
-            { type: "group", label: "Byline", fields: [owner] } as Field,
-          ],
-        }
+    const notice = (fields: unknown[], extra: Partial<StoredSingle> = {}) =>
+      ({ slug: "notice", label: "Notice", fields, ...extra }) as StoredSingle;
+
+    it("creates a Single with the group's fields as columns of its row, stores and reads them there, and a later save adds only what was added", async () => {
+      const t = await singleApp();
+      const before = [text("heading"), laidOut];
+
+      await writeSingle(t, null, notice(before));
+
+      const created = await liveColumns(t, dialect, "single_notice");
+      expect(created).toEqual(
+        expect.arrayContaining(["heading", "subtitle", "rank"])
       );
 
-      // The key the creating SQL declares for the column: the migration the save wrote builds the
-      // table from the desired schema and the keys handed beside it, which read the group through.
-      const adapter = t.adapter as unknown as DrizzleAdapter;
-      const live = await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
-        "single_notice",
-      ]);
-      const keys = live.tables.find(
-        entry => entry.name === "single_notice"
-      )?.foreignKeys;
-      expect(keys, JSON.stringify(keys)).toEqual([
-        expect.objectContaining({
-          columns: ["owner"],
-          referencesTable: "dc_people",
-        }),
-      ]);
-    });
-
-    it("refuses a Single save that renames a field inside the group to a width its stored value does not fit, and changes nothing", async () => {
-      const t = await singleApp();
-      const short = (name: string, maxLength: number): Field =>
-        ({
-          name,
-          type: "text",
-          options: { variant: "short" },
-          validation: { maxLength },
-        }) as Field;
-      const group = (field: Field): Field =>
-        ({ type: "group", label: "Byline", fields: [field] }) as Field;
-
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: "notice",
-          label: "Notice",
-          fields: [text("heading"), group(short("subtitle", 40))],
-        }
-      );
+      // The entry write stores the group's fields on the row, and the read returns them.
       const singles = t.getService("singleEntryService");
-      await singles.update(
+      const saved = await singles.update(
         "notice",
-        { subtitle: "a value longer than ten", _overwrite: true },
+        { heading: "Hello", subtitle: "Below", rank: 3, _overwrite: true },
         { overrideAccess: true }
       );
-      const before = await liveColumns(t, dialect, "single_notice");
-
-      // The renamed field is the same column, so its stored value is judged against the new width
-      // before anything runs, as a rename beside the group is.
-      await expect(
-        dispatchSingles(
-          "updateSingleSchema",
-          { slug: "notice" },
-          { fields: [text("heading"), group(short("strap", 10))] }
-        )
-      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
-
-      expect(await liveColumns(t, dialect, "single_notice")).toEqual(before);
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
       expect(
         (await singles.get("notice", { overrideAccess: true })).data
-      ).toMatchObject({ subtitle: "a value longer than ten" });
-    });
+      ).toMatchObject({ heading: "Hello", subtitle: "Below", rank: 3 });
 
-    it("refuses a Single save that adds a field inside the group whose default its own rules refuse, over the row it holds", async () => {
-      const t = await singleApp();
-      const group = (...fields: Field[]): Field =>
-        ({ type: "group", label: "Byline", fields }) as Field;
+      await writeSingle(t, notice(before), notice([...before, text("extra")]));
 
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: "notice",
-          label: "Notice",
-          fields: [text("heading"), group(text("subtitle"))],
-        }
+      addsExtraAlone(migration(/_notice_update\.sql$/), "single_notice");
+      expect(await liveColumns(t, dialect, "single_notice")).toEqual(
+        [...created!, "extra"].sort()
       );
-      await t
-        .getService("singleEntryService")
-        .update(
-          "notice",
-          { heading: "Held", _overwrite: true },
-          { overrideAccess: true }
-        );
-      const before = await liveColumns(t, dialect, "single_notice");
-
-      // The row the Single holds would be filled with 0, which the field's own minimum refuses,
-      // so the save is refused before anything runs, as it is for such a field beside the group.
-      await expect(
-        dispatchSingles(
-          "updateSingleSchema",
-          { slug: "notice" },
-          {
-            fields: [
-              text("heading"),
-              group(text("subtitle"), {
-                name: "rank",
-                type: "number",
-                defaultValue: 0,
-                validation: { min: 1 },
-              } as Field),
-            ],
-          }
-        )
-      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
-      expect(await liveColumns(t, dialect, "single_notice")).toEqual(before);
+      // The values written before the save are where they were.
+      expect(
+        (await singles.get("notice", { overrideAccess: true })).data
+      ).toMatchObject({ subtitle: "Below", rank: 3 });
     });
 
-    it("makes a required translated field of a translated Single holding the group shared", async () => {
-      const t = await boot(dialect, {
-        db: { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" },
-        basePath: dir,
+    it("refuses, through the Single API, a top-level field without a name, as the collection API does", async () => {
+      const t = await singleApp({
         localization: { locales: ["en", "de"], defaultLocale: "en" },
       });
-      vi.stubEnv("NODE_ENV", "development");
-      const heading = { name: "heading", type: "text", required: true };
+      const refusal = {
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            {
+              path: "fields[1].name",
+              code: "REQUIRED",
+              message: "Each field requires a name.",
+            },
+          ],
+        },
+      };
 
+      // A create holding one is refused before anything is written.
+      await expect(
+        dispatchSingles(
+          "createSingle",
+          {},
+          { slug: "held", label: "Held", fields: [text("heading"), laidOut] }
+        )
+      ).rejects.toMatchObject(refusal);
+      expect(await t.adapter.tableExists("single_held")).toBe(false);
+
+      // A translated field cannot be moved into one, so its translations are never left behind
+      // by a move the companion would not follow: the schema save and the schema dialog refuse
+      // it, and the field stays translated where it was.
+      const heading = { name: "heading", type: "text" };
       await dispatchSingles(
         "createSingle",
         {},
@@ -513,27 +470,57 @@ describe.each(getConfiguredTestDialects())(
           slug: "notice",
           label: "Notice",
           localized: true,
-          fields: [heading as Field, laidOut],
+          fields: [heading, text("strap")],
         }
       );
-      // Translated, the heading lives in the companion; the group's fields stay on the row.
+      const moved = [
+        text("strap"),
+        { type: "group", label: "Byline", fields: [heading] },
+      ];
+      await expect(
+        dispatchSingles(
+          "updateSingleSchema",
+          { slug: "notice" },
+          {
+            fields: moved,
+          }
+        )
+      ).rejects.toMatchObject(refusal);
+      await expect(
+        dispatchSingles(
+          "applySingleSchemaChanges",
+          { slug: "notice" },
+          { fields: moved, confirmed: true }
+        )
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
       expect(await liveColumns(t, dialect, "single_notice")).not.toContain(
         "heading"
       );
+    });
 
-      // Leaving translation plans restoring its requiredness over the column types the creating
-      // SQL gives the row, which reads the group through.
-      await dispatchSingles(
-        "updateSingleSchema",
-        { slug: "notice" },
-        {
-          fields: [{ ...heading, localized: false } as Field, laidOut],
-        }
+    it("keys a relationship inside the group on a Single's row, as one beside it is keyed", async () => {
+      const t = await singleApp();
+      const owner = {
+        name: "owner",
+        type: "relationship",
+        options: { target: "people", onDelete: "set null" },
+      };
+
+      await writeSingle(
+        t,
+        null,
+        notice([
+          text("heading"),
+          { type: "group", label: "Byline", fields: [owner] },
+        ])
       );
 
-      expect(await liveColumns(t, dialect, "single_notice")).toEqual(
-        expect.arrayContaining(["heading", "subtitle", "rank"])
-      );
+      expect(await keysOf(t, "single_notice")).toEqual([
+        expect.objectContaining({
+          columns: ["owner"],
+          referencesTable: "dc_people",
+        }),
+      ]);
     });
 
     it("keys a relationship inside the group on a translated Single's row, whatever it says of translation", async () => {
@@ -545,31 +532,24 @@ describe.each(getConfiguredTestDialects())(
         type: "relationship",
         localized: true,
         options: { target: "people", onDelete: "set null" },
-      } as Field;
+      };
 
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: "notice",
-          label: "Notice",
-          localized: true,
-          fields: [
+      await writeSingle(
+        t,
+        null,
+        notice(
+          [
             text("heading"),
-            { type: "group", label: "Byline", fields: [owner] } as Field,
+            { type: "group", label: "Byline", fields: [owner] },
           ],
-        }
+          { localized: true }
+        )
       );
 
       // Translation is classified from the declared fields, so the relationship inside the group
       // is a column of the main row, and its key is the main table's.
-      const adapter = t.adapter as unknown as DrizzleAdapter;
-      const live = await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
-        "single_notice",
-      ]);
-      const table = live.tables.find(entry => entry.name === "single_notice");
-      expect(table?.columns.map(column => column.name)).toContain("owner");
-      expect(table?.foreignKeys, JSON.stringify(table?.foreignKeys)).toEqual([
+      expect(await liveColumns(t, dialect, "single_notice")).toContain("owner");
+      expect(await keysOf(t, "single_notice")).toEqual([
         expect.objectContaining({
           columns: ["owner"],
           referencesTable: "dc_people",
@@ -588,22 +568,16 @@ describe.each(getConfiguredTestDialects())(
           fields: [{ name: "note", type: "text" }],
         }
       );
-      const placed = (name: string): Field =>
-        ({
+      const placed = (name: string) => [
+        text("heading"),
+        {
           type: "group",
           label: "Byline",
           fields: [{ name, type: "component", component: "meta" }],
-        }) as Field;
+        },
+      ];
 
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: "notice",
-          label: "Notice",
-          fields: [text("heading"), placed("promo")],
-        }
-      );
+      await writeSingle(t, null, notice(placed("promo")));
       const singles = t.getService("singleEntryService");
       const saved = await singles.update(
         "notice",
@@ -612,11 +586,7 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(saved.success, JSON.stringify(saved)).toBe(true);
 
-      await dispatchSingles(
-        "updateSingleSchema",
-        { slug: "notice" },
-        { fields: [text("heading"), placed("banner")] }
-      );
+      await writeSingle(t, notice(placed("promo")), notice(placed("banner")));
 
       // The instance written under the old name is read under the new one: the rename moved its
       // row, as it does for a field group placed beside the group.
@@ -627,24 +597,20 @@ describe.each(getConfiguredTestDialects())(
 
     it("gives a required field inside the group its default on a Single's first read, and takes a first save", async () => {
       const t = await singleApp();
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: "notice",
-          label: "Notice",
-          fields: [
-            text("heading"),
-            {
-              type: "group",
-              label: "Byline",
-              fields: [
-                { name: "subtitle", type: "text", required: true },
-                { name: "rank", type: "number", defaultValue: 4 },
-              ],
-            } as Field,
-          ],
-        }
+      await writeSingle(
+        t,
+        null,
+        notice([
+          text("heading"),
+          {
+            type: "group",
+            label: "Byline",
+            fields: [
+              { name: "subtitle", type: "text", required: true },
+              { name: "rank", type: "number", defaultValue: 4 },
+            ],
+          },
+        ])
       );
       const singles = t.getService("singleEntryService");
 
@@ -669,15 +635,10 @@ describe.each(getConfiguredTestDialects())(
       const t = await singleApp({
         localization: { locales: ["en", "de"], defaultLocale: "en" },
       });
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: "notice",
-          label: "Notice",
-          localized: true,
-          fields: [text("heading"), laidOut],
-        }
+      await writeSingle(
+        t,
+        null,
+        notice([text("heading"), laidOut], { localized: true })
       );
       const singles = t.getService("singleEntryService");
       const saved = await singles.update(
@@ -709,22 +670,20 @@ describe.each(getConfiguredTestDialects())(
           fields: [{ name: "note", type: "text" }],
         }
       );
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: "notice",
-          label: "Notice",
-          versions: true,
-          fields: [
+      await writeSingle(
+        t,
+        null,
+        notice(
+          [
             text("heading"),
             {
               type: "group",
               label: "Byline",
               fields: [{ name: "promo", type: "component", component: "meta" }],
-            } as Field,
+            },
           ],
-        }
+          { versions: true }
+        )
       );
       const singles = t.getService("singleEntryService");
       for (const note of ["first", "second"]) {
@@ -756,6 +715,50 @@ describe.each(getConfiguredTestDialects())(
         heading: "second",
         promo: { note: "second" },
       });
+    });
+
+    it("expands a relationship inside the group on a Single's read, and stores the id a populated one stands for", async () => {
+      const t = await singleApp();
+      await writeSingle(
+        t,
+        null,
+        notice([
+          text("heading"),
+          {
+            type: "group",
+            label: "Byline",
+            fields: [
+              {
+                name: "owner",
+                type: "relationship",
+                options: { target: "people", onDelete: "set null" },
+              },
+            ],
+          },
+        ])
+      );
+      const person = await t.nextly.create({
+        collection: "people",
+        data: { name: "Ana" },
+      });
+      const id = String(person.item.id);
+      const singles = t.getService("singleEntryService");
+
+      // A populated reference, as a read at depth hands one back, is stored as its id.
+      const saved = await singles.update(
+        "notice",
+        { owner: { id, name: "Ana" }, _overwrite: true },
+        { overrideAccess: true }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+      expect(
+        (await singles.get("notice", { overrideAccess: true, depth: 0 })).data
+      ).toMatchObject({ owner: id });
+
+      // And a read at depth expands it, as one beside the group is expanded.
+      expect(
+        (await singles.get("notice", { overrideAccess: true, depth: 1 })).data
+      ).toMatchObject({ owner: { id, name: "Ana" } });
     });
 
     it("changes a field group holding a relationship inside a group with no name, which the field group stores no column for", async () => {
@@ -796,21 +799,17 @@ describe.each(getConfiguredTestDialects())(
 
     it("stores a date inside the group sent as text, as a JSON request sends it", async () => {
       const t = await singleApp();
-      await dispatchSingles(
-        "createSingle",
-        {},
-        {
-          slug: "notice",
-          label: "Notice",
-          fields: [
-            text("heading"),
-            {
-              type: "group",
-              label: "When",
-              fields: [{ name: "startsOn", type: "date" }],
-            } as Field,
-          ],
-        }
+      await writeSingle(
+        t,
+        null,
+        notice([
+          text("heading"),
+          {
+            type: "group",
+            label: "When",
+            fields: [{ name: "startsOn", type: "date" }],
+          },
+        ])
       );
       const singles = t.getService("singleEntryService");
 

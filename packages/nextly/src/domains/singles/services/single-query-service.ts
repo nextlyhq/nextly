@@ -1066,7 +1066,10 @@ export class SingleQueryService extends BaseService {
     }
 
     doc = this.deserializeJsonFields(doc, singleMeta.fields);
-    doc = await this.readUploadFields(doc, singleMeta.fields, options);
+    // The references the row holds, those inside a group with no name among them: their columns
+    // are on this row (`fieldsStoredOnRow`), so they are expanded as one beside the group is.
+    const rowFields = fieldsStoredOnRow(singleMeta.fields);
+    doc = await this.readUploadFields(doc, rowFields, options);
     // The language this read resolved to, shared by both expansions below so a
     // related row and a related row inside a component are judged alike.
     const readChain = resolveLocaleChain(
@@ -1077,7 +1080,7 @@ export class SingleQueryService extends BaseService {
     const readLocale = readChain?.[0];
     doc = await this.expandRelationshipFields(
       doc,
-      singleMeta.fields,
+      rowFields,
       options.depth,
       this.relatedRowAccess(options, enforceRelatedFieldAccess, readChain),
       // The read path threads a caller, so the target collection's field rules

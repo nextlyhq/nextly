@@ -285,7 +285,10 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import { liveColumnNames } from "../../schema/pipeline/diff/introspect-live";
-import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
+import {
+  fieldsStoredOnRow,
+  usesJunctionTable,
+} from "../../schema/services/field-column-descriptor";
 import {
   sharedComparison,
   type SharedComparison,
@@ -7994,7 +7997,9 @@ export class CollectionMutationService extends BaseService {
       relationTo?: unknown;
     }[]
   ): void {
-    for (const field of fields) {
+    // The fields whose columns the row holds, those inside a group with no name among them
+    // (`fieldsStoredOnRow`), as the creating SQL makes them.
+    for (const field of fieldsStoredOnRow(fields)) {
       if (isJsonFieldType(field.type, field) && data[field.name] != null) {
         data[field.name] = toJsonColumnValue(data[field.name]);
       }

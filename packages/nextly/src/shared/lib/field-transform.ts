@@ -521,7 +521,9 @@ export function normalizeRelationshipFields(
   data: Record<string, unknown>,
   fields: FieldConfig[]
 ): void {
-  for (const field of fields) {
+  // The fields stored on this object, those inside a group with no name among them, at every
+  // level the walk reaches: such a group stores its fields where it sits.
+  for (const field of addressableFields(fields) as unknown as FieldConfig[]) {
     if (!("name" in field) || !field.name) continue;
     const value = data[field.name];
     if (value == null) continue;
