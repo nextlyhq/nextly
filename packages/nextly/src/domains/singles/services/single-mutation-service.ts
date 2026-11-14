@@ -2980,7 +2980,13 @@ export class SingleMutationService extends BaseService {
       // tables) AFTER the access/hooks/validation pipeline above has seen
       // the component fields.
       const componentFieldData: Record<string, unknown> = {};
-      fieldConfigs.forEach(field => {
+      // The field groups stored at the top level, those inside a group with no name among them:
+      // such a group stores its fields where it sits, and the field-group save writes their
+      // instances from this level too (`storedFieldGroupFields`). Left in the row's values, one
+      // named a column the row does not have.
+      (
+        addressableFields(fieldConfigs) as unknown as typeof fieldConfigs
+      ).forEach(field => {
         if (isFieldGroupField(field) && currentData[field.name] !== undefined) {
           componentFieldData[field.name] = currentData[field.name];
           delete currentData[field.name];
@@ -4129,9 +4135,12 @@ export class SingleMutationService extends BaseService {
             Object.keys(attemptComponentFields).length > 0
           ) {
             for (const writtenName of Object.keys(attemptComponentFields)) {
-              const fieldConfig = fieldConfigs.find(
-                f => "name" in f && f.name === writtenName
-              );
+              // Found where the split above found it, inside a group with no name included.
+              const fieldConfig = (
+                addressableFields(
+                  fieldConfigs
+                ) as unknown as typeof fieldConfigs
+              ).find(f => "name" in f && f.name === writtenName);
               if (!fieldConfig || !isFieldGroupField(fieldConfig)) continue;
               // The instances this write actually stored: a single-component
               // field yields one; a dynamic-zone field yields each written

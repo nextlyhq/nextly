@@ -27,6 +27,7 @@ import { defineCollection } from "../../../../collections/config/define-collecti
 import { text as textField } from "../../../../collections/fields/helpers";
 import { defineConfig } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
+import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import {
   createTestNextly,
@@ -316,8 +317,11 @@ describe.each(getConfiguredTestDialects())(
     });
 
     /** A Single app, run as the Builder runs it, with a collection `people` defined in code. */
-    async function singleApp(): Promise<TestNextly> {
+    async function singleApp(
+      extra: Partial<Parameters<typeof createTestNextly>[0]> = {}
+    ): Promise<TestNextly> {
       const t = await boot(dialect, {
+        ...extra,
         db: { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" },
         basePath: dir,
         collections: [
@@ -496,6 +500,95 @@ describe.each(getConfiguredTestDialects())(
       expect(await liveColumns(t, dialect, "single_notice")).toEqual(
         expect.arrayContaining(["heading", "subtitle", "rank"])
       );
+    });
+
+    it("keys a relationship inside the group on a translated Single's row, whatever it says of translation", async () => {
+      const t = await singleApp({
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const owner = {
+        name: "owner",
+        type: "relationship",
+        localized: true,
+        options: { target: "people", onDelete: "set null" },
+      } as Field;
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          localized: true,
+          fields: [
+            text("heading"),
+            { type: "group", label: "Byline", fields: [owner] } as Field,
+          ],
+        }
+      );
+
+      // Translation is classified from the declared fields, so the relationship inside the group
+      // is a column of the main row, and its key is the main table's.
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      const live = await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
+        "single_notice",
+      ]);
+      const table = live.tables.find(entry => entry.name === "single_notice");
+      expect(table?.columns.map(column => column.name)).toContain("owner");
+      expect(table?.foreignKeys, JSON.stringify(table?.foreignKeys)).toEqual([
+        expect.objectContaining({
+          columns: ["owner"],
+          referencesTable: "dc_people",
+        }),
+      ]);
+    });
+
+    it("keeps a field group's instances when a Single save renames its field inside the group", async () => {
+      const t = await singleApp();
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "meta",
+          label: "Meta",
+          fields: [{ name: "note", type: "text" }],
+        }
+      );
+      const placed = (name: string): Field =>
+        ({
+          type: "group",
+          label: "Byline",
+          fields: [{ name, type: "component", component: "meta" }],
+        }) as Field;
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          fields: [text("heading"), placed("promo")],
+        }
+      );
+      const singles = t.getService("singleEntryService");
+      const saved = await singles.update(
+        "notice",
+        { heading: "Held", promo: { note: "kept" }, _overwrite: true },
+        { overrideAccess: true }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+
+      await dispatchSingles(
+        "updateSingleSchema",
+        { slug: "notice" },
+        { fields: [text("heading"), placed("banner")] }
+      );
+
+      // The instance written under the old name is read under the new one: the rename moved its
+      // row, as it does for a field group placed beside the group.
+      expect(
+        (await singles.get("notice", { overrideAccess: true })).data
+      ).toMatchObject({ banner: { note: "kept" } });
     });
   }
 );

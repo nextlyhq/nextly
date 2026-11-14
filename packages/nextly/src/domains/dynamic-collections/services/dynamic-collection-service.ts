@@ -482,7 +482,9 @@ export class DynamicCollectionService extends BaseService {
     fields: FieldDefinition[]
   ): Promise<ReadonlyMap<string, string>> {
     const slugs = new Set<string>();
-    for (const field of fields) {
+    // The field groups at this level, those inside a group with no name among them, as a rename
+    // pairs them (`fieldGroupRenamePairs`): a table left unresolved moves no rows.
+    for (const field of fieldsStoredOnRow(fields)) {
       for (const slug of fieldGroupSlugList(field)) slugs.add(slug);
     }
     if (slugs.size === 0) return new Map();
@@ -2198,7 +2200,15 @@ export class DynamicCollectionService extends BaseService {
     // itself has no column, nor a name to spell one from.
     const oldFields = fieldsStoredOnRow(declaredOldFields);
     const newFields = fieldsStoredOnRow(declaredNewFields);
-    const onMainTable = (field: FieldDefinition) => field.localized !== true;
+    // Which fields are translated is read from the declared lists, as the creating SQL and the
+    // desired table read it: a field inside a group with no name stays on the row whatever it
+    // says, so its key is this table's.
+    const translated = new Set(
+      [...declaredOldFields, ...declaredNewFields]
+        .filter(field => field.localized === true)
+        .map(field => field.name)
+    );
+    const onMainTable = (field: FieldDefinition) => !translated.has(field.name);
     const described = this.relationshipForeignKeys(
       tableName,
       newFields.filter(onMainTable),

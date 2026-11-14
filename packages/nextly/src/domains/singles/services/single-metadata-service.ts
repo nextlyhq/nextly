@@ -58,6 +58,7 @@ import type {
 } from "../../../schemas/dynamic-singles/types";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import { assertAddressAllowed } from "../../../shared/address-rule";
+import { addressableFields } from "../../../shared/addressable-fields";
 import type { Logger } from "../../../shared/types";
 import { collectionTablesBySlug } from "../../dynamic-collections/services/collection-tables";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
@@ -1823,7 +1824,9 @@ export class SingleMetadataService {
     const registry = new FieldGroupRegistryService(adapter, this.logger);
     const resolved = new Map<string, string>();
     const slugs = new Set<string>();
-    for (const f of [...oldFields, ...newFields]) {
+    // The field groups at this level, those inside a group with no name among them, as the rename
+    // above pairs them (`fieldGroupRenamePairs`): a table left unresolved moves no rows.
+    for (const f of addressableFields([...oldFields, ...newFields])) {
       for (const slug of fieldGroupSlugList(f)) slugs.add(slug);
     }
     await Promise.all(
