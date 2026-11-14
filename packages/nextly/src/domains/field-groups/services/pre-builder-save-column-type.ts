@@ -23,7 +23,10 @@
  */
 
 import { isNumberField } from "../../../collections/fields/guards";
-import type { DataFieldConfig } from "../../../collections/fields/types";
+import type {
+  DataFieldConfig,
+  NumberFieldConfig,
+} from "../../../collections/fields/types";
 import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
@@ -104,25 +107,32 @@ const KIND_BY_TYPE: Readonly<Record<string, PlainKind>> = {
   json: "json",
 };
 
+/**
+ * A number's column: decimal on `dbType: "decimal"`, a double on the float format, an integer
+ * otherwise. A `hasMany` number was not told apart, so it got the same scalar column.
+ */
+function numberKind(field: NumberFieldConfig, types: EarlierTypes): string {
+  if (field.dbType === "decimal") {
+    return types.decimal(
+      field.precision ?? DEFAULT_DECIMAL_PRECISION,
+      field.scale ?? DEFAULT_DECIMAL_SCALE
+    );
+  }
+  const format = (field as { options?: { format?: string } }).options?.format;
+  return format === "float" ? types.real : types.integer;
+}
+
 /** The column of a number, a select or a relation, which the creator read more of the field for. */
 function shapedKind(
   field: DataFieldConfig,
   types: EarlierTypes
 ): string | null {
-  if (isNumberField(field)) {
-    // Decimal on `dbType: "decimal"`, a double on the float format, an integer otherwise; a
-    // `hasMany` number was not told apart, so it got the same scalar column.
-    if (field.dbType === "decimal") {
-      return types.decimal(
-        field.precision ?? DEFAULT_DECIMAL_PRECISION,
-        field.scale ?? DEFAULT_DECIMAL_SCALE
-      );
-    }
-    const format = (field as { options?: { format?: string } }).options?.format;
-    return format === "float" ? types.real : types.integer;
+  if (isNumberField(field)) return numberKind(field, types);
+  if (field.type === "select") {
+    return (field as { hasMany?: unknown }).hasMany === true
+      ? types.json
+      : types.varchar255;
   }
-  const many = (field as { hasMany?: unknown }).hasMany === true;
-  if (field.type === "select") return many ? types.json : types.varchar255;
   if (field.type === "upload" || field.type === "relationship") {
     return componentRelationshipStoresJson(field) ? types.json : types.uuid;
   }
