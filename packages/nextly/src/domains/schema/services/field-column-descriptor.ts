@@ -174,17 +174,14 @@ export function columnsThatMayHoldNull(
 export { toSnakeCase } from "../field-rules";
 
 /**
- * The fields of a collection or Single whose columns sit on its own row: those at the top of
- * `fields`, and those inside a group with no name, at any depth.
+ * The fields whose columns sit on one row: those at the top of `fields`, and those inside a group
+ * with no name, at any depth.
  *
  * A group with no name only lays fields out. It holds no value and has no name to give a column, and
- * the fields inside it are stored where it sits: the entry reads and writes, the versions and the
- * validation all address them on the row through `addressableFields`, and the Builder places them
- * on the level that holds the group. So every builder of the row's columns (the creating SQL, the
- * alter, the runtime table, the desired table a migration is diffed from, and the system columns
- * an author's field replaces) reads its fields through this one walk. Handed the group itself, the
- * descriptor read its missing name and stopped (`toSnakeCase(undefined)`); leaving its fields out
- * would have planned dropping columns that hold values.
+ * the fields inside it are stored where it sits: on an entry's row for a collection or a Single, and
+ * on the instance's row (`comp_<slug>`) for a field group. The read and write paths already address
+ * those fields at that level through `addressableFields`, so the builders of a row's columns read
+ * the same walk, and the columns and the data paths cannot disagree about which fields a row holds.
  *
  * A named group is kept whole: its fields are stored inside its own value, not on the row.
  */

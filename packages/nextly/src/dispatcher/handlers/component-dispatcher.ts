@@ -965,8 +965,7 @@ export const COMPONENTS_METHODS: Record<
                     getLoggerFromDI() ?? DISCARDED_LOG,
                     tableName,
                     (component.fields ?? []) as unknown as FieldDefinition[],
-                    fields as unknown as FieldDefinition[],
-                    "fieldGroup"
+                    fields as unknown as FieldDefinition[]
                   )),
             },
             landing.landed

@@ -40,5 +40,3 @@ All of these builders now read the group's fields as columns of the row. A later
 - defaults, `select` reads, versions, field-group values, JSON values, dates and relationship values.
 
 **Compatibility:** the Single API now refuses a top-level field without a name, with the same answer the collection API already gives: a validation error, code `REQUIRED`, "Each field requires a name.". This covers creating a Single, saving its schema and applying it from the schema dialog. Before, such a request crashed. A group with no name inside a named group or a repeater stays allowed.
-
-Field groups keep their own rule: the fields inside such a group get no column. A field-group change that adds a relationship there now saves instead of failing.

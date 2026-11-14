@@ -488,6 +488,15 @@ export const MIGRATION_CODES = defineCodes({
       "A schema change waited for a table another database session was using, past its bounds, and stopped.",
     from: [{ code: "NEXTLY_TABLE_BUSY", describe: tableBusyParts }],
   },
+  LOCK_HELD_BY_THIS_PROCESS: {
+    cause:
+      "A write inside a schema change's own SQLite transaction, on another connection to the same database, waited for the lock that transaction holds, so the change stopped without trying again.",
+    // Its message is laid out as a busy table's is (what happened, why, what to do next), so it
+    // splits the same way and keeps one wording.
+    from: [
+      { code: "NEXTLY_LOCK_HELD_BY_THIS_PROCESS", describe: tableBusyParts },
+    ],
+  },
   DATA_LOSS_CONSENT_REQUIRED: {
     cause:
       "The command would delete data, no consent covers it, and nobody can be asked (no terminal, CI, or --non-interactive).",

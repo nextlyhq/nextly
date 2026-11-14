@@ -648,13 +648,11 @@ export function buildDesiredTableFromComponentFields(
 ): TableSpec {
   const typeColumn = options.typeColumn ?? STORAGE_FORMAT.columns.type;
   const columns: ColumnSpec[] = [];
-  // The fields that own a column on the row. A group with no name only lays fields out, and the
-  // field-group creator gives it and what it holds no column (`columnFields`, which reads named
-  // fields alone), so it is described with none. Read whole, its missing name stopped the column
-  // descriptor, and with it every Builder save once such a field group was in the definition file.
-  const namedFields = fields.filter(
-    field => typeof field.name === "string" && field.name.length > 0
-  );
+  // The fields that own a column on the row. A group with no name only lays fields out: it has no
+  // column, and the fields inside it are stored on this row as the ones beside it are, as the
+  // field-group creator makes them (`columnFields`) and the instance write stores them. Both read
+  // `fieldsStoredOnRow`, so the desired table and the created one name the same columns.
+  const namedFields = fieldsStoredOnRow(fields);
 
   // i18n: when the component is localized, its translatable fields live in the
   // companion `comp_<slug>_locales` table (migration-owned) and MUST be omitted

@@ -22,9 +22,7 @@ export async function entityRelations(
   logger: Logger,
   tableName: string,
   before: readonly FieldDefinition[],
-  after: readonly FieldDefinition[],
-  /** Whose table: a Single's row, or a field group's (`writerRelations`). */
-  owner: "row" | "fieldGroup" = "row"
+  after: readonly FieldDefinition[]
 ): Promise<{
   junctions: NonNullable<CollectionSave["junctions"]>;
   keys: NonNullable<CollectionSave["keys"]>;
@@ -37,7 +35,6 @@ export async function entityRelations(
   return new DynamicCollectionService(adapter, logger).writerRelations(
     tableName,
     [...before],
-    [...after],
-    owner
+    [...after]
   );
 }

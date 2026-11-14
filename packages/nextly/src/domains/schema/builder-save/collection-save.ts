@@ -603,6 +603,16 @@ function conversionOf(table: string, op: Operation): ColumnConversion {
         from: op.fromDefault ?? "no default",
         to: op.toDefault ?? "no default",
       };
+    case "add_column":
+      // Named by the column it adds, so the review says which, and each is confirmed on its own:
+      // a field group made before the fields inside its groups with no name were stored lacks one
+      // per such field, which the mapping now declares.
+      return {
+        table,
+        column: op.column.name,
+        from: "missing, as an earlier version made the table",
+        to: `added as Nextly declares it (${op.column.nullable ? "nullable" : "not null"})`,
+      };
     default:
       return {
         table,
@@ -764,14 +774,12 @@ function refuseUnenforceableUniques(
   const dialect = deps.adapter.getCapabilities().dialect;
   const entity = save.entity;
   if (entity === null) return;
-  const onMain = mainTableFields(entity, entity.fields);
-  // A collection's or Single's row holds the fields inside a group with no name as columns
-  // (`fieldsStoredOnRow`), so a unique one among them is judged as one beside the group is. A field
-  // group's creator gives them no column (`buildDesiredTableFromComponentFields`), so there the
-  // group is passed over below, as it was.
-  const judged =
-    kindOf(save).kind === "fieldGroup" ? onMain : fieldsStoredOnRow(onMain);
-  for (const field of judged) {
+  // The row holds the fields inside a group with no name as columns (`fieldsStoredOnRow`), an
+  // entry's and a field group's instance's alike, so a unique one among them is judged as one
+  // beside the group is.
+  for (const field of fieldsStoredOnRow(
+    mainTableFields(entity, entity.fields)
+  )) {
     // A group with no name only lays fields out and has no column to key.
     const name = field.name;
     if (field.unique !== true || name === undefined) continue;
