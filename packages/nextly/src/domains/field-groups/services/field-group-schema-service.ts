@@ -857,8 +857,8 @@ export class FieldGroupSchemaService {
   }
 
   /**
-   * The canonical descriptor's column for a field type this service does not map itself, or null
-   * for a type it still maps below.
+   * The canonical descriptor's column for a field the runtime table binds from it, or null for one
+   * the dialect mappers below still bind.
    *
    * An icon's and a text field's columns are read from the descriptor for the SQL and the Drizzle
    * table alike, so they are the columns the desired schema and the diff compare against on every
@@ -866,12 +866,27 @@ export class FieldGroupSchemaService {
    * bounded by its own `maxLength`, and without one by the rule of whoever owns the table (`builtBy`).
    * Mapped here a second time, the Drizzle table once declared a MySQL text field `varchar(255)`,
    * and a save that reached drizzle-kit narrowed the TEXT column the CREATE had made.
+   *
+   * So is every field the descriptor stores as JSON. The CREATE takes its type from the descriptor
+   * (`columnTypeFor`), and the mappers below bind a `hasMany` number as a scalar and a chips field
+   * as text, so the runtime table would describe a column the table does not have, and drizzle-kit,
+   * handed that table, would convert the JSON list back to a scalar. The other kinds stay with the
+   * mappers: they bind the column the CREATE makes, and the descriptor's builders read some of them
+   * back differently (a decimal as a number rather than a string).
    */
   private canonicalColumn(field: DataFieldConfig): ColumnDescriptor | null {
-    if (!field.name || !(isIconField(field) || isTextField(field))) {
-      return null;
-    }
-    return getComponentRowColumnDescriptor(field, this.dialect, this.builtBy);
+    if (!field.name) return null;
+    const descriptor = getComponentRowColumnDescriptor(
+      field as unknown as Parameters<typeof getComponentRowColumnDescriptor>[0],
+      this.dialect,
+      this.builtBy
+    );
+    if (descriptor === null) return null;
+    return isIconField(field) ||
+      isTextField(field) ||
+      descriptor.kind === "json"
+      ? descriptor
+      : null;
   }
 
   /**
