@@ -68,6 +68,16 @@ describe("textWidth", () => {
     );
   });
 
+  it("keeps the width of spacing HTML does not collapse: ideographic and no-break spaces", () => {
+    const ideographic = "汉\u3000".repeat(20).trim();
+    // 20 characters and 19 ideographic spaces, each a whole em.
+    expect(textWidth(ideographic, 20)).toBe(780);
+    expect(textFit("title", ideographic).fits).toBe(false);
+    expect(textWidth("a\u00a0\u00a0b", 20)).toBeGreaterThan(
+      textWidth("a b", 20)
+    );
+  });
+
   it("measures an emoji, however it is joined, and a Chinese character as one em", () => {
     expect(textWidth("😀", 20)).toBe(20);
     // A family emoji is three pictures joined into what draws as one.
@@ -140,6 +150,14 @@ describe("cutToFit", () => {
     expect(textWidth(edge, 20)).toBeGreaterThan(600);
     expect(textFit("title", edge)).toMatchObject({ pixels: 600, fits: true });
     expect(cutToFit("title", edge)).toBe(edge);
+  });
+
+  it("cuts a value with no word to cut at so that what it shows, the ellipsis and its space included, fits", () => {
+    for (const kind of ["title", "description"] as const) {
+      const cut = cutToFit(kind, "i".repeat(400));
+      expect(cut.endsWith(" …")).toBe(true);
+      expect(textFit(kind, cut).fits).toBe(true);
+    }
   });
 
   it("keeps a title that fits whole", () => {

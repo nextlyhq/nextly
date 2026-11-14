@@ -107,11 +107,12 @@ const WHOLE_EM =
 const PICTURE = /\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20E3/u;
 
 /**
- * `text` as a results page draws it: a run of spaces, tabs or line breaks
- * as one space, and none at either end, as HTML lays out text.
+ * `text` as a results page draws it: a run of the spacing HTML collapses
+ * (spaces, tabs, line breaks) as one space, and none at either end. A
+ * no-break, ideographic or em space is drawn as it is, so it keeps its width.
  */
 function drawn(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
+  return text.replace(/[ \t\n\f\r]+/g, " ").replace(/^ | $/g, "");
 }
 
 /** Characters that take no width of their own: accents, joiners, selectors. */
@@ -152,13 +153,18 @@ function graphemeUnits(grapheme: string): number {
   );
 }
 
-/** How wide `text` draws in Arial at `fontSize` pixels, unrounded. */
-export function textWidth(text: string, fontSize: number): number {
-  const units = graphemes(drawn(text)).reduce(
+/** How wide `text` draws at `fontSize` pixels, exactly as given. */
+function widthAsGiven(text: string, fontSize: number): number {
+  const units = graphemes(text).reduce(
     (sum, grapheme) => sum + graphemeUnits(grapheme),
     0
   );
   return (units / UNITS_PER_EM) * fontSize;
+}
+
+/** How wide `text` draws in Arial at `fontSize` pixels, unrounded. */
+export function textWidth(text: string, fontSize: number): number {
+  return widthAsGiven(drawn(text), fontSize);
 }
 
 /** How long `text` reads: in characters, so an emoji counts once. */
@@ -221,7 +227,9 @@ export function cutToFit(kind: SearchText, text: string): string {
   const shown = drawn(text);
   if (textFit(kind, shown).fits) return shown;
   const { fontSize, width } = SEARCH_TEXT[kind];
-  const room = width - textWidth(" …", fontSize);
+  // The suffix is added after the cut, its space included, so its whole
+  // width is kept free.
+  const room = width - widthAsGiven(" …", fontSize);
   let kept = "";
   let used = 0;
   for (const grapheme of graphemes(shown)) {
