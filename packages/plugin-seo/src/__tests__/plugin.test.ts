@@ -458,10 +458,11 @@ describe("the dashboard card the plugin contributes", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
 
     expect(plugin.contributes?.admin).not.toHaveProperty("widgets");
-    // Its admin contributions are the SEO tab, its side panel line, and the
-    // tab in the Page Builder's Settings.
+    // Its admin contributions are the SEO tab, its two side panel lines, and
+    // the tab in the Page Builder's Settings.
     expect(plugin.contributes?.admin?.contributions).toEqual([
       expect.objectContaining({ kind: "tab" }),
+      expect.objectContaining({ kind: "sidebarSection" }),
       expect.objectContaining({ kind: "sidebarSection" }),
       expect.objectContaining({ kind: "tab", place: PAGE_BUILDER_PLACE }),
     ]);
@@ -525,6 +526,15 @@ describe("the SEO tab the plugin contributes", () => {
         collections: ["pages", "posts"],
       },
       {
+        id: "nextlyhq-plugin-seo.display-status",
+        kind: "sidebarSection",
+        place: "collection.edit",
+        label: "Search display",
+        component: "@nextlyhq/plugin-seo/admin#SeoDisplaySection",
+        after: "nextlyhq-plugin-seo.status",
+        collections: ["pages", "posts"],
+      },
+      {
         id: "nextlyhq-plugin-seo.single-tab",
         kind: "tab",
         place: "single.edit",
@@ -542,6 +552,15 @@ describe("the SEO tab the plugin contributes", () => {
         after: "details",
         singles: ["homepage"],
       },
+      {
+        id: "nextlyhq-plugin-seo.single-display-status",
+        kind: "sidebarSection",
+        place: "single.edit",
+        label: "Search display",
+        component: "@nextlyhq/plugin-seo/admin#SeoDisplaySection",
+        after: "nextlyhq-plugin-seo.single-status",
+        singles: ["homepage"],
+      },
       PAGE_BUILDER_TAB_DECLARED,
     ]);
   });
@@ -550,7 +569,12 @@ describe("the SEO tab the plugin contributes", () => {
     const plugin = seoPlugin({ collections: ["pages"], sitemap: false });
     expect(
       plugin.contributes?.admin?.contributions?.map(each => each.place)
-    ).toEqual(["collection.edit", "collection.edit", PAGE_BUILDER_PLACE]);
+    ).toEqual([
+      "collection.edit",
+      "collection.edit",
+      "collection.edit",
+      PAGE_BUILDER_PLACE,
+    ]);
   });
 });
 
@@ -610,7 +634,7 @@ describe("the SEO tab and fields of a project's own", () => {
       sitemap: false,
       fields: [text({ name: "metaTitle" }), text({ name: "metaDescription" })],
     });
-    expect(editPageContributions(plugin)).toHaveLength(2);
+    expect(editPageContributions(plugin)).toHaveLength(3);
   });
 });
 
@@ -643,6 +667,19 @@ describe("the SEO tab in the Page Builder's Settings", () => {
     expect(gated.contributes?.admin?.contributions).toEqual([
       PAGE_BUILDER_TAB_DECLARED,
     ]);
+  });
+
+  it("is told which types the site's code leaves out, where SEO is on every type", () => {
+    const leaving = seoPlugin({ exclude: ["pages", "pages"], sitemap: false });
+    expect(leaving.contributes?.admin?.clientConfig).toMatchObject({
+      tabEveryType: true,
+      tabExcluded: ["pages"],
+    });
+    const every = seoPlugin({ sitemap: false });
+    expect(every.contributes?.admin?.clientConfig).toMatchObject({
+      tabEveryType: true,
+      tabExcluded: [],
+    });
   });
 });
 
@@ -846,8 +883,10 @@ describe("SEO on every content type, where the site names none", () => {
     expect(edit.map(each => [each.id, each.place])).toEqual([
       ["nextlyhq-plugin-seo.tab", "collection.edit"],
       ["nextlyhq-plugin-seo.status", "collection.edit"],
+      ["nextlyhq-plugin-seo.display-status", "collection.edit"],
       ["nextlyhq-plugin-seo.single-tab", "single.edit"],
       ["nextlyhq-plugin-seo.single-status", "single.edit"],
+      ["nextlyhq-plugin-seo.single-display-status", "single.edit"],
     ]);
     for (const each of edit) {
       // Offered by core on the types the start added the group to, the

@@ -683,6 +683,24 @@ function goneAnswerOf(page: string | undefined): GoneAnswerOptions {
   return { gonePage: address };
 }
 
+/**
+ * The types the site's code leaves out where SEO is on every type, so the
+ * tab there says SEO is off for a page of one rather than asking for an SEO
+ * answer its type does not have. A type also named in `include` is given the
+ * group by that clause, so it is not out. Nothing is out where SEO is on
+ * named types only: the tab there edits the types it names.
+ */
+function tabExcludedOf(
+  options: Pick<SeoPluginOptions, "include" | "exclude">,
+  everyType: boolean
+): string[] {
+  if (!everyType) return [];
+  const include = options.include ?? [];
+  return [
+    ...new Set((options.exclude ?? []).filter(slug => !include.includes(slug))),
+  ];
+}
+
 export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // Always nest the fields (default or custom) under a single `seo` group so
   // every project exposes SEO consistently at `entry.seo.*`.
@@ -953,6 +971,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // Where SEO is on every type, the tab there edits each page whose
         // type has the group, which only the page's own fields say.
         tabEveryType: tab.tabEveryType,
+        // The types the site's code leaves out where SEO is on every type.
+        tabExcluded: tabExcludedOf(options, tab.tabEveryType),
       },
       // The section's menu, in the order the section is used: where it
       // stands, its pages, what to fix, its redirects, its rules. Each
