@@ -83,22 +83,21 @@ function project(): { folder: string; url: string; close: () => void } {
   };
 }
 
-/** An adapter on the project's database, with core's environment naming it while it is made. */
+/**
+ * An adapter on the project's database, with core's environment naming it for
+ * the rest of the case, as a site's own environment names its database.
+ *
+ * Making the adapter reads only the pool settings, so it no longer validates
+ * the environment, and a booted site reads `DB_DIALECT` and `DATABASE_URL`
+ * later (the schema services' dialect, the settings secrets). Named only
+ * while the adapter was made, they were gone by then, and on a run with
+ * neither set the site refused to boot for want of a PostgreSQL URL. Stubbed,
+ * so `afterEach` puts back what was there.
+ */
 async function adapterOn(url: string) {
-  const own = {
-    DATABASE_URL: process.env.DATABASE_URL,
-    DB_DIALECT: process.env.DB_DIALECT,
-  };
-  process.env.DATABASE_URL = url;
-  process.env.DB_DIALECT = "sqlite";
-  try {
-    return await createAdapter({ type: "sqlite", url });
-  } finally {
-    for (const [key, value] of Object.entries(own)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
+  vi.stubEnv("DATABASE_URL", url);
+  vi.stubEnv("DB_DIALECT", "sqlite");
+  return createAdapter({ type: "sqlite", url });
 }
 
 /** A call to Nextly's own API, as the admin makes it. */
@@ -169,6 +168,9 @@ describe("db:sync --promote of a collection with a template address (sqlite)", (
       seedPublic: true,
     });
     const cookie = await sessionOf(site, await person(site, "owner"));
+    // Put back by itself below: undoing every stub would also drop the
+    // database the environment names for the rest of the case.
+    const nodeEnv = process.env.NODE_ENV;
     vi.stubEnv("NODE_ENV", "development");
     const made = await api(cookie, ["collections"], {
       name: HOST,
@@ -178,7 +180,7 @@ describe("db:sync --promote of a collection with a template address (sqlite)", (
       // besides, as a collection defined in code needs one.
       fields: [{ name: "summary", type: "text" }],
     });
-    vi.unstubAllEnvs();
+    vi.stubEnv("NODE_ENV", nodeEnv);
     expect(made.status, JSON.stringify(made.body)).toBe(201);
 
     // 2. Its template, published at an address, and two entries.

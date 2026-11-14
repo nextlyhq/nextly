@@ -45,10 +45,33 @@ async function sessionOf(
   return String(rows[0]?.session_id);
 }
 
+/**
+ * The database user a session logged in as, read on that session: PostgreSQL's session user
+ * (what pg_stat_activity.usename names) and the user part of MySQL's USER() (what
+ * performance_schema.threads.PROCESSLIST_USER names). Read from the database rather than written
+ * as a literal, since the user a run connects as is the run's own: CI logs in as one user, a
+ * local container as another.
+ */
+async function userOf(
+  run: { queryStatement: DrizzleAdapter["queryStatement"] },
+  dialect: SupportedDialect
+): Promise<string> {
+  const rows = await run.queryStatement<{ login_user: unknown }>(
+    sql.raw(
+      dialect === "postgresql"
+        ? "SELECT session_user AS login_user"
+        : "SELECT SUBSTRING_INDEX(USER(), '@', 1) AS login_user"
+    )
+  );
+  return String(rows[0]?.login_user);
+}
+
 describe.each(SERVERS)("the holder of a busy table on %s", dialect => {
   let world: LockWorld;
   let adapter: DrizzleAdapter;
   let holderSession: string;
+  /** The user the holder's session logged in as, which a report naming it must give. */
+  let holderUser: string;
   let freeTheTable: () => void = () => {};
   let holding: Promise<unknown> = Promise.resolve();
 
@@ -69,6 +92,7 @@ describe.each(SERVERS)("the holder of a busy table on %s", dialect => {
     holding = adapter
       .transaction(async ctx => {
         holderSession = await sessionOf(ctx, dialect);
+        holderUser = await userOf(ctx, dialect);
         await ctx.queryStatement(
           sql.raw(`SELECT id, '${HOLDER_LITERAL}' AS marker FROM ${BUSY}`)
         );
@@ -140,7 +164,7 @@ describe.each(SERVERS)("the holder of a busy table on %s", dialect => {
     if (report.kind !== "named") throw new Error("unreachable");
     expect(report.sessions.map(session => session.id)).toEqual([holderSession]);
     const [holder] = report.sessions;
-    expect(holder.user).toBe(dialect === "postgresql" ? "postgres" : "root");
+    expect(holder.user).toBe(holderUser);
     expect(typeof holder.clientAddress).toBe("string");
     // The address alone, without the client's port.
     expect(holder.clientAddress).not.toMatch(/^[^:]+:\d+$/);
@@ -223,7 +247,7 @@ describe.each(SERVERS)("the holder of a busy table on %s", dialect => {
         expect(report.sessions).toEqual([
           {
             id: holderSession,
-            user: "postgres",
+            user: holderUser,
             clientAddress: null,
             applicationName: null,
             transactionOpenSeconds: null,

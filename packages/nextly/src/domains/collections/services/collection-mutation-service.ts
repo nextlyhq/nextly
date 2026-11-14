@@ -20400,8 +20400,11 @@ export class CollectionMutationService extends BaseService {
       link = (link as { cause?: unknown }).cause;
     }
     if (!foreignKey) return undefined;
+    // Read through the adapter's own handle once the delete's transaction has rolled back. Inside
+    // a caller's enclosing transaction these reads see only committed rows; they word a refusal
+    // the database already made, and decide nothing.
     const referrers = await referrersHolding(
-      this.adapter,
+      this.adapter.getDrizzle(),
       this.dialect,
       entryTable,
       params.entryId

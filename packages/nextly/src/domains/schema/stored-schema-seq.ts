@@ -47,6 +47,8 @@ import {
   type FollowedState,
 } from "../../shared/lib/followed-value";
 
+import type { StoredSchemaVersion } from "./schema-version";
+
 /**
  * How long one read of the stored count is reused by this process: the bound,
  * with the reload or re-read after it, on how long another copy's registry
@@ -107,10 +109,35 @@ export async function storedSchemaSeq(
   });
 }
 
+/**
+ * The whole stored version each database's last read found, with how many changes this process
+ * had marked when that read began (`latestStoredSchemaVersion`).
+ */
+const lastRead = new WeakMap<
+  object,
+  { stored: StoredSchemaVersion; marks: number }
+>();
+
+/**
+ * The stored version as this process last read it for `database`, the migration it names
+ * included: undefined where it has not been read, or where this process marked a change since that
+ * read began (its own registry write, or boot migrations storing a new version), which the read
+ * may not hold. A start compares its build with this rather than reading the same row again.
+ */
+export function latestStoredSchemaVersion(
+  database: object
+): StoredSchemaVersion | undefined {
+  const reading = lastRead.get(database);
+  return reading !== undefined && reading.marks === seqState().marks
+    ? reading.stored
+    : undefined;
+}
+
 /** One read of the stored count, or undefined where it cannot be read. */
 async function readStoredSeq(
   database: VersionSource
 ): Promise<number | undefined> {
+  const marks = seqState().marks;
   try {
     // Imported when first needed: the version's module reaches the registry
     // row cache, which asks here.
@@ -119,6 +146,7 @@ async function readStoredSeq(
       database.getDrizzle(),
       database.getCapabilities().dialect
     );
+    lastRead.set(database, { stored, marks });
     // No stored version: no registry write has recorded one yet.
     return stored.present ? (stored.version?.seq ?? 0) : 0;
   } catch {
