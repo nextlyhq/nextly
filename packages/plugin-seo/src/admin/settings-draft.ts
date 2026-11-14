@@ -114,6 +114,10 @@ export interface SettingsDraft {
   indexNow: boolean;
   /** Whether `/llms.txt` is served. */
   llmsTxt: boolean;
+  /** Whether `/llms-full.txt` is served beside it. */
+  llmsFullTxt: boolean;
+  /** What the site tells AI tools in its own words, at the top of llms.txt. */
+  llmsIntro: string;
   /** Whether each listed page has a plain-text copy. */
   plainTextCopies: boolean;
   /** The site's own robots.txt lines. */
@@ -309,6 +313,8 @@ export function draftOf(
     // Off unless stored as switched on.
     indexNow: stored.indexNow === true,
     llmsTxt: stored.llmsTxt === true,
+    llmsFullTxt: stored.llmsFullTxt === true,
+    llmsIntro: text(stored.llmsIntro),
     plainTextCopies: stored.plainTextCopies === true,
     robotsRules: robotsRulesDraftOf(stored.robotsRules),
     verificationCodes: verificationDraftOf(stored.verificationCodes),

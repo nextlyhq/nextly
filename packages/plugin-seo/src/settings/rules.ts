@@ -90,6 +90,13 @@ export interface SeoRules {
   indexNow?: boolean;
   /** Whether `/llms.txt` is served: only once switched on. */
   llmsTxt?: boolean;
+  /**
+   * Whether `/llms-full.txt`, every listed page's words in one file, is
+   * served: only once switched on, and only beside llms.txt.
+   */
+  llmsFullTxt?: boolean;
+  /** What the site tells AI tools in its own words, at the top of llms.txt. */
+  llmsIntro?: string;
   /** Whether each listed page has a plain-text copy: only once switched on. */
   plainTextCopies?: boolean;
   /**
@@ -233,6 +240,11 @@ async function rulesOf(
     // Off unless stored as switched on: a value that is not `true` is off.
     ...withDefined("indexNow", document.indexNow === true ? true : undefined),
     ...withDefined("llmsTxt", document.llmsTxt === true ? true : undefined),
+    ...withDefined(
+      "llmsFullTxt",
+      document.llmsFullTxt === true ? true : undefined
+    ),
+    ...withDefined("llmsIntro", trimmed(document.llmsIntro)),
     ...withDefined(
       "plainTextCopies",
       document.plainTextCopies === true ? true : undefined

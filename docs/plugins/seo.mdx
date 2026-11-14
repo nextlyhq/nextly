@@ -687,6 +687,16 @@ Settings > Search engines and AI**. Few tools read them today, so neither is on 
   the same rules, so a draft, a hidden page or a page whose canonical points elsewhere is
   never in it. Until it is switched on, `/llms.txt` is not found. Like the sitemap, it
   answers `503` while the address record catches up at start.
+  **What AI tools should know**, on the same tab, is the site's own words placed under the
+  summary, as the proposal allows: plain sentences and lists, a line beginning with `#`
+  escaped so it never becomes a heading.
+- **`/llms-full.txt`**, its own switch, served only beside llms.txt and off by default:
+  llms.txt's head, then every page llms.txt lists, in its order, each as its title, its
+  address (`Source:`) and the words of its plain-text copy. A page the public may not read
+  is named by its address alone. It stops before a page that would take it past 5 MB and
+  ends by pointing to llms.txt for the rest. llms.txt links it while it is on. It is not
+  part of the llms.txt proposal; some tools ask for it (ChatGPT's fetcher most, by one
+  vendor's logs), others read llms.txt and each page's copy instead.
 - **Plain-text copies** add a text version of each page the sitemap lists, at the page's
   address with `.md` added: `/blog/hello.md` for `/blog/hello`, and `/index.md` for the
   home page (and for any address ending in a slash; `/index.html.md` answers too). The copy
@@ -869,14 +879,14 @@ address of its own (`?tab=general`, `types`, `images`, `brand`, `crawlers`, `con
 link lands on it, and **Save changes** under any tab saves every tab's changes; **Cancel** lets go of
 them:
 
-| Tab                   | What it holds                                                                                                                                                                                                                                                                                         |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| General               | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, and the default description                                                                                                                                 |
-| Content types         | Each content type with SEO (set in code), whether it has a public address yet, its title pattern, whether the whole type is hidden from search, and what its pages are described as in structured data, with the field each detail is read from                                                       |
-| Share images          | The default share image, for a page with none of its own                                                                                                                                                                                                                                              |
-| Organization          | The kind of site; the organization's name, other names, logo and social profiles; its description, email, telephone, contact points and founding date; and its parent organization. A fact the site's code gives is shown in its field, marked as set in the code, until one is saved here            |
-| Search engines and AI | Whether pages ask for [large image previews](#how-results-show-a-page), on by default; what AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none; and [llms.txt and plain-text copies](#llmstxt-and-plain-text-copies), each off until switched on |
-| Connections           | Optional services, each off until switched on: [Search Console and IndexNow](#search-console-and-indexnow)                                                                                                                                                                                            |
+| Tab                   | What it holds                                                                                                                                                                                                                                                                                                                                       |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| General               | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, and the default description                                                                                                                                                                               |
+| Content types         | Each content type with SEO (set in code), whether it has a public address yet, its title pattern, whether the whole type is hidden from search, and what its pages are described as in structured data, with the field each detail is read from                                                                                                     |
+| Share images          | The default share image, for a page with none of its own                                                                                                                                                                                                                                                                                            |
+| Organization          | The kind of site; the organization's name, other names, logo and social profiles; its description, email, telephone, contact points and founding date; and its parent organization. A fact the site's code gives is shown in its field, marked as set in the code, until one is saved here                                                          |
+| Search engines and AI | Whether pages ask for [large image previews](#how-results-show-a-page), on by default; what AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none; and [llms.txt, llms-full.txt and plain-text copies](#llmstxt-and-plain-text-copies), each off until switched on, and what AI tools should know |
+| Connections           | Optional services, each off until switched on: [Search Console and IndexNow](#search-console-and-indexnow)                                                                                                                                                                                                                                          |
 
 The production addresses saved on General are the ones the page's canonical, the sitemap,
 robots.txt and the staging guard all read; `NEXTLY_PRODUCTION_ADDRESSES`, where it is set, wins over

@@ -602,6 +602,16 @@ function conversionOf(table: string, op: Operation): ColumnConversion {
         from: op.fromDefault ?? "no default",
         to: op.toDefault ?? "no default",
       };
+    case "add_column":
+      // Named by the column it adds, so the review says which, and each is confirmed on its own:
+      // a field group made before the fields inside its groups with no name were stored lacks one
+      // per such field, which the mapping now declares.
+      return {
+        table,
+        column: op.column.name,
+        from: "missing, as an earlier version made the table",
+        to: `added as Nextly declares it (${op.column.nullable ? "nullable" : "not null"})`,
+      };
     default:
       return {
         table,

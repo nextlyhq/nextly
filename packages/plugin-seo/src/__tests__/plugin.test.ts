@@ -118,6 +118,7 @@ describe("seoPlugin", () => {
       ["GET", "/robots.txt", "root", true],
       // Registered always; it answers once switched on in the settings.
       ["GET", "/llms.txt", "root", true],
+      ["GET", "/llms-full.txt", "root", true],
       ["GET", "/sitemap.xml", undefined, true],
       ["POST", "/share-image", undefined, undefined],
       // The settings screen's reads, for a signed-in reader of the settings.
@@ -231,6 +232,7 @@ describe("seoPlugin", () => {
       "/connections/search-console/report",
       "/robots.txt",
       "/llms.txt",
+      "/llms-full.txt",
       "/share-image",
       "/settings/content-types",
       "/settings/robots-rules-check",
@@ -278,6 +280,7 @@ describe("seoPlugin", () => {
       "/connections/search-console/report",
       // Switched on and off in the settings, not by these options.
       "/llms.txt",
+      "/llms-full.txt",
       "/share-image",
       "/settings/content-types",
       "/settings/robots-rules-check",
