@@ -69,6 +69,11 @@ function plan(args: {
     field: ReconcilableField,
     table: ReconcileTable
   ) => string | undefined;
+  /** The earlier creator's spelling, accepted beside `expectedColumnType`. */
+  preBuilderSaveColumnType?: (
+    field: ReconcilableField,
+    table: ReconcileTable
+  ) => string | undefined;
   /** The builder's DEFAULT for a column; `known: false` means the check must stay silent. */
   expectedColumnDefault?: (
     field: ReconcilableField,
@@ -84,6 +89,9 @@ function plan(args: {
     liveCompanion: args.liveCompanion ?? null,
     ...(args.expectedColumnType
       ? { expectedColumnType: args.expectedColumnType }
+      : {}),
+    ...(args.preBuilderSaveColumnType
+      ? { preBuilderSaveColumnType: args.preBuilderSaveColumnType }
       : {}),
     ...(args.expectedColumnDefault
       ? { expectedColumnDefault: args.expectedColumnDefault }
@@ -546,6 +554,62 @@ describe("planFieldGroupReconcile", () => {
         kind: "physical-type-changed",
       }),
     ]);
+  });
+
+  /**
+   * Two spellings of one field's column exist in databases: today's, from the column descriptor a
+   * Builder save's migration builds with, and the one the creator before it gave. A column in
+   * either is the field's column; a column in neither is drift, however the widening is read.
+   */
+  describe("a column built before the Builder's save writer", () => {
+    const stored: ReconcilableField[] = [{ name: "contact", type: "email" }];
+    const withLiveType = (type: string): TableSpec => {
+      const live = liveTableFor([{ name: "contact", type: "email" }]);
+      const col = live.columns.find(c => c.name === "contact");
+      if (col) col.type = type;
+      return live;
+    };
+    // PostgreSQL's spellings for an `email`: `text` today, `VARCHAR(255)` from the earlier creator.
+    const spellings = {
+      expectedColumnType: () => "text",
+      preBuilderSaveColumnType: () => "VARCHAR(255)",
+    };
+
+    it("accepts a column in the earlier creator's spelling", () => {
+      const result = plan({
+        storedFields: stored,
+        liveMain: withLiveType("varchar"),
+        ...spellings,
+      });
+
+      expect(result.blockers).toEqual([]);
+    });
+
+    it("accepts a column in today's spelling", () => {
+      const result = plan({
+        storedFields: stored,
+        liveMain: withLiveType("text"),
+        ...spellings,
+      });
+
+      expect(result.blockers).toEqual([]);
+    });
+
+    it("refuses a column in neither spelling, naming today's", () => {
+      const result = plan({
+        storedFields: stored,
+        liveMain: withLiveType("int4"),
+        ...spellings,
+      });
+
+      expect(result.blockers).toEqual([
+        expect.objectContaining({
+          fieldName: "contact",
+          kind: "physical-type-changed",
+          detail: expect.stringContaining("would create as text"),
+        }),
+      ]);
+    });
   });
 
   /**

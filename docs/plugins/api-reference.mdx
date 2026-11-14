@@ -40,6 +40,10 @@ interface PluginDefinition {
     ctx: PluginContext,
     opts: { keepData: boolean }
   ) => void | Promise<void>; // `nextly plugins uninstall`, before its DOWN migrations; @experimental
+  onMigrate?: (
+    ctx: PluginContext,
+    run: { applied: number }
+  ) => void | Promise<void>; // after a `nextly migrate` that left nothing pending; @experimental
   destroy?: (ctx: PluginContext) => void | Promise<void>;
   rename?: (map: Record<string, string>) => PluginDefinition; // integrator-side remap
 }
@@ -1333,6 +1337,12 @@ plugins uninstall` calls `onUninstall` before its DOWN migrations, with
 `{ keepData }`. Write both so they can run again: an install can be retried
 after a failure part-way through. Work that must happen on every start, rather
 than once per install, belongs in `init`.
+
+`onMigrate` (`@experimental`) runs after a `nextly migrate` (or
+`nextly migrate:fresh`) that left nothing pending, for an enabled plugin
+installed on the database, with `{ applied }`, the number of migrations the
+run applied (0 when there was nothing to apply). It runs after migrate's lock
+is released, so write it to be safe when two runs call it at once.
 
 Before either command shuts the runtime down, it waits for the event handlers
 the hook set off, including those of the follow-up events they emit, for at

@@ -30,7 +30,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
-import type { AnyRelations } from "drizzle-orm";
+import type { AnyRelations, Table } from "drizzle-orm";
 
 import { authUiProblems } from "../auth/handlers/auth-ui";
 import {
@@ -4099,19 +4099,19 @@ export async function registerConfigTablesInResolver(
   overrides?: { differed: boolean }
 ): Promise<void> {
   const dialect = adapter.getCapabilities().dialect;
-  const { entityKind, getTableColumns } = await import("drizzle-orm");
+  const { entityKind, getColumns } = await import("drizzle-orm");
   /**
    * A table's columns as it reads and writes them, sorted: each column's
    * Drizzle class, which holds its decoder and encoder (`SQLiteBoolean` and
    * `SQLiteInteger` are both `integer`), its SQL type, and every setting it
    * was built with, the name, nullability and mode among them. A function
    * setting (a mapper, a default) is rebuilt with each column, so it is
-   * described by its source.
+   * described by its source. Read through `getColumns`, Drizzle v1's column
+   * accessor, typed as a `Table` so it returns the column map rather than a
+   * view's selected fields.
    */
   const columnsOf = (table: unknown): string =>
-    Object.values(
-      getTableColumns(table as Parameters<typeof getTableColumns>[0])
-    )
+    Object.values(getColumns(table as Table))
       .map(column =>
         JSON.stringify([
           Reflect.get(column.constructor, entityKind) as unknown,

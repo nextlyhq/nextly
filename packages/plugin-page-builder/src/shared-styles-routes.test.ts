@@ -22,6 +22,8 @@ import {
   mayReadSharedStyleUsage,
   readSharedStyleUsage,
   readSharedStyleUses,
+  REMOVAL_COUNT_MS,
+  joinedCount,
   removeSharedStyles,
   sharedStyleRoutes,
   siteStyleClassStore,
@@ -46,9 +48,17 @@ const WHOLE: UsageIndexHealth = {
   coversExistingDocuments: true,
   anyUndetermined: false,
 };
+/** Not whole, with scopes still to walk: a count changes it. */
 const NOT_WHOLE: UsageIndexHealth = {
   ...WHOLE,
   coversExistingDocuments: false,
+  backfillPending: true,
+};
+/** Not whole, every scope walked, a page past its walk bound: no count changes it. */
+const UNDETERMINED: UsageIndexHealth = {
+  ...WHOLE,
+  anyUndetermined: true,
+  backfillPending: false,
 };
 
 /** A store over `classes`, read at version `rev`, recording each write. */
@@ -684,6 +694,198 @@ describe("removing unused shared styles", () => {
         "Nothing was removed. Some pages haven't been counted yet, so no shared style can be removed.",
     });
     expect(write).not.toHaveBeenCalled();
+  });
+
+  it("counts the pages first where the index is not whole, then removes an unused style", async () => {
+    const { store, write } = storeOf([card, hero]);
+    const { source } = usageOf(WHOLE);
+    // A count that finishes: the index is whole once it has run.
+    let counted = false;
+    const countNow = vi.fn(async (budgetMs: number) => {
+      expect(budgetMs).toBe(REMOVAL_COUNT_MS);
+      counted = true;
+    });
+    const response = await removeSharedStyles(
+      post({ ids: ["c-card"] }),
+      store,
+      {
+        ...source,
+        health: async () => (counted ? WHOLE : NOT_WHOLE),
+        countNow,
+      },
+      new Set(),
+      NOT_STILL_USED
+    );
+    expect(countNow).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith([hero], {}, fromRead());
+    expect(response.status).toBe(200);
+  });
+
+  it("counts the pages first, then still refuses a style the count finds used", async () => {
+    const { store, write } = storeOf([card, hero]);
+    const { source } = usageOf(WHOLE, {
+      "c-card": [{ collection: "pages", documents: ["p1"] }],
+    });
+    let counted = false;
+    const countNow = vi.fn(async () => {
+      counted = true;
+    });
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-card"] }),
+          store,
+          {
+            ...source,
+            health: async () => (counted ? WHOLE : NOT_WHOLE),
+            countNow,
+          },
+          new Set(),
+          NOT_STILL_USED
+        )
+      )
+    ).toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(countNow).toHaveBeenCalledTimes(1);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("refuses as not counted when the count cannot finish in its time", async () => {
+    const { store, write } = storeOf([card, hero]);
+    const { source } = usageOf(NOT_WHOLE);
+    // The count runs out of time: the index is still not whole after it.
+    const countNow = vi.fn(async () => undefined);
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-card"] }),
+          store,
+          { ...source, countNow },
+          new Set(),
+          NOT_STILL_USED
+        )
+      )
+    ).toMatchObject({
+      code: "CONFLICT",
+      // Counting, not a use: what to do, said as such.
+      publicMessage:
+        "Nothing was removed. Some pages are still being counted, so no shared style can be removed yet. Try again shortly, or count them now with Count now.",
+    });
+    expect(countNow).toHaveBeenCalledTimes(1);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("lets two removals at once join one count, and removes the unused style in both", async () => {
+    // The sweep as the jobs runner runs it: one row, which one runner holds,
+    // so a second run asked for while the first is going claims nothing and
+    // returns at once. Each run takes a tick, so two asked for at once
+    // overlap.
+    let running = false;
+    let whole = false;
+    const sweep = vi.fn(async () => {
+      if (running) return { ran: false };
+      running = true;
+      await new Promise(resolve => setTimeout(resolve, 5));
+      whole = true;
+      running = false;
+      return { ran: true };
+    });
+    const countNow = joinedCount(sweep);
+    const remove = () => {
+      const { store, write } = storeOf([card, hero]);
+      const { source } = usageOf(WHOLE);
+      return {
+        write,
+        done: removeSharedStyles(
+          post({ ids: ["c-card"] }),
+          store,
+          {
+            ...source,
+            health: async () => (whole ? WHOLE : NOT_WHOLE),
+            countNow,
+          },
+          new Set(),
+          NOT_STILL_USED
+        ),
+      };
+    };
+    const first = remove();
+    const second = remove();
+    const [a, b] = await Promise.all([first.done, second.done]);
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect(first.write).toHaveBeenCalledTimes(1);
+    expect(second.write).toHaveBeenCalledTimes(1);
+    // One count, joined by the second removal rather than run again.
+    expect(sweep).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts once, then refuses saying why, where the count leaves content it cannot read whole", async () => {
+    const { store, write } = storeOf([card, hero]);
+    const { source } = usageOf(WHOLE);
+    let counted = false;
+    const countNow = vi.fn(async () => {
+      counted = true;
+    });
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-card"] }),
+          store,
+          {
+            ...source,
+            health: async () => (counted ? UNDETERMINED : NOT_WHOLE),
+            countNow,
+          },
+          new Set(),
+          NOT_STILL_USED
+        )
+      )
+    ).toMatchObject({
+      code: "CONFLICT",
+      publicMessage:
+        "Nothing was removed. No shared style can be removed while the count of where they are used is incomplete: some pages are too large to read in full, so what they use is not counted.",
+    });
+    expect(countNow).toHaveBeenCalledTimes(1);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("does not count where no work is left to do, and refuses saying why", async () => {
+    const { store, write } = storeOf([card, hero]);
+    const { source } = usageOf(WHOLE);
+    const countNow = vi.fn(async () => undefined);
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-card"] }),
+          store,
+          { ...source, health: async () => UNDETERMINED, countNow },
+          new Set(),
+          NOT_STILL_USED
+        )
+      )
+    ).toMatchObject({
+      code: "CONFLICT",
+      publicMessage: expect.stringContaining(
+        "the count of where they are used is incomplete"
+      ),
+    });
+    // No sweep that could change nothing.
+    expect(countNow).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("does not count where the index is already whole", async () => {
+    const { store } = storeOf([card, hero]);
+    const { source } = usageOf(WHOLE);
+    const countNow = vi.fn(async () => undefined);
+    await removeSharedStyles(
+      post({ ids: ["c-card"] }),
+      store,
+      { ...source, countNow },
+      new Set(),
+      NOT_STILL_USED
+    );
+    expect(countNow).not.toHaveBeenCalled();
   });
 
   it("refuses a used, a locked and a code-defined style as a conflict naming each", async () => {

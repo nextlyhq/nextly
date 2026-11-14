@@ -1603,6 +1603,28 @@ export interface PluginDefinition<W extends AnyWidget = AnyWidget> {
   ) => Promise<void> | void;
 
   /**
+   * @experimental Runs after a completed `nextly migrate` (and
+   * `nextly migrate:fresh`): every migrate that leaves nothing pending, after
+   * its schema, access and other post-schema steps. Never at a boot, never in
+   * a dry run, and not when `--step` leaves migrations pending.
+   *
+   * The place for work a deploy owes once the schema is in step and that no
+   * request should wait for, such as filling an index for content that
+   * existed before it. `run.applied` counts the migrations this run applied,
+   * 0 when it found nothing to apply: the hook runs either way.
+   *
+   * It runs after migrate's lock is released, so two migrates (or a migrate
+   * and a running app) can run it at the same time: it must be idempotent and
+   * safe when run twice at once. A throw makes the command exit non-zero once
+   * every plugin's hook has run; the schema it applied stays applied, and
+   * running `nextly migrate` again runs the hook again.
+   */
+  onMigrate?: (
+    context: PluginContext,
+    run: { applied: number }
+  ) => Promise<void> | void;
+
+  /**
    * @public Teardown on shutdown / HMR / test teardown.
    * Invocation is wired.
    */
