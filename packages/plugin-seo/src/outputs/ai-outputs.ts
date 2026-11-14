@@ -628,6 +628,9 @@ async function pageAsked(
     const page = await listedPageAt(ctx, address.path, address.locale, {
       origin: own === url.origin ? url.origin : site,
       readRules: config.readRules,
+      ...(config.codeRoutes === undefined
+        ? {}
+        : { codeRoutes: config.codeRoutes }),
       ...(config.collections === undefined
         ? {}
         : { collections: config.collections }),

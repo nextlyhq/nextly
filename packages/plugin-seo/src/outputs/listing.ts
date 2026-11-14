@@ -672,5 +672,24 @@ export async function listedPageAt(
     const page = await listedVersionOf(ctx, holder, at, options);
     if (page !== null) return page;
   }
-  return null;
+  // A page built in code, listed in the site's language as the listing
+  // lists it: only the route at `path` is read.
+  const routes = options.codeRoutes?.().filter(route => route.path === path);
+  if (language !== at.recordIn || routes === undefined || routes.length === 0) {
+    return null;
+  }
+  const found = { pages: [] as ListedPage[], problems: [] as ListingProblem[] };
+  await listCodePages(
+    ctx,
+    routes,
+    {
+      origin: options.origin,
+      language,
+      ...(options.readRules === undefined
+        ? {}
+        : { readRules: options.readRules }),
+    },
+    found
+  );
+  return found.pages[0] ?? null;
 }

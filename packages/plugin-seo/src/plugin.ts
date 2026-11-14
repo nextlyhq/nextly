@@ -741,6 +741,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // answers them and the head that links them make one decision.
   const plainCopies = {
     readRules,
+    // A page built in code is copied too, from the page as it renders.
+    codeRoutes,
     ...siteOrigin,
     ...(sitemapSubset === undefined ? {} : { collections: sitemapSubset }),
   };
