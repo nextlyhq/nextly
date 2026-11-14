@@ -18,6 +18,7 @@ import {
   repeater,
   text,
 } from "../../../../config";
+import type { SchemaHook } from "../../../schema/extension/draft";
 import { col, defineTable } from "../../../schema/extension/dsl";
 import { readIndexNames } from "../../../schema/pipeline/live-table-facts";
 import { definePlugin } from "../../../../plugins/plugin-context";
@@ -81,34 +82,42 @@ export const cards = defineFieldGroup({
   fields: [relationship({ name: "topic", relationTo: TAGS })],
 });
 
-/** The plugin whose own table has a declared foreign key to TAGS's table. */
-export const LINKS_PLUGIN = "@t/dep-links";
-export const LINKS_TABLE = "deplinks__links";
+/**
+ * The app's own table, with a declared foreign key to TAGS's table. The app declares it, not a
+ * plugin: a plugin's migrations run before the app's, which create the collections' tables, so a
+ * plugin's key to one is refused at boot. The app's run last and may key to them, a plugin's
+ * collection included.
+ */
+export const LINKS_TABLE = "dep_tag_links";
+/** How a refusal names the owner of `LINKS_TABLE`'s key. */
+export const LINKS_OWNER = "the app";
 
-export const linksPlugin = definePlugin({
-  name: LINKS_PLUGIN,
-  version: "1.0.0",
-  nextly: ">=0.0.0",
-  contributes: {
-    schema: {
-      prefix: "deplinks",
-      tables: [
-        defineTable(
-          "links",
-          { id: col.id(), tagId: col.shortText({ nullable: true }) },
+export const linksToTags: SchemaHook = ({ schema }) => {
+  schema.addTable(
+    defineTable(
+      LINKS_TABLE,
+      { id: col.id(), tagId: col.shortText({ nullable: true }) },
+      {
+        foreignKeys: [
           {
-            foreignKeys: [
-              {
-                columns: ["tagId"],
-                references: { table: TAGS_TABLE, columns: ["id"] },
-              },
-            ],
-          }
-        ),
-      ],
-    },
-  },
-});
+            columns: ["tagId"],
+            references: { table: TAGS_TABLE, columns: ["id"] },
+          },
+        ],
+      }
+    )
+  );
+};
+
+/** The config's `db` block declaring `linksToTags`, with the default paths. */
+export const linksDb = {
+  migrationsDir: "./migrations",
+  uiSchemaFile: "./ui-schema.json",
+  schema: { extend: [linksToTags] },
+};
+
+/** The plugin that declares TAGS where a suite has a plugin's collection rather than the app's. */
+export const TAGS_OWNER_PLUGIN = "@t/dep-tags-owner";
 
 /** The plugin that adds a hidden column and an index on it to TAGS's table. */
 export const MARKER_PLUGIN = "@t/dep-marker";
@@ -118,6 +127,10 @@ export const markerPlugin = definePlugin({
   name: MARKER_PLUGIN,
   version: "1.0.0",
   nextly: ">=0.0.0",
+  // A plugin extends another plugin's table only where it names that plugin among its
+  // dependencies. Optional, so the same plugin extends TAGS whether the app or the owner
+  // plugin below declares it.
+  optionalDependsOn: { [TAGS_OWNER_PLUGIN]: "*" },
   contributes: {
     schema: {
       extend: [
