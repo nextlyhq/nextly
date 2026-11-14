@@ -38,6 +38,11 @@ export interface ChromeTooltipProps {
   align?: "start" | "center" | "end";
   /** Classes for the tooltip's content. */
   className?: string;
+  /**
+   * Keeps the tooltip closed while its control stays wrapped: a control whose
+   * tooltip comes and goes keeps one element, so focus on it survives.
+   */
+  disabled?: boolean;
 }
 
 /**
@@ -75,10 +80,11 @@ export function ChromeTooltip({
   side = "bottom",
   align = "center",
   className,
+  disabled = false,
 }: ChromeTooltipProps): React.JSX.Element {
-  const { trigger, ...state } = useClosedByFrames();
+  const { trigger, open, onOpenChange } = useClosedByFrames();
   return (
-    <Tooltip {...state}>
+    <Tooltip open={open && !disabled} onOpenChange={onOpenChange}>
       <TooltipTrigger asChild ref={trigger}>
         {children}
       </TooltipTrigger>
