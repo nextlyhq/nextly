@@ -8,6 +8,7 @@ import { randomBytes } from "crypto";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import { assertTopLevelFieldsNamed } from "../../../api/fields-payload";
 import { NextlyError } from "../../../errors";
 import { resolveBuilderRevalidate } from "../../../revalidation/builder-revalidate";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
@@ -558,21 +559,8 @@ export class DynamicCollectionService extends BaseService {
     // Element shape matters too: the array is normalised with `f.name
     // .toLowerCase()` below, before field validation runs, so an element
     // without a string name throws the same untyped TypeError the checks
-    // above exist to prevent.
-    const malformed = data.fields.findIndex(
-      f => typeof (f as { name?: unknown })?.name !== "string"
-    );
-    if (malformed !== -1) {
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: `fields[${malformed}].name`,
-            code: "REQUIRED",
-            message: "Each field requires a name.",
-          },
-        ],
-      });
-    }
+    // above exist to prevent. The rule every entity API shares.
+    assertTopLevelFieldsNamed(data.fields);
 
     // `group` is lower-cased later without a type check; `?.` guards null and
     // undefined but not a number or object, which would throw an untyped
@@ -1367,21 +1355,9 @@ export class DynamicCollectionService extends BaseService {
       }
       // The array is normalised through `f.name.toLowerCase()` before field
       // validation runs, so an element without a string name throws an
-      // untyped TypeError rather than reporting the client error it is.
-      const malformedUpdate = updates.fields.findIndex(
-        f => typeof (f as { name?: unknown })?.name !== "string"
-      );
-      if (malformedUpdate !== -1) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: `fields[${malformedUpdate}].name`,
-              code: "REQUIRED",
-              message: "Each field requires a name.",
-            },
-          ],
-        });
-      }
+      // untyped TypeError rather than reporting the client error it is. The
+      // rule every entity API shares.
+      assertTopLevelFieldsNamed(updates.fields);
     }
 
     const collection = (await this.registryService.getCollection(

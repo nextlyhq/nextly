@@ -48,6 +48,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "@nextly/collections";
 
+import { assertTopLevelFieldsNamed } from "../../../api/fields-payload";
 import { NextlyError } from "../../../errors";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
@@ -433,6 +434,9 @@ export class SingleMetadataService {
    * table name. Rejecting after this point would leave a `pending` row behind.
    */
   async createSingle(input: CreateSingleInput): Promise<CreateSingleResult> {
+    // Only named fields at the top level, as a collection's API takes them: the request alone
+    // decides it, so it is refused before the lock (`assertTopLevelFieldsNamed`).
+    assertTopLevelFieldsNamed(input.fields ?? []);
     // 🔴 The exclusion wraps ALL THREE phases, not just the apply. A storage migration renaming
     // tables between the plan and the row write would leave this create describing storage that
     // moved underneath it, and the row is as much a part of the schema as the table is.
@@ -797,6 +801,9 @@ export class SingleMetadataService {
   async updateSingleSchema(
     input: UpdateSingleSchemaInput
   ): Promise<UpdateSingleSchemaResult> {
+    // Only named fields at the top level, as a collection's API takes them: a field cannot be
+    // created in, or moved into, a group with no name there (`assertTopLevelFieldsNamed`).
+    if (input.fields !== undefined) assertTopLevelFieldsNamed(input.fields);
     return withSchemaChangeExcluded(
       {
         adapter: this.adapter,
