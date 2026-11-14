@@ -29,6 +29,17 @@ export type DataTableTarget = string;
 export interface DataTableContext {
   /** The list key the columns are being resolved for. */
   target: DataTableTarget;
+  /**
+   * Answers, from a column provider, that its columns for this list rest on
+   * something still on its way (a read of the plugin's own, say): no columns
+   * now, and `until` settling is when they are known. A list that has its
+   * rows holds them back for a moment while a provider is still deciding, so
+   * a column registered once the read answers is drawn with the rows rather
+   * than pushing them apart after; once `until` settles, every list asks its
+   * providers again. Hand the same promise for as long as one decision is
+   * out. Absent on a transform's context.
+   */
+  deciding?: (until: Promise<unknown>) => NextlyColumn[];
 }
 
 /** Returns extra columns to append to a list. */
@@ -122,6 +133,66 @@ function collect<T>(
   const wildcard = map.get("*") ?? [];
   const scoped = target === "*" ? [] : (map.get(target) ?? []);
   return [...wildcard, ...scoped];
+}
+
+/**
+ * The decisions a provider said its columns wait on (`ctx.deciding`), each
+ * watched once: when one settles, the registrations are replaced by an equal
+ * copy, so every list on screen asks its providers again and stops holding
+ * its rows for it, whether or not the answer added a column.
+ */
+const watchedDecisions = new WeakSet<Promise<unknown>>();
+
+/** Ask the lists to resolve their columns again once `until` settles. */
+function watchDecision(until: Promise<unknown>): void {
+  if (watchedDecisions.has(until)) return;
+  watchedDecisions.add(until);
+  const askAgain = () => replace({ ...registrations });
+  until.then(askAgain, askAgain);
+}
+
+/**
+ * A provider's context for `target`: `deciding` reports to `onDeciding`,
+ * watches the decision and answers no columns. A provider is asked during a
+ * render, and watching changes nothing then: the registrations are replaced
+ * only once the decision settles, which is always a later task.
+ */
+function providerContext(
+  target: DataTableTarget,
+  onDeciding: () => void
+): DataTableContext {
+  return {
+    target,
+    deciding: until => {
+      onDeciding();
+      watchDecision(until);
+      return [];
+    },
+  };
+}
+
+/**
+ * Whether any provider registered for `target` (or every list) says its
+ * columns there are still being decided (`ctx.deciding`). Asks the same
+ * providers `resolvePluginColumns` does, so a list can hold its rows for a
+ * column on its way. A provider that throws is not deciding.
+ */
+export function pluginColumnsDeciding(
+  target: DataTableTarget,
+  from: DataTablePluginRegistrations = registrations
+): boolean {
+  let deciding = false;
+  const ctx = providerContext(target, () => {
+    deciding = true;
+  });
+  for (const provider of collect(from.columnProviders, target)) {
+    try {
+      provider(ctx);
+    } catch {
+      // Reported where the columns are resolved; here it decides nothing.
+    }
+  }
+  return deciding;
 }
 
 /** The registrations as they stand, for `useSyncExternalStore`. */
@@ -263,16 +334,16 @@ export function resolvePluginColumns<Row extends object>(
   base: NextlyColumn<Row>[],
   from: DataTablePluginRegistrations = registrations
 ): NextlyColumn<Row>[] {
-  const ctx: DataTableContext = { target };
   let columns = [...(base as NextlyColumn[])];
 
   for (const provider of collect(from.columnProviders, target)) {
     try {
-      columns = [...columns, ...provider(ctx)];
+      columns = [...columns, ...provider(providerContext(target, () => {}))];
     } catch (error) {
       console.warn(`registerColumns provider for "${target}" failed:`, error);
     }
   }
+  const ctx: DataTableContext = { target };
   for (const transform of collect(from.columnTransforms, target)) {
     try {
       // Transform a copy and only commit an array result, so a transform that

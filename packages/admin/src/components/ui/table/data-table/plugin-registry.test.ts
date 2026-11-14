@@ -9,6 +9,9 @@ import {
   getPluginRowActions,
   getPluginBulkActions,
   clearDataTablePlugins,
+  dataTablePluginRegistrations,
+  pluginColumnsDeciding,
+  subscribeToDataTablePlugins,
 } from "./plugin-registry";
 import type { NextlyColumn } from "./types";
 
@@ -125,5 +128,51 @@ describe("data-table plugin-registry", () => {
     removeBulk();
     expect(getPluginRowActions("users")).toEqual([]);
     expect(getPluginBulkActions("users").map(a => a.id)).toEqual(["y"]);
+  });
+
+  // A provider whose columns rest on a read of its own says so, and a list
+  // holds its rows a moment for it; the property separating this from a
+  // plausible broken registry is that the lists are asked again once the
+  // read settles even when it adds no column, or a list would wait out its
+  // whole hold for every collection without one.
+  it("says a list's columns are still being decided while a provider waits on a read", async () => {
+    let answer = () => {};
+    const read = new Promise<void>(resolve => {
+      answer = resolve;
+    });
+    let out = true;
+    registerColumns("*", ctx =>
+      out && ctx.deciding !== undefined ? ctx.deciding(read) : []
+    );
+    registerColumns("posts", () => [{ name: "seo", header: "SEO" }]);
+    expect(pluginColumnsDeciding("posts")).toBe(true);
+    // Deciding adds no column of its own.
+    expect(resolvePluginColumns("posts", base).map(c => c.name)).toEqual([
+      "title",
+      "seo",
+    ]);
+
+    const before = dataTablePluginRegistrations();
+    let told = 0;
+    const stop = subscribeToDataTablePlugins(() => {
+      told += 1;
+    });
+    out = false;
+    answer();
+    await read;
+    await Promise.resolve();
+    stop();
+    // Told once, though nothing was registered, and decided now.
+    expect(told).toBe(1);
+    expect(dataTablePluginRegistrations()).not.toBe(before);
+    expect(pluginColumnsDeciding("posts")).toBe(false);
+  });
+
+  it("is deciding nothing where no provider says so, or one throws", () => {
+    registerColumns("*", () => {
+      throw new Error("broken provider");
+    });
+    registerColumns("posts", () => [{ name: "seo", header: "SEO" }]);
+    expect(pluginColumnsDeciding("posts")).toBe(false);
   });
 });

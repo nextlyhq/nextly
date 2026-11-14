@@ -17,9 +17,10 @@
  *
  * @module tests/loading-frame.spec
  */
-import { expect, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { ADMIN } from "./support/admin";
+import { LOCK } from "./support/locks";
 import { mainColumnBox } from "./support/shell-geometry";
 import {
   fileAccount,
@@ -28,6 +29,36 @@ import {
   ownSeat,
   test,
 } from "./support/test";
+
+// The posts list is loaded with the collection's one template, which gives it
+// the Page Builder's Design column, decided by a read of the plugin's own. The
+// template is shared, so this file holds its lock while it makes and removes
+// its own.
+test.describe.configure({ lock: [LOCK.postsTemplate] });
+
+/**
+ * A seat of the file's account for the data below, made once for the file,
+ * so its writes are not spent from a test's request budget.
+ */
+const DATA_SEAT = 41;
+let removeFileData: Array<() => Promise<void>> = [];
+let dataApi: APIRequestContext | null = null;
+
+test.beforeAll(async ({ playwright, baseURL }, testInfo) => {
+  test.setTimeout(120_000);
+  dataApi = await playwright.request.newContext({
+    baseURL,
+    storageState: await fileAccount(baseURL ?? "", testInfo, DATA_SEAT),
+  });
+  removeFileData = [await postsTemplate(dataApi)];
+});
+
+test.afterAll(async () => {
+  test.setTimeout(120_000);
+  for (const remove of removeFileData.splice(0)) await remove();
+  await dataApi?.dispose();
+  dataApi = null;
+});
 
 /** The admin's record that this browser has signed in here before. */
 const SIGNED_IN_HERE_KEY = "nextly:admin:signed-in-here";
@@ -686,6 +717,56 @@ async function ownList(
   return `/collections/${slug}?where=${where}`;
 }
 
+/** Where the Page Builder's template actions are run. */
+const TEMPLATE_ACTIONS =
+  "/admin/api/plugins/@nextlyhq/plugin-page-builder/templates/actions";
+
+/** The CSRF token and origin a cookie-signed write to a plugin route needs. */
+async function pluginWriteHeaders(
+  api: APIRequestContext
+): Promise<Record<string, string>> {
+  const csrf = await api.get("/admin/api/auth/csrf");
+  const { token } = (await csrf.json()) as { token: string };
+  return { "x-csrf-token": token, origin: new URL(csrf.url()).origin };
+}
+
+/**
+ * Makes sure the posts collection has its one template, so its list draws the
+ * Page Builder's Design column, which the plugin decides by a read of its
+ * own after the list has asked for its columns. Answers the removal of the
+ * template when this file made it, and nothing to remove when another spec's
+ * was already there.
+ */
+async function postsTemplate(
+  api: APIRequestContext
+): Promise<() => Promise<void>> {
+  const created = await api.post(TEMPLATE_ACTIONS, {
+    data: { action: { kind: "create-template", collection: "posts" } },
+    headers: await pluginWriteHeaders(api),
+  });
+  const found = await api.get(
+    // Drafts too: a template is made as a draft, and a list read answers
+    // published entries alone unless asked for all.
+    "/admin/api/collections/templates/entries?where[collection][equals]=posts&status=all&limit=1"
+  );
+  expect(found.ok(), await found.text()).toBe(true);
+  const { items } = (await found.json()) as { items: { id: string }[] };
+  // The control: whichever spec made it, the posts collection has one.
+  expect(
+    items,
+    `the posts collection has no template: ${created.status()} ${await created.text()}`
+  ).toHaveLength(1);
+  if (!created.ok()) return async () => {};
+  const id = items[0]?.id ?? "";
+  return async () => {
+    const removed = await api.post(TEMPLATE_ACTIONS, {
+      data: { action: { kind: "delete-template", id } },
+      headers: await pluginWriteHeaders(api),
+    });
+    expect(removed.ok(), await removed.text()).toBe(true);
+  };
+}
+
 /** A form of the test's own, which no other test holds open. */
 async function ownForm(page: Page, made: string[]): Promise<string> {
   const stamp = `${Date.now().toString(36)}-${test.info().repeatEachIndex}-${test.info().workerIndex}`;
@@ -750,9 +831,11 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
 
       for (const mode of ["held", "unheld"] as const) {
         // The posts list has a plugin's showcase under its table, which a
-        // table that grows as its rows land would push down, and a plugin's
-        // block above it; the tags list has neither, so its outline's rows
-        // are held to the list's own.
+        // table that grows as its rows land would push down, a plugin's
+        // block above it, and, with its template, the Page Builder's Design
+        // column, which the plugin decides once its own read answers; the
+        // tags list has none of them, so its outline's rows are held to the
+        // list's own.
         for (const slug of ["posts", "tags"] as const) {
           test(`moves no part of a list of five ${slug}, ${mode}`, async ({
             page,
@@ -762,6 +845,12 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
             await expectStillLoad(page, path, mode, {
               parts: slug === "tags",
             });
+            // The control: the posts list drew the column it waited for.
+            if (slug === "posts") {
+              await expect(
+                page.getByRole("columnheader", { name: "Design" })
+              ).toBeVisible();
+            }
           });
 
           test(`moves no part of a list of eleven ${slug} on a revisit, ${mode}`, async ({

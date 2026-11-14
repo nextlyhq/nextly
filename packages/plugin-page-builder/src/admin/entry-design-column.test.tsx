@@ -21,7 +21,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EntryDesignsResponse } from "../templates/entry-designs-contract";
 
-type Provider = (ctx: { target: string }) => unknown[];
+type Provider = (ctx: {
+  target: string;
+  deciding?: (until: Promise<unknown>) => unknown[];
+}) => unknown[];
 type Transform = (columns: { name: string }[]) => { name: string }[];
 const providers: { target: string; provider: Provider }[] = [];
 const transforms: { target: string; transform: Transform }[] = [];
@@ -100,11 +103,23 @@ function answer(
   };
 }
 
+/** What the providers said their columns wait on, by list, as last asked. */
+const decidingOn = new Map<string, Promise<unknown>>();
+
 /** Every provider registered for `target` or every list, asked once. */
 function columnsOf(target: string): { name?: string; header?: unknown }[] {
+  decidingOn.delete(target);
   return providers
     .filter(each => each.target === target || each.target === "*")
-    .flatMap(each => each.provider({ target })) as {
+    .flatMap(each =>
+      each.provider({
+        target,
+        deciding: until => {
+          decidingOn.set(target, until);
+          return [];
+        },
+      })
+    ) as {
     name?: string;
     header?: unknown;
   }[];
@@ -155,14 +170,27 @@ describe("the Design column", () => {
     registerEntryDesignColumn();
     expect(providers.filter(each => each.target === "*")).toHaveLength(1);
 
-    // The first draw of each list asks; nothing is added yet.
+    // The first draw of each list asks; nothing is added yet, and each list
+    // is told its columns wait on that read, so it holds its rows for it.
     expect(columnsOf("posts")).toEqual([]);
     expect(columnsOf("users")).toEqual([]);
-    // A redraw asks nothing more.
+    expect(decidingOn.has("users")).toBe(true);
+    // A redraw asks nothing more, and waits on the same read.
+    const waitedOn = decidingOn.get("users");
+    columnsOf("users");
+    expect(decidingOn.get("users")).toBe(waitedOn);
     columnsOf("posts");
     await vi.waitFor(() =>
       expect(providers.some(each => each.target === "posts")).toBe(true)
     );
+    // Once it has answered, neither list waits any more: one has its column,
+    // the other none.
+    await decidingOn.get("posts");
+    expect(columnsOf("posts").map(column => column.header)).toEqual(["Design"]);
+    expect(decidingOn.has("posts")).toBe(false);
+    await waitedOn;
+    columnsOf("users");
+    expect(decidingOn.has("users")).toBe(false);
     expect(reads).toEqual([
       "/templates/entry-designs?collection=posts",
       "/templates/entry-designs?collection=users",
@@ -336,11 +364,28 @@ describe("the Design column", () => {
   });
 
   it("holds the pill's place while the read is out", () => {
+    // A collection whose list was never decided: nothing to draw from yet.
     const { container } = render(
-      <DesignCell collection="posts" row={{ id: "p1" }} />
+      <DesignCell collection="notes" row={{ id: "n1" }} />
     );
     expect(container.querySelector("[aria-hidden='true']")).not.toBeNull();
     expect(container.textContent).toBe("");
+  });
+
+  it("draws from the read that gave its list the column while its own read is out", () => {
+    // The posts list's latest answer: its template, and no own designs.
+    cellRead = { data: answer(BLOG_POST), error: null };
+    render(<DesignCell collection="posts" row={{ id: "p1" }} />);
+    cleanup();
+    // The next cell's own read is out: it draws "Template" from its first
+    // frame, not the pill's placeholder, so the column does not change width
+    // when its own read lands.
+    cellRead = { data: undefined, error: null };
+    const { container } = render(
+      <DesignCell collection="posts" row={{ id: "p1" }} />
+    );
+    expect(screen.getByText("Template")).toBeTruthy();
+    expect(container.querySelector("[aria-hidden='true']")).toBeNull();
   });
 });
 

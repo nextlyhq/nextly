@@ -30,11 +30,14 @@ import {
 } from "react";
 
 import { Pencil, Trash2 } from "@admin/components/icons";
+import { useHoldForDecidingColumns } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { RangeField } from "@admin/components/shared/range-field";
 import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
+import { useDataTablePluginRegistrations } from "@admin/components/ui/table/data-table/DataTableView";
+import { pluginColumnsDeciding } from "@admin/components/ui/table/data-table/plugin-registry";
 import {
   ListView,
   type ListColumnsControl,
@@ -356,6 +359,23 @@ export const EntryTable: ForwardRefExoticComponent<
     [collection]
   );
 
+  // A plugin's column decided by a read of its own (whether the collection
+  // has what the column shows) is registered once that read answers. Asked
+  // here from the list's first draw, outline included, so the read leaves
+  // with the rows' own; and once the rows are in, the outline stays a moment
+  // longer while a provider is still deciding, so the column is drawn with
+  // the rows instead of moving every cell beside it when it lands.
+  const registered = useDataTablePluginRegistrations();
+  const columnsDeciding = useMemo(
+    () => pluginColumnsDeciding(collection.slug, registered),
+    [collection.slug, registered]
+  );
+  const holdForColumns = useHoldForDecidingColumns(
+    !isLoading,
+    columnsDeciding,
+    collection.slug
+  );
+
   // -------------------------------------------------------------------------
   // Sorting
   // -------------------------------------------------------------------------
@@ -655,7 +675,7 @@ export const EntryTable: ForwardRefExoticComponent<
             .map(column => column.header)}
         />
       }
-      loading={isLoading}
+      loading={isLoading || holdForColumns}
       columns={columns}
       rows={entries}
       getRowId={rowId}
