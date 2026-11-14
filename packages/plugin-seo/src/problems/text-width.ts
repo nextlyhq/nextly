@@ -203,8 +203,10 @@ export function fitSummary(fit: TextFit): string {
  * cut at the last word that fits with " …" after it.
  */
 export function cutToFit(kind: SearchText, text: string): string {
+  // Whole where the fit says it fits, the one decision the width bar and the
+  // problem list make, so the preview never cuts a value they call fitting.
+  if (textFit(kind, text).fits) return text;
   const { fontSize, width } = SEARCH_TEXT[kind];
-  if (textWidth(text, fontSize) <= width) return text;
   const room = width - textWidth(" …", fontSize);
   let kept = "";
   let used = 0;

@@ -113,6 +113,15 @@ describe("textFit", () => {
 });
 
 describe("cutToFit", () => {
+  it("keeps whole a title the fit rounds to the limit, as the width bar calls it", () => {
+    // 600.0098 px unrounded: the fit rounds it to 600 and calls it fitting,
+    // so the preview must not cut it.
+    const edge = "t".repeat(58) + "n" + "i".repeat(60);
+    expect(textWidth(edge, 20)).toBeGreaterThan(600);
+    expect(textFit("title", edge)).toMatchObject({ pixels: 600, fits: true });
+    expect(cutToFit("title", edge)).toBe(edge);
+  });
+
   it("keeps a title that fits whole", () => {
     expect(cutToFit("title", NARROW_TITLE)).toBe(NARROW_TITLE);
   });
