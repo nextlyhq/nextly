@@ -92,6 +92,12 @@ describe("whether a request asks for Markdown over HTML", () => {
     // Named only to refuse it.
     ["text/markdown;q=0, text/html", false],
     ["text/markdown;q=0.0", false],
+    // HTML weighted through a wildcard, as specifically as it is named.
+    ["text/markdown;q=0.1, */*;q=1", false],
+    ["text/markdown;q=0.5, text/*;q=0.8", false],
+    ["text/*, text/markdown", false],
+    ["text/markdown, */*;q=0.1", true],
+    ["text/markdown;q=0.9, text/*;q=0.8, text/html;q=0.5", true],
   ])("%s: %s", (accept, asks) => {
     expect(prefersMarkdown(accept)).toBe(asks);
   });

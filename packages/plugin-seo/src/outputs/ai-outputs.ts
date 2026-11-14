@@ -663,7 +663,11 @@ export function prefersMarkdown(accept: string | null): boolean {
   const types = acceptedTypes(accept);
   const markdown = types.find(each => each.type === "text/markdown");
   if (markdown === undefined || markdown.q <= 0) return false;
-  const html = types.find(each => each.type === "text/html");
+  // HTML's weight from the range naming it most specifically, as RFC 9110
+  // reads it: `text/html`, else `text/*`, else `*/*`.
+  const html = ["text/html", "text/*", "*/*"]
+    .map(range => types.find(each => each.type === range))
+    .find(each => each !== undefined);
   if (html === undefined) return true;
   return (
     markdown.q > html.q || (markdown.q === html.q && markdown.at < html.at)
