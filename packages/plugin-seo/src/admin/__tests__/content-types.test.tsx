@@ -215,6 +215,25 @@ describe("the Content types tab", () => {
     ).toEqual(["SEO for Type 03"]);
   });
 
+  it("counts as off only the types with SEO switched off, never one the site's code leaves out", () => {
+    const many = Array.from({ length: 9 }, (_, at) =>
+      seoType(`type${at}`, `Type ${at}`)
+    );
+    render(
+      <Tab types={many} switchedOff={[leftOut, ownSeo]} saved={["type3"]} />
+    );
+    // Eleven rows, so the filter shows: one type is off, eight are on, and
+    // the two locked rows are neither.
+    expect(screen.getByRole("radio", { name: "SEO off 1" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "SEO on 8" })).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "All 11" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("radio", { name: "SEO off 1" }));
+    expect(screen.queryByRole("group", { name: "Docs (old)" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Landing pages" })).toBeNull();
+    expect(screen.getByRole("group", { name: "Type 3" })).toBeTruthy();
+  });
+
   it("offers no search for a few types", () => {
     render(<Tab types={[posts, authors]} />);
     expect(screen.queryByRole("searchbox")).toBeNull();
