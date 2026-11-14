@@ -250,6 +250,13 @@ function unwrapped(text: string): string {
   }
 }
 
+/** An element being closed: what it noted on opening, its words, and what came before it. */
+interface Closing {
+  open: Open;
+  inner: string;
+  before: string;
+}
+
 /** The writer of one page's copy, as its HTML is read. */
 class CopyWriter {
   out = "";
@@ -358,40 +365,62 @@ class CopyWriter {
     const { tag } = open;
     if (this.nestedList(tag)) this.newLine();
     else if (BLOCKS.has(tag)) this.newBlock();
-    if (tag === "li") {
-      this.newLine();
-      const lists = this.lists();
-      const list = lists.at(-1);
-      if (list !== undefined) list.count = (list.count ?? 0) + 1;
-      const marker = list?.ordered === true ? `${list.count ?? 1}.` : "-";
-      this.out += `${"  ".repeat(Math.max(lists.length - 1, 0))}${marker} `;
-    }
     if (tag === "ol") open.ordered = true;
-    if (tag === "td" || tag === "th") {
-      this.out = this.out.replace(/[ \t]+$/, "");
-      this.out += this.out.endsWith("\n") || this.out === "" ? "| " : " | ";
-    }
-    if (tag === "tr") {
-      const table = [...this.stack]
-        .reverse()
-        .find(each => each.tag === "table");
-      open.count = table?.count ?? 0;
-      if (table !== undefined) table.count = (table.count ?? 0) + 1;
-      this.newLine();
-    }
-    if (tag === "a") {
-      // Two links in a row would otherwise run together.
-      if (this.out.endsWith(")")) this.out += " ";
-      const href = attributeOf(attributes, "href");
-      if (
-        href !== undefined &&
-        !href.startsWith("#") &&
-        !/^javascript:/i.test(href)
-      ) {
-        open.href = whole(href, this.base);
-      }
-    }
+    this.beginnerFor(tag)?.(open, attributes);
     open.start = this.out.length;
+  }
+
+  /** What opening `tag` writes beyond its block's break, where it writes any. */
+  private beginnerFor(
+    tag: string
+  ): ((open: Open, attributes: string) => void) | undefined {
+    const beginners: Record<string, (open: Open, attributes: string) => void> =
+      {
+        li: () => this.beginItem(),
+        td: () => this.beginCell(),
+        th: () => this.beginCell(),
+        tr: open => this.beginRow(open),
+        a: (open, attributes) => this.beginLink(open, attributes),
+      };
+    return beginners[tag];
+  }
+
+  /** A list item's marker, indented to its list's depth and numbered in order. */
+  private beginItem(): void {
+    this.newLine();
+    const lists = this.lists();
+    const list = lists.at(-1);
+    if (list !== undefined) list.count = (list.count ?? 0) + 1;
+    const marker = list?.ordered === true ? `${list.count ?? 1}.` : "-";
+    this.out += `${"  ".repeat(Math.max(lists.length - 1, 0))}${marker} `;
+  }
+
+  /** A table cell's leading bar. */
+  private beginCell(): void {
+    this.out = this.out.replace(/[ \t]+$/, "");
+    this.out += this.out.endsWith("\n") || this.out === "" ? "| " : " | ";
+  }
+
+  /** A table row, numbered in its table so the first is read as the header. */
+  private beginRow(open: Open): void {
+    const table = [...this.stack].reverse().find(each => each.tag === "table");
+    open.count = table?.count ?? 0;
+    if (table !== undefined) table.count = (table.count ?? 0) + 1;
+    this.newLine();
+  }
+
+  /** A link's target, made whole; a link within the page or to a script has none. */
+  private beginLink(open: Open, attributes: string): void {
+    // Two links in a row would otherwise run together.
+    if (this.out.endsWith(")")) this.out += " ";
+    const href = attributeOf(attributes, "href");
+    if (
+      href !== undefined &&
+      !href.startsWith("#") &&
+      !/^javascript:/i.test(href)
+    ) {
+      open.href = whole(href, this.base);
+    }
   }
 
   close(tag: string): void {
@@ -401,68 +430,115 @@ class CopyWriter {
     const open = this.stack[at];
     this.stack.length = at;
     if (open === undefined || open.skip || this.skipping()) return;
-    const inner = this.out.slice(open.start);
-    const before = this.out.slice(0, open.start);
-    if (/^h[1-6]$/.test(tag)) {
-      // A heading is emphasis enough: emphasis around all of it is dropped.
-      const heading = unwrapped(inner.replace(/\s+/g, " ").trim());
-      this.out =
-        heading === ""
-          ? before
-          : `${before}${"#".repeat(Number(tag[1]))} ${heading}`;
-      this.newBlock();
-    } else if (tag === "a") {
-      // A card that wraps a heading and a paragraph in one link is one line.
-      const label = inner
-        .split(/\n+/)
-        .map(part => part.replace(/^#+\s*/, "").trim())
-        .filter(part => part !== "")
-        .join(" — ");
-      this.out =
-        before +
-        (label !== "" && open.href !== undefined
-          ? `[${label}](${linkTarget(open.href)})`
-          : label);
-    } else if (tag === "pre") {
-      const code = inner.replace(/^\n+|\s+$/g, "");
-      this.out = `${before}${fencedCode(code)}`;
-      this.newBlock();
-    } else if (tag === "code" && !this.inside("pre")) {
-      const code = inner.trim();
-      this.out = code === "" ? before : `${before}${inlineCode(code)}`;
-    } else if (EMPHASIS[tag] !== undefined) {
-      const mark = EMPHASIS[tag];
-      const words = inner.trim();
-      if (words !== "" && !words.includes("\n")) {
-        const lead = inner.match(/^\s*/)?.[0] ?? "";
-        const trail = inner.match(/\s*$/)?.[0] ?? "";
-        this.out = `${before}${lead}${mark}${words}${mark}${trail}`;
-      }
-    } else if (tag === "blockquote") {
-      const quote = inner.trim();
-      this.out =
-        quote === ""
-          ? before
-          : `${before}${quote
-              .split("\n")
-              .map(line => (line === "" ? ">" : `> ${line}`))
-              .join("\n")}`;
-      this.newBlock();
-    } else if (tag === "li") {
-      this.newLine();
-    } else if (tag === "th" || (tag === "td" && this.headerRow())) {
-      // A header cell is emphasis enough, as a heading is.
-      this.out = `${before}${unwrapped(inner.trim())}`;
-    } else if (tag === "tr") {
-      this.out = `${this.out.replace(/[ \t]+$/, "")} |\n`;
-      if (open.count === 0) {
-        // The first row is the table's header.
-        const cells = this.out.slice(open.start).split("|").length - 2;
-        this.out += `|${" --- |".repeat(Math.max(cells, 1))}\n`;
-      }
-    } else if (tag === "table") {
-      this.newBlock();
-    } else if (this.nestedList(tag)) {
+    this.closerFor(tag)({
+      open,
+      inner: this.out.slice(open.start),
+      before: this.out.slice(0, open.start),
+    });
+  }
+
+  /** How closing `tag` rewrites what it holds, read after it is closed. */
+  private closerFor(tag: string): (closing: Closing) => void {
+    const heading = /^h([1-6])$/.exec(tag);
+    if (heading !== null) {
+      return closing => this.closeHeading(Number(heading[1]), closing);
+    }
+    const mark = EMPHASIS[tag];
+    if (mark !== undefined) return closing => this.closeEmphasis(mark, closing);
+    if (tag === "code" && !this.inside("pre")) {
+      return closing => this.closeCode(closing);
+    }
+    if (tag === "th" || (tag === "td" && this.headerRow())) {
+      return closing => this.closeHeaderCell(closing);
+    }
+    const closers: Record<string, (closing: Closing) => void> = {
+      a: closing => this.closeLink(closing),
+      pre: closing => this.closePre(closing),
+      blockquote: closing => this.closeQuote(closing),
+      li: () => this.newLine(),
+      tr: closing => this.closeRow(closing),
+      table: () => this.newBlock(),
+    };
+    return closers[tag] ?? (closing => this.closeOther(tag, closing));
+  }
+
+  /** A heading, marked by its level. */
+  private closeHeading(level: number, { inner, before }: Closing): void {
+    // A heading is emphasis enough: emphasis around all of it is dropped.
+    const heading = unwrapped(inner.replace(/\s+/g, " ").trim());
+    this.out =
+      heading === "" ? before : `${before}${"#".repeat(level)} ${heading}`;
+    this.newBlock();
+  }
+
+  /** A link, its words as its label. */
+  private closeLink({ open, inner, before }: Closing): void {
+    // A card that wraps a heading and a paragraph in one link is one line.
+    const label = inner
+      .split(/\n+/)
+      .map(part => part.replace(/^#+\s*/, "").trim())
+      .filter(part => part !== "")
+      .join(" — ");
+    this.out =
+      before +
+      (label !== "" && open.href !== undefined
+        ? `[${label}](${linkTarget(open.href)})`
+        : label);
+  }
+
+  /** A preformatted block, fenced as code. */
+  private closePre({ inner, before }: Closing): void {
+    const code = inner.replace(/^\n+|\s+$/g, "");
+    this.out = `${before}${fencedCode(code)}`;
+    this.newBlock();
+  }
+
+  /** Inline code, fenced in backticks. */
+  private closeCode({ inner, before }: Closing): void {
+    const code = inner.trim();
+    this.out = code === "" ? before : `${before}${inlineCode(code)}`;
+  }
+
+  /** Emphasis, marked where it holds words on one line. */
+  private closeEmphasis(mark: string, { inner, before }: Closing): void {
+    const words = inner.trim();
+    if (words === "" || words.includes("\n")) return;
+    const lead = inner.match(/^\s*/)?.[0] ?? "";
+    const trail = inner.match(/\s*$/)?.[0] ?? "";
+    this.out = `${before}${lead}${mark}${words}${mark}${trail}`;
+  }
+
+  /** A quote, each line marked. */
+  private closeQuote({ inner, before }: Closing): void {
+    const quote = inner.trim();
+    this.out =
+      quote === ""
+        ? before
+        : `${before}${quote
+            .split("\n")
+            .map(line => (line === "" ? ">" : `> ${line}`))
+            .join("\n")}`;
+    this.newBlock();
+  }
+
+  /** A header cell, without emphasis around all of it. */
+  private closeHeaderCell({ inner, before }: Closing): void {
+    // A header cell is emphasis enough, as a heading is.
+    this.out = `${before}${unwrapped(inner.trim())}`;
+  }
+
+  /** A table row, closed by its bar; the first row is followed by the header line. */
+  private closeRow({ open }: Closing): void {
+    this.out = `${this.out.replace(/[ \t]+$/, "")} |\n`;
+    if (open.count !== 0) return;
+    // The first row is the table's header.
+    const cells = this.out.slice(open.start).split("|").length - 2;
+    this.out += `|${" --- |".repeat(Math.max(cells, 1))}\n`;
+  }
+
+  /** Any other element: a list, a block, or an inline element. */
+  private closeOther(tag: string, { inner }: Closing): void {
+    if (this.nestedList(tag)) {
       this.newLine();
     } else if (BLOCKS.has(tag)) {
       this.newBlock();
