@@ -57,6 +57,25 @@ const SKIPPED: ReadonlySet<string> = new Set([
   "head",
 ]);
 
+/**
+ * Elements whose content is raw text, not markup: read to their own closing
+ * tag, so a `"</div>"` in a script's source closes nothing. Each is also
+ * left out of the copy.
+ */
+const RAW_TEXT: ReadonlySet<string> = new Set([
+  "script",
+  "style",
+  "textarea",
+  "iframe",
+]);
+
+/**
+ * Where a fenced code block stands in the copy while it is written, so the
+ * tidying of prose at the end never touches code; the character is never
+ * in a page's words, which are kept without it.
+ */
+const CODE_MARK = "\u0000";
+
 /** Elements that begin a block of their own. */
 const BLOCKS: ReadonlySet<string> = new Set([
   "p",
@@ -220,6 +239,8 @@ interface Open {
   ordered?: boolean;
   /** Items in a list, or rows in a table, so far. */
   count?: number;
+  /** A list item's marker width: how far its later blocks are indented. */
+  indent?: number;
 }
 
 /** The emphasis each inline element draws, as Markdown marks it. */
@@ -261,6 +282,8 @@ interface Closing {
 class CopyWriter {
   out = "";
   readonly stack: Open[] = [];
+  /** The fenced code blocks, in order, each marked in `out` by its index. */
+  readonly codes: string[] = [];
 
   private readonly base: string;
   private readonly wholeBody: boolean;
@@ -311,11 +334,13 @@ class CopyWriter {
   /** The words of a text run, as the copy holds them. */
   text(raw: string): void {
     if (this.skipping()) return;
+    // Never a code block's mark, which only the writer places.
+    const text = decoded(raw).replaceAll(CODE_MARK, "");
     if (this.inside("pre")) {
-      this.out += decoded(raw);
+      this.out += text;
       return;
     }
-    const words = decoded(raw).replace(/\s+/g, " ");
+    const words = text.replace(/\s+/g, " ");
     if (words.trim() === "") {
       if (this.out !== "" && !/\s$/.test(this.out)) this.out += " ";
       return;
@@ -364,10 +389,17 @@ class CopyWriter {
   private begin(open: Open, attributes: string): void {
     const { tag } = open;
     if (this.nestedList(tag)) this.newLine();
-    else if (BLOCKS.has(tag)) this.newBlock();
+    // A block that begins a list item stays on its marker's line.
+    else if (BLOCKS.has(tag) && !this.atItemStart()) this.newBlock();
     if (tag === "ol") open.ordered = true;
     this.beginnerFor(tag)?.(open, attributes);
     open.start = this.out.length;
+  }
+
+  /** Whether nothing is written yet in the list item being read, past its marker. */
+  private atItemStart(): boolean {
+    const item = [...this.stack].reverse().find(open => open.tag === "li");
+    return item !== undefined && this.out.length === item.start;
   }
 
   /** What opening `tag` writes beyond its block's break, where it writes any. */
@@ -376,7 +408,7 @@ class CopyWriter {
   ): ((open: Open, attributes: string) => void) | undefined {
     const beginners: Record<string, (open: Open, attributes: string) => void> =
       {
-        li: () => this.beginItem(),
+        li: open => this.beginItem(open),
         td: () => this.beginCell(),
         th: () => this.beginCell(),
         tr: open => this.beginRow(open),
@@ -385,14 +417,19 @@ class CopyWriter {
     return beginners[tag];
   }
 
-  /** A list item's marker, indented to its list's depth and numbered in order. */
-  private beginItem(): void {
+  /**
+   * A list item's marker, indented to its list's depth and numbered in
+   * order; its width is noted, to indent the item's later blocks by.
+   */
+  private beginItem(open: Open): void {
     this.newLine();
     const lists = this.lists();
     const list = lists.at(-1);
     if (list !== undefined) list.count = (list.count ?? 0) + 1;
     const marker = list?.ordered === true ? `${list.count ?? 1}.` : "-";
-    this.out += `${"  ".repeat(Math.max(lists.length - 1, 0))}${marker} `;
+    const lead = `${"  ".repeat(Math.max(lists.length - 1, 0))}${marker} `;
+    open.indent = lead.length;
+    this.out += lead;
   }
 
   /** A table cell's leading bar. */
@@ -455,7 +492,7 @@ class CopyWriter {
       a: closing => this.closeLink(closing),
       pre: closing => this.closePre(closing),
       blockquote: closing => this.closeQuote(closing),
-      li: () => this.newLine(),
+      li: closing => this.closeItem(closing),
       tr: closing => this.closeRow(closing),
       table: () => this.newBlock(),
     };
@@ -486,10 +523,33 @@ class CopyWriter {
         : label);
   }
 
-  /** A preformatted block, fenced as code. */
+  /**
+   * A list item: each line after its first that is indented less than its
+   * marker is indented under it, so a later paragraph stays in the item.
+   */
+  private closeItem({ open, inner, before }: Closing): void {
+    const indent = " ".repeat(open.indent ?? 0);
+    this.out =
+      before +
+      inner
+        .split("\n")
+        .map((line, at) =>
+          at === 0 || line.trim() === "" || line.startsWith(indent)
+            ? line
+            : `${indent}${line.trimStart()}`
+        )
+        .join("\n");
+    this.newLine();
+  }
+
+  /**
+   * A preformatted block, fenced as code: kept aside and marked where it
+   * stands, so it is copied verbatim ({@link withCode}).
+   */
   private closePre({ inner, before }: Closing): void {
     const code = inner.replace(/^\n+|\s+$/g, "");
-    this.out = `${before}${fencedCode(code)}`;
+    this.codes.push(fencedCode(code));
+    this.out = `${before}${CODE_MARK}${this.codes.length - 1}${CODE_MARK}`;
     this.newBlock();
   }
 
@@ -570,12 +630,57 @@ function descriptionOf(html: string): string | undefined {
   return undefined;
 }
 
+/** The tags of the HTML a page's copy reads: a comment, a tag, or text. */
+const TOKEN =
+  /<!--[\s\S]*?-->|<(\/?)([a-zA-Z][a-zA-Z0-9-]*)\b((?:[^>"']|"[^"]*"|'[^']*')*)>|[^<]+|</g;
+
+/**
+ * Where the raw text of a `tag` opened before `from` ends: just past its
+ * closing tag, else the end of `source`, which an unclosed one runs to.
+ */
+function rawTextEnd(source: string, tag: string, from: number): number {
+  const closing = new RegExp(`</${tag}(?=[\\s/>])[^>]*>`, "gi");
+  closing.lastIndex = from;
+  const found = closing.exec(source);
+  return found === null ? source.length : found.index + found[0].length;
+}
+
+/**
+ * `markdown` with each code block put back where its mark stands, every
+ * line after the first led by what leads the mark's line (a quote's `>`, a
+ * list item's indent), so code in a quote or an item stays inside it.
+ */
+function withCode(markdown: string, codes: readonly string[]): string {
+  const mark = new RegExp(
+    `^([^\\n${CODE_MARK}]*)${CODE_MARK}(\\d+)${CODE_MARK}`,
+    "gm"
+  );
+  return markdown.replace(mark, (whole, lead: string, at: string) => {
+    const code = codes[Number(at)];
+    if (code === undefined) return whole;
+    // A list marker leads only the first line; the rest align under it.
+    const rest = lead.replace(/(?:-|\d+\.) /g, marker =>
+      " ".repeat(marker.length)
+    );
+    return code
+      .split("\n")
+      .map((line, index) => {
+        if (index === 0) return `${lead}${line}`;
+        return line === "" ? rest.trimEnd() : `${rest}${line}`;
+      })
+      .join("\n");
+  });
+}
+
 /** Markdown from the HTML `source`, its addresses made whole against `base`. */
 function markdownOf(source: string, base: string, wholeBody: boolean): string {
   const writer = new CopyWriter(base, wholeBody);
-  for (const token of source.matchAll(
-    /<!--[\s\S]*?-->|<(\/?)([a-zA-Z][a-zA-Z0-9-]*)\b((?:[^>"']|"[^"]*"|'[^']*')*)>|[^<]+|</g
-  )) {
+  const tokens = new RegExp(TOKEN);
+  for (
+    let token = tokens.exec(source);
+    token !== null;
+    token = tokens.exec(source)
+  ) {
     const [all, closing, name, attributes = ""] = token;
     if (all.startsWith("<!--")) continue;
     if (name === undefined) {
@@ -588,18 +693,102 @@ function markdownOf(source: string, base: string, wholeBody: boolean): string {
       // A self-closed element that is not void holds nothing.
       writer.open(tag, attributes);
       writer.close(tag);
-    } else writer.open(tag, attributes);
+    } else {
+      writer.open(tag, attributes);
+      if (RAW_TEXT.has(tag)) {
+        // Its raw text is passed over whole, and the element closed.
+        tokens.lastIndex = rawTextEnd(source, tag, tokens.lastIndex);
+        writer.close(tag);
+      }
+    }
   }
-  return (
-    writer.out
-      .split("\n")
-      .map(line => line.replace(/[ \t]+$/, ""))
-      // A list item left with no words.
-      .filter(line => !/^\s*(?:-|\d+\.)\s*$/.test(line))
-      .join("\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim()
-  );
+  const prose = writer.out
+    .split("\n")
+    .map(line => line.replace(/[ \t]+$/, ""))
+    // A list item left with no words.
+    .filter(line => !/^\s*(?:-|\d+\.)\s*$/.test(line))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return withCode(prose, writer.codes);
+}
+
+/**
+ * The inner HTML of the hidden container React streams a boundary's
+ * content in (`<div hidden id="S:0">`), and `html` without it; none where
+ * it is not found.
+ */
+function streamedSegment(
+  html: string,
+  id: string
+): { inner: string; rest: string } | undefined {
+  const opening = `<div hidden id="${id}">`;
+  const start = html.indexOf(opening);
+  if (start === -1) return undefined;
+  let depth = 0;
+  const divs = /<(\/?)div(?=[\s>])[^>]*>/gi;
+  divs.lastIndex = start;
+  for (let div = divs.exec(html); div !== null; div = divs.exec(html)) {
+    depth += div[1] === "/" ? -1 : 1;
+    if (depth === 0) {
+      return {
+        inner: html.slice(start + opening.length, div.index),
+        rest: html.slice(0, start) + html.slice(div.index + div[0].length),
+      };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * `html` with the boundary marked `<template id="B:0">` holding `content`
+ * in place of its fallback: everything from the template to the comment
+ * that closes the boundary (`<!--/$-->`), boundaries inside it counted.
+ */
+function boundaryFilled(html: string, id: string, content: string): string {
+  const template = `<template id="${id}"></template>`;
+  const start = html.indexOf(template);
+  if (start === -1) return html;
+  let depth = 0;
+  const comments = /<!--([\s\S]*?)-->/g;
+  comments.lastIndex = start + template.length;
+  for (
+    let comment = comments.exec(html);
+    comment !== null;
+    comment = comments.exec(html)
+  ) {
+    const data = comment[1] ?? "";
+    if (data === "/$" || data === "/&") {
+      if (depth === 0) {
+        return html.slice(0, start) + content + html.slice(comment.index);
+      }
+      depth -= 1;
+    } else if (["$", "$?", "$~", "$!", "&"].includes(data)) {
+      depth += 1;
+    }
+  }
+  return html;
+}
+
+/**
+ * `html` as the browser shows it once every streamed boundary has loaded.
+ * A page that streams renders each Suspense boundary's fallback first, then
+ * its content in a hidden container, and a script (`$RC("B:0","S:0")`)
+ * moves the content into the fallback's place. The same moves are made
+ * here, in the order the page makes them, so a boundary streamed inside
+ * another is filled once its parent is.
+ */
+function resolvedStreaming(html: string): string {
+  let resolved = html;
+  for (const [, boundary = "", segment = ""] of html.matchAll(
+    /\$R[CR]\("(B:[^"]+)","(S:[^"]+)"/g
+  )) {
+    const found = streamedSegment(resolved, segment);
+    if (found !== undefined) {
+      resolved = boundaryFilled(found.rest, boundary, found.inner);
+    }
+  }
+  return resolved;
 }
 
 /** What a rendered page's copy is made of. */
@@ -615,11 +804,13 @@ export interface RenderedCopy {
 /**
  * The copy of a page from its rendered HTML: its head's title and
  * description, and its main content as Markdown, every address made whole
- * against `base`, the page's own address. Where the main content holds no
+ * against `base`, the page's own address, read as the page shows once
+ * every part it streams has loaded. Where the main content holds no
  * top-level heading, the page's first `<h1>` (which a page may place above
  * its `<main>`) begins it.
  */
-export function renderedCopyOf(html: string, base: string): RenderedCopy {
+export function renderedCopyOf(rendered: string, base: string): RenderedCopy {
+  const html = resolvedStreaming(rendered);
   const { source, wholeBody } = mainOf(html);
   let body = markdownOf(source, base, wholeBody);
   if (!/^# \S/m.test(body)) {

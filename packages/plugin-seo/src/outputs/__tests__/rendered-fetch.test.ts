@@ -8,7 +8,9 @@
  *   it is kept fetches nothing;
  * - a page whose body runs past 6 MB with no Content-Length is given up
  *   without reading the rest of it;
- * - a page answered with anything but HTML, or with a redirect, has no copy.
+ * - a page answered with anything but HTML, or with a redirect, has no copy;
+ * - a page whose body breaks off after its headers has no copy, rather
+ *   than an error the caller would have to catch.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -66,5 +68,24 @@ describe("the rendered page a copy is made from", () => {
         new Response("{}", { headers: { "content-type": "application/json" } })
     );
     expect(await renderedCopyAt({}, PAGE, PAGE)).toBeNull();
+  });
+
+  it("has no copy where the page's body breaks off after its headers", async () => {
+    let sent = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent) {
+          controller.error(new Error("connection reset"));
+          return;
+        }
+        sent = true;
+        controller.enqueue(new TextEncoder().encode("<html><body><main>"));
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(body, { headers: { "content-type": "text/html" } })
+    );
+    await expect(renderedCopyAt({}, PAGE, PAGE)).resolves.toBeNull();
   });
 });

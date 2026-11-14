@@ -122,7 +122,15 @@ export async function renderedCopyAt(
     await response.body?.cancel();
     return null;
   }
-  const html = await textWithin(response, MAX_HTML_BYTES);
+  // A body that stalls past the time allowed or breaks off midway is a page
+  // that did not render, as a failure before its headers is: no copy, so
+  // the caller falls back as it does for any page that does not render.
+  let html: string | null;
+  try {
+    html = await textWithin(response, MAX_HTML_BYTES);
+  } catch {
+    return null;
+  }
   if (html === null) return null;
   const copy = renderedCopyOf(html, canonical);
   if (copy.body === "") return null;

@@ -11,8 +11,16 @@
  *   is linked at its original address, and an image with no words is left out;
  * - the longest `<main>` is read where a streamed page renders two, and a
  *   heading placed above `<main>` still begins the copy;
- * - the head's title and description are read for the front matter.
+ * - the head's title and description are read for the front matter;
+ * - content a page streams in after its fallback (React Suspense) is read in
+ *   the fallback's place, as the browser shows it once loaded;
+ * - a list item made of paragraphs keeps its marker, and its later blocks
+ *   stay inside it;
+ * - a script or style is read as raw text: markup inside it closes nothing;
+ * - code is copied verbatim, never tidied as prose is.
  */
+import { createElement as h, Suspense, type ReactNode } from "react";
+import { renderToReadableStream } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { renderedCopyOf } from "../rendered-copy";
@@ -125,6 +133,96 @@ describe("a copy made from the rendered page", () => {
     );
     expect(renderedCopyOf(html, BASE).body).toBe(
       "## **Fast** and **safe**\n\n### Both"
+    );
+  });
+
+  it("reads streamed content in place of its fallback, as the loaded page shows it", async () => {
+    // A real streamed render: each Suspense boundary's fallback comes first,
+    // its content later in a hidden container React's script moves in.
+    const later = (ms: number) => {
+      let ready = false;
+      const waiting = new Promise<void>(resolve =>
+        setTimeout(() => {
+          ready = true;
+          resolve();
+        }, ms)
+      );
+      return (content: ReactNode) => {
+        const Later = (): ReactNode => {
+          if (!ready) throw waiting;
+          return content;
+        };
+        return h(Later);
+      };
+    };
+    const prices = later(10);
+    const plans = later(20);
+    const app = h(
+      "html",
+      null,
+      h(
+        "body",
+        null,
+        h(
+          "main",
+          null,
+          h("h1", null, "Pricing"),
+          h(
+            Suspense,
+            { fallback: h("p", null, "Loading...") },
+            prices(
+              h(
+                "section",
+                null,
+                h("h2", null, "Plans"),
+                h(
+                  Suspense,
+                  { fallback: h("p", null, "Loading plans...") },
+                  plans(h("p", null, "Starter is $9 a month."))
+                )
+              )
+            )
+          ),
+          h("p", null, "Billed monthly.")
+        )
+      )
+    );
+    const html = await new Response(await renderToReadableStream(app)).text();
+    expect(html).toContain('<div hidden id="S:0">');
+    expect(renderedCopyOf(html, BASE).body).toBe(
+      "# Pricing\n\n## Plans\n\nStarter is $9 a month.\n\nBilled monthly."
+    );
+  });
+
+  it("keeps a list item's marker where the item is made of paragraphs", () => {
+    const html = page(
+      "",
+      `<main>
+         <ul><li><p>First</p></li><li><p>Second</p><p>More of it.</p></li></ul>
+         <ol><li><div><p>One</p></div></li><li><p>Two</p></li></ol>
+       </main>`
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe(
+      "- First\n\n- Second\n\n  More of it.\n\n1. One\n\n2. Two"
+    );
+  });
+
+  it("reads a script or style as raw text, whatever markup it holds", () => {
+    const html = page(
+      "",
+      `<main><div><script>const tag = "</div>"; const greeting = "hello";</script><style>p::after { content: "</p>"; }</style><p>Visible words.</p></div></main>`
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe("Visible words.");
+  });
+
+  it("copies code verbatim, never tidied as prose is", () => {
+    const code = "const list = `first  \n-\n1.\n\n\n\nlast`;";
+    const html = page(
+      "",
+      `<main><p>Example:</p><pre><code>${code}</code></pre><blockquote><pre>a\n\nb</pre></blockquote></main>`
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe(
+      `Example:\n\n\`\`\`\n${code}\n\`\`\`\n\n> \`\`\`\n> a\n>\n> b\n> \`\`\``
     );
   });
 });
