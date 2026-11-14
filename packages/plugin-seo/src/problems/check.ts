@@ -53,6 +53,7 @@ import {
   servedGroups,
   type RobotsBlock,
 } from "../settings/robots-blocks";
+import { isSeoOff } from "../settings/seo-off";
 import type { ReadSocialCardRules } from "../social/card";
 import { shareImageProblems } from "../social/problems";
 import { readStanding } from "../staging/guard";
@@ -1073,7 +1074,12 @@ export async function problemList(
   now: number = Date.now()
 ): Promise<ProblemListBody> {
   const site = await readSiteCheck(ctx);
-  const rows = await readPages(ctx);
+  const rules = await checks.readers.readRules(ctx, undefined);
+  // A type whose SEO is switched off raises no problems. What was found for
+  // its pages is kept, so switching it on again shows it at once.
+  const on = (page: PageRef | undefined) =>
+    page === undefined || !isSeoOff(rules, page.type);
+  const rows = (await readPages(ctx)).filter(row => on(row.subject));
   const allowed = await reader.pages([
     ...rows.map(row => row.subject),
     ...site.problems.flatMap(problem => pageOf(problem) ?? []),
@@ -1084,14 +1090,19 @@ export async function problemList(
       return false;
     }
     const page = pageOf(problem);
-    return page === undefined || allowed.has(pageRefKey(page));
+    return on(page) && (page === undefined || allowed.has(pageRefKey(page)));
   });
-  const rules = await checks.readers.readRules(ctx, undefined);
   const addresses = productionAddressesOf(rules.productionAddresses);
   const host =
     addresses[0] === undefined ? undefined : new URL(addresses[0]).host;
   const problems = once([
-    ...(await siteProblems(ctx, checks, addresses, reader)),
+    // A type-level problem (a type with no address) names its type and no
+    // page, and goes with the type's switch too.
+    ...(await siteProblems(ctx, checks, addresses, reader)).filter(
+      problem =>
+        problem.subject.type === undefined ||
+        !isSeoOff(rules, problem.subject.type)
+    ),
     ...found,
     ...pages.flatMap(row => row.problems),
     ...sharedValueProblems(pages),

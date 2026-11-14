@@ -11,9 +11,11 @@ import { createRequire } from "node:module";
 
 import {
   definePlugin,
+  EXTENSION_SWITCH_SERVICE,
   group,
   isSecret,
   NextlyError,
+  type ExtensionSwitch,
   type FieldConfig,
   type PageMetadataResolver,
   type PluginContext,
@@ -118,6 +120,7 @@ import { redirectRoutes } from "./redirects/routes";
 import { PAGE_BUILDER_PLUGIN } from "./resolver/design-level";
 import type { SiteRules } from "./resolver/page-levels";
 import { seoPageMetadata, type ReadRules } from "./resolver/provider";
+import { withSeoOff } from "./resolver/seo-off";
 import { routeValuesCollection } from "./route-values/collection";
 import { withRouteValues } from "./route-values/record";
 import { seoSchema, seoSchemaPlugin } from "./schema/definition";
@@ -139,6 +142,7 @@ import {
   rememberSettingsSingle,
   setupWaiting,
 } from "./settings/rules";
+import { seoOffKeys, seoOffTypes } from "./settings/seo-off";
 import { seoSettingsSingle } from "./settings/single";
 import { socialCardFromSettings } from "./settings/social-card-rules";
 import { structuredDataFromSettings } from "./settings/structured-data-rules";
@@ -162,6 +166,7 @@ import {
   type StructuredDataOptions,
 } from "./structured-data/rules";
 import { seoTabParts } from "./tab/install";
+import { SEO_GROUP } from "./tab/typed";
 import { PAGE_BUILDER_TAB } from "./template/contributions";
 import { seoTemplateRoute } from "./template/route";
 import {
@@ -489,12 +494,21 @@ function subsetOf(
  * every output and one production address answers for all of them. The
  * robots.txt route falls back to the plugin's own AI crawler option.
  */
-function rulesReader(options: { hiddenTypes?: readonly string[] }): ReadRules {
+function rulesReader(
+  options: { hiddenTypes?: readonly string[] },
+  types: Pick<SeoTypes, "keys">
+): ReadRules {
   const hiddenTypes = [...new Set(options.hiddenTypes ?? [])];
   return async (ctx, locale) => {
     const saved = await readSeoRules(ctx, locale);
+    // The switch read once for every output: only types with SEO can be
+    // off, so a stale key is ignored by the head, the listings and the
+    // problems alike, as the admin's switch ignores it.
+    const { typesWithSeoOff: _saved, ...rest } = saved;
+    const off = seoOffKeys(saved, types, message => ctx.logger.warn(message));
     return {
-      ...saved,
+      ...rest,
+      ...(off.length > 0 ? { typesWithSeoOff: off } : {}),
       ...(saved.hiddenTypes === undefined && hiddenTypes.length > 0
         ? { hiddenTypes }
         : {}),
@@ -698,7 +712,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const types = seoTypesOf(options);
 
   const sitemapSubset = subsetOf(options.sitemap, types);
-  const readRules = rulesReader(options);
+  const readRules = rulesReader(options, types);
   // The addresses redirects hold, kept for the Proxy and dropped whenever a
   // redirect saved here commits.
   const redirectKeys = heldRedirectKeys();
@@ -750,16 +764,23 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // the home page also carries the verification codes the settings hold.
   // What the site's routes are answered, and what the check of what search
   // engines received compares each page with.
+  // A page of a type whose SEO is switched off is answered nothing, so its
+  // route serves only what its own code sets. The verification codes are
+  // the site's, not the type's, so the home page keeps them either way.
   const pageMetadata = (ctx: PluginContext): PageMetadataResolver =>
     withVerification(
-      withStructuredData(
+      withSeoOff(
         ctx,
-        withSocialCard(
+        withStructuredData(
           ctx,
-          withLanguageLinks(ctx, seoPageMetadata(ctx, readRules), readRules),
-          readSocialCardRules
+          withSocialCard(
+            ctx,
+            withLanguageLinks(ctx, seoPageMetadata(ctx, readRules), readRules),
+            readSocialCardRules
+          ),
+          structuredDataFromSettings(readStructuredDataRules)
         ),
-        structuredDataFromSettings(readStructuredDataRules)
+        readRules
       ),
       () => readVerificationTags(ctx)
     );
@@ -851,6 +872,16 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
           ctx,
           withRouteValues(ctx, pageMetadata(ctx), types)
         ),
+      // Which types' SEO the settings switch off: the admin then draws no
+      // SEO tab or group on their pages, and nothing else changes.
+      [EXTENSION_SWITCH_SERVICE]: (ctx): ExtensionSwitch => ({
+        switchedOff: async field =>
+          field === SEO_GROUP
+            ? seoOffTypes(await readRules(ctx, undefined), types, message =>
+                ctx.logger.warn(message)
+              )
+            : [],
+      }),
       // The pages the site lists and the problems that left any out, read by
       // the same rules as the head: one reading for every listing output.
       listedPages: (ctx): ListedPagesService => ({

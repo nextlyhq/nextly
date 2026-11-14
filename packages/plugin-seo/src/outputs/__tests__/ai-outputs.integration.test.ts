@@ -351,6 +351,20 @@ describe.each(getConfiguredTestDialects())(
       expect((await ask("/blog/hello.md")).body).toBe("the page");
     });
 
+    it("serves no plain-text copy of a page whose type has SEO switched off, as it lists none", async () => {
+      const t = await boot(dialect);
+      await post(t, "hello", "published");
+      await switches(t, { plainTextCopies: true });
+      expect((await ask("/blog/hello.md")).status).toBe(200);
+
+      await switches(t, { plainTextCopies: true, typesWithSeoOff: ["posts"] });
+      // Left to the site, as a page the sitemap does not list is.
+      expect((await ask("/blog/hello.md")).body).toBe("the page");
+
+      await switches(t, { plainTextCopies: true });
+      expect((await ask("/blog/hello.md")).status).toBe(200);
+    });
+
     it("holds only what the public may read: no field or page it may not", async () => {
       const t = await boot(dialect);
       await post(t, "hello", "published", {

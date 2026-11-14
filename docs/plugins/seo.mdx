@@ -77,6 +77,25 @@ Pages.
 A plugin's collection that holds public pages but is not marked as the site's content can be
 added by name with `include` (experimental): `seoPlugin({ include: ["listings"] })`.
 
+### Switching SEO off for one type
+
+The SEO settings' **Content types** tab has a switch for each type that has SEO, on by default.
+Only someone who may change the SEO settings (`manage-seo`) can change it.
+
+Switching a type off changes no schema and deletes nothing. While it is off:
+
+- its entries have no SEO tab, and the `seo` group is drawn nowhere on their pages;
+- the plugin answers nothing for its pages, so each route serves only what its own code sets:
+  no title pattern, no structured data, no social card, and no `noindex` of the plugin's;
+- its pages leave the sitemap and `llms.txt`, and the problem list shows none of their problems;
+- Pages still lists them, marked **SEO off**, and the Overview counts them as a group of their own.
+
+Off is not "hidden from search": to keep a type's pages out of search, leave SEO on and turn on
+**Hide the whole group from search**. The pages keep their addresses, so a clash is still refused
+and a moved page still gets its redirect. Switch the type on again and every saved value is back
+as it was. Values are only ever dropped by `nextly prune`, after the configuration leaves the type
+out with `exclude`.
+
 ### Naming the types instead
 
 A site can name exactly the types that get SEO, as every site did before this release:

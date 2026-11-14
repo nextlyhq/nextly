@@ -50,6 +50,7 @@ import {
 import { singleKey } from "../problems/page-types";
 import type { SeoAnswer } from "../resolver/order";
 import type { ReadRules } from "../resolver/provider";
+import { isSeoOff } from "../settings/seo-off";
 import { publishedWhere, toLastModified } from "../sitemap";
 import { mappedImageOf } from "../structured-data/graph";
 import type { ReadStructuredDataRules } from "../structured-data/rules";
@@ -179,8 +180,14 @@ async function* collectionPages(
 async function covered(
   type: PublicAddressType,
   options: ListingOptions,
-  language: string
+  language: string,
+  rules: { readonly typesWithSeoOff?: readonly string[] } | undefined
 ): Promise<boolean> {
+  // A type whose SEO is switched off lists none of its pages, in the full
+  // listing and in a lookup of one page (a plain-text copy) alike, though
+  // they keep their addresses.
+  const key = type.kind === "single" ? singleKey(type.slug) : type.slug;
+  if (rules !== undefined && isSeoOff(rules, key)) return false;
   const narrowedAway =
     type.kind === "collection" &&
     options.collections !== undefined &&
@@ -198,8 +205,11 @@ export async function* candidates(
   ctx: PluginContext,
   options: ListingOptions
 ): AsyncGenerator<Candidate[]> {
+  // Read once for every type: which types' SEO is switched off.
+  const language = await recordLanguage(ctx);
+  const rules = await options.readRules?.(ctx, language);
   for (const type of await ctx.publicAddresses.types()) {
-    if (!(await covered(type, options, await recordLanguage(ctx)))) continue;
+    if (!(await covered(type, options, language, rules))) continue;
     yield* type.kind === "single"
       ? singlePages(type)
       : collectionPages(ctx, type);
@@ -246,7 +256,10 @@ export async function listPages(
     options.readStructuredDataRules === undefined
       ? undefined
       : onceEach(options.readStructuredDataRules);
-  for await (const batch of candidates(ctx, options)) {
+  for await (const batch of candidates(ctx, {
+    ...options,
+    ...(readRules === undefined ? {} : { readRules }),
+  })) {
     await listBatch(
       ctx,
       batch,
@@ -606,7 +619,11 @@ async function listedVersionOf(
 ): Promise<ListedPage | null> {
   const { path, language } = at;
   const type = await typeOf(ctx, holder);
-  if (type === undefined || !(await covered(type, options, at.recordIn))) {
+  const rules = await options.readRules?.(ctx, at.recordIn);
+  if (
+    type === undefined ||
+    !(await covered(type, options, at.recordIn, rules))
+  ) {
     return null;
   }
   const document = (await documentsIn(ctx, type, [holder.id], language)).get(
