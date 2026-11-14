@@ -176,6 +176,30 @@ async function listedHeads(
 }
 
 /**
+ * The pages both llms files list, as the sitemap lists them, with the site's
+ * rules read once per language for the whole file, as the listing reads
+ * them, not once a page.
+ */
+async function llmsPagesOf(
+  ctx: PluginContext,
+  origin: string,
+  config: AiOutputsConfig
+): Promise<{ pages: readonly ListedPage[]; readRules: ReadRules }> {
+  const readRules = onceEach(config.readRules);
+  const { pages } = await listPages(ctx, {
+    origin,
+    readRules,
+    ...(config.codeRoutes === undefined
+      ? {}
+      : { codeRoutes: config.codeRoutes }),
+    ...(config.collections === undefined
+      ? {}
+      : { collections: config.collections }),
+  });
+  return { pages, readRules };
+}
+
+/**
  * The llms.txt of the site at `origin`, by the site's `rules`, or null while
  * it is switched off. Each page links to its plain-text copy where copies are
  * switched on and the public may read it, else to the page itself; a page
@@ -189,19 +213,7 @@ export async function llmsTxtOf(
   rules: SiteRules
 ): Promise<string | null> {
   if (rules.llmsTxt !== true) return null;
-  // The site's rules read once per language for the whole file, as the
-  // listing reads them, not once a page.
-  const readRules = onceEach(config.readRules);
-  const { pages } = await listPages(ctx, {
-    origin,
-    readRules,
-    ...(config.codeRoutes === undefined
-      ? {}
-      : { codeRoutes: config.codeRoutes }),
-    ...(config.collections === undefined
-      ? {}
-      : { collections: config.collections }),
-  });
+  const { pages, readRules } = await llmsPagesOf(ctx, origin, config);
   const sections = await sectionsOf(ctx, pages);
   const linked = await linkedCopies(ctx, pages, rules);
   const headOf = await listedHeads(ctx, pages, config, readRules);
@@ -253,17 +265,7 @@ export async function llmsFullTxtOf(
   rules: SiteRules
 ): Promise<string | null> {
   if (rules.llmsTxt !== true || rules.llmsFullTxt !== true) return null;
-  const readRules = onceEach(config.readRules);
-  const { pages } = await listPages(ctx, {
-    origin,
-    readRules,
-    ...(config.codeRoutes === undefined
-      ? {}
-      : { codeRoutes: config.codeRoutes }),
-    ...(config.collections === undefined
-      ? {}
-      : { collections: config.collections }),
-  });
+  const { pages, readRules } = await llmsPagesOf(ctx, origin, config);
   const headOf = await listedHeads(ctx, pages, config, readRules);
   const fields = new Map<string, readonly CopyField[] | undefined>();
   const full: LlmsFullPage[] = [];
