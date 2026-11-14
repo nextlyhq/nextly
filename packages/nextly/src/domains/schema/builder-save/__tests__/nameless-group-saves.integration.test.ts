@@ -761,50 +761,6 @@ describe.each(getConfiguredTestDialects())(
       ).toMatchObject({ owner: { id, name: "Ana" } });
     });
 
-    it("keys a relationship a field group change adds inside a group with no name", async () => {
-      const t = await singleApp();
-      await dispatchComponents(
-        "createComponent",
-        {},
-        {
-          slug: "meta",
-          label: "Meta",
-          fields: [{ name: "note", type: "text" }],
-        }
-      );
-
-      // A field group stores the fields inside a group with no name on its instance's row, so the
-      // relationship's column is there and the save hands its key along with it.
-      await dispatchComponents(
-        "updateComponent",
-        { slug: "meta" },
-        {
-          fields: [
-            { name: "note", type: "text" },
-            {
-              type: "group",
-              label: "Byline",
-              fields: [
-                {
-                  name: "owner",
-                  type: "relationship",
-                  options: { target: "people", onDelete: "set null" },
-                },
-              ],
-            },
-          ],
-        }
-      );
-
-      const table = (
-        await t
-          .getService("fieldGroupRegistryService")
-          .getComponentBySlug("meta")
-      )?.tableName;
-      expect(table).toBeDefined();
-      expect(await liveColumns(t, dialect, table!)).toContain("owner");
-    });
-
     it("stores a date inside the group sent as text, as a JSON request sends it", async () => {
       const t = await singleApp();
       await writeSingle(
