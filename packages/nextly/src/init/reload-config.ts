@@ -29,7 +29,9 @@ import type {
   CollectionConfig,
   CollectionHooks,
 } from "../collections/config/define-collection";
+import { container } from "../di/container";
 import { loadBuilderEntities } from "../di/load-dynamic-tables";
+import type { NextlyServiceConfig } from "../di/register";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { CollectionDbOptions } from "../domains/collections/services/collection-db-options";
 import {
@@ -166,6 +168,7 @@ import type { VersionsConfig } from "../schemas/versions/types";
 import { FieldGroupSchemaService } from "../services/field-groups/field-group-schema-service";
 import { refusedConfiguredAddresses } from "../shared/address-rule";
 import { consoleLogger } from "../shared/types";
+import type { SanitizedNextlyConfig } from "../shared/types/config";
 import type { SingleHooks } from "../singles/config/types";
 
 import { planFieldGroupReload } from "./field-group-reload-plan";
@@ -1490,6 +1493,27 @@ const globalForReload = globalThis as unknown as {
 export type ReloadOutcome = "refused" | "finished";
 
 /**
+ * Make a landed reload's collections, Singles and field groups the ones the services'
+ * configuration holds (`config` in the container), the configuration the start registered them
+ * from. A later reload of the definitions registers the configuration's own entities over their
+ * registry rows from there (`registerConfigTablesQuietly`), so it takes them as they now stand,
+ * not as the process started with them: one copy, replaced, and nothing else keeping the entities.
+ */
+function adoptCommittedEntities(config: SanitizedNextlyConfig): void {
+  if (!container.has("config")) return;
+  const live = container.get<NextlyServiceConfig>("config");
+  const next: NextlyServiceConfig = {
+    ...live,
+    collections: config.collections,
+    singles: config.singles,
+    fieldGroups: config.fieldGroups,
+  };
+  // `register`, not `registerSingleton`: a singleton already built keeps its first instance, and
+  // the start's configuration has been read by now. The factory hands out the one object.
+  container.register<NextlyServiceConfig>("config", () => next);
+}
+
+/**
  * The terminal's prompt dispatcher, loaded at its first dispatch and kept for
  * the rest of the apply. Most reloads ask nothing, and the prompt brings the
  * CLI's prompt and error reporting with it.
@@ -1716,6 +1740,8 @@ async function applyReloadHolding(
   // nextly.config.ts mid-edit with syntax errors during dev. Without this
   // guard, the loader rejection bubbles through getNextly() and turns
   // every subsequent request into a 500.
+  // The configuration as the loader handed it over, made the services' own once the reload lands.
+  let loadedConfig: SanitizedNextlyConfig | undefined;
   let newConfig:
     | {
         collections?: CollectionDef[];
@@ -1817,6 +1843,7 @@ async function applyReloadHolding(
     reloadUndo.push(() => publishConfiguredExtensions(previousExtended));
     clearConfigCache();
     const result = await loadConfig();
+    loadedConfig = result.config;
     // Watch exactly what this read: the config and every file it imported. Set
     // before the checks below, which may still refuse the edit; the fix for a
     // refusal is another save of one of these same files.
@@ -1962,6 +1989,7 @@ async function applyReloadHolding(
   const commitReload = (): void => {
     if (committed) return;
     committed = true;
+    if (loadedConfig !== undefined) adoptCommittedEntities(loadedConfig);
     commitConfigHooks();
     // The kinds of signed-in person the reloaded config registers, installed
     // with the rest of the reload and not before (see `applyReload`).
