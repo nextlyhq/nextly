@@ -6,7 +6,7 @@
  * @module uncovered-pages.test
  */
 import { tokenRef } from "@nextlyhq/blocks-engine";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   type UncoveredPage,
@@ -198,6 +198,151 @@ describe("the removal's reasons from the uncovered pages", () => {
         {}
       )
     ).toEqual([]);
+  });
+});
+
+describe("each read held to the time box", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** What `promise` has settled to so far, read without awaiting it. */
+  const settledOf = <T>(promise: Promise<T>) => {
+    const seen: { value?: T } = {};
+    void promise.then(value => {
+      seen.value = value;
+    });
+    return seen;
+  };
+
+  /** A read that settles only after `ms` of the (fake) clock. */
+  const after = <T>(ms: number, settle: () => T) =>
+    new Promise<T>((resolve, reject) => {
+      setTimeout(() => {
+        try {
+          resolve(settle());
+        } catch (error) {
+          reject(error);
+        }
+      }, ms);
+    });
+
+  const namer = {
+    firstReadable: async (uses: readonly { id: string }[]) =>
+      uses[0]?.id === "p2" ? "Pricing" : undefined,
+  };
+
+  it("refuses within the box, naming the page, when a page's read never finishes", async () => {
+    vi.useFakeTimers();
+    const p2 = page("p2");
+    const pages = pagesOf([
+      [page("p1"), [storedUsing()]],
+      [p2, [storedUsing()]],
+    ]);
+    const forms = pages.forms;
+    // A read that stalls, as one behind a slow hook can.
+    pages.forms = asked =>
+      asked === p2 ? new Promise<never>(() => undefined) : forms(asked);
+    const reasons = settledOf(
+      uncoveredReasons([{ id: "t-spare", name: "Spare" }], pages, namer)
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(reasons.value).toEqual([
+      {
+        message:
+          "Pricing could not be read to check whether it uses the variable, so nothing can be removed until it is. Try again shortly.",
+        used: false,
+      },
+    ]);
+    // The box's timer is cleared, not left to fire after the answer.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("refuses within the box when the listing of the pages stalls", async () => {
+    vi.useFakeTimers();
+    const pages: UncoveredPages = {
+      list: async function* () {
+        yield page("p1");
+        // The next page of the index's records never arrives.
+        await new Promise<never>(() => undefined);
+      },
+      forms: async () => [storedUsing()],
+    };
+    const reasons = settledOf(
+      uncoveredReasons([{ id: "t-spare", name: "Spare" }], pages, namer)
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(reasons.value).toEqual([
+      {
+        message:
+          "The pages to check for the variable could not all be listed in time, so nothing can be removed until they are. Try again shortly.",
+        used: false,
+      },
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("answers a read that fails after the box is spent as unread, leaving its failure handled", async () => {
+    vi.useFakeTimers();
+    const p1 = page("p1");
+    const pages: UncoveredPages = {
+      list: async function* () {
+        yield p1;
+      },
+      forms: () =>
+        after(6_000, () => {
+          throw new Error("unreadable");
+        }),
+    };
+    const outcome = settledOf(
+      variablesOnUncoveredPages({
+        identities: ["t-spare"],
+        pages,
+        deadline: Date.now() + 5_000,
+      })
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(outcome.value).toEqual({ kind: "unread", page: p1 });
+    // The losing read still fails later; an unhandled rejection would fail
+    // this run.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("still answers clear or used where every read finishes inside the box", async () => {
+    vi.useFakeTimers();
+    const pages: UncoveredPages = {
+      list: async function* () {
+        yield await after(1_000, () => page("p1"));
+        yield await after(1_000, () => page("p2"));
+      },
+      forms: asked =>
+        after(1_000, () =>
+          asked.entityKey === "p2" ? [storedUsing("t-accent")] : [storedUsing()]
+        ),
+    };
+    const used = settledOf(
+      uncoveredReasons(
+        [
+          { id: "t-accent", name: "Accent" },
+          { id: "t-spare", name: "Spare" },
+        ],
+        pages,
+        namer
+      )
+    );
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(used.value).toEqual([
+      { id: "t-accent", message: "Accent is used on Pricing.", used: true },
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+
+    const clear = settledOf(
+      uncoveredReasons([{ id: "t-spare", name: "Spare" }], pages, namer)
+    );
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(clear.value).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
