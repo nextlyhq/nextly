@@ -157,10 +157,16 @@ const proxy = createNextlyProxy({} as SanitizedNextlyConfig, {
 async function ask(
   path: string,
   userAgent = "Mozilla/5.0",
-  host: string = SITE
+  host: string = SITE,
+  accept?: string
 ) {
   const response = await proxy(
-    new Request(`${host}${path}`, { headers: { "user-agent": userAgent } })
+    new Request(`${host}${path}`, {
+      headers: {
+        "user-agent": userAgent,
+        ...(accept === undefined ? {} : { accept }),
+      },
+    })
   );
   return {
     status: response?.status,
@@ -169,6 +175,24 @@ async function ask(
     body: (await response?.text()) ?? "",
   };
 }
+
+/** The caching and indexing headers the Proxy answers `path` with. */
+async function servedWith(path: string, accept?: string) {
+  const response = await proxy(
+    new Request(`${SITE}${path}`, {
+      headers: accept === undefined ? {} : { accept },
+    })
+  );
+  return {
+    vary: response?.headers.get("vary") ?? null,
+    cache: response?.headers.get("cache-control") ?? null,
+    robots: response?.headers.get("x-robots-tag") ?? null,
+  };
+}
+
+/** A copy's body without its front matter. */
+const withoutFrontMatter = (markdown: string): string =>
+  markdown.replace(/^---\n[\s\S]*?\n---\n\n/, "");
 
 async function switches(t: TestNextly, data: Record<string, unknown>) {
   await t.nextly.updateSingle({
@@ -211,7 +235,7 @@ function visibleWords(html: string): string[] {
 /** The words of a Markdown copy, its markup and link addresses taken out. */
 function copyWords(markdown: string): string[] {
   return (
-    markdown
+    withoutFrontMatter(markdown)
       .replace(/\]\([^)]*\)/g, "]")
       // An escaped character is the character itself.
       .replace(/\\(.)/g, "$1")
@@ -294,7 +318,14 @@ describe.each(getConfiguredTestDialects())(
       expect(copy.status).toBe(200);
       expect(copy.type).toBe("text/markdown; charset=utf-8");
       expect(copy.link).toBe(`<${SITE}/blog/hello>; rel="canonical"`);
-      expect(copy.body).toContain("[up](/up)");
+      // A link written from the site's root is made whole.
+      expect(copy.body).toContain(`[up](${SITE}/up)`);
+      // Front matter names the page as its head does.
+      expect(copy.body).toMatch(
+        new RegExp(
+          `^---\\ntitle: "Post hello \\| Acme"\\ndescription: "A short hello."\\nurl: ${SITE}/blog/hello\\nlast_updated: \\d{4}-`
+        )
+      );
 
       // The page as the site renders it: its title, its excerpt and its body
       // as HTML, which the site draws with the page.
@@ -334,10 +365,12 @@ describe.each(getConfiguredTestDialects())(
       expect((await ask("/blog/missing.md")).body).toBe("the page");
       // The page itself is untouched while copies are on.
       expect((await ask("/blog/hello")).body).toBe("the page");
-      // The home page's copy is at index.html.md.
-      const home = await ask("/index.html.md");
-      expect(home.body).toBe("# Welcome\n");
+      // The home page's copy is at index.md, and at index.html.md too.
+      const home = await ask("/index.md");
+      expect(withoutFrontMatter(home.body)).toBe("# Welcome\n");
+      expect(home.body).toContain(`\nurl: ${SITE}/\n`);
       expect(home.link).toBe(`<${SITE}/>; rel="canonical"`);
+      expect(await ask("/index.html.md")).toEqual(home);
       // Reached on another of the site's hosts, a preview say, the copy still
       // names the page at the site's own address.
       const preview = await ask(
@@ -401,7 +434,7 @@ describe.each(getConfiguredTestDialects())(
       expect(links).not.toContain(`${SITE}/blog/hello.md`);
     });
 
-    it("gives index.html.md to the page named index.html, and links the home page itself", async () => {
+    it("gives index.html.md to the page named index.html, and index.md to the home page", async () => {
       const t = await boot(dialect);
       await t.nextly.updateSingle({
         slug: "home",
@@ -413,10 +446,91 @@ describe.each(getConfiguredTestDialects())(
       });
       await switches(t, { plainTextCopies: true, llmsTxt: true });
 
-      expect((await ask("/index.html.md")).body).toBe("# Old index\n");
+      expect(withoutFrontMatter((await ask("/index.html.md")).body)).toBe(
+        "# Old index\n"
+      );
+      expect(withoutFrontMatter((await ask("/index.md")).body)).toBe(
+        "# Welcome\n"
+      );
       const links = await llmsLinks();
       expect(links).toContain(`${SITE}/index.html.md`);
-      expect(links).toContain(`${SITE}/`);
+      expect(links).toContain(`${SITE}/index.md`);
+    });
+
+    it("serves a copy at its own address as a cacheable file kept out of search, pointing to llms.txt", async () => {
+      const t = await boot(dialect);
+      await post(t, "hello", "published");
+      await switches(t, { plainTextCopies: true });
+      expect(await servedWith("/blog/hello.md")).toEqual({
+        vary: "Accept",
+        cache: "public, max-age=300",
+        robots: "noindex",
+      });
+
+      await switches(t, { plainTextCopies: true, llmsTxt: true });
+      expect((await ask("/blog/hello.md")).link).toBe(
+        `<${SITE}/blog/hello>; rel="canonical", <${SITE}/llms.txt>; rel="describedby"; type="text/plain"`
+      );
+    });
+
+    it("answers a page's own address with its copy only where Markdown is asked for over HTML", async () => {
+      const t = await boot(dialect);
+      await post(t, "hello", "published");
+      await post(t, "unfinished", "draft");
+      await switches(t, { plainTextCopies: true });
+      const agent = "text/markdown, text/html, */*";
+
+      const copy = await ask("/blog/hello.md");
+      const asked = await ask("/blog/hello", undefined, SITE, agent);
+      expect(asked.type).toBe("text/markdown; charset=utf-8");
+      expect(asked.body).toBe(copy.body);
+      expect(asked.link).toBe(`<${SITE}/blog/hello>; rel="canonical"`);
+      // Never kept by a shared cache, and never marked noindex.
+      expect(await servedWith("/blog/hello", agent)).toEqual({
+        vary: "Accept",
+        cache: "private, no-store",
+        robots: null,
+      });
+      expect(
+        (
+          await ask(
+            "/blog/hello",
+            undefined,
+            SITE,
+            "text/markdown;q=1.0, text/html;q=0.7"
+          )
+        ).type
+      ).toBe("text/markdown; charset=utf-8");
+
+      // A browser, or a reader preferring HTML, is served the page.
+      const browser =
+        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+      expect((await ask("/blog/hello", undefined, SITE, browser)).body).toBe(
+        "the page"
+      );
+      expect(
+        (await ask("/blog/hello", undefined, SITE, "text/html, text/markdown"))
+          .body
+      ).toBe("the page");
+      expect(
+        (
+          await ask(
+            "/blog/hello",
+            undefined,
+            SITE,
+            "text/markdown;q=0, text/html"
+          )
+        ).body
+      ).toBe("the page");
+      // A page the sitemap does not list is the site's to answer.
+      expect((await ask("/blog/unfinished", undefined, SITE, agent)).body).toBe(
+        "the page"
+      );
+      // Nor while copies are off.
+      await switches(t, { plainTextCopies: false });
+      expect((await ask("/blog/hello", undefined, SITE, agent)).body).toBe(
+        "the page"
+      );
     });
 
     it("tells the public nothing it may not read, in llms.txt or a copy's heading", async () => {

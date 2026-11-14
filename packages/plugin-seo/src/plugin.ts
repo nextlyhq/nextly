@@ -75,6 +75,7 @@ import { notFoundCollection } from "./not-found/collection";
 import { moveLoggedRows } from "./not-found/log";
 import { keepSeoContext } from "./not-found/report";
 import { plainCopyProxyHandler } from "./outputs/ai-outputs";
+import { withCopyLink } from "./outputs/copy-link";
 import { listPages, type ListedPagesService } from "./outputs/listing";
 import type { AiCrawlerChoice } from "./outputs/robots";
 import { siteServesOwnRobots } from "./outputs/robots-owner";
@@ -762,7 +763,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // links to its other languages, its social card completed, and its
   // structured data, worked out from that same answer and the settings'
   // brand facts, with the plugin's options where the settings say nothing;
-  // the home page also carries the verification codes the settings hold.
+  // the home page also carries the verification codes the settings hold,
+  // and, where plain-text copies are on, a listed page links its copy.
   // What the site's routes are answered, and what the check of what search
   // engines received compares each page with.
   // A page of a type whose SEO is switched off is answered nothing, so its
@@ -772,14 +774,22 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     withVerification(
       withSeoOff(
         ctx,
-        withStructuredData(
+        withCopyLink(
           ctx,
-          withSocialCard(
+          withStructuredData(
             ctx,
-            withLanguageLinks(ctx, seoPageMetadata(ctx, readRules), readRules),
-            readSocialCardRules
+            withSocialCard(
+              ctx,
+              withLanguageLinks(
+                ctx,
+                seoPageMetadata(ctx, readRules),
+                readRules
+              ),
+              readSocialCardRules
+            ),
+            structuredDataFromSettings(readStructuredDataRules)
           ),
-          structuredDataFromSettings(readStructuredDataRules)
+          readRules
         ),
         readRules
       ),

@@ -600,6 +600,10 @@ const pageMetadataAnswerSchema = z.object({
     })
     .optional(),
   languages: z.record(z.string(), z.string()).optional(),
+  // Each key is a media type, as a link's `type` names one.
+  formats: z
+    .record(z.string().regex(/^[a-z]+\/[a-z0-9.+-]+$/i), z.string())
+    .optional(),
   // JSON only, the one form a cached answer and a script element both hold:
   // a node holding anything else refuses the answer.
   structuredData: z.array(z.record(z.string(), z.json())).optional(),
