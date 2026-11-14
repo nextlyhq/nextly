@@ -94,6 +94,8 @@ describe("the form's values, from the stored settings", () => {
       structuredData: {},
       indexNow: false,
       llmsTxt: false,
+      llmsFullTxt: false,
+      llmsIntro: "",
       plainTextCopies: true,
       robotsRules: { text: "" },
       verificationCodes: {
@@ -140,6 +142,8 @@ describe("the form's values, from the stored settings", () => {
       structuredData: {},
       indexNow: false,
       llmsTxt: false,
+      llmsFullTxt: false,
+      llmsIntro: "",
       plainTextCopies: false,
       robotsRules: { text: "" },
       verificationCodes: {

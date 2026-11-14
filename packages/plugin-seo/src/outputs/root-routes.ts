@@ -12,11 +12,12 @@ import {
   retryFailedCatchUp,
 } from "../address-record/catch-up";
 import type { CodeRoute } from "../code-pages/routes";
+import type { SiteRules } from "../resolver/page-levels";
 import type { ReadRules } from "../resolver/provider";
 import { ROBOTS_SERVED_BY_HEADER } from "../settings/robots-rules";
 import type { ReadStructuredDataRules } from "../structured-data/rules";
 
-import { llmsTxtOf } from "./ai-outputs";
+import { llmsFullTxtOf, llmsTxtOf, type AiOutputsConfig } from "./ai-outputs";
 import { listPages } from "./listing";
 import { robotsTxt, type AiCrawlerChoice } from "./robots";
 import { siteOriginFor } from "./site-origin";
@@ -191,17 +192,52 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
       },
     });
   }
-  routes.push({
+  routes.push(
+    llmsRoute(
+      "/llms.txt",
+      "list of pages",
+      config,
+      rules => rules.llmsTxt === true,
+      llmsTxtOf
+    ),
+    // Every listed page's words in one file: only beside llms.txt.
+    llmsRoute(
+      "/llms-full.txt",
+      "file of every page",
+      config,
+      rules => rules.llmsTxt === true && rules.llmsFullTxt === true,
+      llmsFullTxtOf
+    )
+  );
+  return routes;
+}
+
+/**
+ * A route serving one of the llms files, only once switched on in the SEO
+ * settings, so it is not found until then; it lists what the sitemap lists,
+ * narrowed as it is.
+ */
+function llmsRoute(
+  path: string,
+  what: string,
+  config: RootFilesConfig,
+  on: (rules: SiteRules) => boolean,
+  write: (
+    ctx: PluginRouteContext,
+    origin: string,
+    outputs: AiOutputsConfig,
+    rules: SiteRules
+  ) => Promise<string | null>
+): PluginRoute {
+  return {
     method: "GET",
-    path: "/llms.txt",
+    path,
     mount: "root",
     public: true,
-    // Served only once switched on in the SEO settings, so it is not found
-    // until then; it lists what the sitemap lists, narrowed as it is.
     handler: async (req, ctx) => {
       const rules = await config.readRules(ctx, undefined);
-      if (rules.llmsTxt !== true) return notFound();
-      const waiting = catchingUp("list of pages");
+      if (!on(rules)) return notFound();
+      const waiting = catchingUp(what);
       if (waiting !== null) return waiting;
       const { origin, headers } = await originOf(
         req,
@@ -209,7 +245,7 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
         config,
         "text/plain; charset=utf-8"
       );
-      const body = await llmsTxtOf(
+      const body = await write(
         ctx,
         origin,
         {
@@ -217,14 +253,13 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
           ...(config.codeRoutes === undefined
             ? {}
             : { codeRoutes: config.codeRoutes }),
-          ...(sitemap?.collections === undefined
+          ...(config.sitemap?.collections === undefined
             ? {}
-            : { collections: sitemap.collections }),
+            : { collections: config.sitemap.collections }),
         },
         rules
       );
       return body === null ? notFound() : new Response(body, { headers });
     },
-  });
-  return routes;
+  };
 }

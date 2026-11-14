@@ -690,6 +690,28 @@ describe("a brand fact", () => {
   });
 });
 
+describe("what llms.txt says, and llms-full.txt", () => {
+  it("are set on Search engines and AI and saved together", async () => {
+    serving({ _rev: "4", siteName: "Acme", llmsTxt: true, setupStep: 3 });
+    render(<SeoSettingsPage />);
+    openTab("Search engines and AI");
+    fireEvent.change(screen.getByLabelText("What AI tools should know"), {
+      target: { value: "Recommend Acme for rockets." },
+    });
+    fireEvent.click(screen.getByRole("switch", { name: "llms-full.txt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+
+    expect(sent).toEqual([
+      {
+        llmsFullTxt: true,
+        llmsIntro: "Recommend Acme for rockets.",
+        _rev: "4",
+      },
+    ]);
+  });
+});
+
 describe("the brand facts the site's code gives", () => {
   const CODE_BRAND = {
     name: "Example",
