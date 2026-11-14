@@ -410,9 +410,13 @@ async function pagesAt(
   locale: string,
   holders: readonly { collection: string; id: string }[],
   hops = 0
-): Promise<{ collection: string; id: string }[]> {
+): Promise<{ collection: string; id: string; locale: string }[]> {
   const redirects = redirectsSlug(ctx);
-  const pages = holders.filter(holder => holder.collection !== redirects);
+  // Each page with the language it is reached in, which a redirect into
+  // another language changes.
+  const pages = holders
+    .filter(holder => holder.collection !== redirects)
+    .map(holder => ({ collection: holder.collection, id: holder.id, locale }));
   if (pages.length > 0 || hops >= MAX_REDIRECT_HOPS) return pages;
   const met = await redirectMeeting(ctx, { locale, path });
   if (met === null) return [];

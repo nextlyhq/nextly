@@ -90,14 +90,15 @@ export interface LinkJudge {
   ) => Promise<readonly { collection: string; id: string }[]>;
   /**
    * The pages a request for `path`, which `holders` hold, arrives at: a
-   * redirect followed to the page it sends people to. Each holder as it is
-   * where not given.
+   * redirect followed to the page it sends people to, with the language it
+   * is reached in where a redirect crossed into another. Each holder as it
+   * is where not given.
    */
   pagesOf?: (
     holders: readonly { collection: string; id: string }[],
     locale: string,
     path: string
-  ) => Promise<readonly { collection: string; id: string }[]>;
+  ) => Promise<readonly { collection: string; id: string; locale?: string }[]>;
 }
 
 /** What a page's links reach. */
@@ -167,11 +168,18 @@ export async function readLinks(
       answers.set(key, held);
     }
     const holders = await held;
-    const pages = judge.pagesOf
+    const pages: readonly {
+      collection: string;
+      id: string;
+      locale?: string;
+    }[] = judge.pagesOf
       ? await judge.pagesOf(holders, kept.locale, path)
       : holders;
     for (const page of pages) {
-      to.add(linkedPageKey(page.collection, page.id, kept.locale));
+      // In the language the page is reached in, which a redirect may change.
+      to.add(
+        linkedPageKey(page.collection, page.id, page.locale ?? kept.locale)
+      );
     }
     // Held, by a page or a redirect sending people on, is not broken.
     if (holders.length > 0) continue;

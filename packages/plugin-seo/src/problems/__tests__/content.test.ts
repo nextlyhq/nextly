@@ -182,6 +182,17 @@ describe("readLinks", () => {
     expect(read.broken).toEqual([]);
   });
 
+  it("counts a link a redirect sends into another language for the page in that language", async () => {
+    const read = await readLinks([{ field: "body", url: "/blog/old" }], {
+      shapes: addressShapes([{ slug: "posts", publicAddress: "/blog/{slug}" }]),
+      productionAddresses: [],
+      keptOf: async url => ({ locale: "en", path: url.pathname }),
+      holders: async () => [{ collection: "nx_seo_redirects", id: "r1" }],
+      pagesOf: async () => [{ collection: "posts", id: "p1", locale: "de" }],
+    });
+    expect(read.to).toEqual([linkedPageKey("posts", "p1", "de")]);
+  });
+
   it("counts a link to an address a redirect holds for the page the redirect sends people to", async () => {
     const redirect = { collection: "nx_seo_redirects", id: "r1" };
     const read = await readLinks([{ field: "body", url: "/blog/old" }], {
