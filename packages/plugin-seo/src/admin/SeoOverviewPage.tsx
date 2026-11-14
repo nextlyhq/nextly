@@ -470,7 +470,7 @@ function PagesCard(): JSX.Element {
                 <Line
                   name={
                     <TextLink href={`${PAGES_PAGE_HREF}?status=seo-off`}>
-                      Types with SEO off
+                      Pages with SEO off
                     </TextLink>
                   }
                   end={<b>{coverage.seoOff}</b>}

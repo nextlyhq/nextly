@@ -35,5 +35,5 @@ The SEO settings' Content types tab now carries each type's SEO switch.
 - Each type has a switch, on by default. Switching one off says before saving that its pages lose their SEO and that nothing is deleted; switching a saved-off type back on says its values are used again. The bar under the tab names each switch waiting to be saved. Without permission to change the settings the switches show their state and cannot be moved.
 - A site's own type without SEO sits greyed at the end of its group with the reason: left out in the site's code, or holding its own field named `seo`, with a link to Import.
 - Past ten types, a search box and an All, SEO on, SEO off filter appear.
-- Pages marks a page of a type with SEO off as "SEO off", says its title is set by its own code, and offers no Edit SEO. The Overview's Pages card counts those pages on a "Types with SEO off" line that opens Pages filtered to them (`?status=seo-off`).
+- Pages marks a page of a type with SEO off as "SEO off", says its title is set by its own code, and offers no Edit SEO. The Overview's Pages card counts those pages on a "Pages with SEO off" line that opens Pages filtered to them (`?status=seo-off`).
 - The content types route answers each type's `kind` and `source`, and a type without SEO its `reason`; the settings document route answers `canChange`.

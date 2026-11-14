@@ -433,8 +433,8 @@ describe("SeoOverviewPage", () => {
     render(<SeoOverviewPage />);
     const pages = card("Pages");
     expect(within(pages).getByText("7 public pages")).toBeTruthy();
-    const off = within(pages).getByRole("link", { name: "Types with SEO off" });
-    expect(off.closest("li")?.textContent).toBe("Types with SEO off2");
+    const off = within(pages).getByRole("link", { name: "Pages with SEO off" });
+    expect(off.closest("li")?.textContent).toBe("Pages with SEO off2");
     expect(off.getAttribute("href")).toBe(
       "/admin/plugins/nextlyhq-plugin-seo/pages?status=seo-off"
     );
@@ -446,9 +446,7 @@ describe("SeoOverviewPage", () => {
 
   it("leaves the SEO off line out where no type has SEO off", () => {
     render(<SeoOverviewPage />);
-    expect(
-      within(card("Pages")).queryByText("Types with SEO off")
-    ).toBeNull();
+    expect(within(card("Pages")).queryByText("Pages with SEO off")).toBeNull();
   });
 
   it("lists the week's addresses not found, each opening a new redirect from it", () => {

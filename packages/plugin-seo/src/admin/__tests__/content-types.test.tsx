@@ -234,6 +234,16 @@ describe("the Content types tab", () => {
     expect(screen.getByRole("group", { name: "Type 3" })).toBeTruthy();
   });
 
+  it("keeps a row moved under a filter in view, with its note, until it is saved", () => {
+    const many = Array.from({ length: 11 }, (_, at) =>
+      seoType(`type${at}`, `Type ${at}`)
+    );
+    render(<Tab types={many} />);
+    fireEvent.click(screen.getByRole("radio", { name: /^SEO on/ }));
+    fireEvent.click(screen.getByRole("switch", { name: "SEO for Type 4" }));
+    expect(within(row("Type 4")).getByRole("note")).toBeTruthy();
+  });
+
   it("offers no search for a few types", () => {
     render(<Tab types={[posts, authors]} />);
     expect(screen.queryByRole("searchbox")).toBeNull();

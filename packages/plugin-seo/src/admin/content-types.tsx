@@ -952,15 +952,18 @@ export function ContentTypesTab({
   const matches = (type: SeoContentType | SwitchedOffType) =>
     !searching || words === "" || type.label.toLowerCase().includes(words);
   const onCount = types.filter(type => isSeoOn(draft, type.key)).length;
-  // Off means a type with SEO switched off: a type the site's code leaves
-  // out has no switch, so it is neither on nor off and shows under All only.
-  const offCount = types.length - onCount;
+  // The filter counts what is saved, as it filters by it. Off means a type
+  // with SEO switched off: a type the site's code leaves out has no switch,
+  // so it is neither on nor off and shows under All only.
+  const offCount = types.filter(type => savedOff.includes(type.key)).length;
+  // Filtered by the saved switch, so a row moved here stays in view, with
+  // its note, until the change is saved.
   const shownTypes = types.filter(
     type =>
       matches(type) &&
       (!searching ||
         filter === "all" ||
-        isSeoOn(draft, type.key) === (filter === "on"))
+        !savedOff.includes(type.key) === (filter === "on"))
   );
   const shownLocked = switchedOff.filter(
     type => matches(type) && (!searching || filter === "all")
@@ -1017,7 +1020,7 @@ export function ContentTypesTab({
             size="bordered"
             options={[
               { value: "all", label: `All ${total}` },
-              { value: "on", label: `SEO on ${onCount}` },
+              { value: "on", label: `SEO on ${types.length - offCount}` },
               { value: "off", label: `SEO off ${offCount}` },
             ]}
             value={filter}
