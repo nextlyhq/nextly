@@ -51,7 +51,10 @@ writeFileSync(
 );
 writeFileSync(
   join(BUILD, "prerender-manifest.json"),
-  JSON.stringify({ version: 4, routes: { "/pricing": { srcRoute: "/pricing" } } })
+  JSON.stringify({
+    version: 4,
+    routes: { "/pricing": { srcRoute: "/pricing" } },
+  })
 );
 
 let current: TestNextly | undefined;

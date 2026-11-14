@@ -451,7 +451,9 @@ function aboutOf(
 ): CopyAbout {
   return {
     ...(head.title === undefined ? {} : { title: head.title }),
-    ...(head.description === undefined ? {} : { description: head.description }),
+    ...(head.description === undefined
+      ? {}
+      : { description: head.description }),
     url: page.loc,
     ...(page.lastModified === undefined
       ? {}

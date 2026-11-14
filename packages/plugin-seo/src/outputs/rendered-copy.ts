@@ -108,16 +108,19 @@ const NAMED: Readonly<Record<string, string>> = {
 
 /** `text` with its character references read as the characters they name. */
 function decoded(text: string): string {
-  return text.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi, (whole, ref: string) => {
-    if (!ref.startsWith("#")) return NAMED[ref.toLowerCase()] ?? whole;
-    const point =
-      ref[1]?.toLowerCase() === "x"
-        ? Number.parseInt(ref.slice(2), 16)
-        : Number.parseInt(ref.slice(1), 10);
-    return Number.isInteger(point) && point > 0 && point <= 0x10ffff
-      ? String.fromCodePoint(point)
-      : whole;
-  });
+  return text.replace(
+    /&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi,
+    (whole, ref: string) => {
+      if (!ref.startsWith("#")) return NAMED[ref.toLowerCase()] ?? whole;
+      const point =
+        ref[1]?.toLowerCase() === "x"
+          ? Number.parseInt(ref.slice(2), 16)
+          : Number.parseInt(ref.slice(1), 10);
+      return Number.isInteger(point) && point > 0 && point <= 0x10ffff
+        ? String.fromCodePoint(point)
+        : whole;
+    }
+  );
 }
 
 /** An attribute's value in a tag's attribute text, decoded, or none. */
@@ -269,7 +272,9 @@ class CopyWriter {
 
   /** Whether the row being read is its table's first, its header. */
   headerRow(): boolean {
-    return [...this.stack].reverse().find(open => open.tag === "tr")?.count === 0;
+    return (
+      [...this.stack].reverse().find(open => open.tag === "tr")?.count === 0
+    );
   }
 
   /** Whether `tag` is a list inside another list's item: no blank line around it. */
@@ -319,11 +324,13 @@ class CopyWriter {
       (this.wholeBody && (tag === "header" || tag === "footer"));
     const inherited = this.skipping();
     if (VOID.has(tag)) {
-      if (!inherited && !skip && !this.inside("pre")) this.empty(tag, attributes);
+      if (!inherited && !skip && !this.inside("pre"))
+        this.empty(tag, attributes);
       return;
     }
     const open: Open = { tag, skip, start: this.out.length };
-    if (!inherited && !skip && !this.inside("pre")) this.begin(open, attributes);
+    if (!inherited && !skip && !this.inside("pre"))
+      this.begin(open, attributes);
     this.stack.push(open);
   }
 
@@ -364,7 +371,9 @@ class CopyWriter {
       this.out += this.out.endsWith("\n") || this.out === "" ? "| " : " | ";
     }
     if (tag === "tr") {
-      const table = [...this.stack].reverse().find(each => each.tag === "table");
+      const table = [...this.stack]
+        .reverse()
+        .find(each => each.tag === "table");
       open.count = table?.count ?? 0;
       if (table !== undefined) table.count = (table.count ?? 0) + 1;
       this.newLine();
@@ -396,7 +405,10 @@ class CopyWriter {
     if (/^h[1-6]$/.test(tag)) {
       // A heading is emphasis enough: emphasis around all of it is dropped.
       const heading = unwrapped(inner.replace(/\s+/g, " ").trim());
-      this.out = heading === "" ? before : `${before}${"#".repeat(Number(tag[1]))} ${heading}`;
+      this.out =
+        heading === ""
+          ? before
+          : `${before}${"#".repeat(Number(tag[1]))} ${heading}`;
       this.newBlock();
     } else if (tag === "a") {
       // A card that wraps a heading and a paragraph in one link is one line.
@@ -412,15 +424,24 @@ class CopyWriter {
           : label);
     } else if (tag === "pre") {
       const code = inner.replace(/^\n+|\s+$/g, "");
-      const longest = Math.max(0, ...(code.match(/`+/g) ?? []).map(run => run.length));
+      const longest = Math.max(
+        0,
+        ...(code.match(/`+/g) ?? []).map(run => run.length)
+      );
       const fence = "`".repeat(Math.max(3, longest + 1));
       this.out = `${before}${fence}\n${code}\n${fence}`;
       this.newBlock();
     } else if (tag === "code" && !this.inside("pre")) {
       const code = inner.trim();
-      const longest = Math.max(0, ...(code.match(/`+/g) ?? []).map(run => run.length));
+      const longest = Math.max(
+        0,
+        ...(code.match(/`+/g) ?? []).map(run => run.length)
+      );
       const fence = "`".repeat(longest + 1);
-      this.out = code === "" ? before : `${before}${fence}${/^`|`$/.test(code) ? ` ${code} ` : code}${fence}`;
+      this.out =
+        code === ""
+          ? before
+          : `${before}${fence}${/^`|`$/.test(code) ? ` ${code} ` : code}${fence}`;
     } else if (EMPHASIS[tag] !== undefined) {
       const mark = EMPHASIS[tag];
       const words = inner.trim();
@@ -431,7 +452,13 @@ class CopyWriter {
       }
     } else if (tag === "blockquote") {
       const quote = inner.trim();
-      this.out = quote === "" ? before : `${before}${quote.split("\n").map(line => (line === "" ? ">" : `> ${line}`)).join("\n")}`;
+      this.out =
+        quote === ""
+          ? before
+          : `${before}${quote
+              .split("\n")
+              .map(line => (line === "" ? ">" : `> ${line}`))
+              .join("\n")}`;
       this.newBlock();
     } else if (tag === "li") {
       this.newLine();
@@ -499,14 +526,16 @@ function markdownOf(source: string, base: string, wholeBody: boolean): string {
       writer.close(tag);
     } else writer.open(tag, attributes);
   }
-  return writer.out
-    .split("\n")
-    .map(line => line.replace(/[ \t]+$/, ""))
-    // A list item left with no words.
-    .filter(line => !/^\s*(?:-|\d+\.)\s*$/.test(line))
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return (
+    writer.out
+      .split("\n")
+      .map(line => line.replace(/[ \t]+$/, ""))
+      // A list item left with no words.
+      .filter(line => !/^\s*(?:-|\d+\.)\s*$/.test(line))
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+  );
 }
 
 /** What a rendered page's copy is made of. */
@@ -532,8 +561,11 @@ export function renderedCopyOf(html: string, base: string): RenderedCopy {
   if (!/^# \S/m.test(body)) {
     const heading = /<h1[\s>][\s\S]*?<\/h1>/i.exec(html)?.[0];
     const words =
-      heading === undefined ? "" : markdownOf(heading, base, false).replace(/^#\s*/, "").trim();
-    if (words !== "") body = body === "" ? `# ${words}` : `# ${words}\n\n${body}`;
+      heading === undefined
+        ? ""
+        : markdownOf(heading, base, false).replace(/^#\s*/, "").trim();
+    if (words !== "")
+      body = body === "" ? `# ${words}` : `# ${words}\n\n${body}`;
   }
   const title = titleOf(html);
   const description = descriptionOf(html);

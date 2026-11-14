@@ -25,7 +25,7 @@ const page = (head: string, body: string) =>
 describe("a copy made from the rendered page", () => {
   it("writes the main content's blocks as Markdown, in order", () => {
     const html = page(
-      "<title>Pricing | Acme</title><meta name=\"description\" content=\"Plans &amp; prices.\">",
+      '<title>Pricing | Acme</title><meta name="description" content="Plans &amp; prices.">',
       `<nav><a href="/">Home</a></nav>
        <main>
          <h1>Pricing</h1>

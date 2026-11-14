@@ -552,7 +552,9 @@ export function plainCopyOf(source: CopySource): string {
     }
   });
   const body = `${parts.join("\n\n")}\n`;
-  return source.about === undefined ? body : withFrontMatter(source.about, body);
+  return source.about === undefined
+    ? body
+    : withFrontMatter(source.about, body);
 }
 
 /** `body`, a copy's Markdown, begun by front matter naming its page. */
