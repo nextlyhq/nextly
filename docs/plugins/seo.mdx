@@ -729,7 +729,7 @@ copy; with llms.txt on, the `Link` header also points to it (`rel="describedby"`
 [llms.txt proposal](https://llmstxt.org) suggests.
 
 A request for a listed page's own address whose `Accept` header asks for Markdown over HTML
-(`text/markdown` weighted above `text/html`, or as high and named first, as coding agents
+(`text/markdown` weighted above HTML, whose weight is `text/html`'s, else `text/*`'s, else `*/*`'s, or as high and named first, as coding agents
 send it: `Accept: text/markdown, text/html, */*`) is answered with the page's copy instead,
 with `Vary: Accept`, the canonical `Link`, and `Cache-Control: private, no-store`, so no
 shared cache keeps it and hands it to a browser: a CDN that ignores `Vary` (Cloudflare's

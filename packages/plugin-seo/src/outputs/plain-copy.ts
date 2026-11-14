@@ -124,7 +124,8 @@ function styledText(node: Node, text: string): string {
   const [, lead = "", words = "", trail = ""] =
     /^(\s*)([\s\S]*?)(\s*)$/.exec(text) ?? [];
   let styled = escapeText(words);
-  if ((format & ITALIC) !== 0) styled = `_${styled}_`;
+  // Asterisks, not underscores: Markdown reads them inside a word too.
+  if ((format & ITALIC) !== 0) styled = `*${styled}*`;
   if ((format & BOLD) !== 0) styled = `**${styled}**`;
   if ((format & STRIKETHROUGH) !== 0) styled = `~~${styled}~~`;
   return `${lead}${styled}${trail}`;

@@ -265,8 +265,20 @@ describe("rich text as Markdown", () => {
       )
     );
     expect(markdownOfRichText(value)).toBe(
-      "Use **bold**, _italic_, **_both_**, ~~gone~~ and `` npm i `x` ``."
+      "Use **bold**, *italic*, ***both***, ~~gone~~ and `` npm i `x` ``."
     );
+  });
+
+  it("keeps emphasis on part of a word, as Markdown reads it inside a word", () => {
+    const value = rich(
+      paragraph(
+        text_("pre"),
+        { type: "text", text: "fix", format: 2 },
+        text_(" and un"),
+        { type: "text", text: "done", format: 1 }
+      )
+    );
+    expect(markdownOfRichText(value)).toBe("pre*fix* and un**done**");
   });
 
   it("makes a link or an image written from the site's root whole, against the page's address", () => {
