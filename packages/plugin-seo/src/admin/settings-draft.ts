@@ -41,6 +41,13 @@ import type {
   StructuredDataTypeRule,
 } from "../structured-data/rules";
 
+import {
+  BRAND_TEXT_FACTS,
+  brandDetailsDraftOf,
+  storedBrandDetails,
+  type BrandDetailsDraft,
+} from "./brand-draft";
+
 /** One of the brand's official accounts, as the form holds it. */
 export interface ProfileDraft {
   network: string;
@@ -86,6 +93,11 @@ export interface SettingsDraft {
   brandOtherNames: string;
   logo: string | null;
   socialProfiles: ProfileDraft[];
+  /**
+   * The brand's other facts: what it is, how to reach it, when it was
+   * founded and who owns it.
+   */
+  brandDetails: BrandDetailsDraft;
   patterns: Record<string, { title?: string; description?: string }>;
   setupStep: number;
   setupDismissed: boolean;
@@ -271,6 +283,7 @@ export function draftOf(
     brandOtherNames: text(stored.brandOtherNames),
     logo: mediaId(stored.logo),
     socialProfiles: profilesOf(stored.socialProfiles),
+    brandDetails: brandDetailsDraftOf(stored.brandDetails),
     patterns: patternsOf(stored.patterns),
     setupStep: typeof stored.setupStep === "number" ? stored.setupStep : 0,
     setupDismissed: stored.setupDismissed === true,
@@ -549,6 +562,7 @@ function storedForm(
     structuredData: savedRules(draft.structuredData, defaults),
     robotsRules: storedRobotsRules(draft.robotsRules),
     verificationCodes: storedVerification(draft.verificationCodes),
+    brandDetails: storedBrandDetails(draft.brandDetails),
     productionAddresses: draft.productionAddresses
       .map(address => address.trim())
       .filter(address => address !== ""),
@@ -619,7 +633,36 @@ export function rebasedDraft(
       before.verificationCodes,
       after.verificationCodes
     ),
+    brandDetails: rebasedBrandDetails(
+      draft.brandDetails,
+      before.brandDetails,
+      after.brandDetails
+    ),
   };
+}
+
+/**
+ * The brand details moved fact by fact, and the contact points item by
+ * item, so an edit to the email keeps another person's edit to the parent
+ * organization.
+ */
+function rebasedBrandDetails(
+  draft: BrandDetailsDraft,
+  before: BrandDetailsDraft,
+  after: BrandDetailsDraft
+): BrandDetailsDraft {
+  const next: BrandDetailsDraft = {
+    ...after,
+    contactPoints: rebasedSet(
+      draft.contactPoints,
+      before.contactPoints,
+      after.contactPoints
+    ),
+  };
+  for (const fact of BRAND_TEXT_FACTS) {
+    if (draft[fact] !== before[fact]) next[fact] = draft[fact];
+  }
+  return next;
 }
 
 /**
@@ -653,6 +696,7 @@ const MOVED_BY_PART: ReadonlySet<keyof SettingsDraft> = new Set([
   "productionAddresses",
   "socialProfiles",
   "verificationCodes",
+  "brandDetails",
 ]);
 
 /** The draft's own values, other than the per-type ones, edited since `before`. */

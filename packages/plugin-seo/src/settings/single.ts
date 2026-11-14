@@ -27,6 +27,7 @@ import {
 
 import { holdsManageSeo } from "../permissions";
 
+import { brandDetailsProblem } from "./brand-details";
 import { SEO_PLUGIN_NAME, SEO_SETTINGS_SLUG, SETUP_STEPS } from "./contract";
 import { SEPARATORS } from "./patterns";
 import { productionAddressesProblem } from "./production-addresses";
@@ -121,6 +122,14 @@ export function seoSettingsSingle(): SingleConfig {
         name: "socialProfiles",
         label: "Social profiles",
         validate: refusing(socialProfilesProblem),
+      }),
+      // The brand's other facts structured data names: what it is, how to
+      // reach it, when it was founded and who owns it. One value, so a fact
+      // added later changes no column.
+      json({
+        name: "brandDetails",
+        label: "Brand details",
+        validate: refusing(brandDetailsProblem),
       }),
       json({
         name: "patterns",

@@ -841,7 +841,7 @@ them:
 | General               | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, and the default description                                                                                                                                 |
 | Content types         | Each content type with SEO (set in code), whether it has a public address yet, its title pattern, whether the whole type is hidden from search, and what its pages are described as in structured data, with the field each detail is read from                                                       |
 | Share images          | The default share image, for a page with none of its own                                                                                                                                                                                                                                              |
-| Organization          | The kind of site, the organization's name and other names, its logo, and its social profiles                                                                                                                                                                                                          |
+| Organization          | The kind of site; the organization's name, other names, logo and social profiles; its description, email, telephone, contact points and founding date; and its parent organization. A fact the site's code gives is shown in its field, marked as set in the code, until one is saved here            |
 | Search engines and AI | Whether pages ask for [large image previews](#how-results-show-a-page), on by default; what AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none; and [llms.txt and plain-text copies](#llmstxt-and-plain-text-copies), each off until switched on |
 | Connections           | Optional services, each off until switched on: [Search Console and IndexNow](#search-console-and-indexnow)                                                                                                                                                                                            |
 
@@ -935,7 +935,8 @@ to finish, so awaiting one in a plugin's `init` or `onReady` would wait on itsel
 
 `readSeoRules` answers the site's name, default description and share image, production addresses,
 the default pattern and each type's own patterns. `readBrandFacts` answers the brand's names, logo,
-social profiles and kind of site. Each reads the settings once; a read cached by your own code
+social profiles, kind of site and the details saved with them (description, email, telephone,
+contact points, founding date and parent organisation). Each reads the settings once; a read cached by your own code
 should carry `seoSettingsCacheTags()`, which every save expires.
 
 ## Turning the fields into tags
@@ -1262,10 +1263,16 @@ given), and `breadcrumbs.names` names the step at an address over the title of t
 of these options is checked when the plugin is created, so a mistyped email or date fails at start.
 
 The [SEO settings](#the-seo-settings) take over from these options fact by fact: their first
-production address is the origin, their brand name (else the site's name), other names, logo and
-social profiles describe the organisation, their default description is the brand's description
-where `brand.description` is not given, and a content type's choice kept in the settings wins over
-the one given here. Whatever the settings leave empty, the options still answer.
+production address is the origin, and each brand fact saved on **Organization** (name, other
+names, logo, social profiles, description, email, telephone, contact points, founding date, and
+each fact of the parent organisation) wins over the same fact here, one at a time, so moving a fact
+from the code to the admin changes nothing else. A list (other names, profiles, contact points) is
+one fact, taken whole from the settings once they hold one. The founders, a contact point's
+languages and the parent organisation's profiles are given only here. The brand is named by its
+own name, from the settings or these options, before the site's name, and described by the site's
+default description only where neither gives a description. A content type's choice kept in the
+settings wins over the one given here. Whatever the settings leave empty, the options still answer,
+and the Organization tab shows each such value in its field, marked as set in the site's code.
 
 ### What a route tells structured data
 

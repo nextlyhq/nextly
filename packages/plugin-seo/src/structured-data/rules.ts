@@ -144,8 +144,11 @@ export type ReadStructuredDataRules = (
 /** The rules as the plugin's options state them. */
 export interface StructuredDataOptions {
   /**
-   * The brand facts. The SEO settings' name, other names, logo and profiles
-   * win where they are saved; the rest are read from here.
+   * The brand facts. Each fact saved in the SEO settings (Organization) wins
+   * over the same fact here, one fact at a time: a list, such as the
+   * profiles or the contact points, is one fact. Every fact the settings
+   * leave empty, and the founders, which only these options give, are read
+   * from here.
    */
   brand?: StructuredDataBrand;
   /** Each content type's choice and mapping, until the SEO settings hold them. */
