@@ -26,6 +26,8 @@ import { tokenRefText } from "@nextlyhq/blocks-engine";
 import type { UnaddressableType } from "./usage-backfill-wiring";
 import type { UsageRowReader } from "./usage-count";
 import type { UsageScope } from "./usage-index";
+// The one bounded race, shared with every other read held to a time box.
+import { TIMED_OUT, within } from "./within-time";
 
 /** One page the index does not cover. */
 export interface UncoveredPage {
@@ -123,30 +125,6 @@ async function pageText(
   // The stored forms as the database holds them, serialized as the
   // reference's spelling is derived: JSON.stringify, no whitespace.
   return forms === TIMED_OUT ? undefined : JSON.stringify(forms);
-}
-
-/** What a read held to the time box answers when the time ran out first. */
-const TIMED_OUT = Symbol("timed out");
-
-/**
- * `read`'s answer, or {@link TIMED_OUT} once `ms` have passed first. The
- * timer is cleared whichever wins, so none outlives the answer, and a read
- * that fails after losing has its failure taken by the race, never left
- * unhandled.
- */
-async function within<T>(
-  read: Promise<T>,
-  ms: number
-): Promise<T | typeof TIMED_OUT> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<typeof TIMED_OUT>(resolve => {
-    timer = setTimeout(() => resolve(TIMED_OUT), Math.max(0, ms));
-  });
-  try {
-    return await Promise.race([read, expired]);
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 /** Rows of the index's own table one read of its markers takes. */

@@ -86,6 +86,7 @@ import {
   type SharedStyleUseItem,
 } from "./library-contract";
 import {
+  REMOVAL_COUNT_MS,
   RESCAN_PAGE_SIZE,
   refuseStoredUses,
   storedUsesOf,
@@ -633,14 +634,6 @@ function notWholeReason(
     used: false,
   };
 }
-
-/**
- * How long a removal may spend counting the pages, where the usage index is
- * not whole, before it judges: long enough to count a small site in one go,
- * short enough that the request stays responsive. A site larger than that is
- * refused as not counted yet, and its Count now, or a scheduler, counts it.
- */
-export const REMOVAL_COUNT_MS = 5_000;
 
 /** The reasons the pages the index does not cover give against a removal. */
 export type UncoveredReasons = (

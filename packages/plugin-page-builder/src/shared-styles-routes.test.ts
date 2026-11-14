@@ -13,6 +13,7 @@ import {
   type SharedStyleUsageKind,
 } from "./library-contract";
 import { pageBuilder } from "./plugin";
+import { REMOVAL_COUNT_MS } from "./shared-style-rescan";
 import {
   countSharedStyleUsage,
   firstReadableTitle,
@@ -22,7 +23,6 @@ import {
   mayReadSharedStyleUsage,
   readSharedStyleUsage,
   readSharedStyleUses,
-  REMOVAL_COUNT_MS,
   joinedCount,
   removeSharedStyles,
   sharedStyleRoutes,
@@ -1025,6 +1025,53 @@ describe("removing unused shared styles", () => {
     });
     expect(asked).toEqual([["c-card"]]);
     expect(write).not.toHaveBeenCalled();
+  });
+
+  it("refuses within the box, counting the uses, when naming the first one stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      const { store, write } = storeOf([card, hero]);
+      const { source } = usageOf(WHOLE);
+      const check: StillUsedCheck = {
+        uses: async () => [
+          { kind: "collection", slug: "pages", id: "p1" },
+          { kind: "collection", slug: "pages", id: "p2" },
+        ],
+        // A lookup of the caller's titles that never answers.
+        firstReadable: () => new Promise<string | undefined>(() => undefined),
+      };
+      const seen: { error?: unknown } = {};
+      void removeSharedStyles(
+        post({ ids: ["c-card"] }),
+        store,
+        source,
+        new Set(),
+        check
+      ).catch((error: unknown) => {
+        seen.error = error;
+      });
+      await vi.advanceTimersByTimeAsync(REMOVAL_COUNT_MS);
+      // Counted, never "you can't open": whether the caller may was not
+      // found out.
+      expect(seen.error).toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            {
+              path: "",
+              code: "IN_USE",
+              message:
+                "Still used on 2 pages. Remove it from those pages first.",
+            },
+          ],
+        },
+      });
+      expect(write).not.toHaveBeenCalled();
+      // The naming box's timer is cleared once it answers.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not walk the documents once the index has refused", async () => {

@@ -151,14 +151,14 @@ export function inSentence(name: string): string {
  * the site's default. Both ways a source is said, the chip's line and the
  * "Empty uses" sentence, word this one answer.
  */
-type SourceDescription =
+export type SourceDescription =
   | { kind: "pattern"; type: string; pattern: string }
   | { kind: "field"; type: string; field: string }
   | { kind: "template"; design: boolean }
   | { kind: "code" }
   | { kind: "site"; what: string };
 
-function describeSource(
+export function describeSource(
   sourced: Pick<Sourced<unknown>, "from" | "pattern" | "field">,
   value: SourcedValue,
   names: SourceNames

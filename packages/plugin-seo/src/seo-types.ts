@@ -150,3 +150,23 @@ export function seoExtendClauses<F>(
     },
   ];
 }
+
+/**
+ * The types the `extend` clauses leave without the group: each the
+ * every-type clause names under `except` that no clause naming types gives
+ * the group instead. Read from the clauses themselves, so what the admin is
+ * told is out is what the schema leaves out. Nothing is out where the site
+ * names its types, since no clause then covers every type.
+ */
+export function typesLeftOut<F>(clauses: SeoExtendClause<F>[]): string[] {
+  const given = new Set(
+    clauses.flatMap(clause =>
+      Array.isArray(clause.target) ? clause.target : []
+    )
+  );
+  return clauses.flatMap(clause =>
+    Array.isArray(clause.target)
+      ? []
+      : (clause.target.except ?? []).filter(slug => !given.has(slug))
+  );
+}
