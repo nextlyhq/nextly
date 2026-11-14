@@ -166,7 +166,8 @@ describe.each(LOCK_DIALECTS)(
     function reconcileCore() {
       return runReconcileCore({
         adapter: adapter as never,
-        confirmDestructive: () => Promise.resolve(true),
+        consent: resolveDataLossConsent({}),
+        interactive: false,
         checkAppHistory: () =>
           assertAppHistoryHolds({
             adapter: adapter as never,

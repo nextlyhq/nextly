@@ -82,7 +82,11 @@ import {
   pluginsRecordedNotInstalled,
   seedAccessOnCommandConnection,
 } from "../../domains/schema/migrate/command-access";
-import { reconcileCore } from "../../domains/schema/migrate/core-reconcile";
+import {
+  planCoreDeletions,
+  planCoreReconcile,
+  reconcileCore,
+} from "../../domains/schema/migrate/core-reconcile";
 import {
   consentToCover,
   describeDeletion,
@@ -280,6 +284,11 @@ import {
 } from "./clear-plaintext-passwords";
 import { commandRun } from "./command-run";
 import { runPluginsOnMigrate } from "./migrate-hooks";
+import {
+  CORE_UPGRADE_LABEL,
+  coreUpgradeSource,
+  judgeCoreDeletions,
+} from "./upgrade-steps/core-upgrade-consent";
 import {
   storedPasswordsNotice,
   storedPasswordsOn,
@@ -638,8 +647,6 @@ export async function runMigrate(
       return;
     }
 
-    // Operator-set override; never in CI config (spec §4.6.1).
-    const allowCoreDestructive = process.env.NEXTLY_ALLOW_CORE_DESTRUCTIVE === "1"; // prettier-ignore
     // The retired-table cleanup has flags of its own: removing those tables
     // and losing rows still in them are each a separate decision from
     // accepting a core schema change. Read here so all three live at one edge.
@@ -710,7 +717,10 @@ export async function runMigrate(
         refuseUnrecognisedBuilderFiles: true,
         knownJunctions: resolvedSchema.knownJunctions,
         declared,
-        allowDestructive: allowCoreDestructive,
+        // What the core upgrade deletes is judged with the files' deletions,
+        // by the run's one consent (`--accept-data-loss`, with
+        // NEXTLY_ALLOW_CORE_DESTRUCTIVE honoured as deprecated for Nextly's own
+        // tables), never by a boolean of its own.
         ...commandLineConsent(options, logger),
         dropRetiredAuthTables,
         allowDropNonEmptyRetired,
@@ -1129,6 +1139,11 @@ export interface MigrateCoreDeps {
   ensureLedger?: () => Promise<void>;
   step?: number;
   reconcileCoreFn?: typeof reconcileCore;
+  /**
+   * What the core upgrade would delete, read before the run's consent is
+   * judged (`judgeFileDeletions`); injected for tests (`planCoreDeletions`).
+   */
+  planCoreDeletionsFn?: typeof planCoreDeletions;
   runFileMigrationsFn?: typeof runFileMigrations;
   /**
    * The consent to the data the run's files delete (`judgeFileDeletions`).
@@ -1297,8 +1312,16 @@ export async function previewMigrate(args: {
   readEventTriggers?: () => Promise<readonly string[]>;
   /** Connected server capabilities, judged identically to execution. */
   serverConstructs?: ServerConstructCapabilities;
-  /** The compiled schema, whose plugin prefixes a real run checks first. */
-  extensionSchema?: Pick<ExtensionSchema, "pluginPrefixes"> | undefined;
+  /**
+   * The compiled schema, whose plugin prefixes a real run checks first, and
+   * whose contributions to the core tables its core upgrade sets aside.
+   */
+  extensionSchema?:
+    | (Pick<ExtensionSchema, "pluginPrefixes"> &
+        Partial<Pick<ExtensionSchema, "entityColumns" | "entityIndexes">>)
+    | undefined;
+  /** The core upgrade's plan; injected for tests (`planCoreReconcile`). */
+  planCoreReconcileFn?: typeof planCoreReconcile;
 }): Promise<void> {
   const { adapter, db, dialect, logger } = args;
   // Refused as a real run refuses, before anything is listed: a plugin whose
@@ -1356,6 +1379,8 @@ export async function previewMigrate(args: {
     "Pending",
     formatCount(pendingModules.length + pendingFiles.length, "migration")
   );
+  // What the core upgrade, which runs before them, would delete.
+  await previewCoreDeletions(args, logger);
   // The modules a real run applies, then its files, judged as that run's
   // consent judges them: one run, modules first (`judgeFileDeletions`).
   const moduleRuns = pluginModuleUnits(
@@ -1398,6 +1423,47 @@ export async function previewMigrate(args: {
     await previewEventTriggers(args, logger);
   }
   await previewRetiredImageSizes(db, dialect, logger);
+}
+
+/**
+ * What the run's core upgrade would do that a dry run must name, from the
+ * reconcile's own plan (`planCoreReconcile`): the refusal a real run makes
+ * before its first statement when drizzle-kit cannot plan the push, and what
+ * it would delete, under the heading a real run lists it under, with the
+ * consent it needs. Nothing when it does neither.
+ */
+async function previewCoreDeletions(
+  args: Parameters<typeof previewMigrate>[0],
+  logger: CommandContext["logger"]
+): Promise<void> {
+  const { db, dialect, extensionSchema } = args;
+  const contributions =
+    extensionSchema?.entityColumns !== undefined &&
+    extensionSchema.entityIndexes !== undefined
+      ? {
+          entityColumns: extensionSchema.entityColumns,
+          entityIndexes: extensionSchema.entityIndexes,
+        }
+      : undefined;
+  const plan = await (args.planCoreReconcileFn ?? planCoreReconcile)({
+    db,
+    dialect,
+    fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
+      dialect,
+      getDrizzle: <T>() => db as T,
+    }),
+    ...(contributions !== undefined ? { contributions } : {}),
+  });
+  if (plan.unsupported !== undefined) {
+    logger.info(`  • ${CORE_UPGRADE_LABEL}`);
+    logger.info(
+      `    ✖ a real run would refuse before applying anything: ${plan.unsupported}`
+    );
+    return;
+  }
+  if (plan.deletions.length === 0) return;
+  logger.info(`  • ${CORE_UPGRADE_LABEL}`);
+  previewDeletions(plan.deletions, logger);
 }
 
 /** Each plugin module a real run reaches, with what it would refuse and what it deletes. */
@@ -2756,6 +2822,17 @@ export async function migrateCore(
           warn: m => deps.logger.warn(m),
         },
         allowDestructive: deps.allowDestructive,
+        // What the core upgrade deletes was listed and agreed with the files'
+        // before the lock; the reconcile judges it again here, against the
+        // core tables under this lock, accepting only what was agreed or what
+        // the consent covers. The development boot's run (`allowDestructive`)
+        // drops nothing and is not judged.
+        ...(deps.allowDestructive === true
+          ? {}
+          : {
+              judgeDeletions: (deletions: readonly Deletion[]) =>
+                judgeCoreDeletionsAgreed(deps, deletions, agreedDeletions),
+            }),
         ...(deps.dropRetiredAuthTables === true
           ? { dropRetiredAuthTables: true }
           : {}),
@@ -3114,12 +3191,7 @@ async function judgeFileDeletions(
   deps: MigrateCoreDeps,
   agreed?: Agreement
 ): Promise<{ agreement: Agreement; files: ReadonlyMap<string, string> }> {
-  const consent =
-    deps.consent ??
-    resolveDataLossConsent({
-      env: process.env,
-      honours: ["NEXTLY_ALLOW_CORE_DESTRUCTIVE"],
-    });
+  const consent = runConsent(deps);
   const listed = await listMigrationFiles(
     deps.adapter,
     deps.db,
@@ -3131,6 +3203,16 @@ async function judgeFileDeletions(
   // Each deletion keeps the file it comes from, by identity, for the listing
   // and for binding an agreement to the file as it stands.
   const sources = new Map<Deletion, DeletionSource>();
+  // What the core upgrade deletes comes first, as the core upgrade runs
+  // first, listed under its own heading and asked about in the same question.
+  // Read before the lock only: under it, the core reconcile judges its own
+  // deletions against this agreement (`judgeCoreDeletionsAgreed`), from the
+  // one diff it applies.
+  if (agreed === undefined) {
+    for (const deletion of await coreRunDeletions(deps)) {
+      sources.set(deletion, coreUpgradeSource(deletion));
+    }
+  }
   // The plugin modules a run applies first, then the app files within the
   // step, read as one run in that order.
   const fileUnits = listed.flatMap(({ file }) =>
@@ -3184,6 +3266,60 @@ async function judgeFileDeletions(
     fileUnits.map(unit => [unit.label, textDigest(unit.text)])
   );
   return { agreement, files };
+}
+
+/**
+ * The run's consent: the command's, or from the environment alone, as a boot
+ * reads it. NEXTLY_ALLOW_CORE_DESTRUCTIVE is honoured, as deprecated, for
+ * Nextly's own tables only.
+ */
+function runConsent(deps: MigrateCoreDeps): DataLossConsent {
+  return (
+    deps.consent ??
+    resolveDataLossConsent({
+      env: process.env,
+      honours: ["NEXTLY_ALLOW_CORE_DESTRUCTIVE"],
+    })
+  );
+}
+
+/**
+ * What the run's core upgrade would delete (`planCoreDeletions`), read from
+ * the database as it stands. None for the development boot's run, which keeps
+ * what it would delete (`allowDestructive`).
+ */
+async function coreRunDeletions(deps: MigrateCoreDeps): Promise<Deletion[]> {
+  if (deps.allowDestructive === true) return [];
+  const plan = deps.planCoreDeletionsFn ?? planCoreDeletions;
+  return plan({
+    db: deps.db,
+    dialect: deps.dialect,
+    fieldGroupRegistryTable: await resolveRegistryNameFromCatalog({
+      dialect: deps.dialect,
+      getDrizzle: <T>() => deps.db as T,
+    }),
+    ...(deps.extensionSchema !== undefined
+      ? { contributions: deps.extensionSchema }
+      : {}),
+  });
+}
+
+/**
+ * The core upgrade's deletions as its reconcile finds them under the lock,
+ * accepted only where the run's judgement before the lock agreed to them
+ * (`agreed`), or the consent covers them; otherwise refused, naming each.
+ */
+async function judgeCoreDeletionsAgreed(
+  deps: MigrateCoreDeps,
+  deletions: readonly Deletion[],
+  agreed: Agreement
+): Promise<void> {
+  await judgeCoreDeletions({
+    deletions,
+    consent: runConsent(deps),
+    agreed,
+    warn: line => deps.logger.warn(line),
+  });
 }
 
 /** How a run reads the database's DDL event triggers: injected, or from the catalog. */

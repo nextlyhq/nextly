@@ -79,6 +79,8 @@
     "missing-migration",
     "missing-snapshot",
     "nextly-core-destructive-refused",
+    "nextly-core-upgrade-unsupported",
+    "nextly-core-upgrade-incomplete",
     "nextly-migrate-lock-busy",
     "nextly-migration-concurrent-run",
     "nextly-migration-foreign-key-violation",

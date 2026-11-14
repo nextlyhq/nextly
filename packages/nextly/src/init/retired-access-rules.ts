@@ -5,7 +5,8 @@
  * The stored per-operation access rules were removed, and with them the code
  * that read the `access_rules` column. The column itself is left in place on a
  * database that already has it — dropping a column that holds configured rules
- * is the operator's decision, and `nextly migrate` puts it to them by name. But
+ * is the operator's decision, and `nextly migrate` puts it to them by name and
+ * drops it under the data-loss consent (`--accept-data-loss`). But
  * between the upgrade and that decision the rules sit in the database looking
  * exactly as they did while they were enforced, and nothing else would say
  * otherwise: no query fails, no feature errors, the rows simply come back that
@@ -32,6 +33,11 @@ export const RETIRED_ACCESS_RULES_TABLES: readonly string[] = [
   "dynamic_collections",
   "dynamic_singles",
 ];
+
+/** The consent that drops the retired column from both registry tables. */
+const RETIRED_ACCESS_RULES_CONSENT = RETIRED_ACCESS_RULES_TABLES.map(
+  table => `${table}.${RETIRED_ACCESS_RULES_COLUMN}`
+).join(",");
 
 /** A registry table that still holds rows with a rule in the retired column. */
 export interface RetiredAccessRules {
@@ -121,8 +127,11 @@ export function formatRetiredAccessRulesWarning(
     "  code-defined `access` on the collection's or Single's config, where it names the operation,",
     "  only narrows that permission. Existing role grants still apply; only the rules in this column",
     "  are ignored. Review those rules, express any you still need as code-defined `access` beside",
-    "  the role permission it narrows, then remove the column:",
-    "  `nextly migrate` will name it and refuse, and NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 drops it.",
+    "  the role permission it narrows, then remove the column. `nextly migrate` names it and",
+    "  refuses until you consent; it drops the column when run with",
+    `  \`--accept-data-loss=${RETIRED_ACCESS_RULES_CONSENT}\``,
+    "  (or with NEXTLY_ACCEPT_DATA_LOSS set to the same list). NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 still works but is",
+    "  deprecated.",
   ];
   return lines.join("\n");
 }

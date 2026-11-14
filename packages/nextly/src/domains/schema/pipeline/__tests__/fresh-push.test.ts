@@ -309,8 +309,10 @@ describe("freshPushSchema", () => {
       // the 3 kit statements, fresh-push adds its OWN independent #5782
       // defense: PRAGMA foreign_keys = OFF before, foreign_key_check via
       // .all() (absent on this mock), and PRAGMA foreign_keys = ON after.
+      // The push runs in one transaction (BEGIN before the first statement,
+      // COMMIT after the last), inside the pragma toggle.
       expect(result.statementsExecuted).toHaveLength(3);
-      expect(fakeDb.run).toHaveBeenCalledTimes(5);
+      expect(fakeDb.run).toHaveBeenCalledTimes(7);
     });
 
     it("swallows 'already exists' errors and continues", async () => {
@@ -321,7 +323,7 @@ describe("freshPushSchema", () => {
       };
       const fakeDb = {
         run: vi.fn().mockImplementation((q: unknown) => {
-          if (JSON.stringify(q).includes("PRAGMA")) return;
+          if (/PRAGMA|BEGIN|COMMIT|ROLLBACK/.test(JSON.stringify(q))) return;
           throw new Error("table already exists");
         }),
       };
@@ -340,7 +342,7 @@ describe("freshPushSchema", () => {
       };
       const fakeDb = {
         run: vi.fn().mockImplementation((q: unknown) => {
-          if (JSON.stringify(q).includes("PRAGMA")) return;
+          if (/PRAGMA|BEGIN|COMMIT|ROLLBACK/.test(JSON.stringify(q))) return;
           throw new Error("Failed query: CREATE TABLE ...", {
             cause: new Error("table users already exists"),
           });
@@ -359,7 +361,7 @@ describe("freshPushSchema", () => {
       };
       const fakeDb = {
         run: vi.fn().mockImplementation((q: unknown) => {
-          if (JSON.stringify(q).includes("PRAGMA")) return;
+          if (/PRAGMA|BEGIN|COMMIT|ROLLBACK/.test(JSON.stringify(q))) return;
           throw new Error("syntax error near 'PRIMARY'");
         }),
       };
@@ -528,5 +530,55 @@ describe("isIdempotencyError boundary (data-safety)", () => {
     expect(
       isIdempotencyError(new Error('column "author" does not exist'))
     ).toBe(false);
+  });
+});
+
+describe("the SQLite core push's transaction", () => {
+  it("opens nothing for a push with nothing to run", async () => {
+    const { inSqliteTransaction } = await import("../fresh-push");
+    const { ran, db } = recordingDb(new Set());
+    await expect(inSqliteTransaction(db, async () => "nothing")).resolves.toBe(
+      "nothing"
+    );
+    expect(ran).toEqual([]);
+  });
+
+  /** A SQLite connection that records each statement, failing the ones `fail` names once. */
+  function recordingDb(fail: Set<string>) {
+    const ran: string[] = [];
+    const text = (q: unknown) =>
+      (q as { queryChunks?: { value?: string[] }[] }).queryChunks
+        ?.flatMap(chunk => chunk.value ?? [])
+        .join("") ?? String(q);
+    return {
+      ran,
+      db: {
+        run: (q: unknown) => {
+          const sql = text(q);
+          ran.push(sql);
+          if (fail.delete(sql)) throw new Error(`SQLITE_BUSY: ${sql}`);
+        },
+        all: () => [],
+      },
+    };
+  }
+
+  it("rolls back a commit that fails, before switching foreign keys back on", async () => {
+    const { inSqliteTransaction } = await import("../fresh-push");
+    const { ran, db } = recordingDb(new Set(["COMMIT"]));
+
+    await expect(
+      inSqliteTransaction(db, async open => {
+        open();
+        return "pushed";
+      })
+    ).rejects.toThrow("SQLITE_BUSY");
+    expect(ran).toEqual([
+      "PRAGMA foreign_keys = OFF",
+      "BEGIN",
+      "COMMIT",
+      "ROLLBACK",
+      "PRAGMA foreign_keys = ON",
+    ]);
   });
 });

@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTestDb, type TestDb } from "../../__tests__/fixtures/db";
 
+import { resolveDataLossConsent } from "../../domains/schema/migrate/data-loss-consent";
 import { CliError } from "../errors";
 import { previewReconcileCore, runReconcileCore } from "./upgrade";
 
@@ -43,31 +44,222 @@ describe("runReconcileCore", () => {
     testDb = await createTestDb();
   });
 
-  it("runs reconcileCore in dev-loose with the supplied confirm callback", async () => {
+  const adapter = () => ({
+    tableExists: () => Promise.resolve(false),
+    getDrizzle: () => testDb.db,
+    dropTable: () => Promise.resolve(),
+    getCapabilities: () => ({ dialect: "sqlite" as const }),
+  });
+  const ACCESS_RULES = ["dynamic_collections", "dynamic_singles"].map(
+    table => ({
+      kind: "column" as const,
+      table,
+      column: "access_rules",
+      core: true,
+      reason: "stored access rules, no longer enforced since 0.0.2-alpha.66",
+    })
+  );
+  const NAMED = "dynamic_collections.access_rules,dynamic_singles.access_rules";
+
+  it("runs reconcileCore with a judge of what it deletes, the consent agreed before the lock", async () => {
     const reconcile = vi.fn().mockResolvedValue({ changed: false });
-    const confirm = vi.fn().mockResolvedValue(true);
 
     await runReconcileCore(
       {
-        adapter: {
-          tableExists: () => Promise.resolve(false),
-          getDrizzle: () => testDb.db,
-          dropTable: () => Promise.resolve(),
-          getCapabilities: () => ({ dialect: "sqlite" }),
-        },
-        confirmDestructive: confirm,
+        adapter: adapter(),
+        consent: resolveDataLossConsent({ flag: NAMED }),
+        interactive: false,
         checkAppHistory: () => Promise.resolve(),
       },
-      { reconcileCore: reconcile }
+      {
+        reconcileCore: reconcile,
+        planCoreDeletions: () => Promise.resolve(ACCESS_RULES),
+      }
     );
 
     expect(reconcile).toHaveBeenCalledOnce();
     const passed = reconcile.mock.calls[0][0] as {
-      mode: string;
-      confirmDestructive: unknown;
+      judgeDeletions: (deletions: readonly unknown[]) => Promise<void>;
     };
-    expect(passed.mode).toBe("dev-loose");
-    expect(passed.confirmDestructive).toBe(confirm);
+    await expect(passed.judgeDeletions(ACCESS_RULES)).resolves.toBeUndefined();
+    await expect(
+      passed.judgeDeletions([
+        { kind: "column", table: "users", column: "name", core: true },
+      ])
+    ).rejects.toThrow(/users\.name/);
+  });
+
+  it("hands what plugins contributed to the core tables to the plan and the reconcile", async () => {
+    const reconcile = vi.fn().mockResolvedValue({ changed: false });
+    const plan = vi.fn().mockResolvedValue([]);
+    const contributions = {
+      entityColumns: new Map([["users", []]]),
+      entityIndexes: new Map(),
+    };
+
+    await runReconcileCore(
+      {
+        adapter: adapter(),
+        consent: resolveDataLossConsent({}),
+        interactive: false,
+        contributions,
+        checkAppHistory: () => Promise.resolve(),
+      },
+      { reconcileCore: reconcile, planCoreDeletions: plan }
+    );
+
+    expect(plan.mock.calls[0][0]).toMatchObject({ contributions });
+    expect(reconcile.mock.calls[0][0]).toMatchObject({ contributions });
+  });
+
+  it("with no terminal and no consent, refuses before the lock, naming the consent", async () => {
+    const reconcile = vi.fn();
+    await expect(
+      runReconcileCore(
+        {
+          adapter: adapter(),
+          consent: resolveDataLossConsent({}),
+          interactive: false,
+          checkAppHistory: () => Promise.resolve(),
+        },
+        {
+          reconcileCore: reconcile,
+          planCoreDeletions: () => Promise.resolve(ACCESS_RULES),
+        }
+      )
+    ).rejects.toThrow(`--accept-data-loss=${NAMED}`);
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it("an agreement to one change on a column does not cover another change to it found under the lock", async () => {
+    const typeChange = {
+      kind: "column" as const,
+      table: "users",
+      column: "name",
+      core: true,
+      reason: "type changes from text to varchar",
+    };
+    const madeRequired = {
+      ...typeChange,
+      reason: "becomes required, which fails on a row without a value",
+    };
+    const reconcile = vi.fn(
+      async (deps: {
+        judgeDeletions: (deletions: readonly unknown[]) => Promise<void>;
+      }) => {
+        // The same change as agreed passes; another change to the column does not.
+        await deps.judgeDeletions([typeChange]);
+        await deps.judgeDeletions([madeRequired]);
+        return { changed: true };
+      }
+    );
+
+    await expect(
+      runReconcileCore(
+        {
+          adapter: adapter(),
+          consent: resolveDataLossConsent({}),
+          interactive: true,
+          askToDelete: () => Promise.resolve(true),
+          checkAppHistory: () => Promise.resolve(),
+        },
+        {
+          reconcileCore: reconcile as never,
+          planCoreDeletions: () => Promise.resolve([typeChange]),
+        }
+      )
+    ).rejects.toThrow(/users\.name/);
+    expect(reconcile).toHaveBeenCalledOnce();
+  });
+
+  it("an agreement holds when only the count of a change moved by the time of the lock", async () => {
+    const required = (rows: number) => ({
+      kind: "column" as const,
+      table: "users",
+      column: "name",
+      core: true,
+      reason: `becomes required, which fails on a row without a value (${rows} rows hold none)`,
+    });
+    const reconcile = vi.fn(
+      async (deps: {
+        judgeDeletions: (deletions: readonly unknown[]) => Promise<void>;
+      }) => {
+        await deps.judgeDeletions([required(5)]);
+        return { changed: true };
+      }
+    );
+
+    await runReconcileCore(
+      {
+        adapter: adapter(),
+        consent: resolveDataLossConsent({}),
+        interactive: true,
+        askToDelete: () => Promise.resolve(true),
+        checkAppHistory: () => Promise.resolve(),
+      },
+      {
+        reconcileCore: reconcile as never,
+        planCoreDeletions: () => Promise.resolve([required(3)]),
+      }
+    );
+    expect(reconcile).toHaveBeenCalledOnce();
+  });
+
+  it("reads the field-group registry again under the lock, where a run it waited behind renamed it", async () => {
+    const names = ["dynamic_components", "dynamic_field_groups"];
+    const tables = (
+      testDb.sqlite
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .all() as Array<{ name: string }>
+    ).map(row => row.name);
+    const before = names.find(name => tables.includes(name));
+    expect(before).toBeDefined();
+    const after = names.find(name => name !== before) as string;
+    const reconcile = vi.fn().mockResolvedValue({ changed: false });
+
+    await runReconcileCore(
+      {
+        adapter: adapter(),
+        consent: resolveDataLossConsent({}),
+        interactive: false,
+        checkAppHistory: () => Promise.resolve(),
+      },
+      {
+        reconcileCore: reconcile,
+        planCoreDeletions: async target => {
+          expect(target.fieldGroupRegistryTable).toBe(before);
+          // The field-group storage migration this run waited behind.
+          testDb.sqlite.exec(`ALTER TABLE ${before} RENAME TO ${after}`);
+          return [];
+        },
+      }
+    );
+
+    expect(reconcile.mock.calls[0][0]).toMatchObject({
+      fieldGroupRegistryTable: after,
+    });
+  });
+
+  it("at a terminal lists what it deletes and asks once; a no changes nothing", async () => {
+    const reconcile = vi.fn();
+    const askToDelete = vi.fn().mockResolvedValue(false);
+    await expect(
+      runReconcileCore(
+        {
+          adapter: adapter(),
+          consent: resolveDataLossConsent({}),
+          interactive: true,
+          askToDelete,
+          checkAppHistory: () => Promise.resolve(),
+        },
+        {
+          reconcileCore: reconcile,
+          planCoreDeletions: () => Promise.resolve(ACCESS_RULES),
+        }
+      )
+    ).rejects.toMatchObject({});
+    expect(askToDelete).toHaveBeenCalledOnce();
+    expect(reconcile).not.toHaveBeenCalled();
   });
 
   it("refuses when legacy bookkeeping is still present", async () => {
@@ -82,7 +274,8 @@ describe("runReconcileCore", () => {
             dropTable: () => Promise.resolve(),
             getCapabilities: () => ({ dialect: "sqlite" }),
           },
-          confirmDestructive: () => Promise.resolve(true),
+          consent: resolveDataLossConsent({}),
+          interactive: false,
           checkAppHistory: () => Promise.resolve(),
         },
         { reconcileCore: reconcile }
@@ -105,6 +298,7 @@ describe("runReconcileCore", () => {
         getCapabilities: () => ({ dialect: "sqlite" }),
       },
       interactive: false,
+      consent: resolveDataLossConsent({}),
       checkAppHistory: () => Promise.reject(missing),
     });
     expect(plan).toEqual({ changes: [], refusals: [missing.publicMessage] });
@@ -122,7 +316,8 @@ describe("runReconcileCore", () => {
             dropTable: () => Promise.resolve(),
             getCapabilities: () => ({ dialect: "sqlite" }),
           },
-          confirmDestructive: () => Promise.resolve(true),
+          consent: resolveDataLossConsent({}),
+          interactive: false,
           checkAppHistory: () => Promise.reject(refusal),
         },
         { reconcileCore: reconcile }

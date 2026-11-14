@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
 import { getCoreSchema } from "../../../schemas";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
-import { reconcileCore } from "./core-reconcile";
+import { planCoreReconcile, reconcileCore } from "./core-reconcile";
 
 describe("reconcileCore (Phase 1)", () => {
   let testDb: TestDb;
@@ -38,10 +38,16 @@ describe("reconcileCore (Phase 1)", () => {
       .fn()
       .mockResolvedValue({ statementsExecuted: ["CREATE TABLE …"] });
 
+    // The live tables before the push, then as the push left them: the run
+    // checks every declared column is there once it has pushed.
+    const introspect = vi
+      .fn()
+      .mockResolvedValueOnce(live)
+      .mockResolvedValue(desired);
     const result = await reconcileCore({
       db: testDb.db,
       dialect: "sqlite",
-      introspect: () => Promise.resolve(live),
+      introspect,
       applyCore,
     });
 
@@ -96,102 +102,210 @@ describe("reconcileCore (Phase 1)", () => {
     };
   }
 
-  it("dev-loose applies a destructive diff when confirmDestructive returns true", async () => {
-    const live = liveWithExtraTable();
-    const applyCore = vi
-      .fn()
-      .mockResolvedValue({ statementsExecuted: ["DROP TABLE …"] });
-    const confirmDestructive = vi.fn().mockResolvedValue(true);
+  /**
+   * The desired core schema with one column of another type than declared:
+   * the diff changes its type, a destructive change the push makes.
+   */
+  function liveWithChangedType(): NextlySchemaSnapshot {
+    const [first, ...rest] = desired.tables;
+    const column = first.columns.find(c => c.primaryKey !== true);
+    if (column === undefined) throw new Error("no ordinary column to change");
+    return {
+      tables: [
+        {
+          ...first,
+          columns: first.columns.map(c =>
+            c === column ? { ...c, type: "integer" } : c
+          ),
+        },
+        ...rest,
+      ],
+    };
+  }
 
-    const result = await reconcileCore({
-      db: testDb.db,
-      dialect: "sqlite",
-      mode: "dev-loose",
-      confirmDestructive,
-      introspect: () => Promise.resolve(live),
-      applyCore,
+  /** Introspection that reads `live` first, then the tables as declared. */
+  function introspectThenDeclared(live: NextlySchemaSnapshot) {
+    return vi.fn().mockResolvedValueOnce(live).mockResolvedValue(desired);
+  }
+
+  it("the development boot applies a type change and keeps a retired table, naming the consent that drops it", async () => {
+    const live = liveWithChangedType();
+    live.tables.push({
+      name: "legacy_extra",
+      columns: [{ name: "id", type: "text", nullable: false }],
     });
-
-    expect(confirmDestructive).toHaveBeenCalledOnce();
-    expect(applyCore).toHaveBeenCalledOnce();
-    expect(result.changed).toBe(true);
-  });
-
-  it("dev-loose aborts when confirmDestructive returns false", async () => {
-    const live = liveWithExtraTable();
-    const applyCore = vi.fn();
-    const confirmDestructive = vi.fn().mockResolvedValue(false);
-
-    await expect(
-      reconcileCore({
-        db: testDb.db,
-        dialect: "sqlite",
-        mode: "dev-loose",
-        confirmDestructive,
-        introspect: () => Promise.resolve(live),
-        applyCore,
-      })
-    ).rejects.toMatchObject({ code: "NEXTLY_CORE_DESTRUCTIVE_REFUSED" });
-    expect(applyCore).not.toHaveBeenCalled();
-  });
-  it("dev-loose asks nothing about a drop its push strips, says it is left in place, and applies the rest", async () => {
-    const live = liveWithExtraTable();
     const applyCore = vi
       .fn()
-      .mockResolvedValue({ statementsExecuted: ["CREATE INDEX …"] });
-    const confirmDestructive = vi.fn().mockResolvedValue(true);
+      .mockResolvedValue({ statementsExecuted: ["ALTER TABLE …"] });
+    const executeSql = vi.fn();
     const warnings: string[] = [];
 
     const result = await reconcileCore({
       db: testDb.db,
       dialect: "sqlite",
-      mode: "dev-loose",
-      confirmDestructive,
-      introspect: () => Promise.resolve(live),
+      allowDestructive: true,
+      introspect: introspectThenDeclared(live),
       applyCore,
-      planPush: () =>
-        Promise.resolve({
-          runnable: [],
-          blocked: ['DROP TABLE "legacy_extra";'],
-          degraded: false,
-        }),
+      executeSql,
       logger: { info: () => {}, warn: line => warnings.push(line) },
     });
 
-    expect(confirmDestructive).not.toHaveBeenCalled();
-    expect(warnings.join("\n")).toMatch(/Left in place: .*legacy_extra/);
     expect(applyCore).toHaveBeenCalledOnce();
+    expect(executeSql).not.toHaveBeenCalled();
+    expect(warnings.join("\n")).toMatch(/Left in place: .*legacy_extra/);
+    expect(warnings.join("\n")).toContain(
+      "with the consent --accept-data-loss=legacy_extra"
+    );
     expect(result.changed).toBe(true);
   });
 
-  it("dev-loose asks only about the destructive changes its push makes", async () => {
-    const live = liveWithExtraTable();
-    live.tables.push({
-      name: "legacy_other",
-      columns: [{ name: "id", type: "text", nullable: false }],
-    });
-    const applyCore = vi.fn().mockResolvedValue({ statementsExecuted: [] });
-    const confirmDestructive = vi.fn().mockResolvedValue(true);
+  it("with nothing but a retired table, and nobody to drop it, changes nothing", async () => {
+    const applyCore = vi.fn();
+    const executeSql = vi.fn();
 
-    await reconcileCore({
+    const result = await reconcileCore({
       db: testDb.db,
       dialect: "sqlite",
-      mode: "dev-loose",
-      confirmDestructive,
-      introspect: () => Promise.resolve(live),
+      allowDestructive: true,
+      introspect: () => Promise.resolve(liveWithExtraTable()),
       applyCore,
-      // The push strips one drop and runs the other.
-      planPush: () =>
-        Promise.resolve({
-          runnable: ['DROP TABLE "legacy_other";'],
-          blocked: ['DROP TABLE "legacy_extra";'],
-          degraded: false,
-        }),
+      executeSql,
+      logger: { warn: () => {} },
     });
 
-    expect(confirmDestructive).toHaveBeenCalledOnce();
-    const asked = (confirmDestructive.mock.calls[0]?.[0] ?? []) as string[];
-    expect(asked.join("\n")).toContain("legacy_other");
-    expect(asked.join("\n")).not.toContain("legacy_extra");
+    expect(applyCore).not.toHaveBeenCalled();
+    expect(executeSql).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+  });
+
+  it("judges every destructive change, a type change among them, by the consent", async () => {
+    const judgeDeletions = vi.fn().mockRejectedValue(new Error("refused"));
+    const applyCore = vi.fn();
+    const live = liveWithChangedType();
+    const changed = live.tables[0];
+
+    await expect(
+      reconcileCore({
+        db: testDb.db,
+        dialect: "sqlite",
+        introspect: () => Promise.resolve(live),
+        applyCore,
+        judgeDeletions,
+      })
+    ).rejects.toThrow("refused");
+
+    expect(judgeDeletions).toHaveBeenCalledWith([
+      expect.objectContaining({
+        kind: "column",
+        table: changed.name,
+        core: true,
+        reason: expect.stringContaining("type changes from integer"),
+      }),
+    ]);
+    expect(applyCore).not.toHaveBeenCalled();
+  });
+
+  it("refuses a push it cannot plan with a named error naming the table and the release to migrate with first", async () => {
+    const { UnplannablePushError } = await import("../pipeline/fresh-push");
+    const applyCore = vi
+      .fn()
+      .mockRejectedValue(new UnplannablePushError("resolver crashed"));
+
+    await expect(
+      reconcileCore({
+        db: testDb.db,
+        dialect: "sqlite",
+        introspect: () => Promise.resolve({ tables: desired.tables.slice(1) }),
+        applyCore,
+      })
+    ).rejects.toMatchObject({
+      code: "NEXTLY_CORE_UPGRADE_UNSUPPORTED",
+      publicMessage: expect.stringMatching(
+        new RegExp(
+          `${desired.tables[0].name}.*npx nextly@0\\.0\\.2-alpha\\.65 migrate`
+        )
+      ),
+    });
+  });
+
+  it("describes a column made required by the rows it fails on, not by its values", async () => {
+    // A column the declaration makes required, nullable in the database.
+    const table = desired.tables.find(t =>
+      t.columns.some(c => c.nullable === false && c.primaryKey !== true)
+    );
+    const column = table?.columns.find(
+      c => c.nullable === false && c.primaryKey !== true
+    );
+    if (table === undefined || column === undefined) throw new Error("none");
+    const live: NextlySchemaSnapshot = {
+      tables: desired.tables.map(t =>
+        t === table
+          ? {
+              ...t,
+              columns: t.columns.map(c =>
+                c === column ? { ...c, nullable: true } : c
+              ),
+            }
+          : t
+      ),
+    };
+    // Three rows hold NULL in it, whatever is asked.
+    const db = { all: () => [{ count: 3 }], run: () => {} };
+    const judgeDeletions = vi.fn().mockRejectedValue(new Error("stop"));
+
+    await expect(
+      reconcileCore({
+        db,
+        dialect: "sqlite",
+        introspect: () => Promise.resolve(live),
+        applyCore: vi.fn(),
+        judgeDeletions,
+      })
+    ).rejects.toThrow("stop");
+
+    const [deletion] = judgeDeletions.mock.calls[0][0] as Array<{
+      count?: number;
+      reason?: string;
+    }>;
+    expect(deletion.count).toBeUndefined();
+    expect(deletion.reason).toBe(
+      "becomes required, which fails on a row without a value (3 rows hold none)"
+    );
+  });
+
+  it("plans a push drizzle-kit cannot plan as the refusal a run would make", async () => {
+    const { UnplannablePushError } = await import("../pipeline/fresh-push");
+    const plan = await planCoreReconcile({
+      db: testDb.db,
+      dialect: "sqlite",
+      introspect: () => Promise.resolve({ tables: desired.tables.slice(1) }),
+      planPush: () =>
+        Promise.reject(new UnplannablePushError("resolver crashed")),
+    });
+
+    expect(plan.statements).toEqual([]);
+    expect(plan.unsupported).toMatch(
+      new RegExp(
+        `cannot bring ${desired.tables[0].name} up to date.*npx nextly@0\\.0\\.2-alpha\\.65 migrate`
+      )
+    );
+  });
+
+  it("names the columns still missing after the push, never reporting success", async () => {
+    const live: NextlySchemaSnapshot = { tables: desired.tables.slice(1) };
+    const applyCore = vi.fn().mockResolvedValue({ statementsExecuted: [] });
+
+    await expect(
+      reconcileCore({
+        db: testDb.db,
+        dialect: "sqlite",
+        // The push ran, and the table is still not there.
+        introspect: () => Promise.resolve(live),
+        applyCore,
+      })
+    ).rejects.toMatchObject({
+      code: "NEXTLY_CORE_UPGRADE_INCOMPLETE",
+      publicMessage: expect.stringContaining(`table ${desired.tables[0].name}`),
+    });
   });
 });

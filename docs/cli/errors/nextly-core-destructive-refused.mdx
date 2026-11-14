@@ -1,26 +1,31 @@
 ---
 title: NEXTLY_CORE_DESTRUCTIVE_REFUSED
-description: "Bringing Nextly's own tables up to date needs a destructive change, which `nextly migrate` makes only with `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1`."
+description: "Bringing Nextly's own tables up to date deletes data, which `nextly migrate` does only with the consent `--accept-data-loss` (or `NEXTLY_ACCEPT_DATA_LOSS`) covering it."
 ---
 
 ## Cause
 
-Bringing Nextly's own tables up to date needs a destructive change, which `nextly migrate` makes only with `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1`.
+Bringing Nextly's own tables up to date deletes data, which `nextly migrate` does only with the consent `--accept-data-loss` (or `NEXTLY_ACCEPT_DATA_LOSS`) covering it.
 
-Before the app's migrations, `nextly migrate` brings Nextly's own tables up to date. A change there that would drop a table or column, or fail on rows already stored, is refused by default: it usually means the installed `nextly` and the database come from different releases.
+Before the app's migrations, `nextly migrate` brings Nextly's own tables up to date. When that deletes data, it lists what goes and refuses before changing anything unless the consent covers it. What it deletes:
+
+- a column a core table still has that this version no longer declares, such as `access_rules` on `dynamic_collections` and `dynamic_singles`, retired in 0.0.2-alpha.66;
+- a column whose type changes, or that becomes required, where the values already stored may not fit.
+
+At a terminal, `nextly migrate` lists each one with its count and asks. With no terminal (CI, a deploy step), it refuses and prints the consent that covers the run.
 
 ## Fix
 
-- Check that the installed version of `nextly` is the one the database was last migrated with, and read that release's notes.
-- Once you are sure the change is intended, run `nextly migrate` with `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1` set.
+- Read what the message lists. For `access_rules`, first express any stored rule you still need as code-defined `access` (the start-up warning says how).
+- Run `nextly migrate` again with the consent it printed, naming the columns: `--accept-data-loss=dynamic_collections.access_rules,dynamic_singles.access_rules`, or `NEXTLY_ACCEPT_DATA_LOSS` set to the same list.
+- `NEXTLY_ALLOW_CORE_DESTRUCTIVE=1` still works for Nextly's own tables but is deprecated.
 
 ## Example
 
 ```text
-✗ Core schema reconciliation requires destructive operations.
-  Why:  drops column 'nextly_users.legacy_role'
-        drops table 'nextly_sessions_old'
-        This usually means a Nextly version mismatch.
-  Next: Set NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 to proceed (see release notes).
+✗ Bringing Nextly's own tables up to date deletes data. Nothing was changed.
+  Why:  column dynamic_collections.access_rules: the collections' stored access rules, no longer enforced since 0.0.2-alpha.66
+        column dynamic_singles.access_rules: the Singles' stored access rules, no longer enforced since 0.0.2-alpha.66
+  Next: To go ahead, give consent: --accept-data-loss=dynamic_collections.access_rules,dynamic_singles.access_rules (or NEXTLY_ACCEPT_DATA_LOSS=dynamic_collections.access_rules,dynamic_singles.access_rules). NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 still works for Nextly's own tables but is deprecated.
   Docs: https://nextlyhq.com/docs/cli/errors/nextly-core-destructive-refused  (NEXTLY_CORE_DESTRUCTIVE_REFUSED)
 ```

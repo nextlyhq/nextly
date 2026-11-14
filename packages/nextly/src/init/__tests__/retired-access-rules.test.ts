@@ -120,6 +120,14 @@ describe("formatRetiredAccessRulesWarning", () => {
     expect(message).toContain("dynamic_collections: 2 rows carry");
     expect(message).toContain("dynamic_singles: 1 row carries");
     expect(message).toContain("nextly migrate");
-    expect(message).toContain("NEXTLY_ALLOW_CORE_DESTRUCTIVE=1");
+    // The consent `nextly migrate` honours, in both its spellings, and the
+    // earlier variable named as what it now is.
+    expect(message).toContain(
+      "--accept-data-loss=dynamic_collections.access_rules,dynamic_singles.access_rules"
+    );
+    expect(message).toContain("NEXTLY_ACCEPT_DATA_LOSS");
+    expect(message).toMatch(
+      /NEXTLY_ALLOW_CORE_DESTRUCTIVE=1 still works but is\s+deprecated/
+    );
   });
 });
