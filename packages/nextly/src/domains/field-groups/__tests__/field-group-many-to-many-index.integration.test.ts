@@ -14,7 +14,7 @@
  * embedding the group, so the outcome asserted is the one a user sees: the save succeeds and the
  * two related ids come back.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../../../config";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
@@ -37,7 +37,16 @@ import type { SingleEntryService } from "../../singles/services/single-entry-ser
 
 let handle: TestNextly | undefined;
 
+// A field group's Builder create, through any road, builds its table in development only; elsewhere it
+// writes the migration for `nextly migrate` and leaves the group pending, with no table. These cases
+// judge the table the create makes, so they run as development does. `vi.stubEnv` rather than
+// assigning: `NODE_ENV` is declared read-only.
+beforeEach(() => {
+  vi.stubEnv("NODE_ENV", "development");
+});
+
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await handle?.destroy();
   handle = undefined;
 });

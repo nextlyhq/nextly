@@ -428,15 +428,19 @@ for (const dialect of getConfiguredTestDialects()) {
     });
 
     describe("a Single", () => {
+      // In development, as the collection's Builder save above: only there does the save build the
+      // table before recording the Single.
       const create = (slug: string) =>
-        dispatchSingles(
-          "createSingle",
-          {},
-          {
-            slug,
-            label: "Team updates",
-            fields: BODY,
-          }
+        inDevelopment(() =>
+          dispatchSingles(
+            "createSingle",
+            {},
+            {
+              slug,
+              label: "Team updates",
+              fields: BODY,
+            }
+          )
         );
 
       it("is created through a Builder save under a hyphen, and refused a twin or a refused address", async () => {
@@ -525,23 +529,29 @@ for (const dialect of getConfiguredTestDialects()) {
         return (read as { news?: { body?: string } } | null)?.news?.body;
       }
 
+      // In development, as the collection's Builder save above: only there does a create build the
+      // table before recording the field group.
       const roads = {
         "a Builder save": (slug: string) =>
-          dispatchComponents(
-            "createComponent",
-            {},
-            {
-              slug,
-              label: "Team updates",
-              fields: BODY,
-            }
+          inDevelopment(() =>
+            dispatchComponents(
+              "createComponent",
+              {},
+              {
+                slug,
+                label: "Team updates",
+                fields: BODY,
+              }
+            )
           ),
         "the Direct API": (slug: string) =>
-          (current as TestNextly).nextly.fieldGroups.create({
-            slug,
-            label: "Team updates",
-            fields: BODY as never,
-          }),
+          inDevelopment(() =>
+            (current as TestNextly).nextly.fieldGroups.create({
+              slug,
+              label: "Team updates",
+              fields: BODY as never,
+            })
+          ),
       };
 
       for (const [road, create] of Object.entries(roads)) {

@@ -17,7 +17,7 @@
  *
  * Self-skips per dialect on the standard rule.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createTestNextly,
@@ -27,7 +27,16 @@ import {
 
 let current: TestNextly | undefined;
 
+// A field group's Builder create, through any road, builds its table in development only; elsewhere it
+// writes the migration for `nextly migrate` and leaves the group pending, with no table. These cases
+// judge the table the create makes, so they run as development does. `vi.stubEnv` rather than
+// assigning: `NODE_ENV` is declared read-only.
+beforeEach(() => {
+  vi.stubEnv("NODE_ENV", "development");
+});
+
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await current?.destroy();
   current = undefined;
 });
