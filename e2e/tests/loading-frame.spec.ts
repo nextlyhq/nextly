@@ -36,7 +36,8 @@ import {
 } from "./support/test";
 
 // The screens below are loaded with releases, scheduled and needing
-// attention, which the dashboard draws parts of from reads that answer late.
+// attention, which the Releases page and the dashboard draw parts of from
+// reads that answer late.
 // Releases are shared, so this file holds their lock while it makes and
 // removes its own.
 test.describe.configure({ lock: [LOCK.releases] });
@@ -875,11 +876,6 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
           await expectStillLoad(page, path, mode);
         });
 
-        test(`moves no part of the releases, ${mode}`, async ({ page }) => {
-          test.setTimeout(90_000);
-          await expectStillLoad(page, "/releases", mode);
-        });
-
         test(`moves no part of the users on a revisit, ${mode}`, async ({
           page,
         }) => {
@@ -890,6 +886,29 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
           await expectStillLoad(page, "/users", mode, { revisit: true });
         });
       }
+
+      test.describe("the releases", () => {
+        // A further account per width: with releases in every tab, the page
+        // reads its list, each tab's count, the strip and the rows' checks,
+        // and polls them, past what the account above has left.
+        ownSeat(51 + index);
+
+        for (const mode of ["held", "unheld"] as const) {
+          test(`moves no part of the releases, ${mode}`, async ({ page }) => {
+            test.setTimeout(90_000);
+            // With the file's releases in every part the page draws late: the
+            // attention strip above the tabs, the tabs' counts and each row's
+            // readiness line.
+            await expectStillLoad(page, "/releases", mode);
+            // The control: the strip the page waited for is drawn.
+            await expect(
+              page.getByRole("region", {
+                name: /^\d+ releases? needs? attention$/,
+              })
+            ).toBeVisible();
+          });
+        }
+      });
 
       test.describe("the dashboard", () => {
         // A further account per width: the dashboard's reads are many, and
