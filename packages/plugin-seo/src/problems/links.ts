@@ -135,6 +135,48 @@ function requestOf(
     : undefined;
 }
 
+/** A holder of an address, as the record names it. */
+type Holder = { collection: string; id: string };
+
+/** What one link reaches: its address as kept, what holds it, and the pages. */
+interface LinkTarget {
+  path: string;
+  holders: readonly Holder[];
+  /** The pages reached, by `linkedPageKey`. */
+  pages: string[];
+}
+
+/**
+ * What `link` reaches on the site, or nothing for a link off it. Who holds
+ * each address is asked once per language, whatever links name it, through
+ * `asked`.
+ */
+async function targetOf(
+  link: LinkFact,
+  judge: LinkJudge,
+  asked: Map<string, Promise<readonly Holder[]>>
+): Promise<LinkTarget | undefined> {
+  const request = requestOf(link.url, judge.productionAddresses, judge.origin);
+  const kept = request === undefined ? undefined : await judge.keptOf(request);
+  if (kept === undefined) return undefined;
+  const path = pathOf(kept.path);
+  const key = `${kept.locale}\u0000${path}`;
+  const held = asked.get(key) ?? judge.holders(path, kept.locale);
+  asked.set(key, held);
+  const holders = await held;
+  const pages: readonly (Holder & { locale?: string })[] = judge.pagesOf
+    ? await judge.pagesOf(holders, kept.locale, path)
+    : holders;
+  return {
+    path,
+    holders,
+    // In the language the page is reached in, which a redirect may change.
+    pages: pages.map(page =>
+      linkedPageKey(page.collection, page.id, page.locale ?? kept.locale)
+    ),
+  };
+}
+
 /**
  * What `links` reach: each page holding an address they name on the site,
  * and the links to an address a content type serves that no page holds in
@@ -145,45 +187,18 @@ export async function readLinks(
   links: readonly LinkFact[],
   judge: LinkJudge
 ): Promise<LinkReading> {
-  const answers = new Map<
-    string,
-    Promise<readonly { collection: string; id: string }[]>
-  >();
+  const asked = new Map<string, Promise<readonly Holder[]>>();
   const broken: LinkFact[] = [];
   const to = new Set<string>();
   for (const link of links) {
-    const request = requestOf(
-      link.url,
-      judge.productionAddresses,
-      judge.origin
-    );
-    const kept =
-      request === undefined ? undefined : await judge.keptOf(request);
-    if (kept === undefined) continue;
-    const path = pathOf(kept.path);
-    const key = `${kept.locale}\u0000${path}`;
-    let held = answers.get(key);
-    if (held === undefined) {
-      held = judge.holders(path, kept.locale);
-      answers.set(key, held);
-    }
-    const holders = await held;
-    const pages: readonly {
-      collection: string;
-      id: string;
-      locale?: string;
-    }[] = judge.pagesOf
-      ? await judge.pagesOf(holders, kept.locale, path)
-      : holders;
-    for (const page of pages) {
-      // In the language the page is reached in, which a redirect may change.
-      to.add(
-        linkedPageKey(page.collection, page.id, page.locale ?? kept.locale)
-      );
-    }
+    const target = await targetOf(link, judge, asked);
+    if (target === undefined) continue;
+    for (const page of target.pages) to.add(page);
     // Held, by a page or a redirect sending people on, is not broken.
-    if (holders.length > 0) continue;
-    if (judge.shapes.some(shape => shape.pattern.test(path))) broken.push(link);
+    const unheld = target.holders.length === 0;
+    if (unheld && judge.shapes.some(shape => shape.pattern.test(target.path))) {
+      broken.push(link);
+    }
   }
   return { broken, to: [...to] };
 }
