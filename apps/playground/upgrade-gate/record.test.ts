@@ -43,9 +43,12 @@ describe("isInstalledFrom", () => {
 
 describe("siteEnvironment", () => {
   it("runs the playground as a site does: no browser-suite switches, the recorded plugins, this database", () => {
+    // `NODE_ENV` is required by Next's `ProcessEnv`, and given as another
+    // mode so the site's `development` is seen replacing it.
     const environment = siteEnvironment(
       {
         PATH: "/bin",
+        NODE_ENV: "production",
         DB_DIALECT: "postgresql",
         NEXTLY_E2E_STYLE_FIXTURE: "1",
         NEXTLY_E2E_DEV_RELOAD: "1",

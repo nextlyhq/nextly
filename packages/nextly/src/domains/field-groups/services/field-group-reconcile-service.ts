@@ -143,10 +143,11 @@ function asCreatorField(
  * group nothing is wrong with.
  *
  * The two tables have DIFFERENT builders, which is why this is keyed by table rather than resolved
- * once. `FieldGroupSchemaService` builds the main table; the localization renderer builds the
- * companion, and it spells the same field differently — a PostgreSQL `email` is `VARCHAR(255)` on
- * one and `TEXT` on the other. The planner supplies the table it OBSERVED the column in, so a
- * stored placement flag that is itself wrong cannot select the wrong builder.
+ * once. A Builder save's migration builds the main table from the column descriptor; the
+ * localization renderer builds the companion, and the two can spell the same field differently — a
+ * MySQL `date` is `timestamp` on one and `DATETIME(3)` on the other. The planner supplies the table
+ * it OBSERVED the column in, so a stored placement flag that is itself wrong cannot select the
+ * wrong builder.
  *
  * Returns `undefined` where neither builder claims the field, which the planner skips rather than
  * blocks: an underivable expectation is not evidence of drift.
@@ -159,26 +160,49 @@ async function expectedColumnTypeResolver(
 ): Promise<
   (field: FieldDefinition, table: ReconcileTable) => string | undefined
 > {
-  const { FieldGroupSchemaService } = await import(
-    "./field-group-schema-service"
+  const { getComponentRowColumnDescriptor } = await import(
+    "../../schema/services/field-column-descriptor"
   );
   const { fieldToLocalizedColumnSpec } = await import(
     "../../i18n/migration/field-to-column-spec"
   );
   const { ddlType } = await import("../../i18n/migration/ddl-types");
 
-  const creator = new FieldGroupSchemaService(dialect);
-
   return (field, table) => {
     if (table === "companion") {
       const spec = fieldToLocalizedColumnSpec(field, dialect, "fieldGroup");
       return spec ? ddlType(spec, dialect) : undefined;
     }
-    // The parameter's own declared type. `FieldDefinition` and the config shape describe the same
-    // stored field from two layers, and naming the target keeps the compiler checking this call.
-    const type = creator.columnTypeFor(asCreatorField(field));
-    return type ?? undefined;
+    // The main table as a Builder create builds it today: through the save writer's migration,
+    // whose columns are the column descriptor's for a field group's row.
+    return getComponentRowColumnDescriptor(field, dialect, "fieldGroup")
+      ?.dialectType;
   };
+}
+
+/**
+ * The type the main table's creator gave a field before a Builder save wrote its migration
+ * (`FieldGroupSchemaService`'s own map): the one earlier spelling the planner accepts beside
+ * {@link expectedColumnTypeResolver}'s, because field groups built that way still exist. It is also
+ * what that creator writes where no save writer is set up. Named here, in one place, so it can be
+ * retired with that creator. None for the companion, whose builder has not changed.
+ */
+async function preBuilderSaveColumnTypeResolver(
+  dialect: SupportedDialect
+): Promise<
+  (field: FieldDefinition, table: ReconcileTable) => string | undefined
+> {
+  const { FieldGroupSchemaService } = await import(
+    "./field-group-schema-service"
+  );
+  const creator = new FieldGroupSchemaService(dialect);
+  return (field, table) =>
+    table === "companion"
+      ? undefined
+      : // The parameter's own declared type. `FieldDefinition` and the config shape describe the
+        // same stored field from two layers, and naming the target keeps the compiler checking
+        // this call.
+        (creator.columnTypeFor(asCreatorField(field)) ?? undefined);
 }
 
 /**
@@ -352,6 +376,7 @@ async function assessFieldGroupReconcile(
     liveCompanion,
     typeColumn,
     expectedColumnType: await expectedColumnTypeResolver(dialect),
+    preBuilderSaveColumnType: await preBuilderSaveColumnTypeResolver(dialect),
     expectedColumnDefault: await expectedColumnDefaultResolver(dialect),
     structuralColumnDefaults: await structuralColumnDefaults(dialect),
   });

@@ -18,7 +18,6 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { builderColumnIsUnique } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { indexNameForColumns } from "../../schema/services/index-name";
@@ -45,7 +44,7 @@ export type UniqueFieldLike = CompanionFieldLike & {
  * the flag alone let two rows in one language point at the same target.
  */
 export function isUniqueField(field: UniqueFieldLike): boolean {
-  return builderColumnIsUnique(field as unknown as FieldDefinition);
+  return builderColumnIsUnique(field);
 }
 
 /** A translated field that is unique within each language, and its companion column. */

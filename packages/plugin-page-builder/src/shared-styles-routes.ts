@@ -108,10 +108,12 @@ import { retryOnStale } from "./stale-retry";
 import { readStoredJson } from "./stored-json";
 import { USAGE_BACKFILL_JOB } from "./usage-backfill-job";
 import { documentCountOf, type DocumentsUsing } from "./usage-count";
+import { coverageGapWords } from "./usage-count-after-migrate";
 import {
   indexIsWhole,
   indexStillCounting,
   type UsageIndexHealth,
+  usageCoverageGap,
 } from "./usage-index-health";
 
 /** The permission that locks and unlocks shared styles, in its parts. */
@@ -177,6 +179,12 @@ export interface SharedStyleUsageSource {
   ): Promise<ReadonlyMap<string, DocumentsUsing>>;
   /** Which kind of document a collection holds. */
   kindOf(collection: string): SharedStyleUsageKind;
+  /**
+   * Count the pages into the index now, for at most `maxDurationMs`: the
+   * usage backfill the count route runs, which a removal runs too before it
+   * refuses for an index that is not whole. Absent where nothing can run it.
+   */
+  countNow?(maxDurationMs: number): Promise<void>;
 }
 
 /**
@@ -563,17 +571,95 @@ export interface UsageReason {
 }
 
 /**
+ * A count of the pages that a second caller joins while the first is still
+ * running, rather than asking for another. The sweep has one row, which one
+ * runner holds: a second run asked for meanwhile claims nothing and returns
+ * at once, so the second of two removals counting at once in one process
+ * would read the index before the first count finished, and be refused
+ * although counting was going fine. Joined, both wait on the one count and
+ * both judge its result. Across processes (another instance, the scheduler,
+ * `nextly migrate`) nothing is shared, and a removal there that finds the
+ * count unfinished is refused as such.
+ */
+export function joinedCount(
+  run: (maxDurationMs: number) => Promise<unknown>
+): (maxDurationMs: number) => Promise<void> {
+  let inFlight: Promise<void> | null = null;
+  return maxDurationMs => {
+    if (inFlight !== null) return inFlight;
+    const counting = run(maxDurationMs).then(
+      () => undefined,
+      () => undefined
+    );
+    inFlight = counting.finally(() => {
+      inFlight = null;
+    });
+    return inFlight;
+  };
+}
+
+/** The jobs a count of the pages runs through: a context's `runSweepNow`. */
+export type UsageCountJobs = Pick<
+  PluginRouteContext["services"]["jobs"],
+  "runSweepNow"
+>;
+
+/**
+ * How long a removal may spend counting the pages, where the usage index is
+ * not whole, before it judges: long enough to count a small site in one go,
+ * short enough that the request stays responsive. A site larger than that is
+ * refused as not counted yet, and its Count now, or a scheduler, counts it.
+ */
+export const REMOVAL_COUNT_MS = 5_000;
+
+/**
  * What a usage index says against removing each entry: not whole, so no
  * count can be trusted; or an entry used, or not countable in full. `noun`
  * is what is being removed ("shared style", "variable"), for the words.
+ *
+ * An index that is not whole is counted first, for at most
+ * {@link REMOVAL_COUNT_MS}, and judged again: on a site no scheduler drains,
+ * nothing else counts the pages that existed before the index, and every
+ * removal there would otherwise be refused until someone presses Count now.
+ * The count is the backfill's own run, which records its progress and stops
+ * quietly where a newer run has taken over, so two removals counting at once
+ * neither count a page twice nor leave the index wrong.
  */
 export async function usageRefusals(
   removable: readonly { id: string; name: string }[],
   usage: SharedStyleUsageSource,
   noun: string
 ): Promise<UsageReason[]> {
-  const health = await usage.health();
+  let health = await usage.health();
+  // Counted only while the backfill has work left: an index content keeps
+  // from whole (a page too large to read whole, a field it cannot reach)
+  // stays a floor however often it sweeps, and a count would spend the
+  // request's time on sweeps that change nothing.
+  const counts = indexStillCounting(health) && usage.countNow !== undefined;
+  if (counts) {
+    await usage.countNow?.(REMOVAL_COUNT_MS);
+    health = await usage.health();
+  }
   if (!indexIsWhole(health)) {
+    // What keeps it from whole, said as such and never as a use: content no
+    // count can cover, a count that ran out of time, or one not yet run.
+    const gap = usageCoverageGap(health);
+    if (gap !== undefined) {
+      return [
+        {
+          message: `No ${noun} can be removed while the count of where they are used is incomplete: ${coverageGapWords(gap)}.`,
+          used: false,
+        },
+      ];
+    }
+    if (counts) {
+      return [
+        {
+          message: `Some pages are still being counted, so no ${noun} can be removed yet. Try again shortly, or count them now with Count now.`,
+          used: false,
+        },
+      ];
+    }
     return [
       {
         message: `Some pages haven't been counted yet, so no ${noun} can be removed.`,
@@ -1043,7 +1129,7 @@ export const SHARED_STYLE_COUNT_MS = 10_000;
  * way the counts ever become exact.
  */
 export async function countSharedStyleUsage(
-  jobs: Pick<PluginRouteContext["services"]["jobs"], "runSweepNow">,
+  jobs: UsageCountJobs,
   usage: Pick<SharedStyleUsageSource, "health">
 ): Promise<Response> {
   const { ran } = await jobs.runSweepNow(USAGE_BACKFILL_JOB, {

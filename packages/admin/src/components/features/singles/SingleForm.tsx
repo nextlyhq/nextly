@@ -1064,7 +1064,7 @@ export function SingleForm({
     takeoverTypes,
     versionFor,
     editorRestore,
-    schema.fields as FieldConfig[]
+    schema.fields
   );
   const {
     viewingVersion,

@@ -8,11 +8,11 @@ import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors";
 import { getNextlyLogger } from "../../observability/logger";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
-import { clientPasswordRule } from "../password/policy";
 import { sessionCookies } from "../cookies/session-cookies";
 import { validatePasswordStrength } from "../credentials/password-strength";
 import { buildClaims } from "../jwt/claims";
 import { signAccessTokenWithExpiry } from "../jwt/sign";
+import { clientPasswordRule } from "../password/policy";
 import type { SessionRoles } from "../session/session-roles";
 import type { TokenVerdict } from "../setup-token/setup-token";
 // hashPassword not needed here -- seedSuperAdmin handles hashing internally

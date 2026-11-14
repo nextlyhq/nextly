@@ -128,6 +128,11 @@ async function listRecentSends(
   // The submissions they were for, read as the person: one they may not
   // read is left out, with its send.
   const ids = [...new Set(sends.map(send => send.submission))];
+  // Nothing sent yet, as on a new notification: no submissions to read. The
+  // read is not made, since a filter listing no ids is refused as one that
+  // can match nothing (`FILTER_EMPTY_IN`), and the page said the sends could
+  // not be read.
+  if (ids.length === 0) return respondList([], wholeList(0));
   const { data } = await ctx.services.collections.listEntries(
     deps.submissionsSlug,
     {

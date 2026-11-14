@@ -128,7 +128,9 @@ export async function getAllCategoriesWithCounts(): Promise<
               where: {
                 and: [
                   { status: { equals: "published" } },
-                  { categories: { contains: catId } },
+                  // `in` matches a post whose hasMany `categories` holds this
+                  // id; `contains` is refused on a list of related entries.
+                  { categories: { in: [catId] } },
                 ],
               },
               limit: 0,
