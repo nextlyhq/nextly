@@ -76,6 +76,8 @@ Without it nothing is listed, and the refusal (`PLUGIN_RESOLUTION_ERROR`,
 
   ```ts
   import { undeclaredPluginRoutes } from "@nextlyhq/plugin-sdk/testing";
+  import { expect, it } from "vitest";
+  import { myPlugin } from "../src";
 
   it("declares what every route takes", () => {
     expect(undeclaredPluginRoutes(myPlugin())).toEqual([]);

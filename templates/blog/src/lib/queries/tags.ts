@@ -87,7 +87,9 @@ export async function getAllTagsWithCounts(): Promise<
               where: {
                 and: [
                   { status: { equals: "published" } },
-                  { tags: { contains: tagId } },
+                  // `in` matches a post whose hasMany `tags` holds this id;
+                  // `contains` is refused on a list of related entries.
+                  { tags: { in: [tagId] } },
                 ],
               },
               limit: 0,

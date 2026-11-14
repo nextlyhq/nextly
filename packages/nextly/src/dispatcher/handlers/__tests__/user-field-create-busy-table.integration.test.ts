@@ -23,84 +23,86 @@ const SERVERS = getConfiguredTestDialects().filter(
   dialect => dialect !== "sqlite"
 );
 
-// A run with no server configured (the SQLite leg) declares the suite skipped rather than none:
-// Vitest fails a file that declares no suite at all.
-describe.skipIf(SERVERS.length === 0)("on the servers", () => {
-  describe.each(SERVERS)(
-    "a user field created while user_ext is busy (%s)",
-    dialect => {
-      let handle: TestNextly;
-      let adapter: DrizzleAdapter;
-      let free: () => void = () => {};
-      let holding: Promise<unknown> = Promise.resolve();
+// Shown as skipped, rather than as a file with no tests, on a run that has
+// neither server configured: the SQLite-only leg fails a file with no suite.
+if (SERVERS.length === 0) {
+  it.skip("runs on PostgreSQL and MySQL only", () => {});
+}
 
-      beforeEach(async () => {
-        // The Builder runs its DDL in development; short bounds, so the tries run in seconds.
-        vi.stubEnv("NODE_ENV", "development");
-        vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
-        vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "4");
-        handle = await createTestNextly({ dialect, collections: [] });
-        adapter = handle.adapter as unknown as DrizzleAdapter;
-      }, 120_000);
+describe.each(SERVERS)(
+  "a user field created while user_ext is busy (%s)",
+  dialect => {
+    let handle: TestNextly;
+    let adapter: DrizzleAdapter;
+    let free: () => void = () => {};
+    let holding: Promise<unknown> = Promise.resolve();
 
-      afterEach(async () => {
-        free();
-        await holding.catch(() => {});
-        await handle?.destroy();
-        vi.unstubAllEnvs();
-      }, 60_000);
+    beforeEach(async () => {
+      // The Builder runs its DDL in development; short bounds, so the tries run in seconds.
+      vi.stubEnv("NODE_ENV", "development");
+      vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "1");
+      vi.stubEnv("NEXTLY_LOCK_TIMEOUT_TOTAL", "4");
+      handle = await createTestNextly({ dialect, collections: [] });
+      adapter = handle.adapter as unknown as DrizzleAdapter;
+    }, 120_000);
 
-      const definitions = () =>
-        handle.getService(
-          "userFieldDefinitionService"
-        ) as unknown as UserFieldDefinitionService;
+    afterEach(async () => {
+      free();
+      await holding.catch(() => {});
+      await handle?.destroy();
+      vi.unstubAllEnvs();
+    }, 60_000);
 
-      /** A second session's open transaction that has read `user_ext`, until `free()`. */
-      async function holdUserExt(): Promise<void> {
-        let held: () => void = () => {};
-        const isHeld = new Promise<void>(resolve => {
-          held = resolve;
-        });
-        const freed = new Promise<void>(resolve => {
-          free = resolve;
-        });
-        holding = adapter.transaction(async tx => {
-          await tx.execute("SELECT 1 FROM user_ext");
-          held();
-          await freed;
-        });
-        await isHeld;
-      }
+    const definitions = () =>
+      handle.getService(
+        "userFieldDefinitionService"
+      ) as unknown as UserFieldDefinitionService;
 
-      const create = (name: string) =>
-        dispatchUserFields(
-          "createField",
-          {},
-          { name, label: name, type: "text" }
-        );
-
-      it("stops as table busy, keeps no definition, and creates it once the table is free", async () => {
-        // `user_ext` exists, with a field of its own.
-        await create("ufbFirst");
-        await holdUserExt();
-        const refused = await create("ufbSecond").then(
-          () => undefined,
-          (e: unknown) => e
-        );
-        free();
-        await holding.catch(() => {});
-        expect(NextlyError.is(refused) ? refused.code : refused).toBe(
-          "NEXTLY_TABLE_BUSY"
-        );
-        expect(
-          (await definitions().listFields()).map(f => f.name)
-        ).not.toContain("ufbSecond");
-
-        await create("ufbSecond");
-        expect((await definitions().listFields()).map(f => f.name)).toContain(
-          "ufbSecond"
-        );
-      }, 60_000);
+    /** A second session's open transaction that has read `user_ext`, until `free()`. */
+    async function holdUserExt(): Promise<void> {
+      let held: () => void = () => {};
+      const isHeld = new Promise<void>(resolve => {
+        held = resolve;
+      });
+      const freed = new Promise<void>(resolve => {
+        free = resolve;
+      });
+      holding = adapter.transaction(async tx => {
+        await tx.execute("SELECT 1 FROM user_ext");
+        held();
+        await freed;
+      });
+      await isHeld;
     }
-  );
-});
+
+    const create = (name: string) =>
+      dispatchUserFields(
+        "createField",
+        {},
+        { name, label: name, type: "text" }
+      );
+
+    it("stops as table busy, keeps no definition, and creates it once the table is free", async () => {
+      // `user_ext` exists, with a field of its own.
+      await create("ufbFirst");
+      await holdUserExt();
+      const refused = await create("ufbSecond").then(
+        () => undefined,
+        (e: unknown) => e
+      );
+      free();
+      await holding.catch(() => {});
+      expect(NextlyError.is(refused) ? refused.code : refused).toBe(
+        "NEXTLY_TABLE_BUSY"
+      );
+      expect((await definitions().listFields()).map(f => f.name)).not.toContain(
+        "ufbSecond"
+      );
+
+      await create("ufbSecond");
+      expect((await definitions().listFields()).map(f => f.name)).toContain(
+        "ufbSecond"
+      );
+    }, 60_000);
+  }
+);
