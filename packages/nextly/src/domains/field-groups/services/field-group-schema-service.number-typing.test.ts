@@ -31,7 +31,8 @@ function columnSql(dialect: SupportedDialect, field: FieldConfig): string {
 
 // Component number fields previously always became floating-point columns,
 // unlike the same field in a collection. These cases pin each storage mode to
-// the column type the runtime and the generated Drizzle schema build for it —
+// the column type the runtime and the generated Drizzle schema build for it,
+// spelled as the column descriptor spells it, which the creator reads —
 // a mismatch means the created table can never match the desired schema, so
 // every later diff re-alters the same column.
 describe("FieldGroupSchemaService number column typing", () => {
@@ -39,15 +40,17 @@ describe("FieldGroupSchemaService number column typing", () => {
   // would silently round-trip 1 as 1.0.
   it("types a default number field as an integer column (not real/double)", () => {
     const expected: Record<SupportedDialect, string> = {
-      postgresql: "INTEGER",
-      mysql: "INT",
-      sqlite: "INTEGER",
+      postgresql: "int4",
+      mysql: "int",
+      sqlite: "integer",
     };
     for (const dialect of Object.keys(expected) as SupportedDialect[]) {
       const q = QUOTE[dialect];
       const sql = columnSql(dialect, numberField());
       expect(sql).toContain(`${q}value${q} ${expected[dialect]}`);
-      expect(sql).not.toMatch(new RegExp(`${q}value${q}\\s+(REAL|DOUBLE)`));
+      expect(sql).not.toMatch(
+        new RegExp(`${q}value${q}\\s+(real|double|float8)`, "i")
+      );
     }
   });
 
@@ -56,9 +59,9 @@ describe("FieldGroupSchemaService number column typing", () => {
   // NUMERIC affinity is the closest equivalent.
   it("types a dbType:decimal number field as an exact decimal column", () => {
     const expected: Record<SupportedDialect, string> = {
-      postgresql: "NUMERIC(10, 2)",
-      mysql: "DECIMAL(10, 2)",
-      sqlite: "NUMERIC",
+      postgresql: "numeric(10, 2)",
+      mysql: "decimal(10,2)",
+      sqlite: "numeric",
     };
     for (const dialect of Object.keys(expected) as SupportedDialect[]) {
       const q = QUOTE[dialect];
@@ -75,9 +78,9 @@ describe("FieldGroupSchemaService number column typing", () => {
   // not merely "some float" — PostgreSQL REAL (float4) would not match.
   it("types an options.format:float number field as a floating-point column", () => {
     const expected: Record<SupportedDialect, string> = {
-      postgresql: "DOUBLE PRECISION",
-      mysql: "DOUBLE",
-      sqlite: "REAL",
+      postgresql: "float8",
+      mysql: "double",
+      sqlite: "real",
     };
     for (const dialect of Object.keys(expected) as SupportedDialect[]) {
       const q = QUOTE[dialect];

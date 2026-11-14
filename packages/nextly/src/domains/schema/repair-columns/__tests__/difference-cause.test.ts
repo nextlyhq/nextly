@@ -189,13 +189,14 @@ describe("differenceCause: legacy shapes", () => {
 });
 
 describe("differenceCause: what a current generator still creates", () => {
-  // The live type is what each generator writes for the key: the field-group generator types it
-  // `uuid` on PostgreSQL, which is itself a difference it still creates.
+  // The live type is what each generator writes for the key, the descriptor's type: only the NOT
+  // NULL is the generator's own.
   it.each<[RepairEntityKind, RepairColumnOrigin, SupportedDialect, string]>([
     ["collection", "collection", "postgresql", "text"],
     ["collection", "collection", "mysql", "varchar(36)"],
     ["single", "collection", "sqlite", "text"],
-    ["fieldGroup", "fieldGroup", "postgresql", "uuid"],
+    ["fieldGroup", "fieldGroup", "postgresql", "text"],
+    ["fieldGroup", "fieldGroup", "mysql", "varchar(36)"],
   ])(
     "a required relationship in a NOT NULL column (%s, %s, %s)",
     (kind, origin, dialect, type) => {
@@ -243,17 +244,82 @@ describe("differenceCause: what a current generator still creates", () => {
       ).toEqual({ kind: "current-generator" });
     }
   );
+});
 
-  it("a field-group date the generator still makes DATETIME on MySQL", () => {
+describe("differenceCause: the field-group creator's earlier spelling", () => {
+  // Each column as the field group's creator made it before it read the descriptor: a type the
+  // descriptor does not give, and the nullability that creator gives.
+  it.each<[string, Record<string, unknown>, SupportedDialect, ColumnState]>([
+    [
+      "a date as DATETIME",
+      { type: "date" },
+      "mysql",
+      { type: "datetime", nullable: true },
+    ],
+    [
+      "an email as varchar(255)",
+      { type: "email" },
+      "postgresql",
+      { type: "varchar", nullable: true, typeModifier: "255" },
+    ],
+    [
+      "a required reference as a NOT NULL uuid",
+      { type: "relationship", relationTo: "posts", required: true },
+      "postgresql",
+      { type: "uuid", nullable: false },
+    ],
+    [
+      "a hasMany number as a scalar integer",
+      { type: "number", hasMany: true },
+      "sqlite",
+      { type: "integer", nullable: true },
+    ],
+    [
+      "a multi-select as JSON",
+      { type: "select", hasMany: true },
+      "mysql",
+      { type: "json", nullable: true },
+    ],
+  ])("%s on %s", (_label, declared, dialect, live) => {
+    expect(
+      causeFor({
+        f: field(declared),
+        kind: "fieldGroup",
+        origin: "fieldGroup",
+        dialect,
+        live,
+      })
+    ).toEqual({
+      kind: "legacy",
+      shape: "field-group-creator-spelling",
+      before: "0.0.2-alpha.77",
+    });
+  });
+
+  it("is not named for the same column on a collection's table", () => {
+    // Only the field group's creator spelled a date DATETIME; a collection's generators never did.
+    expect(
+      causeFor({
+        f: field({ type: "date" }),
+        kind: "collection",
+        origin: "collection",
+        dialect: "mysql",
+        live: { type: "datetime", nullable: true },
+      })
+    ).toBeNull();
+  });
+
+  it("is not named for a column that creator spelled differently", () => {
+    // That creator made a MySQL date DATETIME, never an integer.
     expect(
       causeFor({
         f: field({ type: "date" }),
         kind: "fieldGroup",
         origin: "fieldGroup",
         dialect: "mysql",
-        live: { type: "datetime", nullable: true },
+        live: { type: "int", nullable: true },
       })
-    ).toEqual({ kind: "current-generator" });
+    ).toBeNull();
   });
 });
 
