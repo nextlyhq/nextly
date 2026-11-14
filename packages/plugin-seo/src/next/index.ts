@@ -99,8 +99,12 @@ function logOnceRequested(): void {
  *
  * @experimental Its name and shape may change before 1.0.
  */
-export async function notFoundLogged(): Promise<never> {
-  // Not awaited: the log waits for a request, and the answer must not.
-  logOnceRequested();
-  notFound();
+export function notFoundLogged(): Promise<never> {
+  // Rejected with Next.js's not-found, as an async function's throw would
+  // be. The log is not awaited: it waits for a request, and the answer must
+  // not.
+  return new Promise<never>(() => {
+    logOnceRequested();
+    notFound();
+  });
 }

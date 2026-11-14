@@ -91,8 +91,12 @@ export const blockPagesRoute: BlocksPageConfig = {
       : {}),
   }),
   // A path this route has nothing for is answered not found through the SEO
-  // plugin, which lists it under Redirects › Not found, once per request,
-  // where the plugin is on. Logged here, where the route decides, rather than
-  // from `app/not-found.tsx`, which Next.js renders for every page.
+  // plugin, which lists it under Redirects › Not found where the plugin is
+  // on. The route is public, so under Cache Components Next.js keeps the 404
+  // and answers later requests for the path with it: the helper reads the
+  // request only where Next.js renders the miss for one, so the path is
+  // counted when its 404 is made. Logged here, where the route decides,
+  // rather than from `app/not-found.tsx`, which Next.js renders for every
+  // page.
   notFound: notFoundLogged,
 };

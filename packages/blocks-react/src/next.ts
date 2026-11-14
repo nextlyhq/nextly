@@ -4670,12 +4670,15 @@ function underCacheComponents(): boolean {
 }
 
 /**
- * The site's `notFound` for a route, where the route answers its misses per
- * request: always for an access-enforced route, and for a public one only
- * under Cache Components. Without them a public route renders a path once
- * (at build, or on its first request) and keeps the answer, and Next.js
- * refuses a render it keeps that reads the request, so the handler, which
- * may read it, is left out there and the miss is answered by `notFound()`.
+ * The site's `notFound` for a route: always for an access-enforced route,
+ * and for a public one only under Cache Components. A public route renders
+ * a path once and keeps the answer either way. Under Cache Components a
+ * handler that reads the request there only costs the kept 404 (every
+ * request renders the miss again, answered 200), and one that reads it only
+ * where Next.js renders for a request, as the SEO plugin's `notFoundLogged`
+ * does, keeps it. Without them Next.js refuses a render it keeps that reads
+ * the request, so the handler, which may read it, is left out there and the
+ * miss is answered by `notFound()`.
  */
 function perRequestNotFound<H>(
   handler: H | undefined,

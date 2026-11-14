@@ -36,9 +36,10 @@ import { PLAYGROUND, stop, waitFor } from "../../support/playground-dev-server";
  * found is never logged, whether visited, navigated to or prefetched; a
  * missing address the page builder's content route answers is logged once,
  * though its page and its head both answer it; a miss Nextly's own content
- * route decides (`/preview/blocks`) is logged once; a public route's miss is
- * logged where it is answered per request and never turns into an error
- * where it is not; and a prefetch of a missing address is never logged.
+ * route decides (`/preview/blocks`) is logged once; a public route keeps its
+ * 404, logged on the request that made it and not on the ones served it,
+ * and never turns into an error; and a prefetch of a missing address is
+ * never logged.
  *
  * Next.js renders the root `not-found` page's element on every request, so a
  * log written from it counts every page view. The playground hands its
@@ -255,15 +256,19 @@ test.describe("the SEO plugin's log of addresses not found, on a production buil
     expect((await rowFor(missing))?.hits).toBe(1);
   });
 
-  test("answers a public route's miss not found, logged only where it is answered per request", async ({
+  test("keeps a public route's 404, logged when it is made and not when it is served", async ({
     request,
   }) => {
-    // `/blocks` is public: under Cache Components its miss is answered per
-    // request and logged; without them the answer is rendered once and
-    // kept, so it is answered by Next's notFound() and never a 500.
+    // `/blocks` is public. Under Cache Components its first request renders
+    // the miss and is logged, and Next.js keeps the 404: the next request is
+    // answered with it, status 404, without rendering, so it is not logged
+    // again. Without them the answer is rendered once and kept, so it is
+    // answered by Next's notFound(), never a 500, and not logged.
     const missing = `/blocks/seo-public-missing-${run}`;
     expect(answeredNotFound(await visit(request, missing))).toBe(true);
     await settle(request, "public");
+    expect((await visit(request, missing)).status).toBe(404);
+    await settle(request, "public-again");
     expect((await rowFor(missing))?.hits).toBe(
       CACHE_COMPONENTS ? 1 : undefined
     );

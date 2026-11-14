@@ -205,12 +205,20 @@ so the request is still answered not found. `createSingleRoute`, and the page
 builder's `createContentPage`, `createBlocksPage` and `createSinglePage`, take
 the same option. It is experimental: its name and shape may change before 1.0.
 
+A public route's answers are kept. With Cache Components on, Next.js keeps a
+missing path's 404 and answers later requests for it with status 404, without
+rendering, as long as the miss reads nothing of the request while Next.js
+prerenders it. A handler that reads the request (`headers()`, `cookies()`)
+there makes every request render the miss again, sent with status 200 and a
+`noindex` tag rather than a 404. The SEO plugin's `notFoundLogged` reads the
+request only where Next.js renders the miss for one, so a route given it keeps
+its 404s.
+
 Without Cache Components, `createPublicContentRoute` renders a path once, at
 build or on its first request, and keeps the answer, and Next.js refuses a
-kept render that reads the request (`headers()`, `cookies()`). Give a public
-route a handler that reads the request only with Cache Components on. The page
-builder's public forms leave the handler out themselves where their answers are
-kept.
+kept render that reads the request at all. Give a public route a handler that
+reads the request only with Cache Components on. The page builder's public
+forms leave the handler out themselves there.
 
 ### One route for every language
 

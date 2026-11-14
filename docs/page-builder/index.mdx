@@ -524,7 +524,10 @@ followed by `notFound()`. `createBlocksPage` and `createSinglePage` take the sam
 option. It is experimental: its name and shape may change before 1.0. The public forms
 (`createPublicContentPage`, `createPublicBlocksPage`, `createPublicSinglePage`) call it
 only with Cache Components on: without them a public page's answer is rendered once and
-kept, so a miss there is answered by `notFound()` and the handler is not called.
+kept, so a miss there is answered by `notFound()` and the handler is not called. With them,
+Next.js keeps a public page's 404 and answers later requests for the address with it, as
+long as the handler reads nothing of the request while Next.js prerenders the miss; the SEO
+plugin's `notFoundLogged` reads it only where Next.js renders the miss for a request.
 
 An entry with its own design ([An entry's own design](/docs/page-builder/compose-through-the-api#an-entrys-own-design))
 is drawn with that design instead, and takes its SEO settings from it, once the design
