@@ -64,6 +64,7 @@ import {
   changesOf,
   verificationDraftOf,
   draftOf,
+  switchChangesText,
   rebasedDraft,
   robotsRulesDraftOf,
   structuredDataOf,
@@ -194,6 +195,8 @@ export function SeoSettingsPage(): JSX.Element {
           tab={open}
           stored={settings.data}
           serverAddresses={where.data?.serverAddresses ?? []}
+          // Yes until the server says otherwise.
+          canChange={where.data?.canChange !== false}
           {...split}
           typesFailed={types.error !== null}
           reread={async () => {
@@ -487,9 +490,12 @@ function SettingsPanel({
   serverAddresses,
   rulesCheck,
   stored,
+  canChange,
 }: {
   tab: TabId;
   tabProps: TabProps;
+  /** Whether the reader may change the settings. */
+  canChange: boolean;
   /** Which sitemap pages the own robots.txt rules being typed block. */
   rulesCheck: ReturnType<typeof useRobotsRulesCheck>;
   /** The settings as stored, which what was saved is read from. */
@@ -535,6 +541,8 @@ function SettingsPanel({
           {...tabProps}
           types={types}
           switchedOff={switchedOff}
+          savedOff={draftOf(stored).typesWithSeoOff}
+          canChange={canChange}
         />
       );
   }
@@ -547,10 +555,50 @@ function firstSetupStep(stepsDone: number): 1 | 2 | 3 {
     : (Math.min(stepsDone + 1, SETUP_STEPS) as 1 | 2 | 3);
 }
 
+/**
+ * The content type switches `draft` changes from what is stored, in words,
+ * each type by its label; null where none changed.
+ */
+function switchSummary(
+  stored: StoredSettings,
+  draft: SettingsDraft,
+  defaults: SettingsDefaults,
+  types: readonly { key: string; label: string }[],
+  switchedOff: readonly { key: string; label: string }[]
+): string | null {
+  return switchChangesText(
+    draftOf(stored, defaults),
+    draft,
+    new Map([...types, ...switchedOff].map(type => [type.key, type.label]))
+  );
+}
+
+/**
+ * What stops `draft` being saved, if anything: a value the form refuses, or
+ * own robots.txt rules that would block what the sitemap lists.
+ */
+function saveProblem(
+  draft: SettingsDraft,
+  types: readonly SeoContentType[],
+  serverAddresses: readonly string[],
+  stored: StoredSettings,
+  check: ReturnType<typeof useRobotsRulesCheck>["check"]
+): string | null {
+  return (
+    draftProblem(draft, types, serverAddresses) ??
+    ownRulesSaveProblem(
+      draft.robotsRules,
+      robotsRulesDraftOf(stored.robotsRules).text,
+      check
+    )
+  );
+}
+
 /** Cancel and Save changes under a tab, saying what waits to be saved. */
 function SaveBar({
   changed,
   problem,
+  summary,
   saving,
   cancel,
   save,
@@ -558,6 +606,8 @@ function SaveBar({
   changed: boolean;
   /** What stops the changes being saved, if anything does. */
   problem: string | null;
+  /** The content type switches waiting to be saved, in words, if any. */
+  summary?: string | null;
   saving: boolean;
   cancel: () => void;
   save: () => void;
@@ -565,7 +615,11 @@ function SaveBar({
   return (
     <FormActions
       dirty={changed}
-      {...(changed && problem !== null ? { message: problem } : {})}
+      {...(changed && problem !== null
+        ? { message: problem }
+        : changed && summary
+          ? { message: summary }
+          : {})}
     >
       <Button
         type="button"
@@ -642,11 +696,14 @@ function SettingsScreen({
   switchedOff,
   typesFailed,
   reread,
+  canChange,
 }: {
   slug: string;
   tab: TabId;
   stored: StoredSettings;
   serverAddresses: readonly string[];
+  /** Whether the reader may change the settings. */
+  canChange: boolean;
   types: readonly SeoContentType[];
   switchedOff: readonly SwitchedOffType[];
   typesFailed: boolean;
@@ -666,13 +723,13 @@ function SettingsScreen({
     draft.robotsRules.text,
     draft.hiddenTypes
   );
-  const problem =
-    draftProblem(draft, types, serverAddresses) ??
-    ownRulesSaveProblem(
-      draft.robotsRules,
-      robotsRulesDraftOf(stored.robotsRules).text,
-      rulesCheck.check
-    );
+  const problem = saveProblem(
+    draft,
+    types,
+    serverAddresses,
+    stored,
+    rulesCheck.check
+  );
   useLeaveWarning(changes !== null);
   useHeldDraft(slug, stored, draft, changes !== null);
 
@@ -705,10 +762,12 @@ function SettingsScreen({
         serverAddresses={serverAddresses}
         rulesCheck={rulesCheck}
         stored={stored}
+        canChange={canChange}
       />
       <SaveBar
         changed={changes !== null}
         problem={problem}
+        summary={switchSummary(stored, draft, defaults, types, switchedOff)}
         saving={saving}
         cancel={cancel}
         save={saveChanges}

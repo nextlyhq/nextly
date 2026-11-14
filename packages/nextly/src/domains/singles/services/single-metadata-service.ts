@@ -82,18 +82,11 @@ import {
   type TranslationLayoutChange,
 } from "../../i18n/per-language-storage";
 import { assertLanguageStatesAgreeWithEntry } from "../../i18n/runtime/language-states-agree";
-import {
-  writeCollectionSave,
-  type BuilderSaveSetup,
-  type CollectionSaveDeps,
+import type {
+  BuilderSaveSetup,
+  CollectionSaveDeps,
 } from "../../schema/builder-save/collection-save";
-import {
-  checkEntitySaveHistory,
-  entitySaveDeps,
-  previousEntity,
-  writeEntityDelete,
-  writeEntitySave,
-} from "../../schema/builder-save/entity-save";
+import { entitySaveDeps } from "../../schema/builder-save/entity-save-deps";
 import { entityRelations } from "../../schema/builder-save/single-relations";
 import { singleEntity } from "../../schema/builder-save/stored-entity";
 import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
@@ -110,6 +103,15 @@ import { assertNoNewSiblingClashes } from "../../schema/sibling-fields";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
 import type { SingleRegistryService } from "./single-registry-service";
+
+/**
+ * The Builder save writer, loaded where a save runs: it brings the migration
+ * generator and runner, which a read, or a save with no writer set up, never
+ * needs.
+ */
+const loadEntitySave = () => import("../../schema/builder-save/entity-save");
+const loadCollectionSave = () =>
+  import("../../schema/builder-save/collection-save");
 
 /**
  * 🔴 The schema generators, the runtime-schema builder and the companion reconcile are loaded on
@@ -694,6 +696,8 @@ export class SingleMetadataService {
       await remove();
       return;
     }
+    const { checkEntitySaveHistory, writeEntityDelete } =
+      await loadEntitySave();
     await checkEntitySaveHistory(deps);
     await writeEntityDelete(
       deps,
@@ -900,7 +904,10 @@ export class SingleMetadataService {
 
     // The history checks a Builder save makes, before that first write, where a writer is set up.
     const deps = this.saveDeps();
-    await checkEntitySaveHistory(deps);
+    if (deps !== undefined) {
+      const { checkEntitySaveHistory } = await loadEntitySave();
+      await checkEntitySaveHistory(deps);
+    }
 
     await this.assertFieldsMayLeaveTranslation(input);
 
@@ -1000,6 +1007,7 @@ export class SingleMetadataService {
     input: UpdateSingleSchemaInput,
     plan: UpdateDdlPlan | null
   ): Promise<UpdateSingleSchemaResult> {
+    const { previousEntity, writeEntitySave } = await loadEntitySave();
     const existing = input.existing;
     const updateData = input.updateData;
     const before = (existing.fields ?? []) as unknown as FieldDefinition[];
@@ -1115,6 +1123,7 @@ export class SingleMetadataService {
     /** Writes the row with the settings, once they have applied. */
     recordApplied: () => Promise<void>
   ): Promise<LeavingSettingStep[]> {
+    const { writeEntitySave } = await loadEntitySave();
     const adapter = deps.adapter;
     const tableName = input.existing.tableName;
     const save = {
@@ -2684,6 +2693,7 @@ export class SingleMetadataService {
     input: CreateSingleInput,
     plan: CreateDdlPlan
   ): Promise<SingleMigrationStatus> {
+    const { writeCollectionSave } = await loadCollectionSave();
     await writeCollectionSave(deps, {
       kind: "single",
       slug: input.slug,
