@@ -54,11 +54,18 @@ export type UncoveredOutcome =
       readonly uses: ReadonlyMap<string, readonly UncoveredPage[]>;
     }
   /** The first page not read: the time ran out, or it could not be read. */
-  | { readonly kind: "unread"; readonly page: UncoveredPage };
+  | { readonly kind: "unread"; readonly page: UncoveredPage }
+  /** The time ran out while the pages were still being listed. */
+  | { readonly kind: "unlisted" };
 
 /**
  * Whether any of the variables `identities` is used on a page the index does
  * not cover, reading each such page until `deadline`.
+ *
+ * Every read is held to the time left, not only checked between pages: a read
+ * that stalls (a slow hook on a page, a listing that does not return) would
+ * otherwise keep the removal waiting past its box. A read still running when
+ * the box ends is left to finish unobserved; it writes nothing.
  */
 export async function variablesOnUncoveredPages(args: {
   identities: readonly string[];
@@ -68,26 +75,65 @@ export async function variablesOnUncoveredPages(args: {
   now?: () => number;
 }): Promise<UncoveredOutcome> {
   const now = args.now ?? (() => Date.now());
+  const left = () => args.deadline - now();
   const needles = args.identities.map(
     identity => [identity, tokenRefText(identity)] as const
   );
   const uses = new Map<string, UncoveredPage[]>();
-  for await (const page of args.pages.list()) {
-    if (now() >= args.deadline) return { kind: "unread", page };
-    let text: string;
-    try {
+  const listing = args.pages.list()[Symbol.asyncIterator]();
+  try {
+    for (;;) {
+      const next = await within(listing.next(), left());
+      if (next === TIMED_OUT) return { kind: "unlisted" };
+      if (next.done === true) break;
+      const page = next.value;
+      if (left() <= 0) return { kind: "unread", page };
+      let forms: readonly unknown[] | typeof TIMED_OUT;
+      try {
+        forms = await within(args.pages.forms(page), left());
+      } catch {
+        return { kind: "unread", page };
+      }
+      if (forms === TIMED_OUT) return { kind: "unread", page };
       // The stored forms as the database holds them, serialized as the
       // reference's spelling is derived: JSON.stringify, no whitespace.
-      text = JSON.stringify(await args.pages.forms(page));
-    } catch {
-      return { kind: "unread", page };
+      const text = JSON.stringify(forms);
+      for (const [identity, needle] of needles) {
+        if (!text.includes(needle)) continue;
+        uses.set(identity, [...(uses.get(identity) ?? []), page]);
+      }
     }
-    for (const [identity, needle] of needles) {
-      if (!text.includes(needle)) continue;
-      uses.set(identity, [...(uses.get(identity) ?? []), page]);
-    }
+  } finally {
+    // Stopped early, the listing is closed as a `for await` would close it.
+    // One stalled mid-read closes once that read returns, if ever, so the
+    // close is not awaited, and its failure has no one left to answer.
+    listing.return?.().catch(() => undefined);
   }
   return uses.size === 0 ? { kind: "clear" } : { kind: "used", uses };
+}
+
+/** What a read held to the time box answers when the time ran out first. */
+const TIMED_OUT = Symbol("timed out");
+
+/**
+ * `read`'s answer, or {@link TIMED_OUT} once `ms` have passed first. The
+ * timer is cleared whichever wins, so none outlives the answer, and a read
+ * that fails after losing has its failure taken by the race, never left
+ * unhandled.
+ */
+async function within<T>(
+  read: Promise<T>,
+  ms: number
+): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<typeof TIMED_OUT>(resolve => {
+    timer = setTimeout(() => resolve(TIMED_OUT), Math.max(0, ms));
+  });
+  try {
+    return await Promise.race([read, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Rows of the index's own table one read of its markers takes. */

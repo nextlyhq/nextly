@@ -221,7 +221,8 @@ function blockDefaultReasons(
  * read from their stored text within the removal's time box
  * (`REMOVAL_COUNT_MS`): each variable used on one, by name, with the page
  * named where the caller may open it, or the first page not read in time or
- * not readable at all. Nothing on a clear answer.
+ * not readable at all, or that the pages could not all be listed in time.
+ * Nothing on a clear answer.
  */
 export async function uncoveredReasons(
   removable: readonly NamedVariable[],
@@ -236,11 +237,22 @@ export async function uncoveredReasons(
     now,
   });
   if (outcome.kind === "clear") return [];
+  const them = removable.length === 1 ? "the variable" : "the variables";
+  if (outcome.kind === "unlisted") {
+    // Not every uncovered page is known yet, so none can be named: the
+    // refusal says the list itself did not finish within the box.
+    return [
+      {
+        message: `The pages to check for ${them} could not all be listed in time, so nothing can be removed until they are. Try again shortly.`,
+        used: false,
+      },
+    ];
+  }
   if (outcome.kind === "unread") {
     const page = await pagesNamed([outcome.page], namer);
     return [
       {
-        message: `${page} could not be read to check whether it uses ${removable.length === 1 ? "the variable" : "the variables"}, so nothing can be removed until it is. Try again shortly.`,
+        message: `${page} could not be read to check whether it uses ${them}, so nothing can be removed until it is. Try again shortly.`,
         used: false,
       },
     ];
