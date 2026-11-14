@@ -166,9 +166,22 @@ describe("localized single without a companion table (integration)", () => {
     // the Single started life unlocalized, so its legacy main column is still present and
     // the fallback genuinely works.
     current = await boot(true);
+    // The Direct API's first call follows the stored schema version, and outside a production
+    // start that load creates a translation table it finds missing. So the window is opened after
+    // it, as a deploy whose `nextly migrate` has not run leaves it: a call first, then the drop.
+    await current.nextly.findSingle({
+      slug: "swin_settings",
+      locale: "en",
+    } as never);
     await current.adapter.executeQuery(
       "DROP TABLE IF EXISTS single_swin_settings_locales"
     );
+    expect(
+      await current.adapter.tableExists("single_swin_settings_locales")
+    ).toBe(false);
+    // The call also remembered the table as ready; forgotten, as a process started after the
+    // drop would find it, so the write meets the refusal before it reaches the database.
+    forgetCompanionReadiness(current.adapter, "single_swin_settings_locales");
 
     await expect(
       current.nextly.updateSingle({
