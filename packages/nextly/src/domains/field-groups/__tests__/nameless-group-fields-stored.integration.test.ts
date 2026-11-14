@@ -103,20 +103,13 @@ function badgeFields(): unknown[] {
       name: "lead",
       type: "relationship",
       relationTo: "fgntargets",
-      index: true,
     },
     laidOut([
       { name: "note", type: "text" },
       { name: "count", type: "number" },
       { name: "meta", type: "json" },
-      // Declares the index every single reference gets anyway, so reconcile compares it as a
-      // declared one: an undeclared reference index is a separate question of indexes.
-      {
-        name: "owner",
-        type: "relationship",
-        relationTo: "fgntargets",
-        index: true,
-      },
+      // A single reference, which every route indexes whether or not it asks.
+      { name: "owner", type: "relationship", relationTo: "fgntargets" },
       { name: "seal", type: "component", component: "fgnseal" },
       laidOut([{ name: "issued_on", type: "date" }]),
     ]),
