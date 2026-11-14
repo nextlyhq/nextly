@@ -39,11 +39,13 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { configWatchAllowed } from "../../../runtime/hmr-listener";
 import type { Logger } from "../../../shared/types";
 import { CollectionRegistryService } from "../../collections/services/collection-registry-service";
 import { FieldGroupRegistryService } from "../../field-groups/services/field-group-registry-service";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { SingleRegistryService } from "../../singles/services/single-registry-service";
+import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { liveColumnNames } from "../pipeline/diff/introspect-live";
 import {
   builtByFor,
@@ -54,9 +56,6 @@ import {
   getColumnDescriptor,
   getComponentRowColumnDescriptor,
 } from "../services/field-column-descriptor";
-
-import { configWatchAllowed } from "../../../runtime/hmr-listener";
-import { SchemaEventsRepository } from "../events/schema-events-repository";
 
 import { readRegistrySource } from "./registry-source";
 import { rowsBehindSource, type RowBehindSource } from "./registry-writer";

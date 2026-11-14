@@ -257,9 +257,9 @@ export function buildAuthRouterDeps(
       );
     },
 
-    // Sign-out and the theft response delete through `serializeOnSqlite`: a
-    // revocation another request's rollback undid would leave a session the
-    // user was told had ended.
+    // Sign-out and ending all of an account's sessions delete through
+    // `serializeOnSqlite`: a revocation another request's rollback undid
+    // would leave a session the user was told had ended.
     deleteRefreshTokenByHash: async (tokenHash: string) => {
       const { eq } = await import("drizzle-orm");
       const { refreshTokens } = getDialectTables();

@@ -130,7 +130,9 @@ export type LegacyShape =
   /** A MySQL column the legacy type map left as `text`, where the descriptor names a varchar. */
   | "mysql-text-fallback"
   /** A component's many-to-many held in a scalar column, where the descriptor names a JSON list. */
-  | "component-list-in-scalar";
+  | "component-list-in-scalar"
+  /** A field-group column in the type the field group's creator gave it before it read the descriptor. */
+  | "field-group-creator-spelling";
 
 /** Why a column differs, where that is known. */
 export type DifferenceCause =

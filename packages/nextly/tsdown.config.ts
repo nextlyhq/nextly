@@ -209,6 +209,11 @@ const clientEntries = [
   // user through it, so neither keeps its own record of what it already
   // said; it imports nothing.
   "src/shared/lib/deprecation-notice.ts",
+  // The one rule for where the admin may send a browser after sign-in, as its
+  // own entry: the server holds a sign-in's destination to it and the admin
+  // its sign-in page's return address, so neither keeps a copy; it imports
+  // nothing. Internal: not a public API.
+  "src/auth/redirect/sanitize-admin-path.ts",
   // Which kind of file a MIME type is, as its own entry: the admin badges an
   // item by it and the library query narrows to a kind by it, so neither
   // keeps a copy; it imports nothing. Internal: not a public API.
