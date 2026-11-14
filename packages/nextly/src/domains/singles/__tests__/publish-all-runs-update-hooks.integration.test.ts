@@ -147,6 +147,63 @@ describe("publishing every language of a Single runs its update hooks", () => {
     expect(heard.field).toEqual(["Prefs EN"]);
   });
 
+  it("hands a promoted change's hooks the document as it stood before, where nothing else reads it", async () => {
+    // A Single that records no events and has no in-transaction handler: the
+    // update hooks are the only ones handed the document before the publish,
+    // so nothing else would have read it before the promotion rewrote it.
+    const own: Heard[] = [];
+    current = await createTestNextly({
+      singles: [
+        defineSingle({
+          slug: "notices",
+          localized: true,
+          status: true,
+          versions: { drafts: true },
+          webhooks: { record: false },
+          hooks: {
+            afterChange: [
+              context => {
+                own.push({
+                  data: context.data as Record<string, unknown>,
+                  originalData: context.originalData as Record<string, unknown>,
+                });
+                return context.data;
+              },
+            ],
+          },
+          fields: [text({ name: "headline", localized: true })],
+        }),
+      ],
+      localization: { locales: ["en", "de"], defaultLocale: "en" },
+    });
+    const singles = singlesOf(current);
+    for (const locale of ["en", "de"]) {
+      await singles.update(
+        "notices",
+        { headline: `Live ${locale}`, status: "published", _overwrite: true },
+        { locale, overrideAccess: true }
+      );
+    }
+    // A pending change of the live English text, held until published.
+    await singles.update(
+      "notices",
+      { headline: "Edited en", _overwrite: true },
+      { locale: "en", overrideAccess: true }
+    );
+    own.length = 0;
+
+    const res = await singles.publishAllLocales("notices", {
+      overrideAccess: true,
+      data: { _overwrite: true },
+    });
+    expect(res.success).toBe(true);
+
+    expect(own).toHaveLength(1);
+    expect(own[0]?.data?.headline).toBe("Edited en");
+    // Before the publish, readers saw the live text, not the change.
+    expect(own[0]?.originalData?.headline).toBe("Live en");
+  });
+
   it("runs none of them for a publish that is refused", async () => {
     const heard = { own: [] as Heard[], everyType: [] as Heard[], field: [] };
     const t = await boot(heard);

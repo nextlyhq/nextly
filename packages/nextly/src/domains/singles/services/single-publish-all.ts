@@ -36,12 +36,12 @@ import type { RBACAccessControlService } from "../../../domains/auth/services/rb
 import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { HookRegistry } from "../../../hooks/hook-registry";
-import { resolveRequestFacts } from "../../../hooks/request-facts";
 import {
   inTransactionHandlersFor,
   runInTransactionPhaseFor,
 } from "../../../hooks/in-transaction-call";
 import type { InTransactionHandlerSet } from "../../../hooks/in-transaction-phase";
+import { resolveRequestFacts } from "../../../hooks/request-facts";
 import {
   buildSingleRevalidationIntent,
   readRevalidateConfig,
@@ -183,7 +183,6 @@ import {
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
-import { runSingleAfterUpdateHooks } from "./single-after-update";
 import { liveSharedSingle } from "./live-shared-single";
 import {
   assertDraftsMayBePromoted,
@@ -191,6 +190,7 @@ import {
   promoteCallerFor,
   readsSingleInEveryLanguage,
 } from "./promote-gate";
+import { runSingleAfterUpdateHooks } from "./single-after-update";
 import {
   checkSingleAccess,
   getSingleHookCollection,
@@ -1866,8 +1866,8 @@ export class SinglePublishAllService extends BaseService {
    *   Every other language's companion row is left as it is, so the values
    *   read after the publish are the same.
    *
-   * Both empty when no event is recorded and no in-transaction handler
-   * runs: either is handed the before-state.
+   * Both empty when no event is recorded, no in-transaction handler runs
+   * and no update hook hears the publish: each is handed the before-state.
    */
   private async stateBeforePromotion(
     tx: TransactionContext,
@@ -1880,7 +1880,9 @@ export class SinglePublishAllService extends BaseService {
   }> {
     const components = new Map<string, Record<string, unknown>>();
     if (
-      (!plan.recordingEnabled && plan.inTransactionHandlers.length === 0) ||
+      (!plan.recordingEnabled &&
+        plan.inTransactionHandlers.length === 0 &&
+        !plan.runsUpdateHooks) ||
       pending.length === 0
     ) {
       return { components, values: new Map() };
