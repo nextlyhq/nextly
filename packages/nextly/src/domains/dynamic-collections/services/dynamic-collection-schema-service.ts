@@ -2978,7 +2978,9 @@ ${allColumnDefs.join(",\n")}
       indexNames.add(indexNameForColumn(tableName, column));
       indexColumns.set(indexNameForColumn(tableName, column), [column]);
     }
-    for (const field of fields) {
+    // The fields whose columns sit on the row, those inside a group with no name among them
+    // (`fieldsStoredOnRow`): the creating SQL indexes and keys them as it does the rest.
+    for (const field of fieldsStoredOnRow(fields)) {
       if (!fieldProducesColumn(field)) continue;
       const column = toSnakeCase(field.name);
       // Asked through the statement builder, not through `columnIsIndexed` alone. Wanting an
@@ -3035,7 +3037,9 @@ ${allColumnDefs.join(",\n")}
    */
   plannedColumnTypes(fields: FieldDefinition[]): Map<string, string> {
     const types = new Map<string, string>();
-    for (const field of fields) {
+    // Every column of the row, those of the fields inside a group with no name among them
+    // (`fieldsStoredOnRow`), as the creating SQL makes them.
+    for (const field of fieldsStoredOnRow(fields)) {
       if (!fieldProducesColumn(field)) continue;
       types.set(toSnakeCase(field.name), this.newColumnType(field));
     }

@@ -9,9 +9,12 @@ import {
 
 import type { LocalizedColumnSpec } from "./types";
 
-/** Minimal field shape — cast to FieldDefinition for the descriptor call. */
+/**
+ * Minimal field shape — cast to FieldDefinition for the descriptor call. The name is optional
+ * because a group with no name reaches here from a declared field list.
+ */
 interface FieldLike {
-  name: string;
+  name?: string;
   type: string;
   length?: number;
 }
@@ -63,6 +66,10 @@ export function fieldToLocalizedColumnSpec(
    */
   shape: "translated" | "shared" = "translated"
 ): LocalizedColumnSpec | null {
+  // A group with no name has no column in either table: it only lays fields out, and the fields
+  // inside it are stored on the main row, where the companion and the entry write keep them
+  // (`fieldsStoredOnRow`). Asked of it, the descriptor read its missing name and stopped.
+  if (typeof field.name !== "string" || field.name.length === 0) return null;
   // A translated column is asked without the field's `unique` flag: a translated field is unique
   // per language, keyed by an index over an expression or a prefix that MySQL builds on a TEXT
   // column, so its uniqueness never bounds the column the way a shared unique field's

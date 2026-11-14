@@ -386,5 +386,89 @@ describe.each(getConfiguredTestDialects())(
         (await singles.get("notice", { overrideAccess: true })).data
       ).toMatchObject({ subtitle: "a value longer than ten" });
     });
+
+    it("refuses a Single save that adds a field inside the group whose default its own rules refuse, over the row it holds", async () => {
+      const t = await singleApp();
+      const group = (...fields: Field[]): Field =>
+        ({ type: "group", label: "Byline", fields }) as Field;
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          fields: [text("heading"), group(text("subtitle"))],
+        }
+      );
+      await t
+        .getService("singleEntryService")
+        .update(
+          "notice",
+          { heading: "Held", _overwrite: true },
+          { overrideAccess: true }
+        );
+      const before = await liveColumns(t, dialect, "single_notice");
+
+      // The row the Single holds would be filled with 0, which the field's own minimum refuses,
+      // so the save is refused before anything runs, as it is for such a field beside the group.
+      await expect(
+        dispatchSingles(
+          "updateSingleSchema",
+          { slug: "notice" },
+          {
+            fields: [
+              text("heading"),
+              group(text("subtitle"), {
+                name: "rank",
+                type: "number",
+                defaultValue: 0,
+                validation: { min: 1 },
+              } as Field),
+            ],
+          }
+        )
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      expect(await liveColumns(t, dialect, "single_notice")).toEqual(before);
+    });
+
+    it("makes a required translated field of a translated Single holding the group shared", async () => {
+      const t = await boot(dialect, {
+        db: { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" },
+        basePath: dir,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      vi.stubEnv("NODE_ENV", "development");
+      const heading = { name: "heading", type: "text", required: true };
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          localized: true,
+          fields: [heading as Field, laidOut],
+        }
+      );
+      // Translated, the heading lives in the companion; the group's fields stay on the row.
+      expect(await liveColumns(t, dialect, "single_notice")).not.toContain(
+        "heading"
+      );
+
+      // Leaving translation plans restoring its requiredness over the column types the creating
+      // SQL gives the row, which reads the group through.
+      await dispatchSingles(
+        "updateSingleSchema",
+        { slug: "notice" },
+        {
+          fields: [{ ...heading, localized: false } as Field, laidOut],
+        }
+      );
+
+      expect(await liveColumns(t, dialect, "single_notice")).toEqual(
+        expect.arrayContaining(["heading", "subtitle", "rank"])
+      );
+    });
   }
 );
