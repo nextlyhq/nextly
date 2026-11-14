@@ -65,6 +65,9 @@ const FIELDS = [
   { name: "a_decimal", type: "number", dbType: "decimal" },
   { name: "a_numbers", type: "number", hasMany: true },
   { name: "a_checkbox", type: "checkbox" },
+  // The creator writes this default into the column, where a Builder save writes none; reconcile
+  // accepts either.
+  { name: "a_flag", type: "checkbox", defaultValue: true },
   { name: "a_date", type: "date" },
   { name: "a_json", type: "json" },
   { name: "a_icon", type: "icon" },
@@ -84,9 +87,9 @@ const FIELDS = [
     type: "radio",
     options: [{ label: "One", value: "one" }],
   },
-  // Declares the index both creators give every single reference anyway: reconcile reads an index
-  // the field does not declare as one to record, which is a question about indexes, not types.
-  { name: "a_ref", type: "relationship", relationTo: "users", index: true },
+  // Declares no index: both creators index every single reference anyway, and reconcile judges that
+  // index by the same rule.
+  { name: "a_ref", type: "relationship", relationTo: "users" },
 ];
 
 /** The fields as the creator's input carries them. */
