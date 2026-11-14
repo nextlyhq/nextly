@@ -835,11 +835,13 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   publishAllSingleLocales: {
     // Publish every language of a Single in one transaction. The Single
     // equivalent of the collection entry's publish-all.
-    execute: async (svc, p, body) => {
+    execute: async (svc, p, body, request) => {
       const slug = requireParam(p, "slug", "Single slug");
       const user = readAuthenticatedUser();
       const result = await svc.entry.publishAllLocales(slug, {
         user,
+        // The request the publish's update hooks are told about.
+        request,
         // Who performed the publish, recorded on the outbox events: an API-key
         // caller attributes to the key rather than the user that owns it.
         actor: readAuthenticatedActor(),

@@ -37,6 +37,14 @@ test("shows a changed accent in the live preview before it is saved", async ({
   page,
 }) => {
   await openDesign(page);
+  // An email with a button, which the accent colours. The preview opens on
+  // the first email the brand settings reach, and the form builder's
+  // confirmation, first since its starter emails, draws no button or link.
+  await page.getByRole("combobox", { name: "Email to preview" }).click();
+  await page.getByRole("option", { name: "Password Reset" }).click();
+  await expect(
+    page.getByRole("combobox", { name: "Email to preview" })
+  ).toHaveText("Password Reset");
   // The first render, from the saved settings.
   await expect
     .poll(() => previewHtml(page), { timeout: 30_000 })

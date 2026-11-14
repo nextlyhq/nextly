@@ -41,13 +41,24 @@ function blockFor(ms: number): void {
 
 /**
  * Hold every round trip the driver under `adapter` makes for `delayMs`, and record it, from now
- * until `uninstall`, whichever connection of that driver makes it.
+ * until `uninstall`, whichever connection of that driver makes it. A new connection is held for
+ * `connectionDelayMs` where given: a pool hands a waiting statement whichever client is free first,
+ * a released one or a newly connected one, and where both are held alike they come free at the
+ * same moment and the machine's timing decides which, and with it the chain.
  */
 export async function recordRoundTrips(
   adapter: DrizzleAdapter,
   dialect: TestDialect,
-  options: { delayMs: number; context?: () => unknown }
+  options: {
+    delayMs: number;
+    connectionDelayMs?: number;
+    context?: () => unknown;
+  }
 ): Promise<RoundTripRecorder> {
+  const holdOf = (kind: RoundTrip["kind"]): number =>
+    kind === "connection"
+      ? (options.connectionDelayMs ?? options.delayMs)
+      : options.delayMs;
   const trips: RoundTrip[] = [];
   const restores: Array<() => void> = [];
   const begin = (kind: RoundTrip["kind"], text: string): RoundTrip => {
@@ -93,7 +104,7 @@ export async function recordRoundTrips(
             end(trip);
             return (last as (...a: unknown[]) => unknown)(...result);
           };
-          setTimeout(() => original.apply(this, args), options.delayMs);
+          setTimeout(() => original.apply(this, args), holdOf(kind));
           return undefined;
         }
         const first = args[0] as { once?: unknown } | undefined;
@@ -108,10 +119,10 @@ export async function recordRoundTrips(
             "end",
             () => end(trip)
           );
-          setTimeout(() => original.apply(this, args), options.delayMs);
+          setTimeout(() => original.apply(this, args), holdOf(kind));
           return first;
         }
-        return new Promise(resolve => setTimeout(resolve, options.delayMs))
+        return new Promise(resolve => setTimeout(resolve, holdOf(kind)))
           .then(() => original.apply(this, args))
           .then(
             value => {

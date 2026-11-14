@@ -323,14 +323,18 @@ import {
   readsSingleInEveryLanguage,
   type PromoteGateContext,
 } from "./promote-gate";
+import { runSingleAfterUpdateHooks } from "./single-after-update";
+import {
+  runSingleBeforeHooks,
+  runSingleBeforeOperation,
+  type SingleBeforeHookCall,
+} from "./single-before-update";
 import { readSingleForCreation } from "./single-first-row";
 import type { SingleMediaUsageDeps } from "./single-media-usage";
 import {
   SingleQueryService,
-  buildSingleHookContext,
   checkSingleAccess,
   getSingleHookCollection,
-  resolveNextlyForHooks,
   singleGrantRefusal,
 } from "./single-query-service";
 import { applyReadShape } from "./single-read-shape";
@@ -2557,45 +2561,31 @@ export class SingleMutationService extends BaseService {
       const requestFacts = resolveRequestFacts(options.request);
       const hookCollection = getSingleHookCollection(slug);
 
-      // 4. Execute beforeOperation hook
-      let currentData = { ...data };
+      // What every before-phase of this update is told: the same phases, run
+      // by the same functions, as a publish of every language runs.
+      const beforeCall: SingleBeforeHookCall = {
+        slug,
+        id: existingDoc.id,
+        originalData: existingDeserialized,
+        user: options.user,
+        context: sharedContext,
+        req: requestFacts,
+      };
 
-      if (this.hookRegistry.hasHooks("beforeOperation", hookCollection)) {
-        const beforeOpResult = await this.hookRegistry.executeBeforeOperation({
-          collection: hookCollection,
-          operation: "update",
-          args: { data: currentData, id: existingDoc.id },
-          user: options.user ?? undefined,
-          context: sharedContext,
-          req: {
-            ...requestFacts,
-            nextly: resolveNextlyForHooks(),
-          },
-        });
-        if (beforeOpResult?.data) {
-          currentData = beforeOpResult.data;
-        }
-      }
+      // 4. Execute beforeOperation hook
+      let currentData: Record<string, unknown> = await runSingleBeforeOperation(
+        this.hookRegistry,
+        beforeCall,
+        { ...data }
+      );
 
       // 5. Execute beforeChange hooks (beforeUpdate equivalent for Singles)
-      if (this.hookRegistry.hasHooks("beforeUpdate", hookCollection)) {
-        const beforeContext = buildSingleHookContext({
-          collection: hookCollection,
-          operation: "update",
-          data: currentData,
-          originalData: existingDeserialized,
-          user: options.user ?? undefined,
-          context: sharedContext,
-          req: requestFacts,
-        });
-        const modifiedData = await this.hookRegistry.execute(
-          "beforeUpdate",
-          beforeContext
-        );
-        if (modifiedData !== undefined) {
-          currentData = modifiedData;
-        }
-      }
+      currentData = await runSingleBeforeHooks(
+        this.hookRegistry,
+        "beforeUpdate",
+        beforeCall,
+        currentData
+      );
 
       const fieldConfigs = singleMeta.fields;
 
@@ -2789,23 +2779,12 @@ export class SingleMutationService extends BaseService {
       // which runs above at step 5 -- before validation -- so the hook that
       // documents itself as the last chance to shape a stored value saw data
       // the rules had not been applied to yet.
-      if (this.hookRegistry.hasHooks("beforeChange", hookCollection)) {
-        const beforeChangeResult = await this.hookRegistry.execute(
-          "beforeChange",
-          buildSingleHookContext({
-            collection: hookCollection,
-            operation: "update",
-            data: currentData,
-            originalData: existingDeserialized,
-            user: options.user ?? undefined,
-            context: sharedContext,
-            req: requestFacts,
-          })
-        );
-        if (beforeChangeResult !== undefined) {
-          currentData = beforeChangeResult;
-        }
-      }
+      currentData = await runSingleBeforeHooks(
+        this.hookRegistry,
+        "beforeChange",
+        beforeCall,
+        currentData
+      );
 
       // 6.3. Field-level beforeChange hooks (after validation, before
       // hashing/serialization).
@@ -5823,24 +5802,23 @@ export class SingleMutationService extends BaseService {
       // 11. Execute afterChange hooks (afterUpdate equivalent for Singles)
       // Held like the field hooks above. What a hook returns reshapes the
       // response only when it ran before the call returns.
+      // The same run a publish of every language makes once it is durable.
       if (this.hookRegistry.hasHooks("afterUpdate", hookCollection)) {
         const transformed: { data?: typeof updatedDoc } = {};
         await this.afterCommitOver(updatedDoc, async committed => {
-          const afterContext = buildSingleHookContext({
-            collection: hookCollection,
-            operation: "update",
-            data: committed,
-            originalData: existingDeserialized,
-            user: options.user ?? undefined,
-            context: sharedContext,
-            req: requestFacts,
-          });
-          const transformedData = await this.hookRegistry.execute(
-            "afterUpdate",
-            afterContext
+          const transformedData = await runSingleAfterUpdateHooks(
+            this.hookRegistry,
+            {
+              slug,
+              data: committed,
+              originalData: existingDeserialized,
+              user: options.user ?? undefined,
+              context: sharedContext,
+              req: requestFacts,
+            }
           );
           if (transformedData !== undefined) {
-            transformed.data = transformedData;
+            transformed.data = transformedData as typeof updatedDoc;
           }
         });
         if (transformed.data !== undefined) {

@@ -178,6 +178,9 @@ test("every form's list: who, which form, a summary, and the form's own columns 
   page,
 }) => {
   const [ana] = names as [string];
+  // Wide enough for every column: a list too narrow for them gives up its
+  // Summary first, then names the form under the sender.
+  await page.setViewportSize({ width: 1920, height: 1080 });
   await gotoAdmin(page, "/collections/form-submissions");
   for (const header of ["From", "Form", "Summary", "Status", "Submitted"]) {
     await expect(
