@@ -169,12 +169,18 @@ function escapeText(text: string): string {
   return text
     .replace(/[\\`*_[\]()<>|&]/g, "\\$&")
     .split("\n")
-    .map(line =>
-      line
-        .replace(/^(\s*)(#|[-+])/, "$1\\$2")
-        .replace(/^(\s*\d+)([.)])/, "$1\\$2")
-    )
+    .map(escapedLineStart)
     .join("\n");
+}
+
+/**
+ * `line`, the start of a line of Markdown, with what would begin a
+ * heading or a list there escaped, so it reads as the words it is.
+ */
+export function escapedLineStart(line: string): string {
+  return line
+    .replace(/^(\s*)(#|[-+])/, "$1\\$2")
+    .replace(/^(\s*\d+)([.)])/, "$1\\$2");
 }
 
 /**

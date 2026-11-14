@@ -17,7 +17,7 @@
  *
  * @module outputs/rendered-copy
  */
-import { fencedCode, inlineCode } from "./plain-copy";
+import { escapedLineStart, fencedCode, inlineCode } from "./plain-copy";
 
 /** Elements that hold no content of their own and are never closed. */
 const VOID: ReadonlySet<string> = new Set([
@@ -199,14 +199,19 @@ const linkTarget = (url: string): string =>
 
 /** Text with the characters Markdown would read as markup escaped. */
 function escaped(text: string): string {
-  return text.replace(/[\\`*_[\]<>|]/g, "\\$&");
+  return (
+    text
+      .replace(/[\\`*_[\]<>|]/g, "\\$&")
+      // An ampersand only where it would begin a character reference.
+      .replace(/&(?=#?[a-z0-9]+;)/gi, "\\&")
+  );
 }
 
 /**
  * The longest outermost `<main>` of `html`, or nothing: a page that streams
  * its content can render an empty one first and the real one later.
  */
-function longestMain(html: string): string {
+function longestMain(html: string, base: string): string {
   let best = "";
   let depth = 0;
   let start = -1;
@@ -217,7 +222,11 @@ function longestMain(html: string): string {
     } else if (depth > 0) {
       depth -= 1;
       const end = match.index + match[0].length;
-      if (depth === 0 && end - start > best.length) {
+      if (
+        depth === 0 &&
+        end - start > best.length &&
+        !leftOutAt(html, start, base)
+      ) {
         best = html.slice(start, end);
       }
     }
@@ -233,8 +242,11 @@ const bodyOf = (html: string): string =>
  * The page's main content: its longest `<main>`, else its body, whose
  * shared header and footer are then left out.
  */
-function mainOf(html: string): { source: string; wholeBody: boolean } {
-  const main = longestMain(html);
+function mainOf(
+  html: string,
+  base: string
+): { source: string; wholeBody: boolean } {
+  const main = longestMain(html, base);
   return main === ""
     ? { source: bodyOf(html), wholeBody: true }
     : { source: main, wholeBody: false };
@@ -253,6 +265,8 @@ interface Open {
   count?: number;
   /** A list item's marker width: how far its later blocks are indented. */
   indent?: number;
+  /** A table row's cells so far. */
+  cells?: number;
 }
 
 /** The emphasis each inline element draws, as Markdown marks it. */
@@ -337,7 +351,12 @@ class CopyWriter {
 
   /** Starts a block: a blank line between it and what came before. */
   newBlock(): void {
-    if (this.inside("table")) return;
+    if (this.inside("table")) {
+      // A table row is one line: blocks in a cell are kept apart by a space.
+      const inCell = this.inside("td") || this.inside("th");
+      if (inCell && !/[\s|]$/.test(this.out)) this.out += " ";
+      return;
+    }
     this.out = this.out.replace(/[ \t]+$/, "");
     if (this.out === "" || this.out.endsWith("\n\n")) return;
     this.out += this.out.endsWith("\n") ? "\n" : "\n\n";
@@ -357,9 +376,28 @@ class CopyWriter {
       if (this.out !== "" && !/\s$/.test(this.out)) this.out += " ";
       return;
     }
-    const kept = this.inside("code") ? words : escaped(words);
-    this.out +=
-      this.out === "" || this.out.endsWith("\n") ? kept.trimStart() : kept;
+    this.out += this.inside("code") ? this.leading(words) : this.prose(words);
+  }
+
+  /** `words` without the space that would lead a line. */
+  private leading(words: string): string {
+    return this.atLineStart() ? words.trimStart() : words;
+  }
+
+  /**
+   * `words` of prose, escaped: what Markdown would read as markup, and,
+   * where they begin a line or a list item, a heading's or a list's mark.
+   */
+  private prose(words: string): string {
+    const kept = this.leading(escaped(words));
+    return this.atLineStart() || this.atItemStart()
+      ? escapedLineStart(kept)
+      : kept;
+  }
+
+  /** Whether the copy so far ends a line, so what follows begins one. */
+  private atLineStart(): boolean {
+    return this.out === "" || this.out.endsWith("\n");
   }
 
   /** Whether an element is left out of the copy, with everything in it. */
@@ -408,7 +446,6 @@ class CopyWriter {
     if (this.nestedList(tag)) this.newLine();
     // A block that begins a list item stays on its marker's line.
     else if (BLOCKS.has(tag) && !this.atItemStart()) this.newBlock();
-    if (tag === "ol") open.ordered = true;
     this.beginnerFor(tag)?.(open, attributes);
     open.start = this.out.length;
   }
@@ -426,6 +463,7 @@ class CopyWriter {
     const beginners: Record<string, (open: Open, attributes: string) => void> =
       {
         li: open => this.beginItem(open),
+        ol: (open, attributes) => this.beginOrdered(open, attributes),
         td: () => this.beginCell(),
         th: () => this.beginCell(),
         tr: open => this.beginRow(open),
@@ -449,8 +487,18 @@ class CopyWriter {
     this.out += lead;
   }
 
-  /** A table cell's leading bar. */
+  /** An ordered list, numbered from its `start`, else from one. */
+  private beginOrdered(open: Open, attributes: string): void {
+    open.ordered = true;
+    const start = Number.parseInt(attributeOf(attributes, "start") ?? "", 10);
+    // Its first item takes the number after the count it starts from.
+    if (Number.isInteger(start)) open.count = start - 1;
+  }
+
+  /** A table cell's leading bar, counted in its row. */
   private beginCell(): void {
+    const row = [...this.stack].reverse().find(each => each.tag === "tr");
+    if (row !== undefined) row.cells = (row.cells ?? 0) + 1;
     this.out = this.out.replace(/[ \t]+$/, "");
     this.out += this.out.endsWith("\n") || this.out === "" ? "| " : " | ";
   }
@@ -564,7 +612,9 @@ class CopyWriter {
    * stands, so it is copied verbatim ({@link withCode}).
    */
   private closePre({ inner, before }: Closing): void {
-    const code = inner.replace(/^\n+|\s+$/g, "");
+    // The line break a browser drops after `<pre>`, and the one that only
+    // ends the last line; every other blank line and space is the code's.
+    const code = inner.replace(/^\n/, "").replace(/\n$/, "");
     this.codes.push(fencedCode(code));
     this.out = `${before}${CODE_MARK}${this.codes.length - 1}${CODE_MARK}`;
     this.newBlock();
@@ -608,9 +658,9 @@ class CopyWriter {
   private closeRow({ open }: Closing): void {
     this.out = `${this.out.replace(/[ \t]+$/, "")} |\n`;
     if (open.count !== 0) return;
-    // The first row is the table's header.
-    const cells = this.out.slice(open.start).split("|").length - 2;
-    this.out += `|${" --- |".repeat(Math.max(cells, 1))}\n`;
+    // The first row is the table's header: one line cell per cell opened,
+    // whatever bars the cells' own words hold.
+    this.out += `|${" --- |".repeat(Math.max(open.cells ?? 0, 1))}\n`;
   }
 
   /** Any other element: a list, a block, or an inline element. */
@@ -689,20 +739,12 @@ function withCode(markdown: string, codes: readonly string[]): string {
   });
 }
 
-/** Markdown written from HTML: its prose, and the code blocks marked in it. */
-interface Written {
-  prose: string;
-  codes: readonly string[];
-}
-
 /**
- * Markdown from the HTML `source`, its addresses made whole against
- * `base`: the prose tidied, its code blocks still kept aside, to be put
- * back by {@link withCode} once nothing more reads the prose.
+ * Each tag and text run of the HTML `source` handed to `writer` in order.
+ * Raw text is already taken out ({@link withoutRawText}), and comments
+ * are passed over.
  */
-function writtenOf(source: string, base: string, wholeBody: boolean): Written {
-  const writer = new CopyWriter(base, wholeBody);
-  // Raw text is already taken out ({@link withoutRawText}).
+function read(source: string, writer: CopyWriter): void {
   for (const token of source.matchAll(TOKEN)) {
     const [all, closing, name, attributes = ""] = token;
     if (all.startsWith("<!--")) continue;
@@ -718,6 +760,33 @@ function writtenOf(source: string, base: string, wholeBody: boolean): Written {
       writer.close(tag);
     } else writer.open(tag, attributes);
   }
+}
+
+/**
+ * Whether what begins at `at` in `html` is inside an element the copy
+ * leaves out, judged as the copy itself judges it: the page up to there is
+ * read by a writer, and asked whether it is skipping.
+ */
+function leftOutAt(html: string, at: number, base: string): boolean {
+  const writer = new CopyWriter(base, false);
+  read(html.slice(0, at), writer);
+  return writer.skipping();
+}
+
+/** Markdown written from HTML: its prose, and the code blocks marked in it. */
+interface Written {
+  prose: string;
+  codes: readonly string[];
+}
+
+/**
+ * Markdown from the HTML `source`, its addresses made whole against
+ * `base`: the prose tidied, its code blocks still kept aside, to be put
+ * back by {@link withCode} once nothing more reads the prose.
+ */
+function writtenOf(source: string, base: string, wholeBody: boolean): Written {
+  const writer = new CopyWriter(base, wholeBody);
+  read(source, writer);
   const prose = writer.out
     .split("\n")
     .map(line => line.replace(/[ \t]+$/, ""))
@@ -882,7 +951,7 @@ export interface RenderedCopy {
  */
 export function renderedCopyOf(rendered: string, base: string): RenderedCopy {
   const html = readableHtml(rendered);
-  const { source, wholeBody } = mainOf(html);
+  const { source, wholeBody } = mainOf(html, base);
   const main = writtenOf(source, base, wholeBody);
   let { prose } = main;
   if (!TOP_HEADING.test(prose)) {

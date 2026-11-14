@@ -20,7 +20,13 @@
  *   not even the main content's own closing tag;
  * - a heading taken from above `<main>` is one a reader sees, and a line of
  *   code is never taken for one;
- * - code is copied verbatim, never tidied as prose is.
+ * - code is copied verbatim, never tidied as prose is, its own blank lines
+ *   and trailing spaces kept;
+ * - a `<main>` a reader never sees is not the page's main content;
+ * - prose that Markdown would read again as a block or a character
+ *   reference is escaped;
+ * - an ordered list keeps the number it starts at, a table's header line
+ *   has one cell per header cell, and blocks in a cell stay apart.
  */
 import { createElement as h, Suspense, type ReactNode } from "react";
 import { renderToReadableStream } from "react-dom/server";
@@ -255,6 +261,63 @@ describe("a copy made from the rendered page", () => {
     );
     expect(renderedCopyOf(html, BASE).body).toBe(
       "# Install\n\n```\n# add it\nnpm i acme\n```"
+    );
+  });
+
+  it("keeps code's own leading blank lines and trailing spaces", () => {
+    const html = page("", "<main><pre>\n\n  indented  \nlast  \n</pre></main>");
+    expect(renderedCopyOf(html, BASE).body).toBe(
+      "```\n\n  indented  \nlast  \n```"
+    );
+  });
+
+  it("never takes a main a reader does not see for the page's content", () => {
+    const html = page(
+      "",
+      `<div hidden><main><h1>Hidden draft</h1><p>Not visible, and longer than the page itself.</p></main></div>
+       <main><h1>Shown</h1><p>Visible.</p></main>`
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe("# Shown\n\nVisible.");
+  });
+
+  it("escapes prose Markdown would read again as a block or a character reference", () => {
+    const html = page(
+      "",
+      `<main>
+         <p># Literal heading marker</p>
+         <p>&amp;copy; stays as written.</p>
+         <p>1. Not a list</p>
+         <ul><li># Not a heading</li></ul>
+       </main>`
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe(
+      [
+        "\\# Literal heading marker",
+        "\\&copy; stays as written.",
+        "1\\. Not a list",
+        "- \\# Not a heading",
+      ].join("\n\n")
+    );
+  });
+
+  it("keeps an ordered list's starting number", () => {
+    const html = page(
+      "",
+      '<main><ol start="5"><li>Deploy</li><li>Verify</li></ol></main>'
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe("5. Deploy\n6. Verify");
+  });
+
+  it("writes one header line cell per header cell, and keeps blocks in a cell apart", () => {
+    const html = page(
+      "",
+      `<main><table>
+         <tr><th>A | B</th><th>C</th></tr>
+         <tr><td><p>First paragraph.</p><p>Second paragraph.</p></td><td>2</td></tr>
+       </table></main>`
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe(
+      "| A \\| B | C |\n| --- | --- |\n| First paragraph. Second paragraph. | 2 |"
     );
   });
 });
