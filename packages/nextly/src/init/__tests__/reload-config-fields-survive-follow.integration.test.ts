@@ -7,6 +7,10 @@
  * took the one the process started with put a Single's start-time fields back over the field the
  * config reload added, and the field was not read again until a restart.
  *
+ * A reload that lands only in part takes the entities that advanced and no others: a Single whose
+ * table and registry row moved is read with its new field after the follow, while a Single whose
+ * metadata the registry refused keeps the definition it had before.
+ *
  * The configuration is driven through `reloadNextlyConfig` itself, the loader handed each edit; the
  * follow is caused as another copy causes it, by moving the stored version and letting the read
  * interval pass.
@@ -15,6 +19,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineConfig, defineSingle, text } from "../../config";
 import { storeSchemaVersion } from "../../domains/schema/schema-version";
+import { SingleRegistryService } from "../../domains/singles/services/single-registry-service";
 import { SCHEMA_VERSION_READ_INTERVAL_MS } from "../../domains/schema/stored-schema-seq";
 import {
   createTestNextly,
@@ -47,12 +52,38 @@ const banner = (edited: boolean) =>
     ],
   });
 
+const NOTICE = "rcff_notice";
+
+/** A second Single, edited in the same save, whose registry write the test refuses. */
+const notice = (edited: boolean) =>
+  defineSingle({
+    slug: NOTICE,
+    fields: [
+      text({ name: "headline" }),
+      ...(edited ? [text({ name: "note" })] : []),
+    ],
+  });
+
+/** Moves the stored version as another copy's registry write does, and waits for the follow. */
+async function followAnotherCopy(
+  handle: TestNextly,
+  dialect: Parameters<typeof storeSchemaVersion>[1]
+) {
+  await storeSchemaVersion(handle.adapter.getDrizzle(), dialect, {
+    wrote: true,
+  });
+  await new Promise(resolve =>
+    setTimeout(resolve, SCHEMA_VERSION_READ_INTERVAL_MS + 250)
+  );
+}
+
 describe.each(getConfiguredTestDialects())(
   "a field a config reload adds, through the schema follow (%s)",
   dialect => {
     let handle: TestNextly | undefined;
 
     afterEach(async () => {
+      vi.restoreAllMocks();
       await handle?.destroy();
       handle = undefined;
       vi.unstubAllEnvs();
@@ -76,17 +107,76 @@ describe.each(getConfiguredTestDialects())(
 
       // Another copy's registry write moves the stored version; once the read interval has passed
       // this copy follows it, loading the definitions again.
-      await storeSchemaVersion(handle.adapter.getDrizzle(), dialect, {
-        wrote: true,
-      });
-      await new Promise(resolve =>
-        setTimeout(resolve, SCHEMA_VERSION_READ_INTERVAL_MS + 250)
-      );
+      await followAnotherCopy(handle, dialect);
 
       const read = (await handle.nextly.findSingle({ slug: SLUG })) as {
         subtitle?: unknown;
       };
       expect(read.subtitle).toBe("Added");
+    }, 120_000);
+    it("keeps an advanced Single's field after a reload that another Single held back", async () => {
+      handle = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        singles: [banner(false), notice(false)],
+      });
+      vi.stubEnv("NODE_ENV", "development");
+
+      // The registry refuses the second Single's metadata, as a failed write reports it: its table
+      // moves with the apply, its row keeps the fields it had, and the reload does not land whole.
+      const sync = SingleRegistryService.prototype.syncCodeFirstSingles;
+      const refused = vi
+        .spyOn(SingleRegistryService.prototype, "syncCodeFirstSingles")
+        .mockImplementation(async function (
+          this: SingleRegistryService,
+          configs,
+          options
+        ) {
+          const result = await sync.call(
+            this,
+            configs.filter(config => config.slug !== NOTICE),
+            options
+          );
+          return {
+            ...result,
+            errors: [...result.errors, { slug: NOTICE, error: "refused" }],
+          };
+        });
+
+      // One save edits both: the banner gains a field, and so does the notice.
+      loaded.config = defineConfig({ singles: [banner(true), notice(true)] });
+      await reloadNextlyConfig();
+      expect(refused).toHaveBeenCalled();
+      refused.mockRestore();
+
+      await handle.nextly.updateSingle({
+        slug: SLUG,
+        data: { title: "Banner", subtitle: "Added", _overwrite: true },
+      } as never);
+      // The reload put the notice's moved table in place, so its new column takes a value now.
+      await handle.nextly.updateSingle({
+        slug: NOTICE,
+        data: { headline: "Notice", note: "Pending", _overwrite: true },
+      } as never);
+      const before = (await handle.nextly.findSingle({ slug: NOTICE })) as {
+        note?: unknown;
+      };
+      expect(before.note).toBe("Pending");
+
+      await followAnotherCopy(handle, dialect);
+
+      // The banner advanced in full, table and row, so its field is still read.
+      const banner_ = (await handle.nextly.findSingle({ slug: SLUG })) as {
+        subtitle?: unknown;
+      };
+      expect(banner_.subtitle).toBe("Added");
+      // The notice did not: it keeps the definition it had before the save, as its row does,
+      // rather than the one the registry refused.
+      const notice_ = (await handle.nextly.findSingle({ slug: NOTICE })) as {
+        headline?: unknown;
+        note?: unknown;
+      };
+      expect(notice_.headline).toBe("Notice");
+      expect(notice_.note).toBeUndefined();
     }, 120_000);
   }
 );

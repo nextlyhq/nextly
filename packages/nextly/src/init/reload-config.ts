@@ -645,6 +645,8 @@ async function syncCodeFirstMetadataOnly(
   atStart = false
 ): Promise<{
   collections: boolean;
+  /** Collections whose metadata was not written, as the sync reported them. */
+  failedCollections: ReadonlySet<string>;
   singles: boolean;
   components: boolean;
   /**
@@ -655,6 +657,7 @@ async function syncCodeFirstMetadataOnly(
   failedSingles: ReadonlySet<string>;
 }> {
   let failedSingles: ReadonlySet<string> = new Set<string>();
+  let failedCollections: ReadonlySet<string> = new Set<string>();
   let collections = true;
   let singles = true;
   let components = true;
@@ -679,6 +682,7 @@ async function syncCodeFirstMetadataOnly(
           )
         : undefined;
     const failed = unwrittenSlugs(result);
+    failedCollections = new Set(failed);
     if (failed.length > 0) {
       collections = false;
       logger?.warn(
@@ -736,7 +740,7 @@ async function syncCodeFirstMetadataOnly(
       }`
     );
   }
-  return { collections, singles, components, failedSingles };
+  return { collections, failedCollections, singles, components, failedSingles };
 }
 
 /**
@@ -896,18 +900,7 @@ function republishRecordingPolicies(
  * edit alone changes no table, so its reload is clean and it applies
  * immediately, which is the case the dev loop is built around.
  */
-function reloadAdvancedEverything(dimensions: {
-  /** Entities whose schema change the diff gate refused. Absent where no schema apply ran. */
-  deferredEntities?: ReadonlySet<string>;
-  /** The collection field-tree sync completed. */
-  collections: boolean;
-  /** The single field-tree sync completed. */
-  singles: boolean;
-  /** The component (field-group) tree synced; a failure here taints both scopes. */
-  components: boolean;
-  /** Singles the sync reported individually as failed. */
-  failedSingles: ReadonlySet<string>;
-}): boolean {
+function reloadAdvancedEverything(dimensions: ReloadDimensions): boolean {
   return (
     (dimensions.deferredEntities?.size ?? 0) === 0 &&
     dimensions.collections &&
@@ -915,6 +908,54 @@ function reloadAdvancedEverything(dimensions: {
     dimensions.components &&
     dimensions.failedSingles.size === 0
   );
+}
+
+/** What a reload that ran its metadata sync knows about how far each part of it got. */
+interface ReloadDimensions {
+  /** Entities whose schema change the diff gate refused. Absent where no schema apply ran. */
+  deferredEntities?: ReadonlySet<string>;
+  /** The collection field-tree sync completed. */
+  collections: boolean;
+  /** Collections the sync reported individually as not written. */
+  failedCollections: ReadonlySet<string>;
+  /** The single field-tree sync completed. */
+  singles: boolean;
+  /** The component (field-group) tree synced; a failure here taints both scopes. */
+  components: boolean;
+  /** Singles the sync reported individually as failed. */
+  failedSingles: ReadonlySet<string>;
+}
+
+/**
+ * The entities a reload held back, read from the same dimensions `reloadAdvancedEverything` reads,
+ * per entity where the reload says which: the deferred ones, and those whose registry write did not
+ * land. A kind whose sync failed with no report of which entities it reached is held back whole,
+ * since any of its rows may still describe the previous fields.
+ */
+function entitiesHeldBack(dimensions: ReloadDimensions): EntitiesHeldBack {
+  const deferred = [...(dimensions.deferredEntities ?? [])];
+  const heldBack = (
+    kind: "collection" | "single" | "fieldGroup",
+    synced: boolean,
+    failed: ReadonlySet<string>
+  ): ReadonlySet<string> | "all" =>
+    !synced && failed.size === 0
+      ? "all"
+      : new Set([
+          ...deferred
+            .filter(entity => entity.startsWith(`${kind}:`))
+            .map(entity => entity.slice(`${kind}:`.length)),
+          ...failed,
+        ]);
+  return {
+    collections: heldBack(
+      "collection",
+      dimensions.collections,
+      dimensions.failedCollections
+    ),
+    singles: heldBack("single", dimensions.singles, dimensions.failedSingles),
+    fieldGroups: heldBack("fieldGroup", dimensions.components, new Set()),
+  };
 }
 
 function stageConfigHooks(newConfig: {
@@ -1493,24 +1534,81 @@ const globalForReload = globalThis as unknown as {
 export type ReloadOutcome = "refused" | "finished";
 
 /**
+ * The entities of each kind a reload left behind its declaration: the slugs whose schema change
+ * was deferred or whose registry write did not land, or every entity of the kind where its sync
+ * failed as a whole and reported nothing per entity.
+ */
+interface EntitiesHeldBack {
+  collections: ReadonlySet<string> | "all";
+  singles: ReadonlySet<string> | "all";
+  fieldGroups: ReadonlySet<string> | "all";
+}
+
+const NOTHING_HELD_BACK: EntitiesHeldBack = {
+  collections: new Set(),
+  singles: new Set(),
+  fieldGroups: new Set(),
+};
+
+/**
  * Make a landed reload's collections, Singles and field groups the ones the services'
  * configuration holds (`config` in the container), the configuration the start registered them
  * from. A later reload of the definitions registers the configuration's own entities over their
  * registry rows from there (`registerConfigTablesQuietly`), so it takes them as they now stand,
  * not as the process started with them: one copy, replaced, and nothing else keeping the entities.
+ *
+ * A reload that landed in part names what it held back. Those entities keep the definitions the
+ * configuration already held, since their tables or registry rows did not move; every other entity
+ * takes its new one, since its table and row did. Overlaying the held-back entity's new definition
+ * would describe a row that was never written, and keeping an advanced entity's old one would put
+ * its previous fields back over the row it has.
  */
-function adoptCommittedEntities(config: SanitizedNextlyConfig): void {
+function adoptCommittedEntities(
+  config: SanitizedNextlyConfig,
+  heldBack: EntitiesHeldBack = NOTHING_HELD_BACK
+): void {
   if (!container.has("config")) return;
   const live = container.get<NextlyServiceConfig>("config");
   const next: NextlyServiceConfig = {
     ...live,
-    collections: config.collections,
-    singles: config.singles,
-    fieldGroups: config.fieldGroups,
+    collections: advancedEntities(
+      live.collections,
+      config.collections,
+      heldBack.collections
+    ),
+    singles: advancedEntities(live.singles, config.singles, heldBack.singles),
+    fieldGroups: advancedEntities(
+      live.fieldGroups,
+      config.fieldGroups,
+      heldBack.fieldGroups
+    ),
   };
   // `register`, not `registerSingleton`: a singleton already built keeps its first instance, and
   // the start's configuration has been read by now. The factory hands out the one object.
   container.register<NextlyServiceConfig>("config", () => next);
+}
+
+/**
+ * One kind's entities after a reload: the loaded list in its order, with each held-back entity
+ * replaced by the definition held before, or left out where there was none (an entity the reload
+ * added and then held back has no table or row to describe). An entity the save removed is gone,
+ * as it is from a reload that landed whole.
+ */
+function advancedEntities<Entity extends { slug?: string }>(
+  live: readonly Entity[] | undefined,
+  loaded: Entity[] | undefined,
+  heldBack: ReadonlySet<string> | "all"
+): Entity[] | undefined {
+  if (heldBack === "all") return live === undefined ? undefined : [...live];
+  if (heldBack.size === 0 || loaded === undefined) return loaded;
+  const before = new Map((live ?? []).map(entity => [entity.slug, entity]));
+  return loaded.flatMap(entity => {
+    if (entity.slug === undefined || !heldBack.has(entity.slug)) {
+      return [entity];
+    }
+    const kept = before.get(entity.slug);
+    return kept === undefined ? [] : [kept];
+  });
 }
 
 /**
@@ -1986,6 +2084,13 @@ async function applyReloadHolding(
   const previousWorkflows = publishedWorkflows();
   reloadUndo.push(() => publishWorkflows(previousWorkflows));
   let committed = false;
+  // Where a reload lands only in part: the entities that advanced take their new definitions, and
+  // the rest keep theirs (`adoptCommittedEntities`). A reload that lands whole adopts every one in
+  // `commitReload`.
+  const adoptAdvancedEntities = (heldBack: EntitiesHeldBack): void => {
+    if (loadedConfig !== undefined)
+      adoptCommittedEntities(loadedConfig, heldBack);
+  };
   const commitReload = (): void => {
     if (committed) return;
     committed = true;
@@ -2779,16 +2884,21 @@ async function applyReloadHolding(
       // sync that failed here is the metadata one, and this path is reached
       // only when every diff was empty, so the live schema already matches what
       // the new field types describe.
-      if (
-        reloadAdvancedEverything({
-          deferredEntities,
-          collections: synced.collections,
-          singles: synced.singles,
-          components: synced.components,
-          failedSingles: synced.failedSingles,
-        })
-      ) {
+      const dimensions: ReloadDimensions = {
+        deferredEntities,
+        collections: synced.collections,
+        failedCollections: synced.failedCollections,
+        singles: synced.singles,
+        components: synced.components,
+        failedSingles: synced.failedSingles,
+      };
+      if (reloadAdvancedEverything(dimensions)) {
         commitReload();
+      } else {
+        // The handlers wait for a reload that lands whole, but the entities whose rows this sync
+        // wrote have advanced all the same, and a later reload of the definitions must find them
+        // as they now are.
+        adoptAdvancedEntities(entitiesHeldBack(dimensions));
       }
     } else {
       // A real schema change was deferred (unsafe / needs review) or a diff
@@ -3105,6 +3215,8 @@ async function applyReloadHolding(
     // The singles sync reports per-slug failures rather than rejecting, and
     // those entities keep serialising against their previous field tree.
     let failedSingleMetadata = new Set<string>();
+    // The collections the sync reported as not written, read the same way.
+    let failedCollectionMetadata: ReadonlySet<string> = new Set<string>();
     let componentSynced = true;
     // Sync dynamic_collections metadata so the fields JSON reflects the
     // new config. The pipeline above only applies DDL to dc_<slug>; without
@@ -3144,6 +3256,7 @@ async function applyReloadHolding(
       // policies, and the hook publication below. Both would then run against a
       // field tree that is not the one stored.
       const failedCollections = unwrittenSlugs(collectionSync);
+      failedCollectionMetadata = new Set(failedCollections);
 
       // 🔴 Published HERE, on the path where the metadata sync actually ran,
       // and not before the branch above. Computing it earlier looked equivalent
@@ -3483,16 +3596,21 @@ async function applyReloadHolding(
     // generated FROM the newly loaded field types, and putting the previous
     // ones back would leave validation and storage transforms running the old
     // definitions against the landed schema.
-    if (
-      reloadAdvancedEverything({
-        deferredEntities,
-        collections: collectionSynced,
-        singles: singleSynced,
-        components: componentSynced,
-        failedSingles: failedSingleMetadata,
-      })
-    ) {
+    const dimensions: ReloadDimensions = {
+      deferredEntities,
+      collections: collectionSynced,
+      failedCollections: failedCollectionMetadata,
+      singles: singleSynced,
+      components: componentSynced,
+      failedSingles: failedSingleMetadata,
+    };
+    if (reloadAdvancedEverything(dimensions)) {
       commitReload();
+    } else {
+      // Withheld handlers do not hold the definitions back with them: an entity whose table and
+      // registry row both moved is described by its new definition from here on, and one held
+      // back keeps the definition it had (`adoptCommittedEntities`).
+      adoptAdvancedEntities(entitiesHeldBack(dimensions));
     }
   }
 
