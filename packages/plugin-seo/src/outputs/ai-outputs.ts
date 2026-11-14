@@ -524,9 +524,13 @@ interface FoundCopy {
  */
 function asksFor(page: ListedPage, url: URL, atPage: boolean): boolean {
   if (!atPage) return copyPathsOf(page.loc).includes(url.pathname);
-  const { pathname } = new URL(page.loc);
-  return pathname === url.pathname || pathname === `${url.pathname}/`;
+  // `/a` and `/a/` are one page, whichever way the site writes it.
+  return bare(new URL(page.loc).pathname) === bare(url.pathname);
 }
+
+/** A path with its trailing slashes taken off, `/` itself kept. */
+const bare = (path: string): string =>
+  path.length > 1 ? path.replace(/\/+$/, "") || "/" : path;
 
 /**
  * The first listed page a request for `url` asks the copy of, trying

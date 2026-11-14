@@ -115,6 +115,36 @@ describe("rich text as Markdown", () => {
     );
   });
 
+  it("keeps a pipe in a table cell's code inside its cell", () => {
+    const value = rich({
+      type: "table",
+      children: [
+        {
+          type: "tablerow",
+          children: [
+            { type: "tablecell", children: [paragraph(text_("Type"))] },
+            { type: "tablecell", children: [paragraph(text_("Meaning"))] },
+          ],
+        },
+        {
+          type: "tablerow",
+          children: [
+            {
+              type: "tablecell",
+              children: [
+                paragraph({ type: "text", text: "A | B", format: 16 }),
+              ],
+            },
+            { type: "tablecell", children: [paragraph(text_("Either"))] },
+          ],
+        },
+      ],
+    });
+    expect(markdownOfRichText(value)).toBe(
+      "| Type | Meaning |\n| --- | --- |\n| `A \\| B` | Either |"
+    );
+  });
+
   it("writes buttons as links", () => {
     const value = rich(
       { type: "button-link", url: "/start", text: "Start now" },

@@ -90,6 +90,23 @@ describe("the head's link to a page's plain-text copy", () => {
     }
   });
 
+  it("is made whole against the site's production address where no base address is set", async () => {
+    const resolver = withCopyLink(
+      ctx,
+      { resolve: () => ({ ...LISTED, canonical: "/blog/hello" }) },
+      {
+        readRules: async () => ({
+          patterns: {},
+          plainTextCopies: true,
+          productionAddresses: ["https://acme.example"],
+        }),
+      }
+    );
+    expect((await resolver.resolve(POST)).formats).toEqual({
+      "text/markdown": "/blog/hello.md",
+    });
+  });
+
   it("is not there while copies are off, and asks nothing then", async () => {
     served.asked = [];
     expect((await answered(LISTED, POST, false)).formats).toBeUndefined();

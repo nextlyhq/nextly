@@ -22,6 +22,7 @@ import { codePagesSlug } from "../code-pages/collection";
 import { overAnswer } from "../resolver/provider";
 
 import { servedCopyAddress, type AiOutputsConfig } from "./ai-outputs";
+import { siteOriginFor } from "./site-origin";
 
 /** A path with its trailing slash taken off, so `/a` and `/a/` read alike. */
 const bare = (path: string): string =>
@@ -68,10 +69,20 @@ export function withCopyLink(
     if (source.kind === "entry" && source.collection === codePagesSlug(ctx)) {
       return answer;
     }
-    const page = listedAddress(input, answer, config.origin);
-    if (page === undefined) return answer;
+    if (answer.canonical === undefined || answer.robots?.index === false) {
+      return answer;
+    }
     const rules = await config.readRules(ctx, input.locale);
     if (rules.plainTextCopies !== true) return answer;
+    // The site's own address, wherever it is named (its settings, the
+    // server's production addresses, or the plugin's base address), so a
+    // canonical written from the root is read as the site's.
+    const page = listedAddress(
+      input,
+      answer,
+      await siteOriginFor(undefined, ctx, config)
+    );
+    if (page === undefined) return answer;
     const copy = await servedCopyAddress(ctx, page.href, config);
     if (copy === undefined) return answer;
     // Written as the canonical is: whole, or from the site's root.

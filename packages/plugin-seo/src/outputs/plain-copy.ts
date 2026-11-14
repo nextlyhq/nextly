@@ -211,13 +211,20 @@ function list(node: Node): string {
     .join("\n");
 }
 
+/**
+ * A table cell's words on one line, every pipe escaped: a table reads a
+ * pipe as the end of its cell even inside code, so code's `A | B` is
+ * written `A \| B`, which a table reads back as the pipe.
+ */
+const cellOf = (cell: Node): string =>
+  blocks(childrenOf(cell), 0)
+    .replace(/\n+/g, " ")
+    .replace(/(?<!\\)\|/g, "\\|");
+
 /** A table, its first row as the header. */
 function table(node: Node): string {
   const rows = childrenOf(node).map(
-    row =>
-      `| ${childrenOf(row)
-        .map(cell => blocks(childrenOf(cell), 0).replace(/\n+/g, " "))
-        .join(" | ")} |`
+    row => `| ${childrenOf(row).map(cellOf).join(" | ")} |`
   );
   const [header, ...rest] = rows;
   if (header === undefined) return "";

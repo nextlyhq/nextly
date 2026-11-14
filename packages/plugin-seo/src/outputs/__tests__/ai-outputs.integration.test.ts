@@ -507,6 +507,11 @@ describe.each(getConfiguredTestDialects())(
           )
         ).type
       ).toBe("text/markdown; charset=utf-8");
+      // The page's address with a trailing slash, as a site that writes
+      // addresses so asks for it, is the page too.
+      expect((await ask("/blog/hello/", undefined, SITE, agent)).body).toBe(
+        copy.body
+      );
 
       // A browser, or a reader preferring HTML, is served the page.
       const browser =
