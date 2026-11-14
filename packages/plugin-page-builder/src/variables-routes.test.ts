@@ -17,6 +17,7 @@ import {
   VARIABLE_REMOVE_WRITE_CONTEXT,
   type VariablesInUseCheck,
 } from "./site-style-storage";
+import type { UncoveredPage, UncoveredPages } from "./uncovered-pages";
 import type { DocumentsUsing } from "./usage-count";
 import type { UsageIndexHealth } from "./usage-index-health";
 import {
@@ -704,6 +705,178 @@ describe("the in-use check every removal makes", () => {
           },
         ],
       },
+    });
+  });
+
+  describe("where the index cannot become whole", () => {
+    /** A gap no count closes: a page too large, or a field it cannot reach. */
+    const GAP: UsageIndexHealth = {
+      ...WHOLE,
+      coversExistingDocuments: false,
+      backfillPending: false,
+    };
+    /** The index as a fake, judging its counts by the health it is asked with. */
+    const gapUsage = (
+      uses: Record<string, DocumentsUsing["collections"]> = {}
+    ): SharedStyleUsageSource => ({
+      health: async () => GAP,
+      documentsUsingEach: async (ids, health) =>
+        new Map(
+          ids.map(id => [
+            id,
+            {
+              collections: Object.hasOwn(uses, id) ? (uses[id] ?? []) : [],
+              complete:
+                health.coversExistingDocuments && !health.anyUndetermined,
+            },
+          ])
+        ),
+      kindOf: () => "pages",
+    });
+    const p1: UncoveredPage = {
+      scope: "collection",
+      entity: "pages",
+      entityKey: "p1",
+    };
+    /** The one uncovered page, its stored form naming `identity`, or failing. */
+    const uncoveredOf = (identity?: string | "fails"): UncoveredPages => ({
+      list: async function* () {
+        yield p1;
+      },
+      forms: async () => {
+        if (identity === "fails") throw new Error("unreadable");
+        return [
+          identity === undefined
+            ? { content: {} }
+            : { content: { color: { $token: identity } } },
+        ];
+      },
+    });
+
+    it("passes variables no uncovered page uses, judging the index's counts as whole", async () => {
+      const { stillUsed } = stillUsedOf([]);
+      await expect(
+        refuseVariablesInUse(
+          removable,
+          [],
+          {
+            usage: gapUsage(),
+            blocks: NO_BLOCKS,
+            stillUsed,
+            uncovered: uncoveredOf("t-other"),
+          },
+          pathOf
+        )
+      ).resolves.toBeUndefined();
+    });
+
+    it("refuses a variable used on an uncovered page as in use, naming the page", async () => {
+      const { stillUsed, uses } = stillUsedOf([], "Pricing");
+      expect(
+        await refusal(
+          refuseVariablesInUse(
+            removable,
+            [],
+            {
+              usage: gapUsage(),
+              blocks: NO_BLOCKS,
+              stillUsed,
+              uncovered: uncoveredOf("t-accent"),
+            },
+            pathOf
+          )
+        )
+      ).toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            {
+              path: "at:t-accent",
+              code: "IN_USE",
+              message: "Accent is used on Pricing.",
+            },
+          ],
+        },
+      });
+      expect(uses).not.toHaveBeenCalled();
+    });
+
+    it("refuses, naming the page, where an uncovered page cannot be read", async () => {
+      const { stillUsed, uses } = stillUsedOf([], "Pricing");
+      expect(
+        await refusal(
+          refuseVariablesInUse(
+            removable,
+            [],
+            {
+              usage: gapUsage(),
+              blocks: NO_BLOCKS,
+              stillUsed,
+              uncovered: uncoveredOf("fails"),
+            },
+            pathOf
+          )
+        )
+      ).toMatchObject({
+        code: "CONFLICT",
+        publicMessage:
+          "Nothing was removed. Pricing could not be read to check whether it uses the variables, so nothing can be removed until it is. Try again shortly.",
+      });
+      expect(uses).not.toHaveBeenCalled();
+    });
+
+    it("still refuses a variable the index counts on a page it covers", async () => {
+      const { stillUsed } = stillUsedOf([]);
+      expect(
+        await refusal(
+          refuseVariablesInUse(
+            removable,
+            [],
+            {
+              usage: gapUsage({
+                "color.brand": [{ collection: "pages", documents: ["p2"] }],
+              }),
+              blocks: NO_BLOCKS,
+              stillUsed,
+              uncovered: uncoveredOf(),
+            },
+            pathOf
+          )
+        )
+      ).toMatchObject({
+        code: "VALIDATION_ERROR",
+        publicData: {
+          errors: [
+            {
+              path: "at:color.brand",
+              code: "IN_USE",
+              message: "Brand is used on 1 document.",
+            },
+          ],
+        },
+      });
+    });
+
+    it("reads no uncovered page while the index still has pages to count", async () => {
+      const { stillUsed } = stillUsedOf([]);
+      const uncovered = uncoveredOf();
+      const list = vi.spyOn(uncovered, "list");
+      expect(
+        await refusal(
+          refuseVariablesInUse(
+            removable,
+            [],
+            {
+              usage: usageOf(NOT_WHOLE).source,
+              blocks: NO_BLOCKS,
+              stillUsed,
+              uncovered,
+            },
+            pathOf
+          )
+        )
+      ).toMatchObject({ code: "CONFLICT" });
+      expect(list).not.toHaveBeenCalled();
     });
   });
 

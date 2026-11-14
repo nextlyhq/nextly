@@ -311,6 +311,8 @@ import {
   storedSharedStyleUses,
   type SharedStyleUsageSource,
   type UsageCountJobs,
+  storedIdsAfter,
+  storedPageForms,
 } from "./shared-styles-routes";
 import {
   BREAKPOINT_REMOVAL_UNDONE_AUDIT,
@@ -429,12 +431,14 @@ import { tokenUsageIndex } from "./token-usage";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
 import { unbindPlanRoute } from "./unbind-plan-route";
+import { type UncoveredPages, uncoveredPagesFrom } from "./uncovered-pages";
 import { USAGE_BACKFILL_JOB, usageBackfillJob } from "./usage-backfill-job";
 import {
   backfillScopes,
   forgetGoneScopes,
   usageBackfillDeps,
   type BackfillHost,
+  backfillSurvey,
 } from "./usage-backfill-wiring";
 import { usageBookkeeping } from "./usage-bookkeeping";
 import { listDocumentsUsingEach } from "./usage-count";
@@ -2326,6 +2330,27 @@ export const pageBuilder = (
     health: () => usageHealthService(requireInstalled).read(tokenUsageIndex),
     log: (message: string) => ctx.logger.info(`[page-builder] ${message}`),
   });
+  /**
+   * The pages the variable index does not cover, from its own records: its
+   * undetermined marker rows, and the types its survey cannot address. Read
+   * as the system, as the rescan reads stored documents (`uncovered-pages`).
+   */
+  const uncoveredPagesOf = (
+    ctx: Parameters<typeof storedPageForms>[0]
+  ): UncoveredPages =>
+    uncoveredPagesFrom({
+      rows: args =>
+        usageTableRows(
+          requireInstalled().db,
+          usageTableOf(tokenUsageIndex)
+        )(args),
+      markers: tokenUsageIndex.whereUndetermined(),
+      unaddressable: async () =>
+        (await backfillSurvey(requireInstalled())).unaddressableTypes,
+      idsAfter: async (collection, after) =>
+        storedIdsAfter(await bootedNextly())(collection, after),
+      forms: async page => storedPageForms(ctx, await bootedNextly())(page),
+    });
   // The count a removal makes before it judges an index that is not whole,
   // shared by every removal in this process so a second joins the first.
   let usageCountNow: ((maxDurationMs: number) => Promise<void>) | null = null;
@@ -3043,6 +3068,7 @@ export const pageBuilder = (
         documents: async () => storedDocumentsOf(ctx, await bootedNextly()),
         limits: opts.limits ?? DEFAULT_LIMITS,
         pathOf: () => "tokens",
+        uncovered: uncoveredPagesOf(ctx),
       };
       // And every write of the site style dropping a variable or a shared
       // style takes the same lock and reads the stored documents again under
@@ -4480,6 +4506,7 @@ export const pageBuilder = (
               documents: async () =>
                 storedDocumentsOf(ctx, await bootedNextly()),
               limits: opts.limits ?? DEFAULT_LIMITS,
+              uncovered: uncoveredPagesOf(ctx),
               // The first use named only if this caller may open it.
               firstReadable: uses =>
                 firstReadableTitle(

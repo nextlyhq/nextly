@@ -106,6 +106,7 @@ import {
 } from "./site-style-storage";
 import { retryOnStale } from "./stale-retry";
 import { readStoredJson } from "./stored-json";
+import type { UncoveredPage } from "./uncovered-pages";
 import { USAGE_BACKFILL_JOB } from "./usage-backfill-job";
 import { documentCountOf, type DocumentsUsing } from "./usage-count";
 import { coverageGapWords } from "./usage-count-after-migrate";
@@ -114,6 +115,7 @@ import {
   indexStillCounting,
   type UsageIndexHealth,
   usageCoverageGap,
+  type UsageCoverageGap,
 } from "./usage-index-health";
 
 /** The permission that locks and unlocks shared styles, in its parts. */
@@ -605,12 +607,45 @@ export type UsageCountJobs = Pick<
 >;
 
 /**
+ * Why a removal is refused on an index that is not whole, said as such and
+ * never as a use: content no count can cover (`gap`), a count that ran out of
+ * time (`counted`), or one not yet run.
+ */
+function notWholeReason(
+  noun: string,
+  gap: UsageCoverageGap | undefined,
+  counted: boolean
+): UsageReason {
+  if (gap !== undefined) {
+    return {
+      message: `No ${noun} can be removed while the count of where they are used is incomplete: ${coverageGapWords(gap)}.`,
+      used: false,
+    };
+  }
+  if (counted) {
+    return {
+      message: `Some pages are still being counted, so no ${noun} can be removed yet. Try again shortly, or count them now with Count now.`,
+      used: false,
+    };
+  }
+  return {
+    message: `Some pages haven't been counted yet, so no ${noun} can be removed.`,
+    used: false,
+  };
+}
+
+/**
  * How long a removal may spend counting the pages, where the usage index is
  * not whole, before it judges: long enough to count a small site in one go,
  * short enough that the request stays responsive. A site larger than that is
  * refused as not counted yet, and its Count now, or a scheduler, counts it.
  */
 export const REMOVAL_COUNT_MS = 5_000;
+
+/** The reasons the pages the index does not cover give against a removal. */
+export type UncoveredReasons = (
+  removable: readonly { id: string; name: string }[]
+) => Promise<readonly UsageReason[]>;
 
 /**
  * What a usage index says against removing each entry: not whole, so no
@@ -628,7 +663,14 @@ export const REMOVAL_COUNT_MS = 5_000;
 export async function usageRefusals(
   removable: readonly { id: string; name: string }[],
   usage: SharedStyleUsageSource,
-  noun: string
+  noun: string,
+  /**
+   * The reasons the pages the index does not cover give against removing
+   * these, read from those pages themselves, or none where none uses them.
+   * Asked only where the index cannot become whole; without it, such an
+   * index refuses every removal, as it cannot say which are used.
+   */
+  uncovered?: UncoveredReasons
 ): Promise<UsageReason[]> {
   let health = await usage.health();
   // Counted only while the backfill has work left: an index content keeps
@@ -641,31 +683,15 @@ export async function usageRefusals(
     health = await usage.health();
   }
   if (!indexIsWhole(health)) {
-    // What keeps it from whole, said as such and never as a use: content no
-    // count can cover, a count that ran out of time, or one not yet run.
-    const gap = usageCoverageGap(health);
-    if (gap !== undefined) {
-      return [
-        {
-          message: `No ${noun} can be removed while the count of where they are used is incomplete: ${coverageGapWords(gap)}.`,
-          used: false,
-        },
-      ];
-    }
-    if (counts) {
-      return [
-        {
-          message: `Some pages are still being counted, so no ${noun} can be removed yet. Try again shortly, or count them now with Count now.`,
-          used: false,
-        },
-      ];
-    }
-    return [
-      {
-        message: `Some pages haven't been counted yet, so no ${noun} can be removed.`,
-        used: false,
-      },
-    ];
+    const judged = await judgedPastGap(
+      health,
+      removable,
+      noun,
+      counts,
+      uncovered
+    );
+    if (Array.isArray(judged)) return judged;
+    health = judged;
   }
   const reasons: UsageReason[] = [];
   const counted = await usage.documentsUsingEach(
@@ -691,6 +717,35 @@ export async function usageRefusals(
     }
   }
   return reasons;
+}
+
+/**
+ * An index that is not whole, judged for a removal: the reasons against it, or
+ * the health its counts are read under once the pages it does not cover were
+ * read and found not to use any of them.
+ *
+ * What keeps it from whole is said as such and never as a use: content no
+ * count can cover, a count that ran out of time, or one not yet run. Only
+ * content no count can cover is read past, and only where the caller can read
+ * the pages the index does not cover.
+ */
+async function judgedPastGap(
+  health: UsageIndexHealth,
+  removable: readonly { id: string; name: string }[],
+  noun: string,
+  counted: boolean,
+  uncovered: UncoveredReasons | undefined
+): Promise<UsageReason[] | UsageIndexHealth> {
+  const gap = usageCoverageGap(health);
+  if (gap === undefined || uncovered === undefined) {
+    return [notWholeReason(noun, gap, counted)];
+  }
+  const found = await uncovered(removable);
+  if (found.length > 0) return [...found];
+  // None of the uncovered pages uses them: the index answers for every page
+  // it covers, and those it does not were read, so its counts are judged as
+  // whole ones.
+  return { ...health, coversExistingDocuments: true, anyUndetermined: false };
 }
 
 /**
@@ -966,6 +1021,53 @@ export function isListedForm(form: StoredDocumentForm): boolean {
   return (
     form.locale === LISTED_FORM.locale && form.variant === LISTED_FORM.variant
   );
+}
+
+/**
+ * Every stored form of one page, whole, read as the system: each of the
+ * site's languages, published and as its working draft. What a check of a
+ * page's stored text reads (`uncovered-pages`).
+ */
+export function storedPageForms(
+  ctx: { readonly config: SiteStyleRouteContext["config"] & LocalizedConfig },
+  nextly: RescanDirectApi
+): (page: UncoveredPage) => Promise<readonly unknown[]> {
+  const formsOf = storedFormsReader(nextly);
+  return page =>
+    formsOf(
+      { scope: page.scope, entity: page.entity, entityKey: page.entityKey },
+      storedFormsOn(siteLocales(ctx.config))
+    );
+}
+
+/**
+ * The ids of a collection's documents after `after`, a page at a time,
+ * read as the system: the id alone, so no document is read whole here.
+ */
+export function storedIdsAfter(
+  nextly: RescanDirectApi
+): (
+  collection: string,
+  after: string | undefined
+) => Promise<{ ids: readonly string[]; hasNext: boolean }> {
+  return async (collection, after) => {
+    const page = await nextly.find({
+      collection,
+      ...(after === undefined
+        ? {}
+        : { where: { id: { greater_than: after } } }),
+      select: { id: true },
+      sort: "id",
+      limit: RESCAN_PAGE_SIZE,
+      page: 1,
+      depth: 0,
+      overrideAccess: true,
+    });
+    return {
+      ids: page.items.map(item => String((item as { id: unknown }).id)),
+      hasNext: page.meta.hasNext,
+    };
+  };
 }
 
 /**
