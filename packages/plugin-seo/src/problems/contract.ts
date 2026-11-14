@@ -11,9 +11,9 @@
  */
 import { SEO_ADMIN_SLUG, SETTINGS_PAGE_HREF } from "../settings/contract";
 
-// The limits the title and description are checked against, from the one
-// check the SEO tab and the list share, named in the kinds' explanations.
-import { DESCRIPTION_LIMIT, TITLE_LIMIT } from "./text-checks";
+// The widths the title and description are checked against, from the one
+// measure the SEO tab and the list share, named in the kinds' explanations.
+import { SEARCH_TEXT } from "./text-width";
 
 /** Where the list is read, under the plugin's routes. */
 export const PROBLEMS_ROUTE_PATH = "/problems";
@@ -140,12 +140,12 @@ export const KIND_TEXT: Readonly<
   },
   longTitle: {
     title: "Title longer than Google shows",
-    explain: `Google shows about ${TITLE_LIMIT} characters of a title and cuts the rest to fit the screen. The title is saved and served as it is; put what matters first.`,
+    explain: `Google shows about ${SEARCH_TEXT.title.width} px of a title, measured in its own font, and cuts the rest to fit the screen: narrow letters fit more, wide capitals fewer. The title is saved and served as it is; put what matters first.`,
     siteWide: false,
   },
   longDescription: {
     title: "Description longer than Google shows",
-    explain: `Google shows about ${DESCRIPTION_LIMIT} characters of a description and cuts the rest. The description is saved and served as it is; put what matters first.`,
+    explain: `Google shows about ${SEARCH_TEXT.description.width} px of a description, about two lines, and cuts the rest. The description is saved and served as it is; put what matters first.`,
     siteWide: false,
   },
   canonical: {

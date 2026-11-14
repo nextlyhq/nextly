@@ -227,6 +227,15 @@ describe("structured data choices kept in the settings", () => {
     ).toBeNull();
   });
 
+  it("accepts an FAQ section declared for a content type, and refuses one that is not true or false", () => {
+    expect(
+      structuredDataSettingsProblem({ pages: { faqSection: true } })
+    ).toBeNull();
+    expect(
+      structuredDataSettingsProblem({ pages: { faqSection: "yes" } })
+    ).toMatch(/pages\.faqSection must be true or false/);
+  });
+
   it("refuses a type that is not offered, and says which", () => {
     expect(
       structuredDataSettingsProblem({ posts: { type: "Recipe" } })

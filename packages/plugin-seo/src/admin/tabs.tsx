@@ -28,7 +28,7 @@ import {
 import { productionAddressProblem } from "../settings/production-addresses";
 import { profileAddressProblem } from "../settings/stored-values";
 import type { StructuredDataBrand } from "../structured-data/rules";
-import { characters, DESCRIPTION_LIMIT } from "../tab/problems";
+import { fitSummary, textFit } from "../tab/problems";
 
 import { BrandDetailRows, CODE_LIST_NOTE, CODE_NOTE } from "./brand-details";
 import { brandDetailsDraftProblem } from "./brand-draft";
@@ -57,19 +57,18 @@ export interface TabProps {
   change: (next: (draft: SettingsDraft) => SettingsDraft) => void;
 }
 
-/** What a description's length reads as, under the field. */
+/**
+ * How wide a description draws on Google, under the field: measured as the
+ * SEO tab and the problem list measure one.
+ */
 function descriptionNote(description: string): {
   text: string;
   tone: "muted" | "warning";
 } | null {
-  const count = characters(description.trim());
-  if (count === 0) return null;
-  return count > DESCRIPTION_LIMIT
-    ? {
-        text: `${count} characters · Google shows about ${DESCRIPTION_LIMIT}`,
-        tone: "warning",
-      }
-    : { text: `${count} characters · Good`, tone: "muted" };
+  const trimmed = description.trim();
+  if (trimmed === "") return null;
+  const fit = textFit("description", trimmed);
+  return { text: fitSummary(fit), tone: fit.fits ? "muted" : "warning" };
 }
 
 /** A link-styled button, for a small action under a control. */

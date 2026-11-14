@@ -515,20 +515,30 @@ describe("the General tab", () => {
     ).toBe(true);
   });
 
-  it("says how long the default description is", () => {
+  it("says how wide the default description draws on Google", () => {
     serving({
       _rev: "1",
       setupStep: 3,
       description: "x".repeat(128),
     });
     render(<SeoSettingsPage />);
-    expect(screen.getByText("128 characters · Good")).toBeTruthy();
+    expect(
+      screen.getByText("Fits · 896 of 920 px · 128 characters")
+    ).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText("Default description"), {
       target: { value: "y".repeat(170) },
     });
     expect(
-      screen.getByText("170 characters · Google shows about 160")
+      screen.getByText("Google cuts it · 1190 of 920 px · 170 characters")
+    ).toBeTruthy();
+
+    // 170 characters of narrow letters fit: the width decides.
+    fireEvent.change(screen.getByLabelText("Default description"), {
+      target: { value: "i".repeat(170) },
+    });
+    expect(
+      screen.getByText("Fits · 529 of 920 px · 170 characters")
     ).toBeTruthy();
   });
 

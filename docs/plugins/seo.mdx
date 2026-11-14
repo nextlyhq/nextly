@@ -149,8 +149,8 @@ bulk insert can omit it too, because that path does not apply nested defaults. S
 
 | Field                | Type     | Notes                                                                                                                                                                    |
 | -------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `metaTitle`          | text     | Any length. Past about 60 characters Google cuts it to fit, so the SEO tab and the problem list warn, and the title is saved and served as typed                         |
-| `metaDescription`    | textarea | Any length. Past about 160 characters the same warning applies                                                                                                           |
+| `metaTitle`          | text     | Any length. Wider than about 600 px Google cuts it to fit, so the SEO tab and the problem list warn, and the title is saved and served as typed                          |
+| `metaDescription`    | textarea | Any length. Wider than about 920 px, two lines, the same warning applies                                                                                                 |
 | `socialTitle`        | text     | The title a shared link's card uses, where it should differ from `metaTitle`                                                                                             |
 | `socialDescription`  | textarea | The description a shared link's card uses, where it should differ from `metaDescription`                                                                                 |
 | `ogImage`            | upload   | Relates to `media`. The social preview image                                                                                                                             |
@@ -189,17 +189,42 @@ description: it shows as much as fits the width of the results and cuts the rest
 ([title links](https://developers.google.com/search/docs/appearance/title-link),
 [snippets](https://developers.google.com/search/docs/appearance/snippet)). So the default fields
 save any length, and the SEO tab ("The title is longer than Google shows.") and the problem list
-(`68 characters, Google shows about 60`) say when it is past what Google usually shows. A site that wants the lengths
-enforced passes `hardLengthLimits: true`, and a save of a title over 60 characters or a
-description over 160 is then refused:
+(`646 of 600 px · 50 characters`) say when it is wider than Google shows. A site that wants the
+width enforced passes `hardLengthLimits: true`, and a save of a title or description wider than
+Google shows is then refused, judged by the same measure as the warning:
 
 ```ts
 seoPlugin({ collections: ["posts"], hardLengthLimits: true });
 ```
 
-`hardLengthLimits` applies to the default fields; a site passing its own `fields` sets
-`maxLength` on them itself. Turning it on or off changes the two fields' settings, which, like any
-field change, reaches a deployed database through `nextly migrate:create` and `nextly migrate`.
+`hardLengthLimits` applies to the default fields; a site passing its own `fields` sets its own
+`validate` or `maxLength` on them. It is a rule checked on each save, not a setting of the stored
+fields, so turning it on or off needs no migration. A site that turned it on before it measured
+widths had a 60 and 160 character cap on the two fields; that cap is gone, which, like any field
+change, reaches a deployed database through `nextly migrate:create` and `nextly migrate`.
+
+### How wide a title or description is
+
+Google cuts a title or description by the width it takes on the screen, not by its number of
+characters, so the plugin measures the width. Google writes a result's title in Arial at 20 px and
+the text under it in Arial at 14 px, and on a desktop screen shows about 600 px of a title and
+about 920 px, two lines, of a description; a phone shows a title on up to two lines, so the
+desktop width is the one that cuts first. Google publishes none of these figures: they are what
+measuring its results page gives, and what the common SEO tools measure against.
+
+The width is worked out from Arial's own character widths, the same on the server and in the
+admin, so a title measures the same everywhere. Narrow letters fit more: "Little tips: fill it
+in, lift it, tilt it, till it is still. jilt" is 65 characters and 369 px, and fits. Wide capitals
+fit fewer: "WOMEN'S WORKWEAR MADE WELL: MEMBER OFFERS AND NEWS" is 50 characters and 646 px, and
+is cut. An emoji or a Chinese, Japanese or Korean character counts as one full em, and a letter of
+another script as an average Latin letter. Kerning is left out, a few pixels at most.
+
+Every place that judges a title or description uses this one measure: the bar under the SEO tab's
+title and description ("Fits · 369 of 600 px · 65 characters", or "Google cuts it · …"), the search
+preview, which cuts the text where Google would, the line under each box in
+[Edit mode](#editing-in-bulk-and-import), the default description and title patterns in Settings,
+the problem list's "Title longer than Google shows", and `hardLengthLimits`. The number of
+characters is shown beside the width as a hint.
 
 ### Custom fields
 
@@ -266,11 +291,14 @@ is drawn only where the `seo` group has both `canonical` and `canonicalElsewhere
 an address on another site is used only once marked confirmed.
 
 The count beside the tab's label is the number of problems the page's answer shows: a
-title longer than Google shows, a description that is too long, a title or a
+title wider than Google shows, a description that is too wide, a title or a
 description that no level supplies, and each detail the page's structured data type
 lacks. The title and description are checked by the same rule the
-[problem list](#problems) uses, lengths counted in characters, so the tab and the list
-always agree; a page hidden from search has no title or description problem in either.
+[problem list](#problems) uses, by [how wide they draw](#how-wide-a-title-or-description-is),
+so the tab and the list always agree; a page hidden from search has no title or description
+problem in either. Under each of the two fields a bar shows how wide the value in use draws
+(typed, or automatic while nothing is typed) against what Google shows, with a mark where Google
+cuts.
 
 The tab's values come from the same answer the page's head is built from, worked out by
 the plugin's `POST /resolve` route for the document as it is typed. The route answers
@@ -1191,10 +1219,13 @@ A page is described as one linked graph, each node naming the others by `@id`:
   a page built in code goes by), so a post reads Home › Blog › the post. A part of the address that
   holds no page gets no step, since a trail leads only through pages a visitor can open;
 - the page's **subject**, as its type describes it (`<address>#<type>`), and, where the page lists
-  entries, the list. Questions and answers are described only on a page whose type is Questions
-  and answers, chosen for its content type, for the page or by its route: a page of any other
-  type gets no `FAQPage` markup, whatever questions it shows. The choosers list it as
-  "Questions and answers · no longer shown by Google".
+  entries, the list. Questions and answers are described as a page's subject on a page whose type
+  is Questions and answers, chosen for its content type, for the page or by its route. The choosers
+  list it as "Questions and answers · no longer shown by Google";
+- an **FAQ section** (`<address>#faq`), where one is declared for a page of any other type: the
+  questions it shows as an `FAQPage` that is part of the page, named by the page's `hasPart`. See
+  [An FAQ section on any page](#an-faq-section-on-any-page). A page nobody declared one for gets no
+  `FAQPage` markup, whatever questions it shows.
 
 The home page is the start of every trail, so it has none; it is named by its whole title, and
 what it describes, such as the site's app, by the brand's name. Every address is spelled as the
@@ -1353,9 +1384,10 @@ export const route = createPublicContentRoute({
 `items` lists the entries a page shows, in order, each `{ name, url }`: the page is then a
 Collection page with an `ItemList` as its main subject, unless somebody chose another type.
 `questions` lists the questions it answers, each `{ question, answer }`: on a Questions and answers
-page they are its main subject. On a page of any other type they are not described: no `FAQPage`
-is added beside it, since Google no longer shows these results and markup nobody chose for a page
-is markup made up for it. Questions can also come from a field: a list named `faq`, `faqs` or `questions`, each
+page they are its main subject. On a page of any other type they are described only where an
+[FAQ section](#an-faq-section-on-any-page) is declared for it (`faqSection: true`, or for its
+content type); otherwise no `FAQPage` is added, since markup nobody chose for a page is markup made
+up for it. Questions can also come from a field: a list named `faq`, `faqs` or `questions`, each
 item with its `question` and its `answer` (plain or rich text). Give only what the page shows:
 Google asks that structured data describe content a visitor can see, and the plugin never makes a
 question, a list or a rating up.
@@ -1394,6 +1426,34 @@ Single, and [`seoStructuredData`](#pages-built-in-code) for a page built in code
 Page Builder routes (`createBlocksPage`, `createSinglePage`, `createContentPage` and their public
 forms) place it themselves, before the page's blocks, so a page built in the Page Builder needs
 nothing more.
+
+#### An FAQ section on any page
+
+A pricing page, a home page or a feature page often ends with a few questions and answers. The page
+stays what it is (a web page, an About page, an app), and its questions can still be described for
+search engines and AI tools: declare an FAQ section, and the plugin adds an `FAQPage` node for the
+questions (`<address>#faq`) that is part of the page (`isPartOf`), and the page names it as a part
+of itself (`hasPart`).
+
+Declare it in one of two places:
+
+- **By the route**, for one page or a page built in code: `faqSection: true` in
+  `structuredDataHints`, beside the `questions` it shows, as in the route above:
+  `structuredDataHints: async entry => ({ questions: await questionsShownOn(String(entry.slug)), faqSection: true })`.
+  A page built in code passes the same in
+  `seoStructuredData`'s options:
+  `seoStructuredData("/pricing", { structuredDataHints: { questions, faqSection: true } })`.
+
+- **For a content type**, for every page of it: in **SEO › Settings › Content types**, open the type
+  and switch on **Questions on its pages are an FAQ section**; or in code,
+  `structuredData: { types: { pages: { faqSection: true } } }`.
+
+The questions are read as a Questions and answers page reads them: the route's `questions` where it
+gives any, else the field the type maps for Questions and answers, else a field named `faq`, `faqs`
+or `questions`. A page that declares a section but shows no questions gets none, and nothing points
+at it. A Questions and answers page needs no section: its questions are already its subject, so a
+declaration there adds nothing. Google no longer shows FAQ rich results, so the section is for other
+search engines and AI tools that read the page's structured data.
 
 ## Redirects
 
@@ -1630,8 +1690,9 @@ it is published in and at its address there, as its head would be served, for:
 - no title or description from any level (a field left empty is never reported where a pattern,
   the page's content or the site's defaults supply a value);
 - a title or description another page has too;
-- a title over 60 characters, or a description over 160, named with its length as a warning (the
-  value is saved and served as it is);
+- a title wider than about 600 px, or a description wider than about 920 px, named with its width
+  and characters as a warning (the value is saved and served as it is; see
+  [How wide a title or description is](#how-wide-a-title-or-description-is));
 - a canonical typed for the page that names another address, unless the page is marked as having
   first appeared on another site, which makes that address the one meant;
 - a link in its content to an address of a content type that no page holds;
@@ -1777,9 +1838,9 @@ With no production address set, the screen asks for one and fetches nothing.
 
 [Pages in Edit mode](#pages) edits the titles and descriptions of many pages at once. A box left
 empty shows, in grey, what the page uses automatically: what its route last set in code, else the
-type's title pattern or its own content; typing in it sets the page's own. Each box counts its
-characters against what Google shows: about 60 for a title, 160 for a description. Each Single SEO
-is added to is a type of its own, with its one page.
+type's title pattern or its own content; typing in it sets the page's own. Each box measures its
+width against what Google shows, about 600 px for a title and 920 px for a description, with the
+characters as a hint. Each Single SEO is added to is a type of its own, with its one page.
 
 A content type's changes are saved in one step, or, where any is refused, none of them. Where a
 page was saved by someone else after it was read, its type's step saves nothing, and the screen

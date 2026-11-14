@@ -473,7 +473,9 @@ describe("Edit mode", () => {
     expect(screen.getAllByText("Pattern: {Title} | {Site name}")).toBeTruthy();
 
     fireEvent.change(home, { target: { value: "Acme, the maker" } });
-    expect(screen.getByText("15 characters · Good · changed")).toBeTruthy();
+    expect(
+      screen.getByText("Fits · 151 of 600 px · 15 characters · changed")
+    ).toBeTruthy();
     expect(screen.getByRole("status").textContent).toContain("1 page changed");
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
