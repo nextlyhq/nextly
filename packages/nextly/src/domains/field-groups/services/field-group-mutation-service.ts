@@ -97,6 +97,7 @@ import {
   readFieldGroupType,
 } from "../storage/field-group-type-key";
 
+import { registeredComponentColumns } from "./field-group-table-provisioning";
 import {
   COMPONENT_META_KEYS,
   componentFieldHasColumn,
@@ -106,7 +107,6 @@ import {
   type ComponentInstanceData,
 } from "./field-group-utils";
 import { INSTANCE_ORDER, instanceKey } from "./instance-query";
-import { registeredComponentColumns } from "./field-group-table-provisioning";
 
 /**
  * Who a field-group write is made as, for the write rules declared on the
@@ -1182,12 +1182,7 @@ export class FieldGroupMutationService extends BaseService {
       let instanceId: string;
       if (existing.length > 0) {
         instanceId = existing[0].id;
-        const updateData = this.serializeComponentRow(
-          main,
-          componentFields,
-          tableName
-        );
-        updateData.updated_at = this.formatDateForDb();
+        const updateData = this.updatedRow(main, componentFields, tableName);
 
         await this.adapter.update(
           tableName,
@@ -1335,12 +1330,7 @@ export class FieldGroupMutationService extends BaseService {
       let instanceId: string;
       if (existing.length > 0) {
         instanceId = existing[0].id;
-        const updateData = this.serializeComponentRow(
-          main,
-          componentFields,
-          tableName
-        );
-        updateData.updated_at = this.formatDateForDb();
+        const updateData = this.updatedRow(main, componentFields, tableName);
 
         await tx.update(tableName, updateData, this.whereEq("id", instanceId), {
           returning: ["id"],
@@ -2701,6 +2691,18 @@ export class FieldGroupMutationService extends BaseService {
     );
     scope?.nested.set(componentFields, resolving);
     return resolving;
+  }
+
+  /** An existing instance's row values for an update: its fields' columns, and when it changed. */
+  private updatedRow(
+    data: ComponentInstanceData,
+    fields: FieldConfig[],
+    tableName: string
+  ): Record<string, unknown> {
+    return {
+      ...this.serializeComponentRow(data, fields, tableName),
+      updated_at: this.formatDateForDb(),
+    };
   }
 
   private serializeComponentRow(

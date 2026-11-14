@@ -660,7 +660,7 @@ function rebuiltLevel<F extends ReconcilableField>(
     out.push({
       ...field,
       fields: rebuiltLevel(inner as F[], outcomes, entered),
-    } as F);
+    });
   }
   return out;
 }

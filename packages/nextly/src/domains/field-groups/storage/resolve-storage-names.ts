@@ -183,7 +183,7 @@ export interface FieldGroupTableColumns {
  * The discriminator and the columns of each requested table, read from one catalog listing.
  * `chooseTypeColumns` is this answer narrowed to the discriminator.
  */
-export function chooseTableColumns(
+function chooseTableColumns(
   catalog: readonly TableColumns[],
   tables: readonly string[],
   rules: IdentifierCaseRules

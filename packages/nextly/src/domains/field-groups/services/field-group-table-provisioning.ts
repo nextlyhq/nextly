@@ -66,9 +66,7 @@ export function registeredComponentColumns(
       ).tableResolver?.getTable?.(tableName);
   if (!is(table, Table)) return undefined;
   return new Set(
-    Object.values(getColumns(table)).map(column =>
-      column.name.toLowerCase()
-    )
+    Object.values(getColumns(table)).map(column => column.name.toLowerCase())
   );
 }
 
