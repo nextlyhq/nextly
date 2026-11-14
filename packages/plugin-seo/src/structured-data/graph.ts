@@ -24,7 +24,9 @@ import {
 import { addressHolders } from "../address-record/participant";
 import { codePagesSlug } from "../code-pages/collection";
 import { nameOfAddress, readCodePage } from "../code-pages/store";
+import { contentDateOf } from "../content-dates/last-changed";
 import { originOf } from "../origin";
+import { singleKey } from "../problems/page-types";
 import { TITLE_FIELDS } from "../settings/patterns";
 
 import {
@@ -305,6 +307,12 @@ interface PageFacts {
   rules: StructuredDataRules;
   /** What the route says about the page, where it says anything. */
   hints: PageStructuredDataHints;
+  /**
+   * When the page's published content last changed in its language, where a
+   * date is kept (`content-dates/last-changed`): read once, and only where a
+   * date would be described from the row's own save stamp.
+   */
+  contentDate: () => Promise<string | undefined>;
 }
 
 /** A detail's value as the fact it is, or nothing where the page lacks it. */
@@ -446,7 +454,7 @@ const DETAIL_READERS: Readonly<Record<StructuredDataDetail, DetailReader>> = {
       facts.origin
     ),
   datePublished: valueRead(dateOf),
-  dateModified: valueRead(dateOf),
+  dateModified: (facts, read) => modifiedOf(facts, read),
   startDate: valueRead(dateOf),
   uploadDate: valueRead(dateOf),
   price: valueRead(numberOf),
@@ -520,12 +528,41 @@ async function detailsOf(
   return { values, missing };
 }
 
+/**
+ * Whether `field` is the row's own save stamp, which every save moves, an
+ * SEO-only one included: not a date a page's content changed.
+ */
+function isSaveStamp(field: string): boolean {
+  return field.toLowerCase().replace(/[^a-z0-9]/g, "") === "updatedat";
+}
+
+/**
+ * The date a page is described as last changed: a field that says so (a
+ * correction or review date, or the one the content type maps), else when
+ * the page's content last changed, by the rule its sitemap entry is dated
+ * by (`lastChangedOf`): its kept content date, else its own last save. So an
+ * SEO-only save, which moves the row's save stamp, moves neither.
+ */
+async function modifiedOf(
+  facts: PageFacts,
+  read: DetailRead
+): Promise<string | undefined> {
+  const stamp =
+    read.field === undefined
+      ? read.value === undefined
+      : isSaveStamp(read.field);
+  if (!stamp) return dateOf(read.value);
+  return dateOf((await facts.contentDate()) ?? read.value);
+}
+
 /** The page's own dates: when it was published, and last changed. */
-function datesOf(facts: PageFacts): { published?: string; modified?: string } {
-  const at = (detail: "datePublished" | "dateModified") =>
-    dateOf(readDetail(facts.document, detail, facts.mapping[detail]).value);
-  const published = at("datePublished");
-  const modified = at("dateModified");
+async function datesOf(
+  facts: PageFacts
+): Promise<{ published?: string; modified?: string }> {
+  const read = (detail: "datePublished" | "dateModified") =>
+    readDetail(facts.document, detail, facts.mapping[detail]);
+  const published = dateOf(read("datePublished").value);
+  const modified = await modifiedOf(facts, read("dateModified"));
   return {
     ...(published === undefined ? {} : { published }),
     ...(modified === undefined ? {} : { modified }),
@@ -1368,7 +1405,7 @@ async function graphOf(
   if (url === undefined) {
     return { ...decided, nodes: site.nodes, problems: [] };
   }
-  const { published, modified } = datesOf(facts);
+  const { published, modified } = await datesOf(facts);
   const page: DescribedPage = present({
     url,
     id: `${url}#webpage`,
@@ -1417,7 +1454,42 @@ export async function buildStructuredData(
       mapping: rule?.details?.[decided.type] ?? {},
       rules,
       hints,
+      contentDate: once(() => contentDateOfPage(ctx, input, document)),
     },
     decided
   );
+}
+
+/** `read`, asked once, its answer kept for every later ask. */
+function once<T>(read: () => Promise<T>): () => Promise<T> {
+  let answer: Promise<T> | undefined;
+  return () => (answer ??= read());
+}
+
+/**
+ * The content date of the page `input` resolved to, in its language
+ * (`contentDateOf`): an entry held under its collection, a Single under its
+ * key, as the save hooks keep their dates. None where none is kept, or the
+ * read fails: the page's head is served whatever the date read does.
+ */
+async function contentDateOfPage(
+  ctx: PluginContext,
+  input: PageMetadataInput,
+  document: Readonly<Record<string, unknown>>
+): Promise<string | undefined> {
+  const id = document.id;
+  if (typeof id !== "string" && typeof id !== "number") return undefined;
+  const { source } = input;
+  const holder = {
+    collection:
+      source.kind === "entry" ? source.collection : singleKey(source.slug),
+    id: String(id),
+  };
+  try {
+    const language =
+      input.locale ?? (await ctx.publicAddresses.defaultLanguage());
+    return await contentDateOf(ctx, holder, language);
+  } catch {
+    return undefined;
+  }
 }
