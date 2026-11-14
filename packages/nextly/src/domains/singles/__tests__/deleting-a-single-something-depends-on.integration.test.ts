@@ -4,12 +4,13 @@
  *
  * Two ways in: the Builder's dispatcher, which drops the Single's storage and
  * then its registry row, and the schema route, which removes the row. Two
- * kinds of dependent on each: a foreign key a plugin declares on its own
- * table, pointing at the Single's table, and a hidden column and index a
- * plugin added to that table. No field points at a Single, so none is asked
- * about. Each refusal names the key or the element with its owner and table,
- * and after it the Single's table, its row, its registry row and the
- * plugin's key, column, values and index are all still there.
+ * kinds of dependent on each: a foreign key the app declares on its own
+ * table, pointing at the Single's table (a plugin's key to it is refused at
+ * boot, as a plugin's migrations run before the app's, which create it), and
+ * a hidden column and index a plugin added to that table. No field points at
+ * a Single, so none is asked about. Each refusal names the key or the element
+ * with its owner and table, and after it the Single's table, its row, its
+ * registry row and the key, column, values and index are all still there.
  *
  * When the declared keys or the record of other owners' elements cannot be
  * read, the delete is refused as unreadable, never taken for one nothing
@@ -43,11 +44,11 @@ import {
 import {
   HOME,
   HOME_TABLE,
-  LINKS_PLUGIN,
+  LINKS_OWNER,
   LINKS_TABLE,
   MARKER_COLUMN,
   MARKER_PLUGIN,
-  linksPluginTo,
+  linksDb,
   markerPluginOn,
   plainHome,
 } from "../../field-groups/__tests__/helpers/used-field-group-fixtures";
@@ -153,15 +154,22 @@ async function deleteVia(
 const q = (t: TestNextly, name: string) =>
   t.adapter.dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 
-/** Boot with HOME and `plugin`, HOME holding one stored document, its row unlocked as the Builder leaves one. */
+/**
+ * Boot with HOME and `with_`'s plugin or the app's table keyed to HOME, HOME holding one stored
+ * document, its row unlocked as the Builder leaves one.
+ */
 async function boot(
   dialect: TestDialect,
-  plugin?: ReturnType<typeof linksPluginTo>
+  with_: {
+    plugin?: ReturnType<typeof markerPluginOn>;
+    db?: ReturnType<typeof linksDb>;
+  } = {}
 ): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
     singles: [plainHome],
-    plugins: plugin === undefined ? [] : [plugin],
+    plugins: with_.plugin === undefined ? [] : [with_.plugin],
+    ...(with_.db === undefined ? {} : { db: with_.db }),
   });
   const singles = current.getService(
     "singleEntryService"
@@ -199,8 +207,8 @@ const INTACT = { table: true, rows: 1, registry: 1 };
 
 describeEachDialect("deleting a Single something depends on", dialect => {
   for (const way of WAYS) {
-    it(`refuses the ${way} delete while a plugin's declared key points at its table, and keeps the key`, async () => {
-      const t = await boot(dialect, linksPluginTo(HOME_TABLE));
+    it(`refuses the ${way} delete while a declared key points at its table, and keeps the key`, async () => {
+      const t = await boot(dialect, { db: linksDb(HOME_TABLE) });
       const keys = await liveForeignKeys(t.adapter, dialect, LINKS_TABLE);
       expect(keys).toHaveLength(1);
       expect(await homeState(t)).toEqual(INTACT);
@@ -211,9 +219,7 @@ describeEachDialect("deleting a Single something depends on", dialect => {
       expect(outcome.message).toContain(
         `"${HOME}" cannot be deleted while other schema depends on it. Foreign keys that point at its tables: `
       );
-      expect(outcome.message).toContain(
-        `on "${LINKS_TABLE}" (plugin "${LINKS_PLUGIN}")`
-      );
+      expect(outcome.message).toContain(`on "${LINKS_TABLE}" (${LINKS_OWNER})`);
       // SQLite keeps no constraint names.
       if (dialect !== "sqlite") {
         expect(outcome.message).toContain(`"${keys[0].split("->")[0]}"`);
@@ -225,7 +231,7 @@ describeEachDialect("deleting a Single something depends on", dialect => {
     }, 120_000);
 
     it(`refuses the ${way} delete while a plugin's hidden column and index are on its table, and keeps them`, async () => {
-      const t = await boot(dialect, markerPluginOn(HOME_TABLE));
+      const t = await boot(dialect, { plugin: markerPluginOn(HOME_TABLE) });
       await t.adapter.update(
         HOME_TABLE,
         { [MARKER_COLUMN]: "the plugin's value" },
@@ -256,10 +262,10 @@ describeEachDialect("deleting a Single something depends on", dialect => {
 
   for (const way of WAYS) {
     it(`refuses the ${way} delete while a key no configuration declares any more points at its table, and keeps the key`, async () => {
-      const t = await boot(dialect, linksPluginTo(HOME_TABLE));
+      const t = await boot(dialect, { db: linksDb(HOME_TABLE) });
       const keys = await liveForeignKeys(t.adapter, dialect, LINKS_TABLE);
       expect(keys).toHaveLength(1);
-      // The plugin stopped declaring the key; its migration has not removed it.
+      // The app stopped declaring the key; its migration has not removed it.
       extensionSchema.undeclared = true;
 
       const outcome = await deleteVia(way, t, HOME);
