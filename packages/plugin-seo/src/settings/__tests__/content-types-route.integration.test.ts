@@ -176,6 +176,10 @@ describe.each(getConfiguredTestDialects())(
         {
           key: POSTS,
           label: "Blog posts",
+          // A collection, made in the site's code (the Content types tab
+          // groups and labels each type by these).
+          kind: "collection",
+          source: "code",
           fields: [
             { name: "slug", token: "Slug" },
             { name: "category", token: "Category" },
@@ -205,6 +209,8 @@ describe.each(getConfiguredTestDialects())(
         {
           key: CASES,
           label: "Case studies",
+          kind: "collection",
+          source: "code",
           fields: [{ name: "slug", token: "Slug" }],
           // The title and slug every collection carries come first.
           mappableFields: [
@@ -219,6 +225,11 @@ describe.each(getConfiguredTestDialects())(
         {
           key: TESTIMONIALS,
           label: "Testimonials",
+          kind: "collection",
+          source: "code",
+          // Without SEO because the plugin's options leave it out, not
+          // because it has a field of its own named `seo`.
+          reason: "left-out",
           count: 0,
           public: false,
           seo: false,
