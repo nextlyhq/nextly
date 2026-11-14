@@ -41,7 +41,7 @@ That adds an `seo` field group to each named collection:
 | `canonical`       | text             | Canonical URL (shipped by default)                         |
 | `noindex`         | checkbox         | Hide the page from search engines (shipped by default)     |
 
-Entries expose the data nested under `seo` (e.g. `entry.seo.metaTitle`). Collections you do not name are untouched. A long title or description is saved and named as a warning, since search engines cut it to fit rather than refusing it; pass `hardLengthLimits: true` to refuse a save past 60 and 160 characters instead.
+Entries expose the data nested under `seo` (e.g. `entry.seo.metaTitle`). Collections you do not name are untouched. A long title or description is saved and named as a warning, since search engines cut it to fit rather than refusing it; pass `hardLengthLimits: true` to refuse a save wider than Google shows (about 600 px of a title, 920 px of a description) instead.
 
 ### Custom fields
 

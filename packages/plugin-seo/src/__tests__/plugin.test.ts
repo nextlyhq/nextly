@@ -385,8 +385,15 @@ describe("seoPlugin", () => {
 });
 
 describe("how long a title or description may be", () => {
-  /** The `maxLength` each of a group's fields is saved with. */
-  function limits(group: unknown) {
+  /** A field's own `validate`, where it has one. */
+  type Validate = (value: unknown, args: unknown) => string | true;
+
+  /**
+   * What each of a group's fields answers for `value`, by name: `true`, a
+   * refusal, or `"no rule"` where the field has no `validate` of its own.
+   * A `maxLength` is reported too, since a character cap is a rule as well.
+   */
+  function verdicts(group: unknown, value: string) {
     const fields: readonly unknown[] =
       typeof group === "object" &&
       group !== null &&
@@ -401,37 +408,56 @@ describe("how long a title or description may be", () => {
             typeof field === "object" && field !== null
         )
         .filter(field => "name" in field)
-        .map(field => [field.name, (field as { maxLength?: number }).maxLength])
+        .map(field => {
+          const own = field as { validate?: Validate; maxLength?: number };
+          if (own.maxLength !== undefined) {
+            return [field.name, `maxLength ${own.maxLength}`];
+          }
+          return [
+            field.name,
+            own.validate === undefined
+              ? "no rule"
+              : own.validate(value, { data: {}, req: {} }),
+          ];
+        })
     );
   }
 
-  it("saves a title or description of any length by default", () => {
+  it("saves a title or description of any width by default", () => {
     // Google cuts a long title by width rather than refusing it, so the
-    // length is a warning in the SEO tab and the problem list.
+    // width is a warning in the SEO tab and the problem list.
     const group = seoGroup(seoPlugin({ collections: ["pages"] }));
     for (const read of [
-      limits(group),
-      limits({ fields: defaultSeoFields() }),
+      verdicts(group, "W".repeat(80)),
+      verdicts({ fields: defaultSeoFields() }, "W".repeat(80)),
     ]) {
-      expect(read).toHaveProperty("metaTitle", undefined);
-      expect(read).toHaveProperty("metaDescription", undefined);
+      expect(read).toHaveProperty("metaTitle", "no rule");
+      expect(read).toHaveProperty("metaDescription", "no rule");
     }
   });
 
-  it("refuses a longer one where the site asks for hard limits", () => {
-    const group = seoGroup(
-      seoPlugin({ collections: ["pages"], hardLengthLimits: true })
-    );
-    expect(limits(group)).toMatchObject({
-      metaTitle: 60,
-      metaDescription: 160,
-    });
-    expect(
-      limits({ fields: defaultSeoFields({ hardLengthLimits: true }) })
-    ).toMatchObject({
-      metaTitle: 60,
-      metaDescription: 160,
-    });
+  it("refuses one wider than Google shows where the site asks for hard limits, by width not characters", () => {
+    for (const group of [
+      seoGroup(seoPlugin({ collections: ["pages"], hardLengthLimits: true })),
+      { fields: defaultSeoFields({ hardLengthLimits: true }) },
+    ]) {
+      // 40 wide capitals: short of 60 characters, 755 px as a title.
+      expect(verdicts(group, "W".repeat(40))).toMatchObject({
+        metaTitle:
+          "Google shows about 600 px of a title, and this one is 755 px (40 characters). Shorten it, or put what matters first.",
+        metaDescription: true,
+      });
+      // 80 narrow letters: past 60 characters, 355 px, so both fit.
+      expect(verdicts(group, "i".repeat(80))).toMatchObject({
+        metaTitle: true,
+        metaDescription: true,
+      });
+      // 70 wide capitals are 925 px as a description, past its 920.
+      expect(verdicts(group, "W".repeat(70))).toMatchObject({
+        metaDescription:
+          "Google shows about 920 px of a description, and this one is 925 px (70 characters). Shorten it, or put what matters first.",
+      });
+    }
   });
 });
 

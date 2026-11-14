@@ -233,12 +233,13 @@ export interface SeoPluginOptions {
    */
   fields?: FieldConfig[];
   /**
-   * Refuse a save of a title longer than 60 characters or a description
-   * longer than 160, the lengths Google shows about as much of. Off by
-   * default: search engines cut a longer one to fit rather than refusing it,
-   * so a long value is saved and named as a warning in the SEO tab and the
-   * problem list. Applies to the default fields; a site passing its own
-   * `fields` sets `maxLength` on them itself.
+   * Refuse a save of a title or description wider than Google shows of it:
+   * about 600 px of a title and 920 px of a description, measured in the
+   * font Google draws them in, the measure the SEO tab and the problem list
+   * warn by. Off by default: search engines cut a wider one to fit rather
+   * than refusing it, so it is saved and named as a warning in the SEO tab
+   * and the problem list. Applies to the default fields; a site passing its
+   * own `fields` sets its own `validate` or `maxLength` on them.
    */
   hardLengthLimits?: boolean;
   /**

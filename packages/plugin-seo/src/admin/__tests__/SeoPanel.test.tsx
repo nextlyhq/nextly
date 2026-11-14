@@ -298,16 +298,37 @@ describe("typing in a field", () => {
     expect(screen.queryByText("Typed for this page")).toBeNull();
   });
 
-  it("says above the fields when a title is longer than Google shows", async () => {
+  it("says above the fields when a title is wider than Google shows", async () => {
     const user = userEvent.setup();
     render(<Harness />);
     expect(
       screen.queryByText("The title is longer than Google shows.")
     ).toBeNull();
-    await user.type(titleField(), "x".repeat(61));
+    // 80 narrow letters fit Google's 600 px, though past 60 characters.
+    await user.type(titleField(), "i".repeat(80));
+    expect(
+      screen.queryByText("The title is longer than Google shows.")
+    ).toBeNull();
+    // 40 wide capitals do not, though short of 60.
+    await user.clear(titleField());
+    await user.type(titleField(), "W".repeat(40));
     expect(
       screen.getByText("The title is longer than Google shows.")
     ).toBeVisible();
+  });
+
+  it("shows how wide the title in use draws, against what Google shows", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    // The automatic title is measured while nothing is typed.
+    const meter = screen.getByTestId("seo-width-title");
+    expect(meter).toHaveTextContent("Fits · 532 of 600 px · 58 characters");
+    expect(meter).toHaveAttribute("data-fits", "true");
+    await user.type(titleField(), "W".repeat(40));
+    expect(meter).toHaveTextContent(
+      "Google cuts it · 755 of 600 px · 40 characters"
+    );
+    expect(meter).toHaveAttribute("data-fits", "false");
   });
 
   it("shows the shared card with the same title until a different one is set", async () => {
