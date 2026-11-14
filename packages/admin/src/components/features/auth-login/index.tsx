@@ -28,7 +28,7 @@ import {
   FormMessage,
 } from "@admin/components/ui/form";
 import { Link } from "@admin/components/ui/link";
-import { PUBLIC_ROUTE_PATHS, ROUTES } from "@admin/constants/routes";
+import { ROUTES } from "@admin/constants/routes";
 import { useAppName } from "@admin/context/providers/BrandingProvider";
 import { useApi } from "@admin/hooks/useApi";
 import { useAuthRefusal } from "@admin/hooks/useAuthRefusal";
@@ -37,6 +37,7 @@ import { useRegistrationOpen } from "@admin/hooks/useSetupStatus";
 import { getCsrfToken } from "@admin/lib/api/csrf";
 import { apiErrorMessage, type ApiError } from "@admin/lib/api/parseApiError";
 import type { ActionResponse } from "@admin/lib/api/response-types";
+import { landingAfterSignIn } from "@admin/lib/auth/return-address";
 import { rememberSignedInHere } from "@admin/lib/device-memory/device-memory";
 
 import {
@@ -78,20 +79,6 @@ function hasPreFormUi(authUi: ReturnType<typeof useAuthUi>): boolean {
 }
 
 type SignInValues = z.infer<typeof formSchema>;
-
-/**
- * Where a finished sign-in lands. Drawn at the sign-in page (or another public
- * page), the dashboard; drawn in place of a screen the visitor asked for, that
- * screen, reloaded now that there is a session. Either way an address on this
- * page's own origin, never one taken from the query string.
- */
-function afterSignInAddress(): string {
-  const { pathname, search } = window.location;
-  const onPublicPage = (PUBLIC_ROUTE_PATHS as readonly string[]).includes(
-    pathname.replace(/\/$/, "")
-  );
-  return onPublicPage ? ROUTES.DASHBOARD : `${pathname}${search}`;
-}
 
 /**
  * What the form says while the server has not answered yet: nothing for the
@@ -327,7 +314,7 @@ export function Login(): JSX.Element {
       // Client-side navigation triggers Radix UI re-renders which cause
       // useInsertionEffect errors, which trigger React Fast Refresh in dev,
       // which remounts PublicRoute, creating an infinite loop.
-      window.location.href = afterSignInAddress();
+      window.location.href = landingAfterSignIn();
     } catch (error: unknown) {
       // Its own answers first: an unverified email is a 403 too, and this form
       // meets it with a resend action rather than a refusal.
@@ -409,9 +396,10 @@ export function Login(): JSX.Element {
           // Absent for the resumed case, where the token is in the cookie.
           pendingToken={challengeFlow.passwordChange.pendingToken}
           // The server's own destination when it has one: the sanitized
-          // `next` the pending token carried. Otherwise the dashboard.
+          // `next` the pending token carried. Otherwise the page's own
+          // landing (`landingAfterSignIn`).
           onDone={next => {
-            window.location.href = next ?? afterSignInAddress();
+            window.location.href = landingAfterSignIn(next);
           }}
           // The pending token is spent, so the step it stood for is over.
           // Clearing it brings the sign-in form back, which is the only
@@ -441,7 +429,7 @@ export function Login(): JSX.Element {
               // the view's own value cannot be that, and navigating on it
               // replaced the destination with the dashboard.
               if (challengeFlow.hasNavigated()) return;
-              window.location.href = next ?? afterSignInAddress();
+              window.location.href = landingAfterSignIn(next);
             }}
           />
         </>

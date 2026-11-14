@@ -706,7 +706,6 @@ describe("refresh handler: respondData shape", () => {
         expiresAt: new Date(Date.now() + 60_000),
       }),
       deleteRefreshToken: vi.fn().mockResolvedValue(undefined),
-      deleteAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
       findUserById: vi.fn().mockResolvedValue({
         id: "u1",
         email: "a@example.com",
@@ -762,7 +761,6 @@ describe("refresh handler: respondData shape", () => {
         expiresAt: new Date(Date.now() + 60_000),
       }),
       deleteRefreshToken,
-      deleteAllRefreshTokensForUser: vi.fn().mockResolvedValue(undefined),
       withSessionRowTransaction: rows.withSessionRowTransaction,
       findUserById: vi.fn().mockRejectedValue(new Error("connection lost")),
       fetchSessionRoles: vi
