@@ -58,14 +58,15 @@ async function openCalendar(page: Page): Promise<void> {
  * The month heading above the grid: the heading the grid is named by. Not
  * every level-two heading: the page also heads its strip of stopped and
  * overdue releases with one, drawn whenever the database holds such a
- * release, which other specs' releases leave in it.
+ * release, which other specs' releases leave in it. Held to the visible
+ * heading, since a hidden copy of the page kept mounted carries the same id.
  */
 async function monthHeading(page: Page): Promise<Locator> {
   const named = await page.getByRole("grid").getAttribute("aria-labelledby");
   expect(named, "the grid is named by its month heading").toBeTruthy();
   return page
     .getByRole("heading", { level: 2 })
-    .and(page.locator(`[id="${named}"]`));
+    .and(page.locator(`[id="${named}"]:visible`));
 }
 
 const DAY_MS = 86_400_000;
