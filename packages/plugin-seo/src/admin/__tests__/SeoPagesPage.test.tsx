@@ -317,6 +317,30 @@ describe("the list", () => {
     expect(rowOf("Pricing").getByText("Not connected")).toBeTruthy();
   });
 
+  it("shows how many pages link to each page and it links to", () => {
+    vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
+      data:
+        args.path === "/problems"
+          ? {
+              ...PROBLEMS,
+              checked: [
+                { type: "pages", id: "8", links: { inbound: 4, outbound: 2 } },
+              ],
+            }
+          : { items: listed },
+      pending: false,
+      error: null,
+      refetch: () => {},
+      fetching: false,
+    })) as unknown as typeof usePluginRoute);
+    render(<SeoPagesPage />);
+    expect(table().getByRole("columnheader", { name: "Links" })).toBeTruthy();
+    expect(rowOf("Blog").getByText("4 in · 2 out")).toBeTruthy();
+    // A page built in code, and one not counted, show no counts.
+    expect(rowOf("Pricing").queryByText(/ in · /)).toBeNull();
+    expect(rowOf("Home").queryByText(/ in · /)).toBeNull();
+  });
+
   it("finds a page by part of its address or name", async () => {
     render(<SeoPagesPage />);
     fireEvent.change(screen.getByPlaceholderText("Search pages"), {

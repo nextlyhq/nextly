@@ -59,6 +59,7 @@ import type { PageEdits } from "./pages-edit";
 import { PagesEditor } from "./pages-editor";
 import {
   entryHref,
+  linksText,
   problemsByPage,
   shownPages,
   statusOf,
@@ -252,6 +253,7 @@ export function SeoPagesPage(): JSX.Element {
             filter.status !== "all"
           }
           statusFor={item => statusOf(item, pages.byPage)}
+          linksFor={item => linksText(item, pages.byPage)}
         />
       ) : (
         <PagesEditor
@@ -407,6 +409,7 @@ function PagesList({
   failure,
   filtered,
   statusFor,
+  linksFor,
 }: {
   shown: SiteAddress[];
   search: ListSearch;
@@ -415,13 +418,17 @@ function PagesList({
   failure: string | null;
   filtered: boolean;
   statusFor: (item: SiteAddress) => PageStatus;
+  linksFor: (item: SiteAddress) => string;
 }): JSX.Element {
   const [open, setOpen] = useState<SiteAddress | null>(null);
   // Closes the panel of `path`, and only it: a save that finishes after
   // another page's panel was opened leaves that one open.
   const openNow = useRef(open);
   openNow.current = open;
-  const columns = useMemo(() => pageColumns(statusFor), [statusFor]);
+  const columns = useMemo(
+    () => pageColumns(statusFor, linksFor),
+    [statusFor, linksFor]
+  );
   const host =
     shown
       .map(item => {
@@ -480,9 +487,13 @@ function PagesList({
   );
 }
 
-/** The list's columns: the page, its title and description, its status. */
+/**
+ * The list's columns: the page, its title and description, how many pages
+ * link to it and it links to, and its status.
+ */
 function pageColumns(
-  statusFor: (item: SiteAddress) => PageStatus
+  statusFor: (item: SiteAddress) => PageStatus,
+  linksFor: (item: SiteAddress) => string
 ): NextlyColumn<SiteAddress>[] {
   return [
     {
@@ -535,6 +546,17 @@ function pageColumns(
           title={row.description}
         >
           {row.description ?? "—"}
+        </span>
+      ),
+    },
+    {
+      name: "links",
+      header: "Links",
+      hideOnMobile: true,
+      width: 120,
+      cell: ({ row }) => (
+        <span className="whitespace-nowrap tabular-nums text-muted-foreground">
+          {linksFor(row)}
         </span>
       ),
     },

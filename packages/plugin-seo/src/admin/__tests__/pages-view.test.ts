@@ -10,6 +10,7 @@ import type { Problem, ProblemKind } from "../../problems/contract";
 import {
   developerNote,
   entryHref,
+  linksText,
   problemsByPage,
   shownPages,
   STATUS_ORDER,
@@ -106,6 +107,32 @@ describe("each page's status", () => {
     expect(status(0)).toBe("good");
     expect(status(3)).toBe("not-connected");
     expect(status(4)).toBe("hidden");
+  });
+
+  it("writes how many pages link in and out, from the counts the list gives a checked page", () => {
+    const byPage = problemsByPage(
+      [],
+      [
+        {
+          type: "single:home",
+          id: "1",
+          links: { inbound: 0, outbound: 12 },
+        },
+        {
+          type: "posts",
+          id: "7",
+          locale: "de",
+          links: { inbound: 3, outbound: 1 },
+        },
+      ]
+    );
+    expect(linksText(ITEMS[0] as SiteAddress, byPage)).toBe("0 in · 12 out");
+    expect(linksText(ITEMS[2] as SiteAddress, byPage)).toBe("3 in · 1 out");
+    // Not checked in the site's language, so nothing to count yet.
+    expect(linksText(ITEMS[1] as SiteAddress, byPage)).toBe("—");
+    // A page built in code holds no content the check reads.
+    expect(linksText(ITEMS[3] as SiteAddress, byPage)).toBe("—");
+    expect(linksText(ITEMS[0] as SiteAddress, undefined)).toBe("—");
   });
 
   it("is unknown for every page until the problem list has been read", () => {

@@ -44,6 +44,7 @@ export type ProblemKind =
   | "longDescription"
   | "canonical"
   | "brokenLink"
+  | "orphanPage"
   | "shareImage"
   | "imageAlt"
   | "structuredData";
@@ -158,6 +159,12 @@ export const KIND_TEXT: Readonly<
     explain: "A link on your site points to a page that doesn't exist.",
     siteWide: false,
   },
+  orphanPage: {
+    title: "Page no other page links to",
+    explain:
+      "Search engines and visitors find pages by following links, so a page nothing links to is found only through the sitemap. Link to it from a related page. Links in your site's code, such as its menu and footer, aren't seen by this check.",
+    siteWide: false,
+  },
   shareImage: {
     title: "Share image missing or the wrong size",
     explain:
@@ -210,6 +217,7 @@ export const KIND_SEVERITY: Readonly<Record<ProblemKind, ProblemSeverity>> = {
   notListed: "warning",
   dropDatePassed: "warning",
   brokenLink: "warning",
+  orphanPage: "notice",
   noDescription: "warning",
   sharedTitle: "warning",
   sharedDescription: "warning",
@@ -280,6 +288,7 @@ export const KIND_ORDER: readonly ProblemKind[] = [
   "brokenLink",
   "noDescription",
   "sharedDescription",
+  "orphanPage",
   "longTitle",
   "longDescription",
   "shareImage",
@@ -440,6 +449,11 @@ export interface CheckedPage {
   type: string;
   id: string;
   locale?: string;
+  /**
+   * How many other pages' content links to it, and how many pages it links
+   * to; absent until a check has read its links.
+   */
+  links?: { inbound: number; outbound: number };
 }
 
 /** What the list's routes answer. */

@@ -233,9 +233,11 @@ describe.each(getConfiguredTestDialects())(
       const [first] = await until(t, checkedSince(id));
 
       let list = await problemList(ctx, CHECKS, everything);
+      // No other page links to it yet either.
       expect(kindsOf(list.problems, id)).toEqual([
         "brokenLink",
         "noDescription",
+        "orphanPage",
         "longTitle",
         "shareImage",
         "imageAlt",
@@ -264,7 +266,61 @@ describe.each(getConfiguredTestDialects())(
       await until(t, checkedSince(id, String(first?.checkedAt)));
 
       list = await problemList(ctx, CHECKS, everything);
-      expect(kindsOf(list.problems, id)).toEqual(["shareImage"]);
+      // It links to Boats now; nothing links to it.
+      expect(kindsOf(list.problems, id)).toEqual(["orphanPage", "shareImage"]);
+    });
+
+    it("counts the pages linking to each page and it links to, and lists a listed page no other page links to", async () => {
+      const { t, ctx } = await boot(dialect);
+      const boats = await publish(t, {
+        title: "Boats",
+        slug: "boats",
+        excerpt: "Every boat in the harbour.",
+      });
+      const harbour = await publish(t, {
+        title: "Harbour",
+        slug: "harbour",
+        excerpt: "A walk along the harbour.",
+        // Two links to one page, one to itself and one outside the site:
+        // one page out.
+        body: {
+          root: {
+            type: "root",
+            version: 1,
+            children: [
+              {
+                type: "paragraph",
+                version: 1,
+                children: [
+                  "/blog/boats",
+                  "/blog/boats",
+                  "/blog/harbour",
+                  "https://elsewhere.com/x",
+                ].map(url => ({
+                  type: "link",
+                  url,
+                  version: 1,
+                  children: [{ type: "text", text: "read", version: 1 }],
+                })),
+              },
+            ],
+          },
+        },
+      });
+      await until(t, checkedSince(boats));
+      await until(t, checkedSince(harbour));
+
+      const list = await problemList(ctx, CHECKS, everything);
+      const counts = (id: string) =>
+        list.checked?.find(page => page.id === id)?.links;
+      expect(counts(boats)).toEqual({ inbound: 1, outbound: 0 });
+      expect(counts(harbour)).toEqual({ inbound: 0, outbound: 1 });
+      expect(kindsOf(list.problems, harbour)).toContain("orphanPage");
+      expect(kindsOf(list.problems, boats)).not.toContain("orphanPage");
+      expect(list.problems.find(p => p.kind === "orphanPage")).toMatchObject({
+        subject: { type: "posts", id: harbour, detail: "/blog/harbour" },
+        what: "No other page links here",
+      });
     });
 
     it("lists no problem of a type whose SEO is switched off, and lists it again once on", async () => {
@@ -351,11 +407,13 @@ describe.each(getConfiguredTestDialects())(
       expect(kindsOf(list.problems, a)).not.toContain("sharedTitle");
       // The pages checked for them: theirs, not the one left out, whose
       // missing problems say nothing about it.
-      expect(list.checked).toEqual([{ type: "posts", id: a }]);
+      expect(list.checked).toEqual([
+        { type: "posts", id: a, links: { inbound: 0, outbound: 0 } },
+      ]);
       expect((await problemList(ctx, CHECKS, everything)).checked).toEqual(
         expect.arrayContaining([
-          { type: "posts", id: a },
-          { type: "posts", id: b },
+          expect.objectContaining({ type: "posts", id: a }),
+          expect.objectContaining({ type: "posts", id: b }),
         ])
       );
     });

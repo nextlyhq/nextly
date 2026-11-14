@@ -69,7 +69,8 @@ import {
   type ProblemListBody,
 } from "./contract";
 import { datesCheckScope, datesTodayProblems } from "./dates-check";
-import { addressShapes, brokenLinks } from "./links";
+import { linkCounts, linkedPageKey, orphanProblems } from "./link-graph";
+import { addressShapes, readLinks } from "./links";
 import { canonicalIsOwn, pageProblems } from "./page-checks";
 import { pageTypeOf, singleKey } from "./page-types";
 import {
@@ -325,28 +326,29 @@ interface Version {
 
 /**
  * The address the version is served at, where it holds its own address in
- * its language: none for a draft there, which holds no address, for one
+ * its language, with the path it is kept at in the record (`/` for its
+ * language's home): none for a draft there, which holds no address, for one
  * that lost its address to another page, and for a type with no address.
  */
 async function servedAddress(
   ctx: PluginContext,
   version: Version,
   entry: Readonly<Record<string, unknown>>
-): Promise<string | undefined> {
+): Promise<{ address: string; path: string } | undefined> {
   const type = pageTypeOf(version.type);
   const own = await publicAddressOf(type, entry, version.locale);
   if (own.status !== "resolved" || !version.held.has(own.path)) {
     return undefined;
   }
-  return (
+  const address =
     (await addressOf(
       ctx,
       { type, key: version.type },
       entry,
       version.locale,
       undefined
-    )) ?? own.path
-  );
+    )) ?? own.path;
+  return { address, path: own.path };
 }
 
 /**
@@ -390,8 +392,9 @@ async function examine(
 ): Promise<PageRow | undefined> {
   const { type, id, locale } = version;
   if (entry === undefined) return undefined;
-  const ownAddress = await servedAddress(ctx, version, entry);
-  if (ownAddress === undefined) return undefined;
+  const served = await servedAddress(ctx, version, entry);
+  if (served === undefined) return undefined;
+  const ownAddress = served.address;
 
   const { readers } = checks;
   const input = await inputOf(ctx, type, entry, locale, version.code);
@@ -399,6 +402,19 @@ async function examine(
   const rules = await readers.readRules(ctx, locale);
   const productionAddresses = productionAddressesOf(rules.productionAddresses);
   const content = contentFacts(entry);
+  // One read of the page's links: the pages they reach, for the site's link
+  // counts, and the ones leading nowhere, for the broken-link check.
+  const links = await readLinks(content.links, {
+    shapes: addressShapes(ctx.config.collections ?? []),
+    productionAddresses,
+    // A language served on its own domain links from there.
+    ...(originOf(ownAddress) === undefined
+      ? {}
+      : { origin: originOf(ownAddress) }),
+    // Read by the same rule a visitor's request is, as the Proxy reads it.
+    keptOf: url => addressOfRequest(url),
+    holders: (path, locale) => addressHolders(ctx, path, locale),
+  });
   const subject = {
     type,
     id,
@@ -429,18 +445,7 @@ async function examine(
         answer.canonical?.value
       )
     ).problems,
-    brokenLinks: await brokenLinks(content.links, {
-      shapes: addressShapes(ctx.config.collections ?? []),
-      productionAddresses,
-      // A language served on its own domain links from there.
-      ...(originOf(ownAddress) === undefined
-        ? {}
-        : { origin: originOf(ownAddress) }),
-      // Read by the same rule a visitor's request is, as the Proxy reads it.
-      keptOf: url => addressOfRequest(url),
-      isHeld: async (path, locale) =>
-        (await addressHolders(ctx, path, locale)).length > 0,
-    }),
+    brokenLinks: links.broken,
   });
   // A page kept out of search shares its title with no page in results, so
   // it is left out of the comparison.
@@ -455,20 +460,24 @@ async function examine(
       ? {}
       : { description: answer.description.value }),
     problems,
+    links: { to: links.to, listed, home: served.path === "/" },
     checkedAt: new Date().toISOString(),
   };
 }
 
 /**
  * Whether a page's new check can alter another page's result: it appeared,
- * or its address, title or description changed.
+ * or its address, title, description or links changed.
  */
 function altersOthers(before: PageRow | undefined, row: PageRow): boolean {
   return (
     before === undefined ||
     before.subject.detail !== row.subject.detail ||
     before.title !== row.title ||
-    before.description !== row.description
+    before.description !== row.description ||
+    // The pages it links to are counted on theirs, and may stop being, or
+    // become, orphans.
+    JSON.stringify(before.links) !== JSON.stringify(row.links)
   );
 }
 
@@ -1106,19 +1115,29 @@ export async function problemList(
     ...found,
     ...pages.flatMap(row => row.problems),
     ...sharedValueProblems(pages),
+    // Every page's links count, the ones the reader may not open too; only
+    // the pages they may read are named.
+    ...orphanProblems(rows, pages),
   ]).sort(byKind);
   const checkedAt = site.checkedAt;
   const age = checkedAt === undefined ? Infinity : now - Date.parse(checkedAt);
   const defaultLanguage = await ctx.publicAddresses.defaultLanguage();
+  const counts = linkCounts(rows);
   return {
     problems,
     // Each version of a page the reader may read that a check read, named
-    // as its problems name it: a language only where not the default.
-    checked: pages.map(({ subject, locale }) => ({
-      type: subject.type,
-      id: subject.id,
-      ...(locale === defaultLanguage || locale === "" ? {} : { locale }),
-    })),
+    // as its problems name it: a language only where not the default, with
+    // how many other pages link to it and it links to, where its links
+    // were read.
+    checked: pages.map(({ subject, locale }) => {
+      const links = counts.get(linkedPageKey(subject.type, subject.id, locale));
+      return {
+        type: subject.type,
+        id: subject.id,
+        ...(locale === defaultLanguage || locale === "" ? {} : { locale }),
+        ...(links === undefined ? {} : { links }),
+      };
+    }),
     ...(host === undefined ? {} : { site: host }),
     ...(checkedAt === undefined ? {} : { checkedAt }),
     pagesChecked: site.pagesChecked,

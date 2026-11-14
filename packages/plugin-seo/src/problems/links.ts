@@ -1,7 +1,9 @@
 /**
- * Which links in a page lead nowhere: those to an address a content type
- * serves (`/blog/{slug}`) that no page holds, read from the site's record of
- * who holds each address.
+ * What a page's links reach: the pages holding each address they name, read
+ * from the site's record of who holds each address, and which links lead
+ * nowhere, those to an address a content type serves (`/blog/{slug}`) that
+ * no page holds. One read gives both, so the link counts and the broken-link
+ * check never read a page's links differently.
  *
  * Only addresses under a content type's own prefix are judged. A type served
  * from the root (`/{slug}`) shares every address with the pages a site
@@ -14,6 +16,7 @@ import { originOf } from "../origin";
 import { isRecord } from "../plain-values";
 import { pathOf } from "../redirects/addresses";
 
+import { linkedPageKey } from "./link-graph";
 import type { LinkFact } from "./page-checks";
 
 /** The addresses one content type serves. */
@@ -80,8 +83,22 @@ export interface LinkJudge {
    * language serves it.
    */
   keptOf: (url: URL) => Promise<{ locale: string; path: string } | undefined>;
-  /** Whether a page holds `path` in `locale`. */
-  isHeld: (path: string, locale: string) => Promise<boolean>;
+  /** The pages holding `path` in `locale`: none for an address no page holds. */
+  holders: (
+    path: string,
+    locale: string
+  ) => Promise<readonly { collection: string; id: string }[]>;
+}
+
+/** What a page's links reach. */
+export interface LinkReading {
+  /** The links to an address a content type serves that no page holds. */
+  broken: LinkFact[];
+  /**
+   * The pages the links reach, each once, by `linkedPageKey` with the
+   * language its address is served in, in the order first linked.
+   */
+  to: string[];
 }
 
 /** The origin a path from the root is read on where the site names none. */
@@ -108,16 +125,21 @@ function requestOf(
 }
 
 /**
- * The links in `links` to an address a content type serves that no page
- * holds in the language the address is served in. Each address is asked
- * about once in each language, however many links name it.
+ * What `links` reach: each page holding an address they name on the site,
+ * and the links to an address a content type serves that no page holds in
+ * the language the address is served in. Each address is asked about once
+ * in each language, however many links name it.
  */
-export async function brokenLinks(
+export async function readLinks(
   links: readonly LinkFact[],
   judge: LinkJudge
-): Promise<LinkFact[]> {
-  const answers = new Map<string, Promise<boolean>>();
+): Promise<LinkReading> {
+  const answers = new Map<
+    string,
+    Promise<readonly { collection: string; id: string }[]>
+  >();
   const broken: LinkFact[] = [];
+  const to = new Set<string>();
   for (const link of links) {
     const request = requestOf(
       link.url,
@@ -128,14 +150,26 @@ export async function brokenLinks(
       request === undefined ? undefined : await judge.keptOf(request);
     if (kept === undefined) continue;
     const path = pathOf(kept.path);
-    if (!judge.shapes.some(shape => shape.pattern.test(path))) continue;
     const key = `${kept.locale}\u0000${path}`;
     let held = answers.get(key);
     if (held === undefined) {
-      held = judge.isHeld(path, kept.locale);
+      held = judge.holders(path, kept.locale);
       answers.set(key, held);
     }
-    if (!(await held)) broken.push(link);
+    const holders = await held;
+    for (const holder of holders) {
+      to.add(linkedPageKey(holder.collection, holder.id, kept.locale));
+    }
+    if (holders.length > 0) continue;
+    if (judge.shapes.some(shape => shape.pattern.test(path))) broken.push(link);
   }
-  return broken;
+  return { broken, to: [...to] };
+}
+
+/** The links in `links` that lead nowhere, as {@link readLinks} reads them. */
+export async function brokenLinks(
+  links: readonly LinkFact[],
+  judge: LinkJudge
+): Promise<LinkFact[]> {
+  return (await readLinks(links, judge)).broken;
 }
