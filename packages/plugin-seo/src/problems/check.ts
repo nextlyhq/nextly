@@ -383,6 +383,46 @@ function nameOf(ctx: PluginContext, type: string, id: string): string {
   return pageType.kind === "single" ? singleLabel(ctx, pageType.slug) : id;
 }
 
+/** How many redirects one link is followed through to reach a page. */
+const MAX_REDIRECT_HOPS = 5;
+
+/**
+ * The pages `holders` lead to: each page as it is, and each redirect
+ * followed to the page holding its To address, through at most
+ * {@link MAX_REDIRECT_HOPS}, so a link to a page's old address counts for
+ * the page. A redirect for an address gone for good, or to another site,
+ * leads to no page.
+ */
+async function pagesBehind(
+  ctx: PluginContext,
+  holders: readonly { collection: string; id: string }[],
+  locale: string,
+  hops = 0
+): Promise<{ collection: string; id: string }[]> {
+  const redirects = redirectsSlug(ctx);
+  const pages: { collection: string; id: string }[] = [];
+  for (const holder of holders) {
+    if (holder.collection !== redirects) {
+      pages.push(holder);
+      continue;
+    }
+    if (hops >= MAX_REDIRECT_HOPS) continue;
+    const { data } = await ctx.services.ownCollections.listEntries(redirects, {
+      where: { id: { equals: holder.id } },
+      pagination: { limit: 1, page: 1 },
+      depth: 0,
+    });
+    const [entry] = data as unknown[];
+    if (entry === undefined) continue;
+    const redirect = redirectOf(entry);
+    if (redirect.gone || !redirect.target.startsWith("/")) continue;
+    const language = redirect.locale === "" ? locale : redirect.locale;
+    const next = await addressHolders(ctx, pathOf(redirect.target), language);
+    pages.push(...(await pagesBehind(ctx, next, language, hops + 1)));
+  }
+  return pages;
+}
+
 /** What the check of one language of a page found, before it is kept. */
 async function examine(
   ctx: PluginContext,
@@ -414,6 +454,7 @@ async function examine(
     // Read by the same rule a visitor's request is, as the Proxy reads it.
     keptOf: url => addressOfRequest(url),
     holders: (path, locale) => addressHolders(ctx, path, locale),
+    pagesOf: (holders, locale) => pagesBehind(ctx, holders, locale),
   });
   const subject = {
     type,
@@ -1117,7 +1158,7 @@ export async function problemList(
     ...sharedValueProblems(pages),
     // Every page's links count, the ones the reader may not open too; only
     // the pages they may read are named.
-    ...orphanProblems(rows, pages),
+    ...orphanProblems(rows, pages, await ctx.publicAddresses.defaultLanguage()),
   ]).sort(byKind);
   const checkedAt = site.checkedAt;
   const age = checkedAt === undefined ? Infinity : now - Date.parse(checkedAt);

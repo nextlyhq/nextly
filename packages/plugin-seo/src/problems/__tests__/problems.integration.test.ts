@@ -323,6 +323,38 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("counts a link to a page's old address, which a redirect holds, for the page", async () => {
+      const { t, ctx } = await boot(dialect);
+      const boats = await publish(t, {
+        title: "Boats",
+        slug: "boats",
+        excerpt: "Every boat in the harbour.",
+      });
+      await until(t, checkedSince(boats));
+      // A published page's new address leaves a redirect from its old one.
+      await t.nextly.update({
+        collection: "posts",
+        id: boats,
+        data: { slug: "boats-of-the-harbour", _overwrite: true },
+      });
+      const harbour = await publish(t, {
+        title: "Harbour",
+        slug: "harbour",
+        excerpt: "A walk along the harbour.",
+        body: body("/blog/boats", "A chart of the tides"),
+      });
+      await until(t, checkedSince(harbour));
+
+      const list = await problemList(ctx, CHECKS, everything);
+      const counts = (id: string) =>
+        list.checked?.find(page => page.id === id)?.links;
+      expect(counts(harbour)).toEqual({ inbound: 0, outbound: 1 });
+      expect(counts(boats)).toEqual({ inbound: 1, outbound: 0 });
+      expect(kindsOf(list.problems, boats)).not.toContain("orphanPage");
+      // Held by the redirect, so the link is not broken either.
+      expect(kindsOf(list.problems, harbour)).not.toContain("brokenLink");
+    });
+
     it("lists no problem of a type whose SEO is switched off, and lists it again once on", async () => {
       const { t, ctx } = await boot(dialect);
       const id = await publish(t, { title: "Harbour", slug: "harbour" });

@@ -126,6 +126,14 @@ describe("orphan pages", () => {
     expect(problems).toEqual([]);
   });
 
+  it("names an orphan in another language with that language, as the list opens its editor in", () => {
+    const german: LinkedPage = { ...page("a", []), locale: "de" };
+    const [problem] = orphanProblems([german, page("b", [])], undefined, "en");
+    expect(problem?.subject).toMatchObject({ id: "a", locale: "de" });
+    const [english] = orphanProblems([page("b", [])], undefined, "en");
+    expect(english?.subject).not.toHaveProperty("locale");
+  });
+
   it("counts links from every page but names only the pages asked about", () => {
     const all = [page("a", ["b"]), page("b", []), page("c", [])];
     const named = orphanProblems(

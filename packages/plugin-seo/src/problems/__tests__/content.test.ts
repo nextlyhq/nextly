@@ -181,6 +181,23 @@ describe("readLinks", () => {
     ]);
     expect(read.broken).toEqual([]);
   });
+
+  it("counts a link to an address a redirect holds for the page the redirect sends people to", async () => {
+    const redirect = { collection: "nx_seo_redirects", id: "r1" };
+    const read = await readLinks([{ field: "body", url: "/blog/old" }], {
+      shapes: addressShapes([{ slug: "posts", publicAddress: "/blog/{slug}" }]),
+      productionAddresses: [],
+      keptOf: async url => ({ locale: "en", path: url.pathname }),
+      holders: async path => (path === "/blog/old" ? [redirect] : []),
+      pagesOf: async holders =>
+        holders.flatMap(each =>
+          each.id === "r1" ? [{ collection: "posts", id: "p1" }] : [each]
+        ),
+    });
+    expect(read.to).toEqual([linkedPageKey("posts", "p1", "en")]);
+    // Held by the redirect, so not broken.
+    expect(read.broken).toEqual([]);
+  });
 });
 
 describe("brokenLinks", () => {

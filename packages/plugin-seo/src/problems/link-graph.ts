@@ -91,13 +91,15 @@ export function linkCounts(
 
 /**
  * The listed pages of `named` that no other page links to, counted over
- * every page in `pages`: a page the reader may not open still links. Never
+ * every page in `pages`: a page the reader may not open still links. Each
+ * is named in its language where that is not `defaultLanguage`. Never
  * the home page, a page kept out of search, or a page whose links were not
  * read.
  */
 export function orphanProblems(
   pages: readonly LinkedPage[],
-  named: readonly LinkedPage[] = pages
+  named: readonly LinkedPage[] = pages,
+  defaultLanguage?: string
 ): Problem[] {
   const counts = linkCounts(pages);
   return named.flatMap(page => {
@@ -108,7 +110,14 @@ export function orphanProblems(
     return [
       {
         kind: "orphanPage" as const,
-        subject,
+        // Named in its language where not the default, as every page's
+        // problems are, so its fix opens the editor in that language.
+        subject:
+          defaultLanguage === undefined ||
+          page.locale === "" ||
+          page.locale === defaultLanguage
+            ? subject
+            : { ...subject, locale: page.locale },
         what: "No other page links here",
         action: "Open the page",
         fix: { place: "page" as const, tab: "content" as const },

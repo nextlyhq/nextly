@@ -83,9 +83,17 @@ export interface LinkJudge {
    * language serves it.
    */
   keptOf: (url: URL) => Promise<{ locale: string; path: string } | undefined>;
-  /** The pages holding `path` in `locale`: none for an address no page holds. */
+  /** What holds `path` in `locale`: none for an address nothing holds. */
   holders: (
     path: string,
+    locale: string
+  ) => Promise<readonly { collection: string; id: string }[]>;
+  /**
+   * The pages `holders` lead to: a redirect holding an address followed to
+   * the page it sends people to. Each holder as it is where not given.
+   */
+  pagesOf?: (
+    holders: readonly { collection: string; id: string }[],
     locale: string
   ) => Promise<readonly { collection: string; id: string }[]>;
 }
@@ -157,9 +165,13 @@ export async function readLinks(
       answers.set(key, held);
     }
     const holders = await held;
-    for (const holder of holders) {
-      to.add(linkedPageKey(holder.collection, holder.id, kept.locale));
+    const pages = judge.pagesOf
+      ? await judge.pagesOf(holders, kept.locale)
+      : holders;
+    for (const page of pages) {
+      to.add(linkedPageKey(page.collection, page.id, kept.locale));
     }
+    // Held, by a page or a redirect sending people on, is not broken.
     if (holders.length > 0) continue;
     if (judge.shapes.some(shape => shape.pattern.test(path))) broken.push(link);
   }
