@@ -101,11 +101,15 @@ describe.each(getConfiguredTestDialects())(
       await boot(dialect);
 
       const german = await ask("https://acme.de/ueber.md");
-      expect(german.body).toBe("# Über uns\n");
+      // Front matter naming the page at its own domain, then its words.
+      expect(german.body).toMatch(
+        /^---\n[\s\S]*\nurl: https:\/\/acme\.de\/ueber\n/
+      );
+      expect(german.body.endsWith("---\n\n# Über uns\n")).toBe(true);
       expect(german.link).toBe('<https://acme.de/ueber>; rel="canonical"');
 
       const english = await ask(`${SITE}/about.md`);
-      expect(english.body).toBe("# About us\n");
+      expect(english.body.endsWith("---\n\n# About us\n")).toBe(true);
       expect(english.link).toBe(`<${SITE}/about>; rel="canonical"`);
     });
   }

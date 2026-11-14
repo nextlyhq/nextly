@@ -460,14 +460,19 @@ describe.each(getConfiguredTestDialects())(
     it("serves a copy at its own address as a cacheable file kept out of search, pointing to llms.txt", async () => {
       const t = await boot(dialect);
       await post(t, "hello", "published");
-      await switches(t, { plainTextCopies: true });
+      // Production, so the staging guard's noindex is not the one seen.
+      await switches(t, { plainTextCopies: true, productionAddresses: [SITE] });
       expect(await servedWith("/blog/hello.md")).toEqual({
         vary: "Accept",
         cache: "public, max-age=300",
         robots: "noindex",
       });
 
-      await switches(t, { plainTextCopies: true, llmsTxt: true });
+      await switches(t, {
+        plainTextCopies: true,
+        llmsTxt: true,
+        productionAddresses: [SITE],
+      });
       expect((await ask("/blog/hello.md")).link).toBe(
         `<${SITE}/blog/hello>; rel="canonical", <${SITE}/llms.txt>; rel="describedby"; type="text/plain"`
       );
@@ -477,7 +482,8 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       await post(t, "hello", "published");
       await post(t, "unfinished", "draft");
-      await switches(t, { plainTextCopies: true });
+      // Production, so the staging guard's noindex is not the one seen.
+      await switches(t, { plainTextCopies: true, productionAddresses: [SITE] });
       const agent = "text/markdown, text/html, */*";
 
       const copy = await ask("/blog/hello.md");
