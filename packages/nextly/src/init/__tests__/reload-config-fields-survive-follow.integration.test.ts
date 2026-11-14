@@ -152,15 +152,10 @@ describe.each(getConfiguredTestDialects())(
         slug: SLUG,
         data: { title: "Banner", subtitle: "Added", _overwrite: true },
       } as never);
-      // The reload put the notice's moved table in place, so its new column takes a value now.
       await handle.nextly.updateSingle({
         slug: NOTICE,
-        data: { headline: "Notice", note: "Pending", _overwrite: true },
+        data: { headline: "Notice", _overwrite: true },
       } as never);
-      const before = (await handle.nextly.findSingle({ slug: NOTICE })) as {
-        note?: unknown;
-      };
-      expect(before.note).toBe("Pending");
 
       await followAnotherCopy(handle, dialect);
 
@@ -176,7 +171,9 @@ describe.each(getConfiguredTestDialects())(
         note?: unknown;
       };
       expect(notice_.headline).toBe("Notice");
-      expect(notice_.note).toBeUndefined();
+      // Its table has the column the apply added, so a definition that named the field would read
+      // it, empty; the definition it kept does not name it.
+      expect(Object.keys(notice_)).not.toContain("note");
     }, 120_000);
   }
 );
