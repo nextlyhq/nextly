@@ -192,6 +192,10 @@ import {
 } from "./promote-gate";
 import { runSingleAfterUpdateHooks } from "./single-after-update";
 import {
+  runSingleStatusMoveBeforeHooks,
+  type SingleBeforeHookCall,
+} from "./single-before-update";
+import {
   checkSingleAccess,
   getSingleHookCollection,
   singleGrantRefusal,
@@ -413,6 +417,11 @@ export class SinglePublishAllService extends BaseService {
       holder: {},
     };
 
+    // One context and one account of the request for every hook of the
+    // publish, before and after it, as a save shares them between its phases.
+    const sharedContext: Record<string, unknown> = { ...options.context };
+    const requestFacts = resolveRequestFacts(options.request);
+
     try {
       stale.check = versionCheckFor(
         { ...options.data },
@@ -423,6 +432,19 @@ export class SinglePublishAllService extends BaseService {
       const resolved = await this.resolvePublishTarget(slug, options);
       if ("result" in resolved) return resolved.result;
       const plan = resolved.plan;
+      const hookCall: SingleBeforeHookCall = {
+        slug,
+        id: plan.existingDoc.id,
+        // Compared against as a save's hooks compare: in its read shape.
+        originalData:
+          this.queryService?.deserializeJsonFields(
+            plan.existingDoc,
+            plan.fieldConfigs
+          ) ?? plan.existingDoc,
+        user: options.user,
+        context: sharedContext,
+        req: requestFacts,
+      };
       translationsTable = plan.companion?.companionTableName;
       // Every language this moves is judged, so the version must name each
       // one: asked before any work only a publish needs.
@@ -445,6 +467,18 @@ export class SinglePublishAllService extends BaseService {
         askedLanguages
       );
       if (denied) return denied;
+
+      // The hooks a status change of one language runs before it writes, run
+      // once for the publish of every language: after the caller is known to
+      // be allowed to make it, and before anything is written, so a site's
+      // rule refuses this as it refuses a save. Run outside the transaction,
+      // as a save runs them: the transaction may re-run on a version
+      // conflict, and a hook's effects outside it could not be withdrawn.
+      await runSingleStatusMoveBeforeHooks(
+        this.hookRegistry,
+        hookCall,
+        "published"
+      );
 
       // Resolved here because the gate that uses them runs inside the write
       // transaction, and resolving grants queries the pooled connection that
@@ -505,7 +539,7 @@ export class SinglePublishAllService extends BaseService {
       const hookDocuments = outcome.hookDocuments;
       if (hookDocuments !== undefined) {
         await this.afterCommit(() =>
-          this.runUpdateHooks(slug, options, hookDocuments)
+          this.runUpdateHooks(hookCall, hookDocuments)
         );
       }
 
@@ -556,8 +590,7 @@ export class SinglePublishAllService extends BaseService {
    * publish answers with its languages, not the document.
    */
   private async runUpdateHooks(
-    slug: string,
-    options: PublishAllSingleLocalesOptions,
+    call: SingleBeforeHookCall,
     documents: {
       data: Record<string, unknown>;
       previous: Record<string, unknown>;
@@ -565,21 +598,21 @@ export class SinglePublishAllService extends BaseService {
   ): Promise<void> {
     await runFieldHooks({
       kind: "single",
-      slug,
+      slug: call.slug,
       phase: "afterChange",
       data: documents.data,
       operation: "update",
-      user: options.user,
+      user: call.user,
     });
     if (this.hookRegistry === undefined) return;
     await runSingleAfterUpdateHooks(this.hookRegistry, {
-      slug,
+      slug: call.slug,
       data: documents.data,
       originalData: documents.previous,
-      user: options.user,
-      // Shared by every hook of the publish; only these run.
-      context: { ...options.context },
-      req: resolveRequestFacts(options.request),
+      user: call.user,
+      // The context the publish's before hooks shared.
+      context: call.context,
+      req: call.req,
     });
   }
 
