@@ -154,6 +154,15 @@ function openTab(name: string | RegExp): void {
   fireEvent.click(screen.getByRole("link", { name }));
 }
 
+/** Opens a content type's row on the Content types tab: rows start closed. */
+function openType(label: string): void {
+  fireEvent.click(
+    within(screen.getByRole("group", { name: label })).getByRole("button", {
+      name: new RegExp(label),
+    })
+  );
+}
+
 /** Whether the tab named `name` is the one shown. */
 function isOpen(name: string | RegExp): boolean {
   return (
@@ -547,6 +556,7 @@ describe("a content type's title pattern", () => {
     serving(SET_UP);
     window.history.replaceState(null, "", `${SETTINGS}?tab=types`);
     render(<SeoSettingsPage />);
+    openType("Blog posts");
 
     expect(screen.queryByRole("dialog")).toBeNull();
     const input = screen.getByLabelText(
@@ -581,6 +591,7 @@ describe("a content type's title pattern", () => {
     serving(SET_UP);
     window.history.replaceState(null, "", `${SETTINGS}?tab=types`);
     render(<SeoSettingsPage />);
+    openType("Blog posts");
 
     fireEvent.change(screen.getByLabelText("Title pattern for Blog posts"), {
       target: { value: "{Title} by {Author}" },
@@ -603,6 +614,7 @@ describe("a content type's title pattern", () => {
     serving({ ...SET_UP, patterns: { posts: { title: "{Title}" } } });
     window.history.replaceState(null, "", `${SETTINGS}?tab=types`);
     render(<SeoSettingsPage />);
+    openType("Blog posts");
 
     fireEvent.click(screen.getByRole("button", { name: "Reset to default" }));
 
@@ -923,6 +935,7 @@ describe("the content types tab", () => {
   it("hides a whole type from search", async () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);
+    openType("Blog posts");
 
     fireEvent.click(
       screen.getByRole("switch", { name: "Hide all Blog posts from search" })
@@ -937,13 +950,16 @@ describe("the content types tab", () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);
 
-    const without = screen.getByRole("group", { name: "Without SEO" });
-    expect(within(without).getByText("Testimonials")).toBeTruthy();
+    const without = screen.getByRole("group", { name: "Testimonials" });
     expect(
       within(without).getByText("40 entries · No public pages")
     ).toBeTruthy();
-    // A type served at its own address without SEO says so.
-    expect(within(without).getByText("Public, without SEO")).toBeTruthy();
+    expect(
+      within(without).getByText("Left out in the site's code")
+    ).toBeTruthy();
+    expect(
+      within(without).queryByRole("switch", { name: "SEO for Testimonials" })
+    ).toBeNull();
     expect(
       screen.queryByRole("switch", {
         name: "Hide all Testimonials from search",
@@ -966,12 +982,20 @@ describe("the content types tab", () => {
     });
     try {
       render(<SeoSettingsPage />);
+      openType("Case studies");
       expect(
         screen
           .getByRole("switch", { name: "Hide all Case studies from search" })
           .getAttribute("aria-checked")
       ).toBe("true");
+      // The chip says so on the closed row too.
+      expect(
+        within(screen.getByRole("group", { name: "Case studies" })).getByText(
+          "Hidden from search"
+        )
+      ).toBeTruthy();
 
+      openType("Blog posts");
       fireEvent.click(
         screen.getByRole("switch", { name: "Hide all Blog posts from search" })
       );
@@ -996,6 +1020,7 @@ describe("the content types tab", () => {
     });
     try {
       render(<SeoSettingsPage />);
+      openType("Blog posts");
       expect(chosen("Structured data for Blog posts")).toBe("Article");
       expect(screen.getByText("· all set")).toBeTruthy();
       expect(
@@ -1018,6 +1043,7 @@ describe("the content types tab", () => {
   it("says beside Questions and answers that Google no longer shows it, and names only the type once chosen", async () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);
+    openType("Blog posts");
     const user = userEvent.setup();
     await user.click(
       screen.getByRole("combobox", { name: "Structured data for Blog posts" })
@@ -1046,6 +1072,7 @@ describe("the content types tab", () => {
   it("offers the details a type may use as well as those it needs, counting only the needed as missing", async () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);
+    openType("Blog posts");
     await choose("Structured data for Blog posts", "Product");
     // The price is found by its name; nothing holds the availability.
     expect(screen.getByText("· 1 missing")).toBeTruthy();
@@ -1061,6 +1088,7 @@ describe("the content types tab", () => {
   it("keeps the open details on the type chosen when the type changes", async () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);
+    openType("Blog posts");
     await choose("Structured data for Blog posts", "Article");
     fireEvent.click(screen.getByRole("button", { name: "Map details" }));
     expect(
@@ -1102,6 +1130,7 @@ describe("the content types tab", () => {
         }) as ReturnType<typeof usePluginRoute>
     );
     render(<SeoSettingsPage />);
+    openType("Blog posts");
     await choose("Structured data for Blog posts", "Article");
     fireEvent.click(screen.getByRole("button", { name: "Map details" }));
     expect(chosen("Field that holds author")).toBe("Author");
@@ -1136,6 +1165,7 @@ describe("the content types tab", () => {
   it("chooses a type's structured data, maps the details it lacks, and saves both", async () => {
     serving(SET_UP);
     render(<SeoSettingsPage />);
+    openType("Blog posts");
 
     await choose("Structured data for Blog posts", "Article");
     // The date is found by its field's name, and the image is the page's
@@ -1178,6 +1208,7 @@ describe("what review asked of the tabs", () => {
     serving({ _rev: "5", setupStep: 3 });
     window.history.replaceState(null, "", `${SETTINGS}?tab=types`);
     render(<SeoSettingsPage />);
+    openType("Blog posts");
     await choose("Structured data for Blog posts", "Software app");
     expect(screen.getByRole("button", { name: "Map details" })).toBeTruthy();
   });
@@ -1202,10 +1233,9 @@ describe("what review asked of the tabs", () => {
     );
     window.history.replaceState(null, "", `${SETTINGS}?tab=types`);
     render(<SeoSettingsPage />);
-    expect(screen.getByText(/No content type has SEO yet/)).toBeTruthy();
     expect(
-      within(screen.getByRole("group", { name: "Without SEO" })).getByText(
-        "Events"
+      within(screen.getByRole("group", { name: "Events" })).getByText(
+        "Left out in the site's code"
       )
     ).toBeTruthy();
   });

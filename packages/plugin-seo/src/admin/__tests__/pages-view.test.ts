@@ -12,6 +12,8 @@ import {
   entryHref,
   problemsByPage,
   shownPages,
+  STATUS_ORDER,
+  STATUS_TEXT,
   statusOf,
   titleSourceText,
   typeChoices,
@@ -127,6 +129,23 @@ describe("each page's status", () => {
     expect(statusOf(ITEMS[1] as SiteAddress, byPage)).toBe("unknown");
     // A page built in code isn't checked per page either way.
     expect(statusOf(ITEMS[3] as SiteAddress, byPage)).toBe("not-connected");
+  });
+
+  it("is SEO off for a page of a type whose SEO is switched off, before any problem list is read", () => {
+    const off: SiteAddress = {
+      path: "/authors/mobeen",
+      name: "Mobeen",
+      source: "entry",
+      from: "Authors",
+      standing: "seo-off",
+      sources: {},
+      entry: { kind: "collection", slug: "authors", id: "9" },
+    };
+    expect(statusOf(off, undefined)).toBe("seo-off");
+    // The problem list never checks such a page, and says nothing of it.
+    expect(statusOf(off, problemsByPage([], []))).toBe("seo-off");
+    expect(STATUS_TEXT["seo-off"]).toBe("SEO off");
+    expect(STATUS_ORDER).toContain("seo-off");
   });
 
   it("names a Single by its type key", () => {

@@ -80,12 +80,17 @@ describe("the content types route", () => {
 
 describe("the settings document route", () => {
   /** What the route answers, its body as the screen reads it. */
-  async function answer(): Promise<{
+  async function answer(
+    can: (action: string, resource: string) => Promise<boolean> = async () =>
+      true
+  ): Promise<{
     single?: string;
     serverAddresses?: unknown;
+    canChange?: unknown;
   }> {
     const ctx = {
       ...context(),
+      caller: { can },
       self: { singles: { "seo-settings": "site-seo" } },
     } as unknown as PluginRouteContext;
     const response = await settingsDocumentRoute().handler(
@@ -98,6 +103,7 @@ describe("the settings document route", () => {
     return (json.data ?? json) as {
       single?: string;
       serverAddresses?: unknown;
+      canChange?: unknown;
     };
   }
 
@@ -110,6 +116,7 @@ describe("the settings document route", () => {
       expect(await answer()).toEqual({
         single: "site-seo",
         serverAddresses: ["https://example.com", "https://de.example.com"],
+        canChange: true,
       });
     } finally {
       vi.unstubAllEnvs();
@@ -123,5 +130,146 @@ describe("the settings document route", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("says whether the reader may change the settings, asked of the Single the host registered", async () => {
+    const asked: string[] = [];
+    const body = await answer(async (action, resource) => {
+      asked.push(`${action} ${resource}`);
+      // Site-wide SEO and the Single's read, but not its update.
+      return action !== "update";
+    });
+    expect(body.canChange).toBe(false);
+    expect(asked).toContain("update site-seo");
+  });
+});
+
+/** A collection as core lists it. */
+interface Listed {
+  slug: string;
+  source: string;
+  label?: string;
+  fields?: unknown[];
+}
+
+/**
+ * A context for someone holding site-wide SEO on a site whose collections
+ * `listed` and Singles `singles` are as given.
+ */
+function siteContext(
+  listed: Listed[],
+  singles: { slug: string; label: string; source: string }[] = []
+): PluginRouteContext {
+  return {
+    user: { id: "u1" },
+    caller: { can: async () => true },
+    services: {
+      collections: {
+        getCollection: async (slug: string) => {
+          const found = listed.find(each => each.slug === slug);
+          return {
+            slug,
+            source: found?.source,
+            labels: { plural: found?.label ?? slug },
+            fields: found?.fields ?? [{ name: "title", type: "text" }],
+          };
+        },
+        listCollections: async () => ({
+          data: listed.map(each => ({
+            slug: each.slug,
+            source: each.source,
+            labels: { plural: each.label ?? each.slug },
+            fields: each.fields ?? [{ name: "title", type: "text" }],
+          })),
+          pagination: { total: listed.length, hasMore: false },
+        }),
+        listEntries: async () => ({
+          data: [{ title: "A" }],
+          pagination: { total: 3, limit: 1, offset: 0, hasMore: false },
+        }),
+      },
+      singles: {
+        list: async () => ({
+          data: singles.map(each => ({
+            ...each,
+            fields: [{ name: "title", type: "text" }],
+          })),
+        }),
+      },
+    },
+  } as unknown as PluginRouteContext;
+}
+
+async function listedBy(
+  types: { collections: string[]; singles?: string[] },
+  ctx: PluginRouteContext
+): Promise<Record<string, unknown>[]> {
+  const response = await contentTypesRoute({
+    singles: [],
+    ...types,
+  }).handler(new Request("http://x/"), ctx);
+  const body = (await (response as Response).json()) as {
+    items: Record<string, unknown>[];
+  };
+  return body.items;
+}
+
+describe("the content types route, for the Content types tab", () => {
+  it("says where each type was made, in code or in the Schema Builder", async () => {
+    const items = await listedBy(
+      { collections: ["posts", "products"] },
+      siteContext([
+        { slug: "posts", source: "code" },
+        { slug: "products", source: "ui" },
+      ])
+    );
+    expect(
+      items.map(({ key, kind, source }) => ({ key, kind, source }))
+    ).toEqual([
+      { key: "posts", kind: "collection", source: "code" },
+      { key: "products", kind: "collection", source: "builder" },
+    ]);
+  });
+
+  it("lists each Single with SEO by its key, after the collections", async () => {
+    const items = await listedBy(
+      { collections: ["posts"], singles: ["home"] },
+      siteContext(
+        [{ slug: "posts", source: "code" }],
+        [{ slug: "home", label: "Home page", source: "ui" }]
+      )
+    );
+    expect(items[1]).toMatchObject({
+      key: "single:home",
+      kind: "single",
+      label: "Home page",
+      source: "builder",
+    });
+  });
+
+  it("says why a site's own type has no SEO: left out in code, or its own seo field", async () => {
+    const items = await listedBy(
+      { collections: ["posts"] },
+      siteContext([
+        { slug: "posts", source: "code" },
+        {
+          slug: "landing",
+          source: "code",
+          label: "Landing pages",
+          fields: [
+            { name: "title", type: "text" },
+            { name: "seo", type: "group", fields: [] },
+          ],
+        },
+        { slug: "docs-old", source: "ui", label: "Docs (old)" },
+      ])
+    );
+    const without = items.filter(item => item.seo === false);
+    expect(
+      without.map(({ key, reason, source }) => ({ key, reason, source }))
+    ).toEqual([
+      { key: "landing", reason: "own-seo", source: "code" },
+      { key: "docs-old", reason: "left-out", source: "builder" },
+    ]);
   });
 });

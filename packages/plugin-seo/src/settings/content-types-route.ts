@@ -20,6 +20,7 @@ import {
 import { originsFrom, PRODUCTION_ADDRESSES_ENV } from "../canonical";
 import { siteWide } from "../permissions";
 import { isRecord, textOf } from "../plain-values";
+import { singleKey } from "../problems/page-types";
 
 import {
   CONTENT_TYPES_ROUTE_PATH,
@@ -29,6 +30,7 @@ import {
   type MappableField,
   type PatternExample,
   type PatternField,
+  type ContentTypeSource,
   type ListedContentType,
   type SeoContentType,
   type SwitchedOffType,
@@ -120,6 +122,20 @@ function labelOf(slug: string, meta: Record<string, unknown>): string {
   );
 }
 
+/** Where core says a type was made, in the screen's words. */
+function sourceOf(
+  record: Record<string, unknown>
+): ContentTypeSource | undefined {
+  if (record.source === "code") return "code";
+  if (record.source === "ui") return "builder";
+  return undefined;
+}
+
+/** Whether a type declares its own top-level field named `seo`. */
+function hasOwnSeoField(fields: unknown): boolean {
+  return entryFields(fields).some(field => field.name === "seo");
+}
+
 /** What the person asking may read of a type: its newest entry and how many there are. */
 interface ReadableEntries {
   newest?: Record<string, unknown>;
@@ -192,15 +208,56 @@ async function contentTypeOf(
       if (address.status === "resolved") example.address = address.path;
     }
   }
+  const source = sourceOf(record);
   return {
     key: slug,
     label: labelOf(slug, record),
+    kind: "collection",
+    ...(source === undefined ? {} : { source }),
     fields,
     mappableFields,
     ...(example === undefined ? {} : { example }),
     ...(count === undefined ? {} : { count }),
     public: isPublic,
   };
+}
+
+/**
+ * One Single with SEO as the screen lists it, from `listed` (core's list of
+ * the site's Singles): its variables and fields, and where it was made. Its
+ * page is its own, so it has no example and no count.
+ */
+function singleTypeOf(
+  slug: string,
+  listed: readonly Record<string, unknown>[],
+  withoutAddress: ReadonlySet<string>
+): SeoContentType {
+  const record = listed.find(each => each.slug === slug) ?? {};
+  const declared = entryFields(record.fields);
+  const source = sourceOf(record);
+  return {
+    key: singleKey(slug),
+    label: textOf(record.label) ?? slug,
+    kind: "single",
+    ...(source === undefined ? {} : { source }),
+    fields: patternFields(
+      declared.map(field => ({
+        name: typeof field.name === "string" ? field.name : undefined,
+        type: typeof field.type === "string" ? field.type : "",
+        label: field.label,
+      }))
+    ),
+    mappableFields: mappableFieldsOf(declared),
+    public: !withoutAddress.has(singleKey(slug)),
+  };
+}
+
+/** Core's list of the site's Singles, as plain records. */
+async function listedSingles(
+  ctx: PluginRouteContext
+): Promise<Record<string, unknown>[]> {
+  const { data } = await ctx.services.singles.list({ limit: 500 });
+  return (data as unknown[]).filter(isRecord);
 }
 
 /**
@@ -252,9 +309,15 @@ async function switchedOff(
       );
       batch.forEach(({ slug, row }, index) => {
         const count = counts[index]?.count;
+        const source = sourceOf(row);
         found.push({
           key: slug,
           label: labelOf(slug, row),
+          kind: "collection",
+          ...(source === undefined ? {} : { source }),
+          // A type with its own `seo` field is left as it is by every-type
+          // SEO; any other the site's code left out.
+          reason: hasOwnSeoField(row.fields) ? "own-seo" : "left-out",
           ...(count === undefined ? {} : { count }),
           public: !withoutAddress.has(slug),
           seo: false,
@@ -271,6 +334,7 @@ async function switchedOff(
  */
 export function contentTypesRoute(types: {
   readonly collections: readonly string[];
+  readonly singles?: readonly string[];
 }): PluginRoute {
   return siteWide({
     method: "GET",
@@ -279,10 +343,16 @@ export function contentTypesRoute(types: {
     // Single's read, and site-wide SEO.
     requiredPermission: ({ single }) => single(SEO_SETTINGS_SLUG, "read"),
     handler: async (_req, ctx) => {
+      const unaddressed = await typesWithoutAddress();
       const withoutAddress = new Set(
-        (await typesWithoutAddress())
+        unaddressed
           .filter(type => type.kind === "collection")
           .map(type => type.slug)
+      );
+      const singlesWithoutAddress = new Set(
+        unaddressed
+          .filter(type => type.kind === "single")
+          .map(type => singleKey(type.slug))
       );
       // Read on each request: where SEO is on every type, the start says
       // which types have it.
@@ -290,6 +360,13 @@ export function contentTypesRoute(types: {
       const items: ListedContentType[] = [];
       for (const slug of collections) {
         items.push(await contentTypeOf(ctx, slug, withoutAddress));
+      }
+      const singles = types.singles ?? [];
+      if (singles.length > 0) {
+        const listed = await listedSingles(ctx);
+        for (const slug of singles) {
+          items.push(singleTypeOf(slug, listed, singlesWithoutAddress));
+        }
       }
       items.push(
         ...(await switchedOff(ctx, new Set(collections), withoutAddress))
@@ -315,14 +392,17 @@ export function settingsDocumentRoute(): PluginRoute {
     method: "GET",
     path: SETTINGS_DOCUMENT_ROUTE_PATH,
     requiredPermission: ({ single }) => single(SEO_SETTINGS_SLUG, "read"),
-    handler: (_req, ctx) => {
+    handler: async (_req, ctx) => {
+      const single = ctx.self.singles[SEO_SETTINGS_SLUG] ?? SEO_SETTINGS_SLUG;
       const body: SettingsDocumentBody = {
-        single: ctx.self.singles[SEO_SETTINGS_SLUG] ?? SEO_SETTINGS_SLUG,
+        single,
         // Read on every request, as the canonical rule and the staging guard
         // read it, so the screen says what the server serves.
         serverAddresses: originsFrom(process.env[PRODUCTION_ADDRESSES_ENV]),
+        canChange:
+          ctx.caller !== null && (await ctx.caller.can("update", single)),
       };
-      return Promise.resolve(respondDoc(body));
+      return respondDoc(body);
     },
   });
 }

@@ -80,7 +80,17 @@ added by name with `include` (experimental): `seoPlugin({ include: ["listings"] 
 ### Switching SEO off for one type
 
 The SEO settings' **Content types** tab has a switch for each type that has SEO, on by default.
-Only someone who may change the SEO settings (`manage-seo`) can change it.
+Only someone who may change the SEO settings (`manage-seo`) can change it; anyone else sees the
+switches and cannot move them.
+
+The tab lists collections and Singles in two groups, each type with where it was made (in code
+or in the Schema Builder), its entry count and an example address. A row opens to the type's
+title pattern, its Hide from search and its structured data, one row at a time. Past ten types,
+a search box and an All, SEO on, SEO off filter appear. A switch moved says what Save will do
+before anything is saved, and the bar under the tab names each switch waiting ("1 change: SEO off
+for Authors"). A site's own type without SEO sits greyed at the end of its group with the reason:
+left out in the site's code, or holding its own field named `seo`, which Nextly never writes
+over and whose values **Import** can copy into Nextly's SEO.
 
 Switching a type off changes no schema and deletes nothing. While it is off:
 
