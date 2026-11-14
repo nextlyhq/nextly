@@ -17,22 +17,49 @@
  */
 
 /**
- * `read`'s answer, or a rejection with what `late` returns once `ms` pass
- * without one.
+ * The longest delay a timer holds: Node fires a longer one (an unbounded
+ * box, `Infinity`) after 1 ms instead, which would take the time as spent.
  */
-export function withinTime<T>(
+const LONGEST_TIMER_MS = 2_147_483_647;
+
+/** What a read held to a time box answers when the time ran out first. */
+export const TIMED_OUT: unique symbol = Symbol("timed out");
+
+/**
+ * `read`'s answer, or {@link TIMED_OUT} once `ms` have passed first: the one
+ * race every bounded read here runs. The timer is cleared whichever wins, so
+ * none outlives the answer, and a read that fails after losing has its
+ * failure taken by the race, never left unhandled.
+ */
+export async function within<T>(
+  read: Promise<T>,
+  ms: number
+): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<typeof TIMED_OUT>(resolve => {
+    const delay = Math.min(Math.max(0, ms), LONGEST_TIMER_MS);
+    timer = setTimeout(() => resolve(TIMED_OUT), delay);
+  });
+  try {
+    return await Promise.race([read, expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * `read`'s answer, or a rejection with what `late` returns once `ms` pass
+ * without one: {@link within}, with running out of time made a failure.
+ */
+export async function withinTime<T>(
   read: Promise<T>,
   ms: number,
   late: () => Error
 ): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      // The caller's own refusal, so it is told apart from a failed read.
-      reject(late());
-    }, ms);
-  });
-  return Promise.race([read, expired]).finally(() => clearTimeout(timer));
+  const answer = await within(read, ms);
+  // The caller's own refusal, so it is told apart from a failed read.
+  if (answer === TIMED_OUT) throw late();
+  return answer;
 }
 
 /** Why a bounded read was refused: it ran out of time, or it failed. */
