@@ -2018,7 +2018,7 @@ async function publishStoredRecordingPolicies(
  * entirely for code-first tables - the DB is still the source of
  * truth for UI-created tables via `loadDynamicTables`.
  */
-async function registerConfigTablesQuietly(
+export async function registerConfigTablesQuietly(
   schemaRegistry: SchemaRegistry | undefined,
   transformedConfig: NextlyServiceConfig,
   adapter: DrizzleAdapter,
