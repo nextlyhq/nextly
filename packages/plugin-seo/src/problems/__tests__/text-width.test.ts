@@ -48,6 +48,26 @@ describe("textWidth", () => {
     expect(textFit("title", decomposed).fits).toBe(true);
   });
 
+  it("measures a keycap and a flag as one em each, as any emoji", () => {
+    expect(textWidth("1\uFE0F\u20E3", 20)).toBe(20);
+    expect(textWidth("#\uFE0F\u20E3".repeat(40), 20)).toBe(800);
+    expect(textFit("title", "1\uFE0F\u20E3".repeat(40)).fits).toBe(false);
+    expect(textWidth("\u{1F1F3}\u{1F1F1}", 20)).toBe(20);
+  });
+
+  it("measures whitespace as it is drawn: a run of spaces or a line break is one space, none at the ends", () => {
+    const words = Array.from({ length: 60 }, () => "W");
+    const spaced = words.join(" ");
+    expect(textWidth(words.join("\n"), 14)).toBe(textWidth(spaced, 14));
+    expect(textWidth(words.join("   "), 14)).toBe(textWidth(spaced, 14));
+    expect(textWidth(`  ${spaced}\n`, 14)).toBe(textWidth(spaced, 14));
+    // The preview cuts what is drawn, so a fitting value with odd spacing
+    // is shown whole, its spacing as drawn.
+    expect(cutToFit("title", "Harbour   walk\n| Example")).toBe(
+      "Harbour walk | Example"
+    );
+  });
+
   it("measures an emoji, however it is joined, and a Chinese character as one em", () => {
     expect(textWidth("😀", 20)).toBe(20);
     // A family emoji is three pictures joined into what draws as one.

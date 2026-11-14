@@ -99,8 +99,20 @@ const OTHER_LETTER = 1139;
 const WHOLE_EM =
   /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}　-〿！-｠]/u;
 
-/** A picture character: an emoji draws one em wide, however it is joined. */
-const PICTURE = /\p{Extended_Pictographic}/u;
+/**
+ * A picture: an emoji draws one em wide, however it is joined. A keycap
+ * (`1️⃣`, a digit and the enclosing keycap mark) and a flag (two regional
+ * indicators) are emoji whose parts are not pictographs themselves.
+ */
+const PICTURE = /\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20E3/u;
+
+/**
+ * `text` as a results page draws it: a run of spaces, tabs or line breaks
+ * as one space, and none at either end, as HTML lays out text.
+ */
+function drawn(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
 
 /** Characters that take no width of their own: accents, joiners, selectors. */
 const NO_WIDTH = /[\p{M}\p{Cf}︀-️]/u;
@@ -142,7 +154,7 @@ function graphemeUnits(grapheme: string): number {
 
 /** How wide `text` draws in Arial at `fontSize` pixels, unrounded. */
 export function textWidth(text: string, fontSize: number): number {
-  const units = graphemes(text).reduce(
+  const units = graphemes(drawn(text)).reduce(
     (sum, grapheme) => sum + graphemeUnits(grapheme),
     0
   );
@@ -199,18 +211,20 @@ export function fitSummary(fit: TextFit): string {
 }
 
 /**
- * `text` as Google shows it as a result's `kind`: whole where it fits, else
- * cut at the last word that fits with " …" after it.
+ * `text` as Google shows it as a result's `kind`, its spacing as drawn:
+ * whole where it fits, else cut at the last word that fits with " …" after
+ * it.
  */
 export function cutToFit(kind: SearchText, text: string): string {
   // Whole where the fit says it fits, the one decision the width bar and the
   // problem list make, so the preview never cuts a value they call fitting.
-  if (textFit(kind, text).fits) return text;
+  const shown = drawn(text);
+  if (textFit(kind, shown).fits) return shown;
   const { fontSize, width } = SEARCH_TEXT[kind];
   const room = width - textWidth(" …", fontSize);
   let kept = "";
   let used = 0;
-  for (const grapheme of graphemes(text)) {
+  for (const grapheme of graphemes(shown)) {
     const next = used + (graphemeUnits(grapheme) / UNITS_PER_EM) * fontSize;
     if (next > room) break;
     kept += grapheme;
