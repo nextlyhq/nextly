@@ -584,8 +584,9 @@ export default defineConfig({
       // suite runs through pnpm rather than turbo. The admin speed check is
       // the same: `node e2e/admin-speed/measure.mjs` sets its port and its
       // preload's statement log and delay for the server it starts, and no
-      // turbo task runs it.
-      files: ["e2e/multi-instance/**", "e2e/admin-speed/**"],
+      // turbo task runs it. The SEO site and its driver are the same: the
+      // driver sets the fixture's flags for the processes it starts.
+      files: ["e2e/multi-instance/**", "e2e/admin-speed/**", "e2e/seo-site/**"],
       rules: { "turbo/no-undeclared-env-vars": "off" },
     },
     {
