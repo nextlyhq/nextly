@@ -344,6 +344,100 @@ describe("each read held to the time box", () => {
     expect(clear.value).toEqual([]);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  /** A lookup of the caller's titles that never answers. */
+  const stalledNamer = {
+    firstReadable: () => new Promise<string | undefined>(() => undefined),
+  };
+
+  it("refuses an unread page within the naming box, counting it, when naming it stalls", async () => {
+    vi.useFakeTimers();
+    const pages = pagesOf([[page("p2"), "fails"]]);
+    const reasons = settledOf(
+      uncoveredReasons([{ id: "t-spare", name: "Spare" }], pages, stalledNamer)
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    // Still refused, saying why, without the title the lookup never gave.
+    expect(reasons.value).toEqual([
+      {
+        message:
+          "1 page could not be read to check whether it uses the variable, so nothing can be removed until it is. Try again shortly.",
+        used: false,
+      },
+    ]);
+    // The naming box's timer is cleared once it answers.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("refuses used variables within one naming box, counting their pages, when naming stalls", async () => {
+    vi.useFakeTimers();
+    const pages = pagesOf([
+      [page("p1"), [storedUsing("t-accent")]],
+      [page("p2"), [storedUsing("t-brand")]],
+    ]);
+    const asked: string[] = [];
+    const reasons = settledOf(
+      uncoveredReasons(
+        [
+          { id: "t-accent", name: "Accent" },
+          { id: "t-brand", name: "Brand" },
+        ],
+        pages,
+        {
+          firstReadable: uses => {
+            asked.push(uses[0]?.id ?? "");
+            return stalledNamer.firstReadable();
+          },
+        }
+      )
+    );
+    // One box for every page the refusal names, not one per variable.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(reasons.value).toEqual([
+      { id: "t-accent", message: "Accent is used on 1 page.", used: true },
+      { id: "t-brand", message: "Brand is used on 1 page.", used: true },
+    ]);
+    // The box spent, the second page's title is not asked for at all.
+    expect(asked).toEqual(["p1"]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("still names the page where the lookup answers inside the naming box", async () => {
+    vi.useFakeTimers();
+    const pages = pagesOf([[page("p2"), [storedUsing("t-accent")]]]);
+    const reasons = settledOf(
+      uncoveredReasons([{ id: "t-accent", name: "Accent" }], pages, {
+        firstReadable: () => after(4_000, () => "Pricing"),
+      })
+    );
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(reasons.value).toEqual([
+      { id: "t-accent", message: "Accent is used on Pricing.", used: true },
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("names a page left unread by the read box running out, in the naming box after it", async () => {
+    vi.useFakeTimers();
+    const p2 = page("p2");
+    const pages = pagesOf([[p2, [storedUsing()]]]);
+    // The read spends the whole read box; the lookup then takes a second.
+    pages.forms = () => new Promise<never>(() => undefined);
+    const reasons = settledOf(
+      uncoveredReasons([{ id: "t-spare", name: "Spare" }], pages, {
+        firstReadable: () => after(1_000, () => "Pricing"),
+      })
+    );
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(reasons.value).toEqual([
+      {
+        message:
+          "Pricing could not be read to check whether it uses the variable, so nothing can be removed until it is. Try again shortly.",
+        used: false,
+      },
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
 
 describe("the uncovered pages, from the index's own records", () => {
