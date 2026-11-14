@@ -22,7 +22,12 @@ import {
   text,
   textarea,
 } from "nextly";
-import { createDynamicHandlers, createNextlyProxy } from "nextly/runtime";
+import {
+  contentPageMetadata,
+  createDynamicHandlers,
+  createNextlyProxy,
+  type ContentEntry,
+} from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { lastCatchUp } from "../../address-record/catch-up";
@@ -542,6 +547,46 @@ describe.each(getConfiguredTestDialects())(
       expect((await ask("/blog/hello", undefined, SITE, agent)).body).toBe(
         "the page"
       );
+    });
+
+    it("links a page's copy from its head only where the copy is served to the public", async () => {
+      const t = await boot(dialect);
+      await post(t, "hello", "published");
+      const club = (
+        await t.nextly.create({
+          collection: "members",
+          data: { title: "Members", slug: "club", status: "published" },
+        })
+      ).item as ContentEntry;
+      const hello = (
+        await t.nextly.find({
+          collection: "posts",
+          where: { slug: { equals: "hello" } },
+        })
+      ).items[0] as ContentEntry;
+      await switches(t, { plainTextCopies: true, productionAddresses: [SITE] });
+      const headOf = (
+        entry: ContentEntry,
+        collection: string,
+        slug: string,
+        path: string
+      ) =>
+        contentPageMetadata(
+          { buildMetadata: () => ({}) },
+          entry,
+          { collection, slug },
+          path
+        );
+
+      expect(
+        (await headOf(hello, "posts", "hello", "/blog/hello")).alternates?.types
+      ).toEqual({ "text/markdown": "/blog/hello.md" });
+      // Listed, but the public may not read it: it has no copy to link.
+      expect((await ask("/members/club.md")).body).toBe("the page");
+      expect(
+        (await headOf(club, "members", "club", "/members/club")).alternates
+          ?.types
+      ).toBeUndefined();
     });
 
     it("tells the public nothing it may not read, in llms.txt or a copy's heading", async () => {

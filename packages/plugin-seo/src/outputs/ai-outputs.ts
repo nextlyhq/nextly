@@ -563,18 +563,18 @@ async function pageAsked(
 }
 
 /**
- * Whether the copy at `url`, a copy's address, is the copy of the page at
- * `loc`: no page of the site holds the address itself, and the first listed
- * page it names is that page. The one decision both serving a copy and
+ * The listed page at `loc` where the copy at `url`, a copy's address, is
+ * its copy, else null: no page of the site holds the address itself, and
+ * the first listed page it names is that page. The one decision both serving a copy and
  * linking one make, so a link never leads to another page's copy.
  */
-async function servesCopyOf(
+async function copyServedAt(
   ctx: PluginContext,
   url: URL,
   loc: string,
   config: AiOutputsConfig
-): Promise<boolean> {
-  if ((await copiesTaken(ctx, [url.href])).size > 0) return false;
+): Promise<ListedPage | null> {
+  if ((await copiesTaken(ctx, [url.href])).size > 0) return null;
   const page = await pageAsked(
     ctx,
     url,
@@ -582,13 +582,16 @@ async function servesCopyOf(
     pagesOfCopy(url.pathname),
     false
   );
-  return page !== null && new URL(page.loc).pathname === new URL(loc).pathname;
+  return page !== null && new URL(page.loc).pathname === new URL(loc).pathname
+    ? page
+    : null;
 }
 
 /**
  * Where the copy of the listed page at `loc` is served, as the head links
  * it: the first of its copy's addresses that is this page's copy, or none
- * where another page holds them all.
+ * where another page holds them all, or where the public may not read the
+ * page, which then has no copy to serve.
  */
 export async function servedCopyAddress(
   ctx: PluginContext,
@@ -597,7 +600,11 @@ export async function servedCopyAddress(
 ): Promise<string | undefined> {
   for (const path of copyPathsOf(loc)) {
     const url = new URL(path, loc);
-    if (await servesCopyOf(ctx, url, loc, config)) return url.href;
+    const page = await copyServedAt(ctx, url, loc, config);
+    if (page === null) continue;
+    return (await publicDocuments([page])).has(readingKey(page))
+      ? url.href
+      : undefined;
   }
   return undefined;
 }
