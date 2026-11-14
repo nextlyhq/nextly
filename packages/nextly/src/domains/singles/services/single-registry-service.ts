@@ -1306,6 +1306,10 @@ export class SingleRegistryService extends BaseRegistryService<
     const decision = this.codeFirstSyncStep(config, existing);
     const { schemaHash } = decision;
     if (decision.step === "unchanged") return "unchanged";
+    // Judged, not written (`RecordedWriteOptions.judgeOnly`).
+    if (options.judgeOnly === true) {
+      return decision.step === "create" ? "created" : "updated";
+    }
     if (decision.step === "create") {
       // The row alone: `insertSingle` is `registerSingle` without its
       // permission seeding.

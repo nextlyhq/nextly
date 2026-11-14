@@ -22,7 +22,7 @@ import { useFormState, useWatch } from "react-hook-form";
 import { receivedHrefFor } from "../received/contract";
 import type { SeoTabContext } from "../tab/contract";
 import { problemsBadge, seoProblems, type SeoProblem } from "../tab/problems";
-import { SEO_GROUP } from "../tab/typed";
+import { SEO_GROUP, typedPageLevel } from "../tab/typed";
 
 import type { DISPLAY_FIELDS } from "./display-rows";
 import { SeoPanel } from "./SeoPanel";
@@ -81,19 +81,25 @@ function useStatusLine(
   context: DocumentTabProps["context"],
   answers: PanelAnswers | undefined,
   count: number,
-  typeLabel: string | undefined
+  typeLabel: string | undefined,
+  values: SeoPanelValues
 ): void {
   const key = statusKeyOf(context);
   const from = answers?.answer.robots.from;
+  // The page sets its own display where its typed level holds any display
+  // control: the same reading the page's head and the panel's answer make.
+  const display =
+    typedPageLevel(values).display === undefined ? "site" : "page";
   useEffect(() => {
     if (from === undefined || typeLabel === undefined) return undefined;
     publishSeoStatus(key, {
       listing: from === "type" ? "type" : from === "page" ? "page" : "listed",
       count,
       typeLabel,
+      display,
     });
     return () => publishSeoStatus(key, null);
-  }, [key, from, count, typeLabel]);
+  }, [key, from, count, typeLabel, display]);
 }
 
 /** One of the panel's values, as the document's form holds it. */
@@ -266,7 +272,7 @@ export function SeoTab({
     [levels, values, chosenImage]
   );
   const problems = useProblemsBadge(answers, levels, setBadge);
-  useStatusLine(context, answers, problems.length, levels?.typeLabel);
+  useStatusLine(context, answers, problems.length, levels?.typeLabel, values);
 
   if (target === null) return null;
   // Read-only while the document is held, and for someone who may not

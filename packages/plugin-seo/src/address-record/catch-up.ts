@@ -44,6 +44,7 @@ import {
   type HeldDocument,
   type ParticipantTransaction,
   type PluginContext,
+  type PluginTransactionBounds,
 } from "@nextlyhq/plugin-sdk";
 
 import { markOutOfDate } from "../problems/store";
@@ -103,6 +104,25 @@ const PAGE = 200;
 
 const NOTHING: CatchUpReport = { ran: false, recorded: 0, lost: [] };
 
+/**
+ * The bounds each transaction a catch-up opens is given
+ * (`ctx.db.withTransactionBounds`).
+ */
+export const CATCH_UP_TRANSACTION_BOUNDS: Readonly<PluginTransactionBounds> = {
+  // Long enough for a save holding a page's lock to finish; past it, the
+  // holder is taken to be stuck, and the catch-up fails and is tried again.
+  lockWaitMs: 2000,
+  // A catch-up sends its statements one after another, so a transaction of
+  // its own idle this long belongs to a process that has stopped running.
+  idleMs: 5000,
+};
+
+/**
+ * How old the last failure must be before a request tries the catch-up
+ * again (`retryFailedCatchUp`).
+ */
+export const RETRY_FAILED_AFTER_MS = 10_000;
+
 /** The last catch-up started, and the context it ran with. */
 let started: { ctx: PluginContext; run: Promise<CatchUpReport> } | undefined;
 
@@ -120,6 +140,10 @@ export function startCatchUp(ctx: PluginContext): Promise<CatchUpReport> {
 let running = 0;
 /** Whether the last catch-up to finish failed, leaving the record behind. */
 let failed = false;
+/** When the last catch-up to fail failed, by the clock. */
+let failedAt = 0;
+/** Whether a retry is starting: set before it awaits anything, so a second request starts none. */
+let retrying = false;
 
 /**
  * Whether the record says what each page holds: no catch-up is under way,
@@ -131,12 +155,19 @@ export function addressRecordReady(): boolean {
 }
 
 /**
- * Start the catch-up again, not awaited, where the last one failed and none
- * is under way: a failure from a passing cause is not left in place until
- * the next start.
+ * Start the catch-up again, not awaited, where the last one failed, none is
+ * under way, and the failure is `RETRY_FAILED_AFTER_MS` old: a failure from a
+ * passing cause is not left in place until the next start, and while the
+ * cause is still there the requests that find the record not ready do not
+ * each start a catch-up of their own, every one taking a connection.
  */
 export function retryFailedCatchUp(): void {
-  if (failed && running === 0 && started !== undefined) void catchUp();
+  if (!failed || running > 0 || retrying || started === undefined) return;
+  if (Date.now() - failedAt < RETRY_FAILED_AFTER_MS) return;
+  retrying = true;
+  void catchUp().finally(() => {
+    retrying = false;
+  });
 }
 
 /** The last catch-up started, to wait for. */
@@ -204,12 +235,23 @@ async function caughtUp(
 ): Promise<CatchUpReport> {
   running += 1;
   try {
-    const report = await runCatchUp(ctx, options);
+    // Every transaction it opens bounded by the database: it runs unawaited,
+    // so on a serverless platform its function may be frozen with one open,
+    // and every save of a page and every other catch-up would otherwise wait
+    // on that transaction's lock rows until the function ran again.
+    const report = await ctx.db.withTransactionBounds(
+      CATCH_UP_TRANSACTION_BOUNDS,
+      async () => {
+        const done = await runCatchUp(ctx, options);
+        if (done.lost.length > 0) await problemsOutOfDate(ctx);
+        return done;
+      }
+    );
     failed = false;
-    if (report.lost.length > 0) await problemsOutOfDate(ctx);
     return report;
   } catch (error) {
     failed = true;
+    failedAt = Date.now();
     ctx.logger.error("The SEO address record could not be brought up to date", {
       error,
     });

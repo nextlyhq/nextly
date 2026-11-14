@@ -1,6 +1,7 @@
 /**
- * The edit page's one read-only SEO line in its side panel: whether search
- * engines list the page, and how many things there are to fix. The SEO tab
+ * The edit page's read-only SEO lines in its side panel: whether search
+ * engines list the page and how many things there are to fix, and whether
+ * how results may show it is the site's or the page's own. The SEO tab
  * works the page's answer out; it tells this line what it found, so the two
  * never count the page differently and the line asks the server nothing.
  *
@@ -19,6 +20,11 @@ export interface SeoStatus {
   count: number;
   /** The content type's name for one of its pages. */
   typeLabel: string;
+  /**
+   * How results may show the page: as the site's defaults say, or with a
+   * display control the page sets itself.
+   */
+  display: "site" | "page";
 }
 
 const statuses = new Map<string, SeoStatus>();
@@ -35,7 +41,8 @@ export function publishSeoStatus(key: string, status: SeoStatus | null): void {
       was !== undefined &&
       was.listing === status.listing &&
       was.count === status.count &&
-      was.typeLabel === status.typeLabel
+      was.typeLabel === status.typeLabel &&
+      was.display === status.display
     ) {
       return;
     }
@@ -85,6 +92,25 @@ export function SeoStatusSection({ context }: SidebarSectionProps): ReactNode {
       ) : (
         "Listed"
       )}
+    </p>
+  );
+}
+
+/**
+ * The second line: `Site defaults` while the page sets none of the search
+ * display controls, `Set for this page` once it sets one. Read-only, as the
+ * line above it is: the controls are in the SEO tab's Advanced section.
+ */
+export function SeoDisplaySection({ context }: SidebarSectionProps): ReactNode {
+  const status = useSeoStatus(statusKeyOf(context));
+  if (status === undefined) return null;
+  return (
+    <p
+      title="Read-only. Change it in the SEO tab, under Advanced."
+      className="m-0 text-[13px] text-foreground"
+      data-testid="seo-display-status"
+    >
+      {status.display === "page" ? "Set for this page" : "Site defaults"}
     </p>
   );
 }

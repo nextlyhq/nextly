@@ -20,7 +20,7 @@ import {
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
 } from "@nextlyhq/blocks-engine";
-import type { PluginDefinition } from "@nextlyhq/plugin-sdk";
+import { getCachedNextly, type PluginDefinition } from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -30,8 +30,9 @@ import {
 import { ServiceContainer } from "nextly";
 import { buildClaims, signAccessToken } from "nextly/auth";
 import { createDynamicHandlers } from "nextly/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { BLOCKS_TYPE } from "../fields/blocksField";
 import { PAGE_BUILDER_PLUGIN_NAME } from "../library-contract";
 import { pageBuilder } from "../plugin";
 import type { StoredDocuments } from "../shared-style-rescan";
@@ -92,6 +93,41 @@ const pageUsing = (identity?: string) => ({
     },
   ],
 });
+
+/**
+ * A page past the walk's node bound, so the index cannot read it whole; its
+ * last node, the one past the bound, names `identity`, or nothing.
+ */
+const oversizedUsing = (identity?: string) => {
+  const last = DEFAULT_LIMITS.maxNodes;
+  return {
+    formatVersion: DOCUMENT_FORMAT_VERSION,
+    kind: "page",
+    nodes: Array.from({ length: last + 1 }, (_, at) => ({
+      id: `n${at}`,
+      type: "core/heading",
+      version: 1,
+      props: { text: "a", level: 2 },
+      ...(at === last && identity !== undefined
+        ? { styles: { base: { base: { color: { $token: identity } } } } }
+        : {}),
+    })),
+  };
+};
+
+/** A collection whose blocks sit in a field under a named group. */
+const LANDING = "landing";
+const landing = {
+  slug: LANDING,
+  fields: [
+    { name: "title", type: "text" },
+    {
+      name: "hero",
+      type: "group",
+      fields: [{ name: "body", type: BLOCKS_TYPE }],
+    },
+  ],
+};
 
 /** The plugin's own backfill job, as it contributes it. */
 function backfillTick(plugin: PluginDefinition): () => Promise<unknown> {
@@ -158,8 +194,11 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
     });
 
-    /** A site storing three variables and a shared style naming one. */
-    async function boot() {
+    /**
+     * A site storing three variables and a shared style naming one, with any
+     * collections of its own beside the page builder's.
+     */
+    async function boot(collections: unknown[] = []) {
       const built = pageBuilder();
       // The plugin's own context, as `nextly migrate` hands its `onMigrate`:
       // the one `init` is handed, kept as it is.
@@ -175,6 +214,9 @@ describe.each(getConfiguredTestDialects())(
         dialect,
         plugins: [plugin],
         seedPublic: true,
+        ...(collections.length === 0
+          ? {}
+          : { collections: collections as never[] }),
       });
       const t = current;
       // The site's first user is its owner, granted everything. Made first, so
@@ -484,6 +526,124 @@ describe.each(getConfiguredTestDialects())(
       expect((await usage()).body).toMatchObject({
         whole: true,
         variables: { "t-accent": { documents: 1, complete: true } },
+      });
+    });
+
+    describe("where the index cannot become whole", () => {
+      it("removes a variable an oversized page does not use, and refuses one used past the walk's bound, naming the page", async () => {
+        const { t, tick } = await boot();
+        const created = await t.nextly.create({
+          collection: "pages",
+          data: { title: "Big", slug: "big", content: pageUsing() },
+          overrideAccess: true,
+        });
+        // Larger than any page the editor saves: stored past its checks.
+        await plantContent(
+          t,
+          String(created.item.id),
+          oversizedUsing("t-accent")
+        );
+        await tick();
+        const designer = await holding(t, ...DESIGN, "read-pages");
+        // CONTROL: every page walked, and the index still cannot be whole.
+        expect(
+          (await call("GET", `${route("usage")}?id=t-spare`, designer)).body
+        ).toMatchObject({ whole: false });
+
+        const removed = await call("POST", route("remove"), designer, {
+          ids: ["t-spare"],
+        });
+        expect(removed.status).toBe(200);
+        expect(await storedIds(t)).toEqual(["t-accent", "t-styled"]);
+
+        const refused = await call("POST", route("remove"), designer, {
+          ids: ["t-accent"],
+        });
+        expect(refused.status).toBe(400);
+        expect(JSON.stringify(refused.body)).toContain('"code":"IN_USE"');
+        expect(JSON.stringify(refused.body)).toContain(
+          "Accent is used on Big."
+        );
+        expect(await storedIds(t)).toEqual(["t-accent", "t-styled"]);
+      });
+
+      it("refuses a variable a block under a named group uses, naming the page, and removes one it does not", async () => {
+        const { t, tick } = await boot([landing]);
+        await t.nextly.create({
+          collection: LANDING,
+          data: { title: "Pricing", hero: { body: pageUsing("t-accent") } },
+          overrideAccess: true,
+        } as never);
+        await tick();
+        const designer = await holding(t, ...DESIGN, `read-${LANDING}`);
+        // CONTROL: the group's blocks are out of the index's reach.
+        expect(
+          (await call("GET", `${route("usage")}?id=t-accent`, designer)).body
+        ).toMatchObject({ whole: false });
+
+        const refused = await call("POST", route("remove"), designer, {
+          ids: ["t-accent"],
+        });
+        expect(refused.status).toBe(400);
+        expect(JSON.stringify(refused.body)).toContain('"code":"IN_USE"');
+        expect(JSON.stringify(refused.body)).toContain(
+          "Accent is used on Pricing."
+        );
+
+        const removed = await call("POST", route("remove"), designer, {
+          ids: ["t-spare"],
+        });
+        expect(removed.status).toBe(200);
+        expect(await storedIds(t)).toEqual(["t-accent", "t-styled"]);
+      });
+
+      it("refuses a removal, naming the page, where a page the index does not cover cannot be read", async () => {
+        const { t, tick } = await boot([landing]);
+        await t.nextly.create({
+          collection: LANDING,
+          data: { title: "About", hero: { body: pageUsing() } },
+          overrideAccess: true,
+        } as never);
+        const pricing = await t.nextly.create({
+          collection: LANDING,
+          data: { title: "Pricing", hero: { body: pageUsing() } },
+          overrideAccess: true,
+        } as never);
+        const pricingId = String(pricing.item.id);
+        await tick();
+        const designer = await holding(t, ...DESIGN, `read-${LANDING}`);
+
+        // The database fails the system's read of that one page; the
+        // caller's read of its title, a different query, still answers.
+        const direct = await getCachedNextly();
+        const findByID = direct.findByID.bind(direct);
+        const failing = vi
+          .spyOn(direct, "findByID")
+          .mockImplementation(async args =>
+            (args as { collection?: string; id?: unknown }).collection ===
+              LANDING && String((args as { id?: unknown }).id) === pricingId
+              ? Promise.reject(new Error("the read failed"))
+              : findByID(args as never)
+          );
+        try {
+          const refused = await call("POST", route("remove"), designer, {
+            ids: ["t-spare"],
+          });
+          expect(refused.status).toBe(409);
+          expect(JSON.stringify(refused.body)).toContain(
+            "Pricing could not be read to check whether it uses the variable"
+          );
+          expect(JSON.stringify(refused.body)).not.toContain("IN_USE");
+        } finally {
+          failing.mockRestore();
+        }
+        expect(await storedIds(t)).toEqual(["t-accent", "t-styled", "t-spare"]);
+
+        // CONTROL: read again, the same page lets the removal through.
+        const removed = await call("POST", route("remove"), designer, {
+          ids: ["t-spare"],
+        });
+        expect(removed.status).toBe(200);
       });
     });
 

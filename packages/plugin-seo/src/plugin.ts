@@ -26,6 +26,7 @@ import {
 } from "@nextlyhq/plugin-sdk";
 
 import {
+  CATCH_UP_TRANSACTION_BOUNDS,
   forgetCatchUpFingerprint,
   lastCatchUp,
   startCatchUp,
@@ -124,7 +125,12 @@ import { withSeoOff } from "./resolver/seo-off";
 import { routeValuesCollection } from "./route-values/collection";
 import { withRouteValues } from "./route-values/record";
 import { seoSchema, seoSchemaPlugin } from "./schema/definition";
-import { seoExtendClauses, seoTypesOf, type SeoTypes } from "./seo-types";
+import {
+  seoExtendClauses,
+  seoTypesOf,
+  typesLeftOut,
+  type SeoTypes,
+} from "./seo-types";
 import {
   contentTypesRoute,
   settingsDocumentRoute,
@@ -830,9 +836,11 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // problem list's; all added below.
   const routes: PluginRoute[] = [];
 
+  // Add the SEO group to each named type, or to every type. The admin is
+  // told which types these leave out, read from the same clauses.
+  const extend = seoExtendClauses(options, types, [seoGroup]);
   const contributes: PluginContributions = {
-    // Add the SEO group to each named type, or to every type.
-    extend: seoExtendClauses(options, types, [seoGroup]),
+    extend,
     // Site-wide SEO, the check of what search engines received, and, where
     // the site asks for it, each named content type's page SEO.
     permissions: seoPermissionDeclarations({
@@ -952,6 +960,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // Where SEO is on every type, the tab there edits each page whose
         // type has the group, which only the page's own fields say.
         tabEveryType: tab.tabEveryType,
+        // The types the site's code leaves out where SEO is on every type, so
+        // the tab there says SEO is off for a page of one rather than asking
+        // for an SEO answer its type does not have.
+        tabExcluded: typesLeftOut(extend),
       },
       // The section's menu, in the order the section is used: where it
       // stands, its pages, what to fix, its redirects, its rules. Each
@@ -1238,12 +1250,19 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       void startCatchUp(ctx);
       // The not-found log an earlier version kept in a collection, moved to
       // the plugin's table; one count once there is nothing left to move.
-      void moveLoggedRows(ctx).catch((error: unknown) => {
-        ctx.logger.error(
-          "The SEO plugin could not move its not-found log to its table",
-          { error }
-        );
-      });
+      // Bounded as the catch-up's are: it runs unawaited, and a function
+      // frozen with one of its transactions open must not keep that
+      // transaction's locks.
+      void ctx.db
+        .withTransactionBounds(CATCH_UP_TRANSACTION_BOUNDS, () =>
+          moveLoggedRows(ctx)
+        )
+        .catch((error: unknown) => {
+          ctx.logger.error(
+            "The SEO plugin could not move its not-found log to its table",
+            { error }
+          );
+        });
       // Both again once, a while later, unawaited and never keeping the
       // process alive: a process of the earlier version still serving
       // during a deploy may write after this start, and a long-running
@@ -1253,7 +1272,9 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         async () => {
           await lastCatchUp();
           await startCatchUp(ctx);
-          await moveLoggedRows(ctx);
+          await ctx.db.withTransactionBounds(CATCH_UP_TRANSACTION_BOUNDS, () =>
+            moveLoggedRows(ctx)
+          );
         },
         (error: unknown) => {
           ctx.logger.error(

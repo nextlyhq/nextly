@@ -89,12 +89,40 @@ export function panelAnswers(
 ): PanelAnswers | undefined {
   if (context === undefined) return undefined;
   return {
-    answer: resolveOrder({
-      ...context.levels,
-      page: typedPageLevel(values, asMetadataImage(chosenImage)),
-    }),
+    answer: answerOf(context, values, chosenImage),
     automatic: resolveOrder({ ...context.levels, page: {} }),
   };
+}
+
+/** The page's answer with `values` typed on top of the server's levels. */
+function answerOf(
+  context: SeoTabContext,
+  values: SeoPanelValues,
+  chosenImage: ChosenImage | undefined
+): SeoAnswer {
+  return resolveOrder({
+    ...context.levels,
+    page: typedPageLevel(values, asMetadataImage(chosenImage)),
+  });
+}
+
+/**
+ * What a shared link uses while nothing is typed for it: the page's answer,
+ * worked out by the same order, with the shared title and description left
+ * empty and everything else as typed. A typed Google title comes first, then
+ * the text the route or the template sets for shared links, and else the
+ * page's own title and description.
+ */
+export function unsharedAnswer(
+  context: SeoTabContext | undefined,
+  values: SeoPanelValues
+): SeoAnswer | undefined {
+  if (context === undefined) return undefined;
+  return answerOf(
+    context,
+    { ...values, socialTitle: null, socialDescription: null },
+    undefined
+  );
 }
 
 /** A value as typed text, or `""` for nothing typed. */
