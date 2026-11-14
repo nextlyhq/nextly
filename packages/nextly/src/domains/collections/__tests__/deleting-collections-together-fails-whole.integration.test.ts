@@ -343,6 +343,24 @@ describeEachDialect("deleting collections together fails whole", dialect => {
     await expectDeletingAgainFinishes(t, since, false);
   }, 120_000);
 
+  it("refuses a development delete with an invalid lock timeout before it removes anything", async () => {
+    const t = await bootPair(dialect);
+    const since = Date.now();
+
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("NEXTLY_LOCK_TIMEOUT", "soon");
+    const failure = await failureOf(builderBulkDelete([TAGS, NOTES]));
+    vi.unstubAllEnvs();
+
+    // Refused while the drop migrations are prepared, before the registry rows, the translations
+    // and the field-group values go: both collections stand as they were, on every dialect.
+    expect(failure.code).toBe("INVALID_INPUT");
+    expect(await stateOf(t, TAGS, TAGS_TABLE)).toEqual(INTACT);
+    expect(await stateOf(t, NOTES, NOTES_TABLE)).toEqual(INTACT);
+    expect(dropMigrationsNaming(t, NOTES_TABLE, since)).toEqual([]);
+    await expectDeletingAgainFinishes(t, since, true);
+  }, 120_000);
+
   // In development the collections' registry rows and what they hold go in
   // one transaction, and each table is then dropped by its written delete
   // migration, the durable record `nextly migrate` applies on deploy. A drop

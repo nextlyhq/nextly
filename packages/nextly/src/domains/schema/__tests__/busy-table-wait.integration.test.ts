@@ -27,6 +27,8 @@ import { runFileMigrations } from "../../../cli/commands/migrate";
 import { createLogger } from "../../../cli/utils/logger";
 import type { BusyTableBounds } from "../busy-table/bounds";
 import { triggerTables } from "../busy-table/run-unit";
+import { boundedStopRecord } from "../busy-table/stopped-record";
+import { runMigrationStatements } from "../migrate/migration-transaction";
 import { getSchemaEventsDdl } from "../events/schema-events-ddl";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import {
@@ -355,6 +357,172 @@ describe.each(DIALECTS)(
     );
 
     it.runIf(dialect === "mysql")(
+      "adds a row written after a schema statement's implicit commit once, though the try after it waited",
+      async () => {
+        await adapter.executeQuery(`CREATE TABLE ${OTHER} (id integer)`);
+        const filename = writeFile("20261113_000001_after_commit", [
+          `CREATE TABLE ${FIRST} (id integer)`,
+          `INSERT INTO ${OTHER} (id) VALUES (1)`,
+          `INSERT INTO ${BUSY} (id) VALUES (2)`,
+        ]);
+        await lockTheTableForWriting();
+        const freeing = sleep(3_500).then(() => free());
+
+        const applied = await migrate({ tryMs: 1_000, totalMs: 20_000 });
+        await freeing;
+
+        // MySQL committed at the CREATE; the row after it rolled back with the try that waited,
+        // and was added again once, not kept and added a second time.
+        expect(applied).toBe(1);
+        expect(await idsOf(OTHER)).toEqual([1]);
+        expect(await idsOf(BUSY)).toEqual([2]);
+        expect(await appliedRows(filename)).toBe(1);
+      }
+    );
+
+    it.runIf(dialect === "mysql")(
+      "says a transaction MySQL rolled back whole was undone where a no-retry row change waited",
+      async () => {
+        await adapter.executeQuery(`CREATE TABLE ${OTHER} (id integer)`);
+        await adapter.executeQuery(
+          `CREATE TRIGGER ${PREFIX}_keep BEFORE INSERT ON ${BUSY} FOR EACH ROW SET NEW.id = NEW.id`
+        );
+        writeFile("20261113_000001_triggered", [
+          `INSERT INTO ${OTHER} (id) VALUES (1)`,
+          `INSERT INTO ${BUSY} (id) VALUES (2)`,
+        ]);
+        await lockTheTableForWriting();
+
+        const stopped = await migrate({ tryMs: 1_000, totalMs: 20_000 }).catch(
+          (error: unknown) => error
+        );
+
+        expect(stopped).toMatchObject({
+          code: "NEXTLY_TABLE_BUSY",
+          logContext: {
+            stop: {
+              tries: 1,
+              outcome: {
+                kind: "no-retry",
+                statementNumber: 2,
+                reason: "trigger",
+                restUndone: true,
+              },
+            },
+          },
+        });
+        expect(await idsOf(OTHER)).toEqual([]);
+        expect(String((stopped as Error).message)).toContain(
+          "was undone whole"
+        );
+      }
+    );
+
+    it.runIf(dialect === "mysql")(
+      "puts the pooled connection's own lock-wait timeouts back after a bounded migration",
+      async () => {
+        const single = await world.connect({ poolMax: 1 });
+        try {
+          // The pool's one connection carries timeouts of its own, not the server's defaults.
+          await single.executeQuery("SET SESSION lock_wait_timeout = 77");
+          await single.executeQuery(
+            "SET SESSION innodb_lock_wait_timeout = 33"
+          );
+
+          await runMigrationStatements(
+            single,
+            [`CREATE TABLE ${FIRST} (id integer)`],
+            { source: "0001_bounded.sql", transaction: true },
+            undefined,
+            { tryMs: 1_000 }
+          );
+
+          const [row] = await single.executeQuery<{
+            l: unknown;
+            i: unknown;
+          }>(
+            "SELECT @@SESSION.lock_wait_timeout AS l, @@SESSION.innodb_lock_wait_timeout AS i"
+          );
+          expect([Number(row?.l), Number(row?.i)]).toEqual([77, 33]);
+        } finally {
+          await single.disconnect();
+        }
+      }
+    );
+
+    it.runIf(dialect === "mysql")(
+      "reports nothing changed where only a setting ran before the wait outside a transaction",
+      async () => {
+        writeFile(
+          "20261113_000001_setting_first",
+          [
+            "SET @nextly_marker = 1",
+            `ALTER TABLE ${BUSY} ADD COLUMN late integer`,
+          ],
+          { outside: true }
+        );
+        await holdTheTable();
+
+        const stopped = await migrate({ tryMs: 1_000, totalMs: 2_000 }).catch(
+          (error: unknown) => error
+        );
+
+        // The setting lived on the try's session, which is gone: it is sent again by the next
+        // run, and nothing of the file stayed.
+        expect(stopped).toMatchObject({
+          code: "NEXTLY_TABLE_BUSY",
+          logContext: { stop: { outcome: { kind: "nothing-changed" } } },
+        });
+      }
+    );
+
+    it.runIf(dialect === "mysql")(
+      "names a row lock's holder where MySQL's metadata-lock instrument is off",
+      async () => {
+        const instrument = "wait/lock/metadata/sql/mdl";
+        await adapter.executeQuery(`INSERT INTO ${BUSY} (id) VALUES (5)`);
+        writeFile("20261113_000001_update_row_untraced", [
+          `UPDATE ${BUSY} SET id = 7 WHERE id = 5`,
+        ]);
+        await adapter.executeQuery(
+          `UPDATE performance_schema.setup_instruments SET ENABLED = 'NO' WHERE NAME = '${instrument}'`
+        );
+        try {
+          let held: () => void = () => {};
+          const isHeld = new Promise<void>(resolve => {
+            held = resolve;
+          });
+          const freed = new Promise<void>(resolve => {
+            free = resolve;
+          });
+          holding = holderAdapter.transaction(async ctx => {
+            await ctx.queryStatement(
+              sql.raw(`UPDATE ${BUSY} SET id = 6 WHERE id = 5`)
+            );
+            held();
+            await freed;
+          });
+          await isHeld;
+
+          const stopped = await migrate({ tryMs: 1_000, totalMs: 2_000 }).catch(
+            (error: unknown) => error
+          );
+
+          // The row's holder is read from InnoDB's lock waits, which the instrument does not gate.
+          expect(String((stopped as Error).message)).toMatch(
+            /held by session \d+/
+          );
+        } finally {
+          free();
+          await holding.catch(() => {});
+          await adapter.executeQuery(
+            `UPDATE performance_schema.setup_instruments SET ENABLED = 'YES' WHERE NAME = '${instrument}'`
+          );
+        }
+      }
+    );
+
+    it.runIf(dialect === "mysql")(
       "bounds a row change waiting on a row another session holds, not InnoDB's own 50 seconds",
       async () => {
         await adapter.executeQuery(`INSERT INTO ${BUSY} (id) VALUES (5)`);
@@ -385,6 +553,11 @@ describe.each(DIALECTS)(
 
         expect(stopped).toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
         expect(Date.now() - started).toBeLessThan(10_000);
+        // The row's holder is named, read from InnoDB's lock waits: a row wait has no pending
+        // metadata lock to read it from.
+        expect(String((stopped as Error).message)).toMatch(
+          /held by session \d+/
+        );
       }
     );
 
@@ -534,6 +707,375 @@ describe.each(DIALECTS)(
           await holding.catch(() => {});
           await adapter.executeQuery(`DROP TABLE IF EXISTS ${OTHER}`);
           await adapter.executeQuery(`DROP FUNCTION IF EXISTS ${touch}()`);
+        }
+      }
+    );
+
+    it.runIf(dialect === "sqlite")(
+      "keeps a file's own busy timeout from lifting the try's bound on SQLite",
+      async () => {
+        await adapter.executeQuery(`CREATE TABLE ${OTHER} (id integer)`);
+        // The statement after the file's own setting records the busy timeout in force for it:
+        // what any wait of that statement, or of the commit after it, would wait for.
+        writeFile("20261113_000001_own_timeout", [
+          "PRAGMA busy_timeout = 30000",
+          `INSERT INTO ${OTHER} (id) SELECT * FROM pragma_busy_timeout()`,
+        ]);
+
+        await migrate({ tryMs: 1_000, totalMs: 2_000 });
+
+        const [timeout] = await idsOf(OTHER);
+        expect(timeout).toBeGreaterThan(0);
+        expect(timeout).toBeLessThanOrEqual(1_000);
+      }
+    );
+
+    it.runIf(dialect === "sqlite")(
+      "undoes the whole ledger write of a unit run outside a transaction when a busy wait ends it",
+      async () => {
+        await adapter.executeQuery(`CREATE TABLE ${OTHER} (id integer)`);
+        let writes = 0;
+        const after = async (db: unknown): Promise<void> => {
+          writes += 1;
+          // The first record lands, then the second meets a busy database, once.
+          await (db as { run: (query: unknown) => Promise<unknown> }).run(
+            sql.raw(`INSERT INTO ${OTHER} (id) VALUES (${String(writes)})`)
+          );
+          if (writes === 1) {
+            throw Object.assign(new Error("database is locked"), {
+              code: "SQLITE_BUSY",
+            });
+          }
+        };
+
+        const failed = await runMigrationStatements(
+          adapter,
+          [`ALTER TABLE ${BUSY} ADD COLUMN late integer`],
+          { source: "0001_outside.sql", transaction: false },
+          after,
+          { tryMs: 1_000 }
+        ).catch((error: unknown) => error);
+
+        expect(failed).toMatchObject({ code: "SQLITE_BUSY" });
+        // Written again whole by the next try, never half of it kept from the first.
+        expect(await idsOf(OTHER)).toEqual([]);
+      }
+    );
+
+    it.runIf(dialect !== "sqlite")(
+      "ends a stopped change's record once its waits together use up one try",
+      async () => {
+        await adapter.executeQuery(`CREATE TABLE ${OTHER} (id integer)`);
+        await adapter.executeQuery(`CREATE TABLE ${FIRST} (id integer)`);
+        /** A second session holds `table` for `ms` once held, then lets it go. */
+        const holdFor = async (table: string, ms: number) => {
+          let held: () => void = () => {};
+          const isHeld = new Promise<void>(resolve => {
+            held = resolve;
+          });
+          const holding =
+            dialect === "postgresql"
+              ? holderAdapter.transaction(async ctx => {
+                  await ctx.queryStatement(
+                    sql.raw(`LOCK TABLE ${table} IN ACCESS EXCLUSIVE MODE`)
+                  );
+                  held();
+                  await sleep(ms);
+                })
+              : holderAdapter.withSession(async session => {
+                  await session.execute(`LOCK TABLES ${table} WRITE`);
+                  held();
+                  await sleep(ms);
+                  await session.execute("UNLOCK TABLES");
+                });
+          await isHeld;
+          // In an object: an async function returning the promise itself would wait it out.
+          return { holding };
+        };
+        // Each wait alone ends within the record's one try; the two together do not.
+        const holdings = await Promise.all([
+          holdFor(OTHER, 800),
+          holdFor(FIRST, 1_600),
+        ]);
+
+        const started = Date.now();
+        const written = await boundedStopRecord(
+          adapter,
+          1_000
+        )(async db => {
+          const run = (statement: string) =>
+            (db as { execute: (query: unknown) => Promise<unknown> }).execute(
+              sql.raw(statement)
+            );
+          await run(`INSERT INTO ${OTHER} (id) VALUES (1)`);
+          await run(`INSERT INTO ${FIRST} (id) VALUES (1)`);
+        }).then(
+          () => "written",
+          (error: unknown) => error
+        );
+        const elapsed = Date.now() - started;
+        await Promise.all(holdings.map(hold => hold.holding));
+
+        expect(written).not.toBe("written");
+        expect(elapsed).toBeLessThan(1_500);
+        expect(await idsOf(OTHER)).toEqual([]);
+      }
+    );
+
+    it.runIf(dialect !== "sqlite")(
+      "ends the ledger write and the stop's record of a file run outside a transaction within their bounds",
+      async () => {
+        writeFile(
+          "20261113_000001_outside_ledger",
+          [`ALTER TABLE ${BUSY} ADD COLUMN late integer`],
+          { outside: true }
+        );
+        await holdTheTable();
+        const freeBusy = free;
+        // Once the statement waits, a second session takes the ledger table; the busy table is
+        // let go at 0.8 s, so the statement lands and its ledger write waits in turn.
+        let freeLedger: () => void = () => {};
+        const ledgerFreed = new Promise<void>(resolve => {
+          freeLedger = resolve;
+        });
+        let ledgerHeld: () => void = () => {};
+        const ledgerIsHeld = new Promise<void>(resolve => {
+          ledgerHeld = resolve;
+        });
+        const holdingLedger = sleep(300).then(() =>
+          dialect === "postgresql"
+            ? holderAdapter.transaction(async ctx => {
+                await ctx.queryStatement(
+                  sql.raw(
+                    "LOCK TABLE nextly_schema_events IN SHARE ROW EXCLUSIVE MODE"
+                  )
+                );
+                ledgerHeld();
+                await ledgerFreed;
+              })
+            : holderAdapter.withSession(async session => {
+                await session.execute("LOCK TABLES nextly_schema_events WRITE");
+                ledgerHeld();
+                await ledgerFreed;
+                await session.execute("UNLOCK TABLES");
+              })
+        );
+        const freeing = ledgerIsHeld
+          .then(() => sleep(500))
+          .then(() => freeBusy());
+        try {
+          const started = Date.now();
+          const stopped = await migrate({
+            tryMs: 1_000,
+            totalMs: 2_000,
+          }).catch((error: unknown) => error);
+          const elapsed = Date.now() - started;
+
+          expect(stopped).toMatchObject({
+            code: "NEXTLY_TABLE_BUSY",
+            logContext: { stop: { tries: 1 } },
+          });
+          // The record of the stop waits for the held ledger table one try at most, then leaves
+          // the attempt for the next run to refuse on: the command ends, rather than waiting for
+          // the holder.
+          expect(elapsed).toBeLessThan(4_000);
+          // One try of 1 s: the statement waited about 0.8 s of it, so the ledger write has what
+          // is left, not a fresh second of its own and the backstop's half second on top.
+          const { elapsedMs, ended } = (
+            stopped as {
+              logContext: {
+                stop: { elapsedMs: number; ended: { table: string | null } };
+              };
+            }
+          ).logContext.stop;
+          expect(elapsedMs).toBeLessThan(1_900);
+          // The table waited for is the ledger's, not the file's last statement's.
+          expect(ended.table).toBe("nextly_schema_events");
+        } finally {
+          await freeing;
+          freeLedger();
+          await holdingLedger.catch(() => {});
+        }
+      }
+    );
+
+    /**
+     * Makes a DDL event trigger for the test, owned by `plpgsql` where `extensionOwned`, and
+     * returns what drops it again.
+     */
+    async function ddlEventTrigger(
+      extensionOwned: boolean,
+      tags?: readonly string[]
+    ): Promise<() => Promise<void>> {
+      const name = `${PREFIX}_ddl_watch`;
+      await adapter.executeQuery(
+        `CREATE FUNCTION ${name}() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN END $$`
+      );
+      const when =
+        tags === undefined
+          ? ""
+          : ` WHEN TAG IN (${tags.map(tag => `'${tag}'`).join(", ")})`;
+      await adapter.executeQuery(
+        `CREATE EVENT TRIGGER ${name} ON ddl_command_start${when} EXECUTE FUNCTION ${name}()`
+      );
+      if (extensionOwned) {
+        await adapter.executeQuery(
+          `ALTER EXTENSION plpgsql ADD EVENT TRIGGER ${name}`
+        );
+      }
+      return async () => {
+        if (extensionOwned) {
+          await adapter.executeQuery(
+            `ALTER EXTENSION plpgsql DROP EVENT TRIGGER ${name}`
+          );
+        }
+        await adapter.executeQuery(`DROP EVENT TRIGGER IF EXISTS ${name}`);
+        await adapter.executeQuery(`DROP FUNCTION IF EXISTS ${name}()`);
+      };
+    }
+
+    it.runIf(dialect === "postgresql")(
+      "stops after one try where a DDL event trigger would run its code again for the schema change",
+      async () => {
+        const drop = await ddlEventTrigger(false);
+        try {
+          writeFile("20261113_000001_add_late", [
+            `ALTER TABLE ${BUSY} ADD COLUMN late integer`,
+          ]);
+          await holdTheTable();
+
+          const stopped = await migrate({
+            tryMs: 1_000,
+            totalMs: 4_000,
+          }).catch((error: unknown) => error);
+
+          expect(stopped).toMatchObject({
+            code: "NEXTLY_TABLE_BUSY",
+            logContext: {
+              stop: {
+                tries: 1,
+                outcome: {
+                  kind: "no-retry",
+                  statementNumber: 1,
+                  reason: "event-trigger",
+                  restUndone: true,
+                },
+              },
+            },
+          });
+          expect(notices).toHaveLength(0);
+        } finally {
+          free();
+          await holding.catch(() => {});
+          await drop();
+        }
+      }
+    );
+
+    it.runIf(dialect === "postgresql")(
+      "keeps trying where the only DDL event trigger fires on other commands than the change's",
+      async () => {
+        const drop = await ddlEventTrigger(false, ["DROP TABLE"]);
+        try {
+          writeFile("20261113_000001_add_late", [
+            `ALTER TABLE ${BUSY} ADD COLUMN late integer`,
+          ]);
+          await holdTheTable();
+
+          const stopped = await migrate({
+            tryMs: 1_000,
+            totalMs: 4_000,
+          }).catch((error: unknown) => error);
+
+          expect(stopped).toMatchObject({
+            code: "NEXTLY_TABLE_BUSY",
+            logContext: {
+              stop: { tries: 2, outcome: { kind: "nothing-changed" } },
+            },
+          });
+        } finally {
+          free();
+          await holding.catch(() => {});
+          await drop();
+        }
+      }
+    );
+
+    it.runIf(dialect === "postgresql")(
+      "keeps trying where the only DDL event trigger belongs to an installed extension",
+      async () => {
+        const drop = await ddlEventTrigger(true);
+        try {
+          writeFile("20261113_000001_add_late", [
+            `ALTER TABLE ${BUSY} ADD COLUMN late integer`,
+          ]);
+          await holdTheTable();
+
+          const stopped = await migrate({
+            tryMs: 1_000,
+            totalMs: 4_000,
+          }).catch((error: unknown) => error);
+
+          expect(stopped).toMatchObject({
+            code: "NEXTLY_TABLE_BUSY",
+            logContext: {
+              stop: { tries: 2, outcome: { kind: "nothing-changed" } },
+            },
+          });
+        } finally {
+          free();
+          await holding.catch(() => {});
+          await drop();
+        }
+      }
+    );
+
+    it.runIf(dialect === "postgresql")(
+      "reads the triggers of a schema the file puts on its search path before judging a row change",
+      async () => {
+        const schema = `${PREFIX}_audit`;
+        const touch = `${PREFIX}_touch`;
+        await adapter.executeQuery(`CREATE SCHEMA ${schema}`);
+        try {
+          await adapter.executeQuery(
+            `CREATE TABLE ${schema}.${OTHER} (id integer)`
+          );
+          await adapter.executeQuery(
+            `CREATE FUNCTION ${schema}.${touch}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$`
+          );
+          await adapter.executeQuery(
+            `CREATE TRIGGER ${touch} BEFORE INSERT ON ${schema}.${OTHER} FOR EACH ROW EXECUTE FUNCTION ${schema}.${touch}()`
+          );
+          writeFile("20261113_000001_audited", [
+            `SET LOCAL search_path TO ${schema}, public`,
+            `INSERT INTO ${OTHER} (id) VALUES (1)`,
+            `ALTER TABLE ${BUSY} ADD COLUMN late integer`,
+          ]);
+          await holdTheTable();
+
+          const stopped = await migrate({
+            tryMs: 1_000,
+            totalMs: 4_000,
+          }).catch((error: unknown) => error);
+
+          // Sent again, the insert would fire the trigger's code a second time.
+          expect(stopped).toMatchObject({
+            code: "NEXTLY_TABLE_BUSY",
+            logContext: {
+              stop: {
+                tries: 1,
+                outcome: {
+                  kind: "no-retry",
+                  statementNumber: 2,
+                  reason: "trigger",
+                },
+              },
+            },
+          });
+        } finally {
+          free();
+          await holding.catch(() => {});
+          await adapter.executeQuery(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
         }
       }
     );

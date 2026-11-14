@@ -55,8 +55,9 @@ import type { AddressKind } from "../../../shared/address-rule";
 import { appLanguageOrder } from "../../i18n/configured-locales";
 import { joinRetries } from "../../i18n/migration/archive-preflight";
 import { mainTableFields } from "../../i18n/per-language-storage";
-import { busyTableBounds } from "../busy-table/bounds";
+import { busyTableBounds, type BusyTableBounds } from "../busy-table/bounds";
 import { runUnitInTries } from "../busy-table/run-unit";
+import { boundedStopRecord } from "../busy-table/stopped-record";
 import { unresolvedAttempts } from "../events/migration-state";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import { checksumOf } from "../migrate/applied-checksums";
@@ -292,6 +293,7 @@ export async function writeCollectionSave(
     appliedAfter?: () => Promise<void | "partly-applied">;
   } = {}
 ): Promise<CollectionSaveResult> {
+  const bounds = boundsFor(deps);
   const written = await writeSave(deps, save, options);
   // Once a push has run, the database changed outside the files: they stay.
   let pushed = false;
@@ -304,7 +306,7 @@ export async function writeCollectionSave(
       }
       await recordWhatWasPushed(deps, written.files, written.table);
     } else if (deps.applies) {
-      await runWritten(deps, written.files, written.table);
+      await runWritten(deps, written.files, written.table, bounds);
     } else if (options.appliedAfter !== undefined) {
       await options.appliedAfter();
       pushed = true;
@@ -379,11 +381,16 @@ export async function prepareCollectionSave(
   save: CollectionSave,
   options: { historyChecked?: boolean } = {}
 ): Promise<PreparedCollectionSave> {
+  // Read before anything is written, and so before the caller's own work between the two (a
+  // delete's teardown): a bound out of range refuses the save while it still changes nothing.
+  const bounds = boundsFor(deps);
   const written = await writeSave(deps, save, options);
   return {
     files: [...written.names],
     run: async () => {
-      if (deps.applies) await runWritten(deps, written.files, written.table);
+      if (deps.applies) {
+        await runWritten(deps, written.files, written.table, bounds);
+      }
     },
     withdraw: () => written.undo(undefined),
   };
@@ -1401,6 +1408,16 @@ async function sqlFiles(dir: string): Promise<string[]> {
 }
 
 /**
+ * The bounds a save that applies waits for a busy table within, as `nextly migrate` waits: the
+ * environment's (`NEXTLY_LOCK_TIMEOUT`, `NEXTLY_LOCK_TIMEOUT_TOTAL`). Read first, so a bound out of
+ * range refuses the save before it writes or removes anything; undefined where the save applies
+ * nothing.
+ */
+function boundsFor(deps: CollectionSaveDeps): BusyTableBounds | undefined {
+  return deps.applies ? busyTableBounds({ env: process.env }) : undefined;
+}
+
+/**
  * Run each written file as `nextly migrate` runs it, recorded in the ledger:
  * one with a snapshot through the reconcile, judged on the collection's table
  * alone; a companion with none, as written. An adoption is recorded applied
@@ -1411,15 +1428,15 @@ async function sqlFiles(dir: string): Promise<string[]> {
 async function runWritten(
   deps: CollectionSaveDeps,
   files: SaveFiles,
-  table: string
+  table: string,
+  boundsRead: BusyTableBounds | undefined
 ): Promise<void> {
   const db = deps.adapter.getDrizzle();
   const dialect = deps.adapter.getCapabilities().dialect;
   const repo = new SchemaEventsRepository(db, dialect);
-  // A table another session holds is waited for in short tries, as `nextly migrate` waits, within
-  // the bounds the environment sets (`NEXTLY_LOCK_TIMEOUT`, `NEXTLY_LOCK_TIMEOUT_TOTAL`); a bound
-  // out of range refuses the save here, before any file runs.
-  const bounds = busyTableBounds({ env: process.env });
+  const bounds = boundsRead ?? busyTableBounds({ env: process.env });
+  // The record of a file a busy table stopped waits for the ledger table one try at most.
+  const recordStopped = boundedStopRecord(deps.adapter, bounds.tryMs);
   const applied: string[] = [];
   const executeSql = (
     sql: string,
@@ -1475,7 +1492,13 @@ async function runWritten(
     const file = await unitOf(deps, filename);
     const target = await snapshotOf(deps, filename);
     if (target === null) {
-      await runRecordedAttempt({ file, dialect, repo, executeSql });
+      await runRecordedAttempt({
+        file,
+        dialect,
+        repo,
+        executeSql,
+        recordStopped,
+      });
       return;
     }
     const scopedTarget = onlyTable(target, table);
@@ -1488,6 +1511,7 @@ async function runWritten(
       dialect,
       repo,
       executeSql,
+      recordStopped,
       ...(adoption === undefined
         ? {}
         : {

@@ -24,6 +24,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql, type SQL } from "drizzle-orm";
 
+import { commitsOnMysql } from "../migrate/mysql-implicit-commit";
 import { leadingWords } from "../migrate/split-sql";
 
 import {
@@ -43,13 +44,17 @@ import {
   firstNoRetry,
   renamedTables,
   targetTable,
+  type JudgeContext,
   type StatementJudgement,
   type TriggerTables,
 } from "./judge";
 import { tableBusyError, tryNotice } from "./report";
 import { withBusyTableTries, type TryResult } from "./tries";
 import type { HolderReport } from "./types";
-import { prepareTryWatchdog } from "./watchdog";
+import { prepareTryWatchdog, type PreparedTryWatchdog } from "./watchdog";
+
+/** The table a unit's ledger write records it in. */
+const LEDGER_TABLE = "nextly_schema_events";
 
 /** What a run hands every unit it runs in tries. */
 export interface BusyTableRun {
@@ -66,15 +71,31 @@ export interface BusyTableRun {
   readonly passOver?: (error: unknown, statement: string) => boolean;
 }
 
+/** Where `triggerTables` looks on PostgreSQL. */
+export interface TriggerTablesScope {
+  /**
+   * Every schema, not only those the connection's search path reaches: for a unit that changes its
+   * search path, whose unqualified names may then reach a schema the path did not.
+   */
+  readonly everySchema?: boolean;
+}
+
 /** The tables of this database with a trigger a row change would fire. */
-function triggerTablesQuery(dialect: SupportedDialect): SQL {
+function triggerTablesQuery(
+  dialect: SupportedDialect,
+  scope: TriggerTablesScope
+): SQL {
   if (dialect === "postgresql") {
-    // Only the schemas an unqualified name reaches: a trigger on a same-named table elsewhere is
-    // not this table's.
+    // Only the schemas an unqualified name reaches, unless the unit moves the path: a trigger on a
+    // same-named table elsewhere is not this table's.
+    const reached =
+      scope.everySchema === true
+        ? sql``
+        : sql` AND n.nspname = ANY (current_schemas(false))`;
     return sql`SELECT DISTINCT c.relname AS name FROM pg_trigger t
       JOIN pg_class c ON c.oid = t.tgrelid
       JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE NOT t.tgisinternal AND n.nspname = ANY (current_schemas(false))`;
+      WHERE NOT t.tgisinternal${reached}`;
   }
   if (dialect === "mysql") {
     return sql`SELECT DISTINCT EVENT_OBJECT_TABLE AS name FROM information_schema.TRIGGERS
@@ -107,7 +128,8 @@ function mysqlSeesEveryTriggerQuery(): SQL {
  */
 export async function triggerTables(
   adapter: Pick<DrizzleAdapter, "queryStatement">,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  scope: TriggerTablesScope = {}
 ): Promise<TriggerTables> {
   if (dialect === "mysql") {
     const seen = await adapter.queryStatement<{ seen: unknown }>(
@@ -116,9 +138,104 @@ export async function triggerTables(
     if (seen.length === 0) return "unseen";
   }
   const rows = await adapter.queryStatement<{ name: unknown }>(
-    triggerTablesQuery(dialect)
+    triggerTablesQuery(dialect, scope)
   );
   return new Set(rows.map(row => String(row.name).toLowerCase()));
+}
+
+/**
+ * Whether PostgreSQL has an enabled DDL event trigger (one on `ddl_command_start`,
+ * `ddl_command_end`, `sql_drop` or `table_rewrite`, not a `login` one) that no installed extension
+ * owns: one runs code the system does not know on every CREATE, ALTER and DROP, so a schema
+ * statement may not be sent again (`JudgeContext`). An extension's own is vetted code installed
+ * with it. False on the other dialects, which have none. A read that fails answers yes, failing
+ * closed.
+ */
+export async function hasDdlEventTriggers(
+  adapter: Pick<DrizzleAdapter, "queryStatement">,
+  dialect: SupportedDialect
+): Promise<boolean> {
+  return (await ddlEventTriggerTags(adapter, dialect)) !== "none";
+}
+
+/**
+ * The command tags PostgreSQL's DDL event triggers fire on (`hasDdlEventTriggers` reads which
+ * count): `"none"` where there is no such trigger, `"all"` where one fires on every command (no
+ * `WHEN TAG IN`), else the tags they are limited to, upper-cased. A read that fails answers
+ * `"all"`, failing closed.
+ */
+export async function ddlEventTriggerTags(
+  adapter: Pick<DrizzleAdapter, "queryStatement">,
+  dialect: SupportedDialect
+): Promise<"none" | "all" | ReadonlySet<string>> {
+  if (dialect !== "postgresql") return "none";
+  try {
+    const rows = await adapter.queryStatement<{ tags: unknown }>(
+      sql`SELECT e.evttags AS tags FROM pg_event_trigger e
+        WHERE e.evtenabled <> 'D'
+          AND e.evtevent IN ('ddl_command_start', 'ddl_command_end', 'sql_drop', 'table_rewrite')
+          AND NOT EXISTS (SELECT 1 FROM pg_depend d
+            WHERE d.classid = 'pg_event_trigger'::regclass AND d.objid = e.oid AND d.deptype = 'e')`
+    );
+    return tagsOf(rows);
+  } catch {
+    return "all";
+  }
+}
+
+/** The tags of the event triggers read, as `ddlEventTriggerTags` answers. */
+function tagsOf(
+  rows: readonly { tags: unknown }[]
+): "none" | "all" | ReadonlySet<string> {
+  if (rows.length === 0) return "none";
+  const tags = new Set<string>();
+  for (const row of rows) {
+    if (!Array.isArray(row.tags)) return "all";
+    for (const tag of row.tags) tags.add(String(tag).toUpperCase());
+  }
+  return tags;
+}
+
+/** What a judgement reads of the event triggers (`JudgeContext`), from their tags. */
+export function eventTriggerContext(
+  tags: "none" | "all" | ReadonlySet<string>
+): JudgeContext {
+  if (tags === "none") return { ddlEventTriggers: false };
+  return tags === "all"
+    ? { ddlEventTriggers: true }
+    : { ddlEventTriggers: true, ddlEventTriggerTags: tags };
+}
+
+/** What a unit's judgements read of the database: its triggers and its DDL event triggers. */
+interface UnitCatalog {
+  readonly triggers: TriggerTables;
+  readonly context: JudgeContext;
+}
+
+/**
+ * Whether `statement` sets PostgreSQL's search path (`SET [LOCAL | SESSION] search_path`), after
+ * which an unqualified name may reach a schema the connection's path did not.
+ */
+function setsSearchPath(statement: string, dialect: SupportedDialect): boolean {
+  const [first, second, third] = leadingWords(statement, dialect, 3);
+  if (first !== "SET") return false;
+  const name = second === "LOCAL" || second === "SESSION" ? third : second;
+  return name === "SEARCH_PATH";
+}
+
+/** Reads the catalog a unit is judged against (`UnitCatalog`). */
+async function readUnitCatalog(
+  adapter: Pick<DrizzleAdapter, "queryStatement">,
+  dialect: SupportedDialect,
+  statements: readonly string[]
+): Promise<UnitCatalog> {
+  const everySchema =
+    dialect === "postgresql" &&
+    statements.some(statement => setsSearchPath(statement, dialect));
+  return {
+    triggers: await triggerTables(adapter, dialect, { everySchema }),
+    context: eventTriggerContext(await ddlEventTriggerTags(adapter, dialect)),
+  };
 }
 
 /**
@@ -176,49 +293,24 @@ function keepingOf(unit: MigrationUnit, dialect: SupportedDialect): TryKeeping {
 }
 
 /**
- * Whether MySQL commits the open transaction implicitly before and after `statement`: a CREATE,
- * ALTER, DROP or RENAME of a table or an index (the column, key and check changes are an
- * ALTER TABLE's). A temporary table's CREATE and DROP do not commit. A statement that commits but
- * is not read as one here (a view's CREATE, a TRUNCATE) is one no later try may send again
- * (`judgeStatement` reads it as unread), so the run stops rather than send it twice.
- */
-function commitsOnMysql(statement: string): boolean {
-  const [first, second, third] = leadingWords(statement, "mysql", 3);
-  const objects = MYSQL_COMMITTING[first ?? ""];
-  if (objects === undefined) return false;
-  // `CREATE UNIQUE|FULLTEXT|SPATIAL INDEX`: the object is the third word.
-  const object =
-    first === "CREATE" && INDEX_KINDS.has(second ?? "") ? third : second;
-  return objects.has(object ?? "");
-}
-
-/** The objects whose creation, change, drop or rename commits MySQL's transaction, by verb. */
-const MYSQL_COMMITTING: Readonly<Record<string, ReadonlySet<string>>> = {
-  CREATE: new Set(["TABLE", "INDEX"]),
-  ALTER: new Set(["TABLE", "INDEX"]),
-  DROP: new Set(["TABLE", "INDEX"]),
-  RENAME: new Set(["TABLE"]),
-};
-
-/** The kinds of index MySQL writes before `INDEX`. */
-const INDEX_KINDS = new Set(["UNIQUE", "FULLTEXT", "SPATIAL"]);
-
-/**
- * The index of the first statement an ended try did not keep, from the try's first (`from`) and
- * the index it was told last (`waiting`: the statement that waited, or the statements' count
- * where the wait came after the last).
+ * The index of the first statement an ended try did not keep, from the try's first (`from`), the
+ * index it was told last (`waiting`: the statement that waited, or the statements' count where the
+ * wait came after the last) and whether that statement was sent (`sent`): a wait in its
+ * checkpoint, before it, is not one on it.
  */
 function keptUntil(
   keeping: TryKeeping,
   statements: readonly string[],
   from: number,
-  waiting: number
+  waiting: number,
+  sent: boolean
 ): number {
   if (keeping === "rolled-back") return from;
   if (keeping === "each-statement") return waiting;
-  // MySQL: a schema statement that waited had the transaction before it committed first.
+  // MySQL: a schema statement that waited had the transaction before it committed first. One that
+  // was never sent committed nothing: the transaction before it rolled back with the try.
   const waited = statements[waiting];
-  if (waited !== undefined && commitsOnMysql(waited)) return waiting;
+  if (sent && waited !== undefined && commitsOnMysql(waited)) return waiting;
   for (let index = waiting - 1; index >= from; index--) {
     const statement = statements[index];
     if (statement !== undefined && commitsOnMysql(statement)) return index + 1;
@@ -240,7 +332,7 @@ function firstNoRetryBetween(
   start: number,
   end: number,
   dialect: SupportedDialect,
-  triggers: TriggerTables
+  catalog: UnitCatalog
 ): ReturnType<typeof firstNoRetry> {
   // Asked first, whatever the next try sends: it runs on a new session either way.
   const sessionState = sessionStateBefore(statements, start, dialect);
@@ -263,7 +355,10 @@ function firstNoRetryBetween(
       ...statements.slice(start, end),
     ],
     dialect,
-    triggers
+    catalog.triggers,
+    // The kept statements read again only to follow renames and settings are not sent again as
+    // schema statements: only those from `start` fire an event trigger again.
+    { ...catalog.context, ddlEventTriggersFrom: replayedBefore.length }
   );
   if (found === undefined) return undefined;
   const at = found.statementNumber - 1;
@@ -272,6 +367,26 @@ function firstNoRetryBetween(
       ? (replayedBefore[at] ?? 0)
       : start + at - replayedBefore.length;
   return { statementNumber: index + 1, judgement: found.judgement };
+}
+
+/** The first words of the statements that change rows or settings, none of which commits MySQL's transaction. */
+const ROW_CHANGE_WORDS = new Set([
+  "INSERT",
+  "UPDATE",
+  "DELETE",
+  "REPLACE",
+  "SELECT",
+  "SET",
+]);
+
+/**
+ * Whether every one of `statements` changes rows or a setting: on MySQL none commits the
+ * transaction implicitly, as a schema statement, a trigger's or a view's CREATE or a TRUNCATE does.
+ */
+function onlyRowChanges(statements: readonly string[]): boolean {
+  return statements.every(statement =>
+    ROW_CHANGE_WORDS.has(leadingWords(statement, "mysql", 1)[0] ?? "")
+  );
 }
 
 /** The positions (1 for the first) of the statements from `from` up to `kept`, not included. */
@@ -297,8 +412,6 @@ export async function runUnitInTries(
 ): Promise<number> {
   const dialect = adapter.getCapabilities().dialect;
   const keeping = keepingOf(unit, dialect);
-  // Read again after each try that ended (below): a statement a try kept may have made a trigger.
-  let triggers = await triggerTables(adapter, dialect);
   // Where the next try starts: past every statement an earlier try kept.
   let from = 0;
   return withBusyTableTries(
@@ -322,16 +435,29 @@ export async function runUnitInTries(
       // The index last told: a statement about to be sent, or the count once all have run; -1
       // while none has been told.
       let reached = -1;
+      // The index last sent to the database: behind `reached` while its checkpoint runs.
+      let sentIndex = -1;
       // Made before the unit's transaction or session opens, so the watch's asks on another
       // connection never run inside that flow; it starts once the session is known.
       // What holds the table, read by the watch just before it ends the try, while the session
       // still waits; after the rollback it waits for nothing and the database names no holder.
       let holder: HolderReport | undefined;
+      const beforeCancel = async (waiting: string): Promise<void> => {
+        holder = await readHolders(adapter, dialect, waiting);
+      };
       const watchdog = prepareTryWatchdog(adapter, dialect, tryMs, {
-        beforeCancel: async waiting => {
-          holder = await readHolders(adapter, dialect, waiting);
-        },
+        beforeCancel,
       });
+      // The watch of a ledger write that runs on a connection of its own, once the statements'
+      // session has closed: it has what the statements' waits left of the try.
+      let ledgerWatch: PreparedTryWatchdog | undefined;
+      const stopWatches = async (): Promise<{ fired: boolean }> => {
+        const [statements, ledger] = await Promise.all([
+          watchdog.stop(),
+          ledgerWatch?.stop() ?? Promise.resolve({ fired: false }),
+        ]);
+        return { fired: statements.fired || ledger.fired };
+      };
       try {
         const value = await runMigrationStatements(
           adapter,
@@ -355,21 +481,49 @@ export async function runUnitInTries(
               await watchdog.stop();
             },
             beforeStatement: () => watchdog.idle(),
+            onSend: index => {
+              sentIndex = index;
+            },
+            afterWatch: () => {
+              const watch = prepareTryWatchdog(
+                adapter,
+                dialect,
+                Math.max(1, tryMs - watchdog.waited()),
+                { beforeCancel }
+              );
+              watch.moveTo(statements.length);
+              ledgerWatch = watch;
+              return {
+                watch: session => watch.watch(session),
+                settle: async () => {
+                  await watch.stop();
+                },
+              };
+            },
             ...(run.passOver === undefined ? {} : { passOver: run.passOver }),
           }
         );
-        await watchdog.stop();
+        await stopWatches();
         return { kind: "done", value };
       } catch (error) {
-        const { fired } = await watchdog.stop();
+        const { fired } = await stopWatches();
         if (!endedWaiting(error, dialect, fired)) throw error;
         const started = from;
         // A statement this try or an earlier one kept may have made a trigger: outside a
         // transaction each statement committed as it ran, and on MySQL a trigger's CREATE commits
         // on its own. The list is read again, after the try let go of its session, before judging
         // what the next try sends; a read that fails counts every table as having one.
-        triggers = await triggerTables(adapter, dialect).catch(
-          (): TriggerTables => "unseen"
+        // Read once the try let go of its session, never before the first try: a statement a try
+        // kept may have made a trigger, so an earlier read would only be read again.
+        const catalog = await readUnitCatalog(
+          adapter,
+          dialect,
+          statements
+        ).catch(
+          (): UnitCatalog => ({
+            triggers: "unseen",
+            context: { ddlEventTriggers: true },
+          })
         );
         // Nothing of this try's own was sent where no index was told: a setting sent again first
         // waited, and the try kept nothing.
@@ -377,33 +531,54 @@ export async function runUnitInTries(
         const waiting = toldNone ? started : reached;
         const kept = toldNone
           ? started
-          : keptUntil(keeping, statements, started, waiting);
+          : keptUntil(
+              keeping,
+              statements,
+              started,
+              waiting,
+              sentIndex === waiting
+            );
         from = kept;
         // What the next try sends again from the statements this one ran: from its start where
         // the transaction kept nothing, from the open transaction's first on MySQL, the waiting
         // statement alone outside a transaction.
         // A try that sent none of its own still leaves the next on a new session, without the
         // state the statements kept before it made.
+        // The statements the next try sends again end at the waiting one where it was sent; a
+        // wait in its checkpoint, before it, leaves it unsent, and sending it is no repeat.
+        const sentUntil =
+          sentIndex === waiting
+            ? Math.min(waiting + 1, statements.length)
+            : waiting;
         const lasting = toldNone
           ? sessionStateBefore(statements, kept, dialect)
-          : firstNoRetryBetween(
-              statements,
-              kept,
-              Math.min(waiting + 1, statements.length),
-              dialect,
-              triggers
-            );
-        const waited = statements[Math.min(waiting, statements.length - 1)];
+          : firstNoRetryBetween(statements, kept, sentUntil, dialect, catalog);
+        // A wait after the last statement is the ledger write's, on the ledger's own table.
+        const waited = statements[waiting];
         return {
           kind: "ended",
           ended: {
-            table: waited === undefined ? null : targetTable(waited, dialect),
+            table:
+              waited === undefined
+                ? waiting >= statements.length && !toldNone
+                  ? LEDGER_TABLE
+                  : null
+                : targetTable(waited, dialect),
             holder: holder ?? (await readHolders(adapter, dialect, session)),
           },
           ...(lasting === undefined ? {} : { lasting }),
-          // Only a transaction that kept nothing undid the rest of the change.
-          undone: keeping === "rolled-back",
-          committed: positionsBetween(started, kept),
+          // Only a transaction that kept nothing undid the rest of the change: on MySQL, one whose
+          // statements sent were all row changes, none of which commits the transaction.
+          undone:
+            keeping === "rolled-back" ||
+            (keeping === "open-transaction" &&
+              kept === 0 &&
+              onlyRowChanges(statements.slice(0, sentIndex + 1))),
+          // A setting kept ended with its session and is sent again first: nothing durable.
+          committed: positionsBetween(started, kept).filter(
+            position =>
+              !isConnectionSetting(statements[position - 1] ?? "", dialect)
+          ),
         };
       }
     }

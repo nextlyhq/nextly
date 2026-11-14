@@ -56,6 +56,7 @@ import {
   runUnitInTries,
   type BusyTableRun,
 } from "../../domains/schema/busy-table/run-unit";
+import { boundedStopRecord } from "../../domains/schema/busy-table/stopped-record";
 import { isPluginLedgerRow } from "../../domains/schema/events/ledger-scope";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import {
@@ -1996,6 +1997,8 @@ export async function runPluginPhase(
   // stopped. A module waits for a busy table in tries as an app file does (`runUnitInTries`), its
   // ledger and owner rows written in `after` with its statements.
   const appliedModules: string[] = [];
+  // The record of a module a busy table stopped waits for the ledger table one try at most.
+  const moduleTryMs = deps.busyTable?.bounds.tryMs;
   const executeModule = buildSqlExecutor(
     dz,
     deps.dialect,
@@ -2098,6 +2101,11 @@ export async function runPluginPhase(
       return live;
     },
     executeSql: pluginExecuteSql,
+    ...(moduleTryMs === undefined
+      ? {}
+      : {
+          recordStopped: boundedStopRecord(dz, moduleTryMs),
+        }),
     repo: eventsRepo,
     recordOwner: async ({
       pluginName,
@@ -4258,6 +4266,15 @@ export async function runFileMigrations(args: {
     logger,
     withAppliedBefore(args.busyTable, appliedFiles)
   );
+  // The record of a file that stopped waiting for a busy table waits for the ledger table no
+  // longer than one try (`writeLedgerBounded`).
+  const busyTableTryMs = args.busyTable?.bounds.tryMs;
+  const recordStopped =
+    busyTableTryMs === undefined
+      ? {}
+      : {
+          recordStopped: boundedStopRecord(dz, busyTableTryMs),
+        };
 
   // Owner rows for the drop guard: an app file dropping a plugin-migrated
   // table is refused whole, before its first statement. Read once; an absent
@@ -4425,6 +4442,7 @@ export async function runFileMigrations(args: {
             dialect,
             repo,
             executeSql: executeFileSql,
+            ...recordStopped,
           });
         } catch (err) {
           throw NextlyError.is(err) ? err : applyFailedError(filename, err);
@@ -4502,6 +4520,7 @@ export async function runFileMigrations(args: {
         dialect,
         repo,
         executeSql: executeFileSql,
+        ...recordStopped,
         ...(withFile === undefined
           ? {}
           : { beforeRecorded: () => withFile(m.transaction) }),
