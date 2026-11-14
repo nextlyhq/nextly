@@ -431,6 +431,10 @@ class CopyWriter {
 
   /** Ends the line, with no space left at its end. */
   newLine(): void {
+    if (this.inCell()) {
+      this.cellBreak();
+      return;
+    }
     this.copy.trimEnd();
     if (this.copy.length > 0 && !this.copy.endsWith("\n")) this.copy.add("\n");
   }
@@ -440,13 +444,19 @@ class CopyWriter {
     return this.inside("td") || this.inside("th");
   }
 
+  /**
+   * A break in a table cell: a space. A table row is one line, so a line
+   * break, a block or a list item in a cell keeps the row whole.
+   */
+  private cellBreak(): void {
+    if (!/[\s|]$/.test(this.copy.last(1))) this.copy.add(" ");
+  }
+
   /** Starts a block: a blank line between it and what came before. */
   newBlock(): void {
     if (this.inside("table")) {
-      // A table row is one line: blocks in a cell are kept apart by a space.
-      if (this.inCell() && !/[\s|]$/.test(this.copy.last(1))) {
-        this.copy.add(" ");
-      }
+      // Between a table's rows and cells, the bars do the breaking.
+      if (this.inCell()) this.cellBreak();
       return;
     }
     this.copy.trimEnd();
@@ -529,9 +539,7 @@ class CopyWriter {
   /** What an element that holds nothing writes: a break, a rule or an image. */
   private empty(tag: string, attributes: string): void {
     if (tag === "br") {
-      // A table row is one line: a break in a cell is a space.
-      if (this.inCell()) this.space();
-      else this.newLine();
+      this.newLine();
     } else if (tag === "hr") {
       this.newBlock();
       this.copy.add("---");

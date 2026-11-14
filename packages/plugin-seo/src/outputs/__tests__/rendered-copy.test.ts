@@ -26,7 +26,7 @@
  *   cell is escaped, so it does not end the cell;
  * - a `<main>` a reader never sees, hidden itself or by what holds it, is
  *   not the page's main content;
- * - a line break in a table cell keeps the cell's row on one line;
+ * - a line break or a list in a table cell keeps the cell's row on one line;
  * - prose that Markdown would read again as a block or a character
  *   reference is escaped;
  * - a list nested in a numbered item is indented to that item's content, at
@@ -392,6 +392,16 @@ describe("a copy made from the rendered page", () => {
     );
     expect(renderedCopyOf(html, BASE).body).toBe(
       "| Command |\n| --- |\n| `echo hello \\| cat` |\n\n`a | b`"
+    );
+  });
+
+  it("keeps a table row on one line where a cell holds a list", () => {
+    const html = page(
+      "",
+      "<main><table><tr><th>Plan</th><th>Features</th></tr><tr><td>Basic</td><td><ul><li>One</li><li>Two</li></ul></td></tr></table></main>"
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe(
+      "| Plan | Features |\n| --- | --- |\n| Basic | - One - Two |"
     );
   });
 });
