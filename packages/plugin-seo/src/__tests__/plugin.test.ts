@@ -722,6 +722,35 @@ describe("typesLeftOut", () => {
   });
 });
 
+describe("the brand facts the settings screen is handed", () => {
+  it("are plain JSON, whatever the options hold: no unset key, no shared list", () => {
+    const shared = ["https://x.com/example"];
+    const plugin = seoPlugin({
+      collections: ["pages"],
+      sitemap: false,
+      structuredData: {
+        brand: {
+          name: "Example",
+          email: undefined,
+          parentOrganization: { name: "Example Holdings", sameAs: shared },
+          founders: [{ name: "Sara Khan", sameAs: shared }],
+        },
+      },
+    });
+    const brand = plugin.contributes?.admin?.clientConfig?.brand as
+      | Record<string, unknown>
+      | undefined;
+    // What core's check of a client config accepts: the value survives a
+    // JSON round trip unchanged, with no key JSON would drop.
+    expect(JSON.parse(JSON.stringify(brand))).toEqual(brand);
+    expect(brand).not.toHaveProperty("email");
+    const parent = brand?.parentOrganization as { sameAs: unknown };
+    const [founder] = (brand?.founders ?? []) as { sameAs: unknown }[];
+    expect(parent.sameAs).toEqual(shared);
+    expect(parent.sameAs).not.toBe(founder?.sameAs);
+  });
+});
+
 describe("the optional connections the plugin declares", () => {
   it("reaches only IndexNow's endpoint and Google's Search Console addresses", () => {
     const plugin = seoPlugin({ collections: ["pages"] });

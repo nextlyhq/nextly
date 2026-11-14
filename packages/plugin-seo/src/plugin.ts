@@ -75,6 +75,7 @@ import { notFoundCollection } from "./not-found/collection";
 import { moveLoggedRows } from "./not-found/log";
 import { keepSeoContext } from "./not-found/report";
 import { plainCopyProxyHandler } from "./outputs/ai-outputs";
+import { withCopyLink } from "./outputs/copy-link";
 import { listPages, type ListedPagesService } from "./outputs/listing";
 import type { AiCrawlerChoice } from "./outputs/robots";
 import { siteServesOwnRobots } from "./outputs/robots-owner";
@@ -170,6 +171,7 @@ import {
   rulesFromOptions,
   type ReadStructuredDataRules,
   type StructuredDataOptions,
+  type StructuredDataBrand,
 } from "./structured-data/rules";
 import { seoTabParts } from "./tab/install";
 import { SEO_GROUP } from "./tab/typed";
@@ -670,6 +672,15 @@ function ownRulesCheckRoute(
  * });
  * ```
  */
+/** The brand facts the options give, as the settings screen is handed them. */
+function codeBrandOption(options: SeoPluginOptions): StructuredDataBrand {
+  // A plain JSON copy: a client config must survive a JSON round trip, and
+  // the options may hold a key set to undefined or a list shared by two facts.
+  return JSON.parse(
+    JSON.stringify(options.structuredData?.brand ?? {})
+  ) as StructuredDataBrand;
+}
+
 /**
  * How the Proxy answers an address made Gone: with the site's own page,
  * named as an address from the site's root, where the site names one.
@@ -736,6 +747,13 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     options,
     sitemapConfig(options, sitemapSubset)
   );
+  // What the plain-text copies are served and linked by: the Proxy that
+  // answers them and the head that links them make one decision.
+  const plainCopies = {
+    readRules,
+    ...siteOrigin,
+    ...(sitemapSubset === undefined ? {} : { collections: sitemapSubset }),
+  };
   const googleClient = googleClientOf(options);
   // Stops noting changes for IndexNow when the plugin is taken down.
   let stopIndexNow: (() => Promise<void>) | undefined;
@@ -767,7 +785,8 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // links to its other languages, its social card completed, and its
   // structured data, worked out from that same answer and the settings'
   // brand facts, with the plugin's options where the settings say nothing;
-  // the home page also carries the verification codes the settings hold.
+  // the home page also carries the verification codes the settings hold,
+  // and, where plain-text copies are on, a listed page links its copy.
   // What the site's routes are answered, and what the check of what search
   // engines received compares each page with.
   // A page of a type whose SEO is switched off is answered nothing, so its
@@ -777,14 +796,22 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     withVerification(
       withSeoOff(
         ctx,
-        withStructuredData(
+        withCopyLink(
           ctx,
-          withSocialCard(
+          withStructuredData(
             ctx,
-            withLanguageLinks(ctx, seoPageMetadata(ctx, readRules), readRules),
-            readSocialCardRules
+            withSocialCard(
+              ctx,
+              withLanguageLinks(
+                ctx,
+                seoPageMetadata(ctx, readRules),
+                readRules
+              ),
+              readSocialCardRules
+            ),
+            structuredDataFromSettings(readStructuredDataRules)
           ),
-          structuredDataFromSettings(readStructuredDataRules)
+          plainCopies
         ),
         readRules
       ),
@@ -915,11 +942,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     proxy: [
       stagingGuard(readRules),
       redirectsProxyHandler(redirectKeys, undefined, goneAnswer),
-      plainCopyProxyHandler({
-        readRules,
-        ...siteOrigin,
-        ...(sitemapSubset === undefined ? {} : { collections: sitemapSubset }),
-      }),
+      plainCopyProxyHandler(plainCopies),
       indexNowKeyProxyHandler({ readRules, ...siteOrigin }),
     ],
     // The optional connections' own state, their credentials sealed: core
@@ -954,6 +977,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // Each type's structured data choice the options make, which the
         // screen shows until the site chooses its own.
         structuredData: checkedTypeRules(options.structuredData?.types),
+        // The brand facts the options give, which the Organization tab shows
+        // where the settings hold none of their own. Every one is public
+        // already: each page's structured data states it.
+        brand: codeBrandOption(options),
         // The collections whose pages the SEO tab edits, so the tab in the
         // Page Builder's Settings knows a page it has a group to edit.
         tabCollections: tab.tabCollections,

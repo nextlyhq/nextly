@@ -196,6 +196,14 @@ export interface PageMetadataAnswer {
   /** The page's address in each language, keyed by language code. */
   languages?: Record<string, string>;
   /**
+   * Other forms of the page, keyed by media type, such as
+   * `{ "text/markdown": "/blog/hello.md" }`: each is placed in the head as
+   * `<link rel="alternate" type href>`, and replaces a route's own link for
+   * that type. Absolute, or root-relative and resolved against
+   * `metadataBase`.
+   */
+  formats?: Record<string, string>;
+  /**
    * The page's structured data: JSON-LD nodes, written without `@context`,
    * which the route helpers hand the page's render as one schema.org graph.
    * Plain JSON only, since the answer is cached as JSON.

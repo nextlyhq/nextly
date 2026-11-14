@@ -72,7 +72,8 @@ export function TextRow({
   onChange?: (value: string) => void;
   /** The line under the control, if any. */
   note?: ReactNode;
-  noteTone?: "muted" | "warning";
+  /** `danger` says what is wrong with the value, and marks the control invalid. */
+  noteTone?: "muted" | "warning" | "danger";
   placeholder?: string;
   multiline?: boolean;
   readOnly?: boolean;
@@ -99,7 +100,7 @@ export function TextRow({
           placeholder,
           readOnly,
           "aria-describedby": describedBy,
-          "aria-invalid": field.invalid,
+          "aria-invalid": field.invalid || noteTone === "danger",
           className: [
             mono ? "font-mono text-[13px]" : "",
             readOnly ? "bg-muted" : "",

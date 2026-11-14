@@ -33,17 +33,24 @@ export function defined<T extends Record<string, unknown>>(
   ) as Partial<T>;
 }
 
-/** The canonical and the language addresses, or undefined for neither. */
+/**
+ * The canonical, the language addresses and the page's other forms, by
+ * media type, or undefined for none of them.
+ */
 function alternatesOf(
   answer: PageMetadataAnswer
 ): Metadata["alternates"] | undefined {
-  const languages = answer.languages;
+  const { languages, formats } = answer;
   const hasLanguages =
     languages !== undefined && Object.keys(languages).length > 0;
-  if (answer.canonical === undefined && !hasLanguages) return undefined;
+  const hasFormats = formats !== undefined && Object.keys(formats).length > 0;
+  if (answer.canonical === undefined && !hasLanguages && !hasFormats) {
+    return undefined;
+  }
   return {
     ...(answer.canonical === undefined ? {} : { canonical: answer.canonical }),
     ...(hasLanguages ? { languages } : {}),
+    ...(hasFormats ? { types: { ...formats } } : {}),
   };
 }
 
