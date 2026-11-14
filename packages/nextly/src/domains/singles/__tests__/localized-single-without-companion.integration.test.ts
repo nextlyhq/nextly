@@ -179,6 +179,9 @@ describe("localized single without a companion table (integration)", () => {
     expect(
       await current.adapter.tableExists("single_swin_settings_locales")
     ).toBe(false);
+    // The call also remembered the table as ready; forgotten, as a process started after the
+    // drop would find it, so the write meets the refusal before it reaches the database.
+    forgetCompanionReadiness(current.adapter, "single_swin_settings_locales");
 
     await expect(
       current.nextly.updateSingle({
