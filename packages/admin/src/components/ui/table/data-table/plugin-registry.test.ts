@@ -169,22 +169,29 @@ describe("data-table plugin-registry", () => {
   });
 
   // Whether a list holds its rows and the columns it draws come from one ask
-  // of its providers, which may start a read when asked: two passes could
-  // see that read in two states.
-  it("asks a list's providers once for its columns and whether it is deciding", () => {
+  // of its providers, which may start a read when asked: two asks could see
+  // that read in two states. And a list drawn anew asks anew, since a
+  // provider's answer can follow time as well as the registrations (a "no
+  // column" that stands only a while): an ask kept by snapshot alone would
+  // answer a list reopened later from a stale decision.
+  it("asks a list's providers once per drawn list for its columns and whether it is deciding", () => {
     let asked = 0;
     registerColumns("posts", () => {
       asked += 1;
       return [{ name: "seo", header: "SEO" }];
     });
-    expect(pluginColumnsDeciding("posts")).toBe(false);
-    resolvePluginColumns("posts", base);
-    resolvePluginColumns("posts", [...base]);
+    const drawn = {};
+    expect(pluginColumnsDeciding("posts", undefined, drawn)).toBe(false);
+    resolvePluginColumns("posts", base, undefined, drawn);
+    resolvePluginColumns("posts", [...base], undefined, drawn);
     expect(asked).toBe(1);
-    // A new snapshot asks again.
+    // The same list in a new snapshot asks again.
     registerColumns("tags", () => []);
-    resolvePluginColumns("posts", base);
+    resolvePluginColumns("posts", base, undefined, drawn);
     expect(asked).toBe(2);
+    // A list drawn anew, in the same snapshot, asks again.
+    resolvePluginColumns("posts", base, undefined, {});
+    expect(asked).toBe(3);
   });
 
   it("is deciding nothing where no provider says so, or one throws", () => {

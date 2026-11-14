@@ -180,29 +180,44 @@ interface ProvidedColumns {
 }
 
 /**
- * Each registrations snapshot's provider pass, by list. Providers are asked
- * once per snapshot and list, and every reader (the columns a list draws,
- * whether it holds its rows for one on its way) derives its view from that
- * one answer: a provider may start a read when asked, and two passes could
- * see it in two states. A snapshot is replaced whole on any change, a
- * decision settling included, so a new one asks again.
+ * One drawn list's ask of its providers: any object the list keeps for as
+ * long as it is on screen. Every reader of that list (the columns it draws,
+ * whether it holds its rows for one on its way) passes the same one, and
+ * derives its view from one answer: a provider may start a read when asked,
+ * and two asks could see it in two states.
  */
-const providedBySnapshot = new WeakMap<
-  DataTablePluginRegistrations,
-  Map<DataTableTarget, ProvidedColumns>
+export type PluginColumnsPass = object;
+
+/**
+ * Each pass's answer, for the registrations snapshot it was asked in, by
+ * list. Asked again when the snapshot is replaced (any change, a decision
+ * settling included), and by a list drawn anew, which brings a pass of its
+ * own: a provider's answer can follow time as well as registrations (a "no
+ * column" that stands only a while), so a list opened later asks afresh.
+ */
+const passes = new WeakMap<
+  PluginColumnsPass,
+  {
+    from: DataTablePluginRegistrations;
+    byTarget: Map<DataTableTarget, ProvidedColumns>;
+  }
 >();
 
-/** The providers' answer for `target` in `from`, asked once. */
+/**
+ * The providers' answer for `target` in `from`: once per `pass`, or afresh
+ * on each call without one.
+ */
 function providedColumns(
   target: DataTableTarget,
-  from: DataTablePluginRegistrations
+  from: DataTablePluginRegistrations,
+  pass: PluginColumnsPass | undefined
 ): ProvidedColumns {
-  let byTarget = providedBySnapshot.get(from);
-  if (byTarget === undefined) {
-    byTarget = new Map();
-    providedBySnapshot.set(from, byTarget);
+  let kept = pass === undefined ? undefined : passes.get(pass);
+  if (pass !== undefined && kept?.from !== from) {
+    kept = { from, byTarget: new Map() };
+    passes.set(pass, kept);
   }
-  const known = byTarget.get(target);
+  const known = kept?.byTarget.get(target);
   if (known !== undefined) return known;
   let deciding = false;
   const ctx = providerContext(target, () => {
@@ -217,7 +232,7 @@ function providedColumns(
     }
   }
   const answer = { columns, deciding };
-  byTarget.set(target, answer);
+  kept?.byTarget.set(target, answer);
   return answer;
 }
 
@@ -229,9 +244,10 @@ function providedColumns(
  */
 export function pluginColumnsDeciding(
   target: DataTableTarget,
-  from: DataTablePluginRegistrations = registrations
+  from: DataTablePluginRegistrations = registrations,
+  pass?: PluginColumnsPass
 ): boolean {
-  return providedColumns(target, from).deciding;
+  return providedColumns(target, from, pass).deciding;
 }
 
 /** The registrations as they stand, for `useSyncExternalStore`. */
@@ -367,15 +383,17 @@ export function registerBulkAction<
 /**
  * Merge plugin columns into a base column set for a target: append the
  * registered providers' columns, then apply the registered transforms in order.
+ * With a `pass`, the providers' answer is the one that pass already has.
  */
 export function resolvePluginColumns<Row extends object>(
   target: DataTableTarget,
   base: NextlyColumn<Row>[],
-  from: DataTablePluginRegistrations = registrations
+  from: DataTablePluginRegistrations = registrations,
+  pass?: PluginColumnsPass
 ): NextlyColumn<Row>[] {
   let columns = [
     ...(base as NextlyColumn[]),
-    ...providedColumns(target, from).columns,
+    ...providedColumns(target, from, pass).columns,
   ];
   const ctx: DataTableContext = { target };
   for (const transform of collect(from.columnTransforms, target)) {
