@@ -69,6 +69,7 @@ import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
 import {
   columnsThatMayHoldNull,
   fieldProducesColumn,
+  fieldsStoredOnRow,
   getColumnDescriptor,
   systemColumnsForFields,
   toSnakeCase,
@@ -481,7 +482,9 @@ export class DynamicCollectionService extends BaseService {
     fields: FieldDefinition[]
   ): Promise<ReadonlyMap<string, string>> {
     const slugs = new Set<string>();
-    for (const field of fields) {
+    // The field groups at this level, those inside a group with no name among them, as a rename
+    // pairs them (`fieldGroupRenamePairs`): a table left unresolved moves no rows.
+    for (const field of fieldsStoredOnRow(fields)) {
       for (const slug of fieldGroupSlugList(field)) slugs.add(slug);
     }
     if (slugs.size === 0) return new Map();
@@ -2106,7 +2109,13 @@ export class DynamicCollectionService extends BaseService {
   async writerRelations(
     tableName: string,
     oldFields: FieldDefinition[],
-    newFields: FieldDefinition[]
+    newFields: FieldDefinition[],
+    /**
+     * Whose table this is. A collection's or Single's row holds the fields inside a group with no
+     * name as columns; a field group's creator gives them none (`FieldGroupSchemaService
+     * .columnFields`), so its keys are read from its named top-level fields alone.
+     */
+    owner: "row" | "fieldGroup" = "row"
   ): Promise<{
     junctions: { up: string[]; down: string[] };
     keys: { before: ForeignKeySpec[]; after: ForeignKeySpec[] };
@@ -2147,7 +2156,8 @@ export class DynamicCollectionService extends BaseService {
         tableName,
         oldFields,
         newFields,
-        targetTables
+        targetTables,
+        owner === "fieldGroup" ? namedFieldsOnly : fieldsStoredOnRow
       ),
     };
   }
@@ -2186,11 +2196,26 @@ export class DynamicCollectionService extends BaseService {
    */
   private async keysTheTableHolds(
     tableName: string,
-    oldFields: FieldDefinition[],
-    newFields: FieldDefinition[],
-    targetTables: CollectionTables | undefined
+    declaredOldFields: FieldDefinition[],
+    declaredNewFields: FieldDefinition[],
+    targetTables: CollectionTables | undefined,
+    columnFieldsOf: (fields: FieldDefinition[]) => FieldDefinition[]
   ): Promise<{ before: ForeignKeySpec[]; after: ForeignKeySpec[] }> {
-    const onMainTable = (field: FieldDefinition) => field.localized !== true;
+    // The fields with a column on the table before and after, as its creator reads them
+    // (`writerRelations`' owner): on a row, those inside a group with no name too, whose
+    // relationships hold keys here; on a field group, its named fields. The group itself has no
+    // column, nor a name to spell one from.
+    const oldFields = columnFieldsOf(declaredOldFields);
+    const newFields = columnFieldsOf(declaredNewFields);
+    // Which fields are translated is read from the declared lists, as the creating SQL and the
+    // desired table read it: a field inside a group with no name stays on the row whatever it
+    // says, so its key is this table's.
+    const translated = new Set(
+      [...declaredOldFields, ...declaredNewFields]
+        .filter(field => field.localized === true)
+        .map(field => field.name)
+    );
+    const onMainTable = (field: FieldDefinition) => !translated.has(field.name);
     const described = this.relationshipForeignKeys(
       tableName,
       newFields.filter(onMainTable),
@@ -2402,4 +2427,15 @@ function fieldRenameOf(
   rename: { from: FieldDefinition; to: FieldDefinition } | null
 ): FieldRename | undefined {
   return rename ? { from: rename.from.name, to: rename.to.name } : undefined;
+}
+
+/**
+ * A field group's fields that own a column on its row: the named ones. Its creator gives a group
+ * with no name, and the fields inside it, no column (`FieldGroupSchemaService.columnFields`), and
+ * its desired table reads them the same way (`buildDesiredTableFromComponentFields`).
+ */
+function namedFieldsOnly(fields: FieldDefinition[]): FieldDefinition[] {
+  return fields.filter(
+    field => typeof field.name === "string" && field.name.length > 0
+  );
 }

@@ -58,6 +58,7 @@ import type {
 } from "../../../schemas/dynamic-singles/types";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import { assertAddressAllowed } from "../../../shared/address-rule";
+import { addressableFields } from "../../../shared/addressable-fields";
 import type { Logger } from "../../../shared/types";
 import { collectionTablesBySlug } from "../../dynamic-collections/services/collection-tables";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
@@ -1823,7 +1824,9 @@ export class SingleMetadataService {
     const registry = new FieldGroupRegistryService(adapter, this.logger);
     const resolved = new Map<string, string>();
     const slugs = new Set<string>();
-    for (const f of [...oldFields, ...newFields]) {
+    // The field groups at this level, those inside a group with no name among them, as the rename
+    // above pairs them (`fieldGroupRenamePairs`): a table left unresolved moves no rows.
+    for (const f of addressableFields([...oldFields, ...newFields])) {
       for (const slug of fieldGroupSlugList(f)) slugs.add(slug);
     }
     await Promise.all(
@@ -1879,7 +1882,7 @@ export class SingleMetadataService {
     const { resolveLocalizedFieldNames } = await import(
       "../../i18n/classify-fields"
     );
-    const { columnsDeclaredBy } = await import(
+    const { columnsDeclaredBy, fieldsStoredOnRow } = await import(
       "../../schema/services/field-column-descriptor"
     );
 
@@ -1897,10 +1900,16 @@ export class SingleMetadataService {
       required: false,
     };
 
+    // The fields whose columns sit on the row (`fieldsStoredOnRow`): those inside a group with no
+    // name are columns of this table, and every check and statement planned from these lists
+    // reads them, so the group itself, which has no name to give a column, is read through here
+    // once. Which are translated is classified from the declared list, as the companion and the
+    // entry write classify it, so a field inside such a group stays on the row.
     const omitLocalized = (fields: FieldDefinition[]): FieldDefinition[] => {
-      if (!omitLocalizedColumns) return fields;
+      const stored = fieldsStoredOnRow(fields);
+      if (!omitLocalizedColumns) return stored;
       const localizedNames = new Set(resolveLocalizedFieldNames(fields, true));
-      return fields.filter(f => !localizedNames.has(f.name));
+      return stored.filter(f => !localizedNames.has(f.name));
     };
 
     const normalize = (fields: FieldDefinition[]): FieldDefinition[] => {

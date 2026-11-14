@@ -795,6 +795,10 @@ export class FieldGroupMetadataService {
      */
     const fieldNameByColumn = new Map<string, string>();
     for (const field of [...oldFields, ...args.fields]) {
+      // A group with no name has no column on a field group's row, nor do the fields inside it
+      // (`buildDesiredTableFromComponentFields`, as the creator); asked of it, the descriptor read
+      // its missing name and stopped the save.
+      if (typeof field.name !== "string" || field.name.length === 0) continue;
       const column = getColumnDescriptor(field, dialect, "fieldGroup");
       if (column) fieldNameByColumn.set(column.name, field.name);
     }

@@ -22,6 +22,8 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { FieldGroupDataService } from "../../services/field-groups/field-group-data-service";
 import { EXACT_STORED_LANGUAGE } from "../i18n/locale-selector";
 
+import { directFieldGroupFields } from "./field-group-write-access";
+
 export interface ReadComponentSubtreesArgs {
   /** Absent when no component service is registered; the result is then empty. */
   fieldGroupDataService: FieldGroupDataService | undefined;
@@ -106,7 +108,10 @@ export async function readComponentSubtreesByLocale({
   );
   if (!fieldGroupDataService || asked.length === 0) return byLocale;
 
-  const componentFields = fieldConfigs.filter(
+  // The field groups whose instances are rows read at this level, those inside a group with no
+  // name among them, as the write stores them (`directFieldGroupFields`). Read from the top level
+  // alone, a version or a restore's capture of such a field group held nothing.
+  const componentFields = directFieldGroupFields(fieldConfigs).filter(
     (f): f is typeof f & { name: string } => isFieldGroupField(f) && !!f.name
   );
   if (componentFields.length === 0) return byLocale;
