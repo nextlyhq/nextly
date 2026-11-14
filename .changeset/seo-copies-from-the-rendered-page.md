@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-SEO: a page with no stored words of its own, a page built in the site's code or a Page Builder layout, now has a plain-text copy made from the page as it renders: its main content as Markdown, asked for as the public asks for it, kept for five minutes. llms.txt and the page's head link these copies too.
+SEO: a page with no stored words of its own, a page built in the site's code or a Page Builder layout, now has a plain-text copy made from the page as it renders: its main content as Markdown, asked for as the public asks for it at its listed address, only where the site names its own address (a production address or `baseUrl`), and kept for five minutes. llms.txt and the page's head link these copies too.
