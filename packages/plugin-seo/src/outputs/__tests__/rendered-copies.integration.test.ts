@@ -3,7 +3,7 @@
  * configured dialect: a page built in the site's code, and a page whose
  * stored fields hold nothing beyond its title (a layout, as a Page Builder
  * page is). Each is copied from the page as it renders, asked for as the
- * public asks, at the host the copy's request reached.
+ * public asks, at the page's own listed address.
  *
  * What each case pins:
  * - such a copy holds the rendered page's main words, with front matter
@@ -13,7 +13,10 @@
  * - a page that does not render as HTML has no copy: the request is the
  *   site's to answer;
  * - a page whose stored fields hold words is copied from them, never
- *   rendered.
+ *   rendered;
+ * - where the site names no address of its own, no page is rendered, and
+ *   neither llms.txt nor a page's head links a rendered copy;
+ * - a page built in code links its copy from its head.
  */
 process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
@@ -71,14 +74,19 @@ afterAll(() => {
 
 const open = { read: () => true };
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+/**
+ * The site booted; `named` false, it names no address of its own (no
+ * `baseUrl`, no production address), so its listed addresses are the
+ * request's host.
+ */
+async function boot(dialect: TestDialect, named = true): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
     seedPublic: true,
     plugins: [
       seoPlugin({
         collections: ["landings", "notes"],
-        baseUrl: SITE,
+        ...(named ? { baseUrl: SITE } : {}),
         nextBuildDir: BUILD,
       }),
     ],
@@ -115,7 +123,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     data: {
       _overwrite: true,
       siteName: "Acme",
-      productionAddresses: [SITE],
+      productionAddresses: named ? [SITE] : [],
       plainTextCopies: true,
       llmsTxt: true,
     },
@@ -193,6 +201,32 @@ describe.each(getConfiguredTestDialects())(
       expect(asked[0]?.headers.get(RENDERING_HEADER)).toBe("1");
 
       expect(await llmsTxt()).toContain(`(${SITE}/pricing.md)`);
+      // Its head links the copy, as every other copied page's does.
+      const head = await seoMetadata("/pricing", {
+        metadata: { title: "Pricing", description: "Plans and prices." },
+      });
+      expect(String(head.alternates?.types?.["text/markdown"])).toMatch(
+        /\/pricing\.md$/
+      );
+    });
+
+    it("renders no page, and links no rendered copy, where the site names no address of its own", async () => {
+      await boot(dialect, false);
+      const asked = renderedSite({
+        "/pricing": html("Pricing", "<h1>Pricing</h1><p>Words.</p>"),
+      });
+      const head = await seoMetadata("/pricing", {
+        metadata: { title: "Pricing" },
+      });
+
+      // The request's host is not one the site chose: nothing is fetched.
+      expect((await ask("/pricing.md")).body).toBe("the page");
+      expect(asked).toEqual([]);
+      // So neither llms.txt nor the head points to a copy that is not served.
+      const llms = await llmsTxt();
+      expect(llms).toContain("/pricing)");
+      expect(llms).not.toContain("/pricing.md");
+      expect(head.alternates?.types?.["text/markdown"]).toBeUndefined();
     });
 
     it("copies a page whose fields hold no words from the page as it renders", async () => {
