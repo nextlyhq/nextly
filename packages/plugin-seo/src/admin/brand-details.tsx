@@ -94,6 +94,8 @@ function FactRow({
   const showsCode = value.trim() === "" && fromCode !== undefined;
   const problem = brandFactProblem(fact, value);
   const shownPlaceholder = showsCode ? fromCode : placeholder;
+  // What is wrong with the value, else where it comes from.
+  const note = problem ?? (showsCode ? CODE_NOTE : undefined);
   return (
     <TextRow
       label={label}
@@ -104,8 +106,8 @@ function FactRow({
       {...(shownPlaceholder === undefined
         ? {}
         : { placeholder: shownPlaceholder })}
-      {...(showsCode ? { note: CODE_NOTE } : {})}
-      error={problem}
+      {...(note === undefined ? {} : { note })}
+      {...(problem === null ? {} : { noteTone: "danger" as const })}
       onChange={next =>
         change(current => ({
           ...current,
@@ -183,12 +185,16 @@ function ContactRow({
     point.contactType === "" ? "Contact" : purposeLabel(point.contactType);
   return (
     <div>
-      <div className="flex items-center gap-2">
+      {/* On a phone the purpose takes its own line, so the address has room. */}
+      <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
         <Select
           value={point.contactType}
           onValueChange={contactType => set({ ...point, contactType })}
         >
-          <SelectTrigger className="w-44 shrink-0" aria-label="What it is for">
+          <SelectTrigger
+            className="w-full sm:w-44 sm:shrink-0"
+            aria-label="What it is for"
+          >
             <SelectValue placeholder="What it is for" />
           </SelectTrigger>
           <SelectContent>
@@ -200,7 +206,7 @@ function ContactRow({
           </SelectContent>
         </Select>
         <Input
-          className="font-mono text-[13px]"
+          className="min-w-0 flex-1 font-mono text-[13px]"
           value={point.value}
           placeholder="Email, telephone or https://"
           aria-label={`${name}: email, telephone or address`}

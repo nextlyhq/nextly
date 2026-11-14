@@ -839,6 +839,9 @@ describe("the brand facts the site's code gives", () => {
     expect(
       screen.getByText("Fix the organization's details first.")
     ).toBeTruthy();
+    expect(screen.getByLabelText("Founded").getAttribute("aria-invalid")).toBe(
+      "true"
+    );
   });
 });
 
