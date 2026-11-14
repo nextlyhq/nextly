@@ -130,7 +130,10 @@ async function lastmodOf(loc: string): Promise<string | undefined> {
   return /<lastmod>([^<]+)<\/lastmod>/.exec(line)?.[1];
 }
 
-/** The `dateModified` the post at `slug` is described with, as served. */
+/** A date as the instant it names, so two spellings of one instant agree. */
+const instant = (value: unknown) => Date.parse(String(value));
+
+/** The `dateModified` the page at `/blog/<slug>` is described with, as served. */
 async function dateModifiedOf(t: TestNextly, slug: string): Promise<unknown> {
   await contentDatesSettled();
   const route = createPublicContentRoute({
@@ -142,11 +145,14 @@ async function dateModifiedOf(t: TestNextly, slug: string): Promise<unknown> {
   const graph = (JSON.parse(String(text ?? "{}")) as { "@graph"?: unknown[] })[
     "@graph"
   ];
-  const post = (graph ?? []).find(
-    node => (node as { "@type"?: unknown })["@type"] === "BlogPosting"
+  // The page's own node, whichever type it is described as: a post missing
+  // a detail its type needs is described as a web page.
+  const page = (graph ?? []).find(
+    node =>
+      (node as { "@id"?: unknown })["@id"] === `${SITE}/blog/${slug}#webpage`
   ) as Record<string, unknown> | undefined;
-  if (post === undefined) throw new Error(`${slug} is not described as a post`);
-  return post.dateModified;
+  if (page === undefined) throw new Error(`${slug} is not described`);
+  return page.dateModified;
 }
 
 /** The rows kept, as stored. */
@@ -490,7 +496,7 @@ describe.each(getConfiguredTestDialects())(
       });
       const loc = `${SITE}/blog/hello`;
       const first = await lastmodOf(loc);
-      expect(await dateModifiedOf(t, "hello")).toBe(first);
+      expect(instant(await dateModifiedOf(t, "hello"))).toBe(instant(first));
 
       // An SEO-only save, as the import makes: the save's own stamp moves,
       // the content's date does not.
@@ -501,7 +507,7 @@ describe.each(getConfiguredTestDialects())(
         data: { seo: { metaTitle: "Hello, world" }, _overwrite: true },
       });
       expect(await lastmodOf(loc)).toBe(first);
-      expect(await dateModifiedOf(t, "hello")).toBe(first);
+      expect(instant(await dateModifiedOf(t, "hello"))).toBe(instant(first));
 
       // A content change moves both, to the same date.
       await nextSecond();
@@ -514,7 +520,7 @@ describe.each(getConfiguredTestDialects())(
       expect(Date.parse(String(moved))).toBeGreaterThan(
         Date.parse(String(first))
       );
-      expect(await dateModifiedOf(t, "hello")).toBe(moved);
+      expect(instant(await dateModifiedOf(t, "hello"))).toBe(instant(moved));
     });
   }
 );
