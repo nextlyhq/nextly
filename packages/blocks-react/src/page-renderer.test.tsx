@@ -1027,6 +1027,40 @@ describe("PageRenderer", () => {
       expect(html).toMatch(bothClasses("test/text"));
     });
 
+    it("marks the root of a block never to be quoted with data-nosnippet", async () => {
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/text", {
+              props: { value: "Plans from $29" },
+              nosnippet: true,
+            })
+          )}
+          blocks={createBlockResolver([text as AnyBlockDefinition])}
+        />
+      );
+
+      expect(html).toMatch(
+        /<[a-z]+ [^>]*data-nosnippet=""[^>]*>Plans from \$29/
+      );
+      expect(html).toMatch(bothClasses("test/text"));
+    });
+
+    it("renders a block written before the mark, or with it off, as it did", async () => {
+      const render = (extra: Record<string, unknown>) =>
+        renderToHtml(
+          <PageRenderer
+            document={doc(
+              node("a", "test/text", { props: { value: "Plans" }, ...extra })
+            )}
+            blocks={createBlockResolver([text as AnyBlockDefinition])}
+          />
+        );
+      const before = await render({});
+      expect(before).not.toContain("data-nosnippet");
+      expect(await render({ nosnippet: false })).toBe(before);
+    });
+
     it("emits no id at all for an empty cssId, rather than an empty one", async () => {
       const html = await renderToHtml(
         <PageRenderer
@@ -2229,6 +2263,40 @@ describe("PageRenderer", () => {
 
       expect(placeholderReasons(html)).toEqual(["invalid-output"]);
       expect(html).not.toContain('id="anchor"');
+      expect(html).toContain("survivor");
+    });
+
+    it("refuses a node marked never to be quoted whose block gives it no DOM root", async () => {
+      // The mark is an attribute on the root like `cssId`: a fragment root
+      // would publish the text with no mark and no word that it was dropped.
+      const fragmentRoot = defineBlock({
+        name: "test/fragment-quoted",
+        version: 1,
+        description: "Returns a fragment rather than an element.",
+        example: { props: {} },
+        render: () => (
+          <>
+            <span>secret price</span>
+            <span>two</span>
+          </>
+        ),
+      });
+
+      const html = await renderToHtml(
+        <PageRenderer
+          document={doc(
+            node("a", "test/fragment-quoted", { nosnippet: true }),
+            node("b", "test/text", { props: { value: "survivor" } })
+          )}
+          blocks={createBlockResolver([
+            fragmentRoot as AnyBlockDefinition,
+            text as AnyBlockDefinition,
+          ])}
+        />
+      );
+
+      expect(placeholderReasons(html)).toEqual(["invalid-output"]);
+      expect(html).not.toContain("secret price");
       expect(html).toContain("survivor");
     });
 
