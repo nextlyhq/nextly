@@ -847,7 +847,10 @@ comes from (its own value, the page's code, or the pattern it was made from), an
 the most serious problem the [problem list](#problems) holds for the page, else **Not connected**
 for a page built in code whose route doesn't call the plugin, **Hidden** for a page kept out of
 search, or **Good**. A page no check has reached for you says **Not checked** rather than **Good**:
-no problem listed for it is no evidence of none. Search by address or name, and narrow the list by
+no problem listed for it is no evidence of none. **Links** says how many other pages link to the
+page and how many it links to (`3 in · 5 out`), counting each page once, however many links it
+holds, from the links in each page's content in the same language; a dash for a page built in
+code, whose links are in its code, and for a page no check has read the links of yet. Search by address or name, and narrow the list by
 **Type** (each collection, the Singles, or the pages built in code) and by **Status**. It names only
 the entries you may read, as the collection's own list does, each language as its list in that
 language does: of a type whose read rule admits only some entries, those it admits, and none of a
@@ -1693,6 +1696,12 @@ it is published in and at its address there, as its head would be served, for:
 - a canonical typed for the page that names another address, unless the page is marked as having
   first appeared on another site, which makes that address the one meant;
 - a link in its content to an address of a content type that no page holds;
+- a listed page no other page links to (**Page no other page links to**, a notice): search engines
+  and visitors find pages by following links, so it is found only through the sitemap. Its home page
+  and a page kept out of search are never named. Only the links in pages' content are read, the
+  same links the broken-link check reads, so a page linked only from the site's menu or footer,
+  which its code draws, is named too: link to it from a related page's content, or leave it if the
+  menu is how people reach it;
 - no share image, one networks crop or shrink, or one in a format some networks don't show
   (SVG, AVIF or WebP);
 - an image in its content (rich text, a media field or a Page Builder image block) with no alt
@@ -1741,8 +1750,13 @@ read can't ask for `manage-seo`, so those are on the list itself.
 ### When the list is checked
 
 - **A page is checked again when it is saved**, after the save, so a check never slows or undoes
-  it. A save that changes a page's address, title or description, and a deletion, mark the last
-  full check as out of date, since another page's result may have changed.
+  it. A save that changes a page's address, title, description or the pages it links to, and a
+  deletion, mark the last full check as out of date, since another page's result may have changed.
+  Each page's check keeps the pages its links reach; the link counts and the pages no page links to
+  are worked out from those when the list is read, so the site is never read twice for them. A page
+  last checked before its links were kept is left out of the counts until its next check. The links
+  are a new field of the plugin's own list of checks: a site that applies its schema with migrations
+  runs `nextly migrate:create` and then `nextly migrate` after upgrading.
 - **The whole site is checked when the list opens** and its last full check is over 24 hours old,
   and whenever someone chooses **Check again**. The list says when it was last checked. No scheduler
   is needed, so this works the same on a self-hosted server.
