@@ -62,6 +62,7 @@
     "legacy-bookkeeping-found",
     "fields-leaving-translation-not-moved",
     "localization-not-provisioned",
+    "lock-held-by-this-process",
     "media-apply-outside-project",
     "media-config-outside-project",
     "media-reindex-outside-project",

@@ -25,7 +25,11 @@ import { PROBLEMS_PAGE } from "../problems/contract";
 import { RECEIVED_PAGE } from "../received/contract";
 import { REDIRECTS_PAGE } from "../redirects/contract";
 import { SETTINGS_PAGE } from "../settings/contract";
-import { SEO_STATUS_COMPONENT, SEO_TAB_COMPONENT } from "../tab/contributions";
+import {
+  SEO_DISPLAY_STATUS_COMPONENT,
+  SEO_STATUS_COMPONENT,
+  SEO_TAB_COMPONENT,
+} from "../tab/contributions";
 import { PAGE_BUILDER_TAB_COMPONENT } from "../template/contributions";
 
 import { PageBuilderSeoTab } from "./PageBuilderSeoTab";
@@ -38,7 +42,7 @@ import { SeoProblemsPage } from "./SeoProblemsPage";
 import { SeoRedirectsPage } from "./SeoRedirectsPage";
 import { SeoSettingsPage } from "./SeoSettingsPage";
 import { SeoTab } from "./SeoTab";
-import { SeoStatusSection } from "./status";
+import { SeoDisplaySection, SeoStatusSection } from "./status";
 
 // Each screen of the SEO section sets its trail in the top bar; the screens
 // drawn before the section had one are given it here. Each is exported under
@@ -65,6 +69,7 @@ registerComponents({
   [SEO_TAB_COMPONENT]: SeoTab,
   [PAGE_BUILDER_TAB_COMPONENT]: PageBuilderSeoTab,
   [SEO_STATUS_COMPONENT]: SeoStatusSection,
+  [SEO_DISPLAY_STATUS_COMPONENT]: SeoDisplaySection,
 });
 
 export { SeoOverviewPage } from "./SeoOverviewPage";
@@ -89,7 +94,7 @@ export {
 export { SeoInspectPage } from "./SeoInspectPage";
 export { SeoTab } from "./SeoTab";
 export { PageBuilderSeoTab } from "./PageBuilderSeoTab";
-export { SeoStatusSection } from "./status";
+export { SeoDisplaySection, SeoStatusSection } from "./status";
 export { SeoPanel, type SeoPanelProps } from "./SeoPanel";
 export {
   panelAnswers,

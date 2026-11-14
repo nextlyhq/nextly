@@ -1259,6 +1259,8 @@ export class FieldGroupRegistryService extends BaseRegistryService<
         },
       });
     }
+    // Judged, not written (`RecordedWriteOptions.judgeOnly`).
+    if (!existing && options.judgeOnly === true) return "created";
     if (!existing) {
       await this.registerComponent({
         ...declaredComponentRegistration(
@@ -1282,6 +1284,7 @@ export class FieldGroupRegistryService extends BaseRegistryService<
       pointer.repairedTableName
     );
     if (step === "unchanged") return "unchanged";
+    if (options.judgeOnly === true) return "updated";
     await this.updateComponent(
       config.slug,
       step === "update"

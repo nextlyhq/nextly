@@ -79,6 +79,8 @@ import {
   type VariableUseItem,
 } from "./library-contract";
 import {
+  firstReadableWithin,
+  REMOVAL_COUNT_MS,
   refuseStoredUses,
   storedUsesOf,
   type StillUsed,
@@ -103,7 +105,6 @@ import {
   type ReadNamedSingle,
   type SharedStyleUsageSource,
   type UsageReason,
-  REMOVAL_COUNT_MS,
 } from "./shared-styles-routes";
 import type { SiteStyleData } from "./site-style";
 import {
@@ -237,6 +238,13 @@ export async function uncoveredReasons(
     now,
   });
   if (outcome.kind === "clear") return [];
+  // The refusal is decided; naming its pages is held to a box of its own, the
+  // removal's length, shared by every page it names, so a stalled lookup of
+  // a title cannot hold the refusal past it. Not the read's box: a page left
+  // unread because that box ran out would otherwise never be named.
+  const namingEnds = now() + REMOVAL_COUNT_MS;
+  const named = (pagesOf: readonly UncoveredPage[]) =>
+    pagesNamed(pagesOf, namer, namingEnds - now());
   const them = removable.length === 1 ? "the variable" : "the variables";
   if (outcome.kind === "unlisted") {
     // Not every uncovered page is known yet, so none can be named: the
@@ -249,7 +257,7 @@ export async function uncoveredReasons(
     ];
   }
   if (outcome.kind === "unread") {
-    const page = await pagesNamed([outcome.page], namer);
+    const page = await named([outcome.page]);
     return [
       {
         message: `${page} could not be read to check whether it uses ${them}, so nothing can be removed until it is. Try again shortly.`,
@@ -263,7 +271,7 @@ export async function uncoveredReasons(
     if (pagesUsing === undefined) continue;
     reasons.push({
       id,
-      message: `${name} is used on ${await pagesNamed(pagesUsing, namer)}.`,
+      message: `${name} is used on ${await named(pagesUsing)}.`,
       used: true,
     });
   }
@@ -272,19 +280,24 @@ export async function uncoveredReasons(
 
 /**
  * Pages named as a refusal names them: the first the caller may open by its
- * title, then how many more; counted alone where none can be named.
+ * title, then how many more; counted alone where none can be named, or none
+ * was named within `ms`.
  */
 async function pagesNamed(
   pages: readonly UncoveredPage[],
-  namer: Pick<StillUsedVariables, "firstReadable">
+  namer: Pick<StillUsedVariables, "firstReadable">,
+  ms: number
 ): Promise<string> {
-  const first = await namer.firstReadable?.(
+  const named = await firstReadableWithin(
+    namer,
     pages.map(page => ({
       kind: page.scope,
       slug: page.entity,
       id: page.entityKey,
-    }))
+    })),
+    ms
   );
+  const first = named.answered ? named.title : undefined;
   const count = pages.length;
   if (first === undefined) return count === 1 ? "1 page" : `${count} pages`;
   return count === 1 ? first : `${first} and ${count - 1} more`;

@@ -445,15 +445,19 @@ describe.each(getConfiguredTestDialects())(
         "/typed": "bothSet",
       });
       const coverage = coverageOf(items ?? []);
+      // Each page in exactly one of the five groups, which add up to the
+      // total; no type here has its SEO switched off, so none is in `seoOff`.
       expect(coverage).toEqual({
         total: 10,
+        seoOff: 0,
         hidden: 1,
         bothSet: 3,
         bothWorkedOut: 5,
         oneOfEach: 1,
       });
       expect(
-        coverage.hidden +
+        coverage.seoOff +
+          coverage.hidden +
           coverage.bothSet +
           coverage.bothWorkedOut +
           coverage.oneOfEach

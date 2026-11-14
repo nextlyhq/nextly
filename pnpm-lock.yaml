@@ -499,6 +499,9 @@ importers:
       '@nextlyhq/plugin-page-builder':
         specifier: workspace:*
         version: link:../packages/plugin-page-builder
+      '@nextlyhq/plugin-seo':
+        specifier: workspace:*
+        version: link:../packages/plugin-seo
       '@nextlyhq/tsconfig':
         specifier: workspace:*
         version: link:../packages/tsconfig

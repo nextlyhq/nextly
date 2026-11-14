@@ -68,8 +68,17 @@ function PageSeo({
   const config = usePluginClientConfig(SEO_PLUGIN_NAME);
   const tabbed = config?.tabCollections;
   // Where SEO is on every type, the Page Builder's pages have the group
-  // unless the site left them out, which the tab's own read then says.
+  // unless the site's code leaves them out, which is said here: the tab's
+  // own read of a type without SEO would only fail.
   const everyType = config?.tabEveryType === true;
+  const excluded = config?.tabExcluded;
+  if (everyType && Array.isArray(excluded) && excluded.includes(collection)) {
+    return (
+      <p className="m-0 pt-4 text-[13px] text-muted-foreground">
+        SEO is off for Page Builder pages in this site&apos;s code.
+      </p>
+    );
+  }
   if (!everyType && (!Array.isArray(tabbed) || !tabbed.includes(collection))) {
     return (
       <p className="m-0 pt-4 text-[13px] text-muted-foreground">

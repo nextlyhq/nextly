@@ -11,7 +11,7 @@
  *
  * @module code-pages/routes
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { FRAMEWORK_CRAWL_EXCLUSIONS } from "@nextlyhq/plugin-sdk";
@@ -190,6 +190,51 @@ function appPathsIn(dir: string): string[] {
 }
 
 /**
+ * The status the build's render of `path` answered, from the record Next.js
+ * keeps beside the page's HTML (`server/app/<path>.meta`); nothing where
+ * there is none. With Cache Components on, the prerender manifest carries
+ * no `initialStatus`, and this record is where a page that called
+ * `notFound()` while the build rendered it says so.
+ */
+function renderedStatusOf(dir: string, path: string): number | undefined {
+  // The page's file name as Next.js makes it (`normalizePagePath`): the home
+  // page is `index`, and a path that starts with `/index` gains another
+  // `index` before it, so `/index` is `index/index` and never the home page's.
+  const name =
+    path === "/"
+      ? "index"
+      : /^\/index(\/|$)/.test(path)
+        ? `index${path}`
+        : path.slice(1);
+  const meta = readJson(
+    join(/*turbopackIgnore: true*/ dir, "server", "app", `${name}.meta`)
+  );
+  return isRecord(meta) && typeof meta.status === "number"
+    ? meta.status
+    : undefined;
+}
+
+/** The status a manifest entry states, else the page's own record's. */
+function statusOf(
+  dir: string,
+  path: string,
+  route: unknown
+): number | undefined {
+  return isRecord(route) && typeof route.initialStatus === "number"
+    ? route.initialStatus
+    : renderedStatusOf(dir, path);
+}
+
+/**
+ * The last manifest read, kept while the file is unchanged: a build's
+ * manifest and records do not change while it is served, and reading a
+ * record per page on every listing would grow with the site.
+ */
+let lastRead:
+  | { file: string; changedAt: number; prerendered: Prerendered[] }
+  | undefined;
+
+/**
  * Every address the build prerendered, with the route that rendered it.
  * Until `next build` writes its prerender manifest, which it does once every
  * page is rendered, those the build declared through `seoStaticParams`; the
@@ -198,19 +243,23 @@ function appPathsIn(dir: string): string[] {
 function prerenderedIn(dir: string): Prerendered[] {
   const file = join(dir, "prerender-manifest.json");
   if (!existsSync(file)) return isNextBuild() ? declaredAddresses(dir) : [];
+  const changedAt = statSync(file).mtimeMs;
+  if (lastRead?.file === file && lastRead.changedAt === changedAt) {
+    return lastRead.prerendered;
+  }
   const manifest = readJson(file);
   const routes = isRecord(manifest) ? manifest.routes : undefined;
   if (!isRecord(routes)) return [];
-  return Object.entries(routes).map(([path, route]) => ({
+  const prerendered = Object.entries(routes).map(([path, route]) => ({
     path,
     srcRoute:
       isRecord(route) && typeof route.srcRoute === "string"
         ? route.srcRoute
         : null,
-    ...(isRecord(route) && route.initialStatus === 404
-      ? { notFound: true }
-      : {}),
+    ...(statusOf(dir, path, route) === 404 ? { notFound: true } : {}),
   }));
+  lastRead = { file, changedAt, prerendered };
+  return prerendered;
 }
 
 /** The extensions a page file may have. */

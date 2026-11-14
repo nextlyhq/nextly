@@ -1,3 +1,7 @@
 
 # Nextly local uploads (auto-added)
 public/uploads/
+
+# The app the route-types test generates Next.js's route types for, removed
+# after each run; left behind only by a run that was killed.
+.route-types-*/
