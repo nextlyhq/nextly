@@ -851,6 +851,81 @@ describe.each(getConfiguredTestDialects())(
       expect((await rows(t)).some(row => row.holderId === id)).toBe(true);
     });
 
+    it("follows an old unprefixed link on a site whose every language is prefixed, as the Proxy reads it", async () => {
+      const seen: { ctx?: PluginContext } = {};
+      current = await createTestNextly({
+        dialect,
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+        languageAddresses: { by: "prefix" },
+        plugins: [seoWithContext(seen, ["posts"])],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            localized: true,
+            status: true,
+            access: { read: () => true },
+            fields: [
+              text({ name: "title", localized: true }),
+              text({ name: "slug", localized: true }),
+              text({ name: "excerpt", localized: true }),
+              richText({ name: "body", localized: true }),
+            ],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+      });
+      const t = current;
+      const ctx = seen.ctx;
+      if (!ctx) throw new Error("the SEO plugin never started");
+      seoContext = ctx;
+      const boats = String(
+        (
+          await t.nextly.create({
+            collection: "posts",
+            locale: "en",
+            data: {
+              title: "Boats",
+              slug: "boats",
+              excerpt: "Boats.",
+              status: "published",
+            },
+          })
+        ).item.id
+      );
+      // An address from before the site had languages, kept in English.
+      await ctx.services.collections.withTransaction(tx =>
+        putRedirect(ctx, tx, {
+          locale: "en",
+          origin: "person",
+          source: "/old-boats",
+          target: "/blog/boats",
+        })
+      );
+      await t.nextly.create({
+        collection: "posts",
+        locale: "en",
+        data: {
+          title: "Harbour",
+          slug: "harbour",
+          excerpt: "Harbour.",
+          body: body("/old-boats", "A chart"),
+          status: "published",
+        },
+      });
+      await lastCatchUp();
+
+      await checkSite(ctx, { ...CHECKS, targets: ["posts"] });
+      const list = await problemList(
+        ctx,
+        { ...CHECKS, targets: ["posts"] },
+        everything
+      );
+      expect(list.checked?.find(page => page.id === boats)?.links).toEqual({
+        inbound: 1,
+        outbound: 0,
+      });
+    });
+
     it("checks each language a page is published in", async () => {
       const seen: { ctx?: PluginContext } = {};
       current = await createTestNextly({

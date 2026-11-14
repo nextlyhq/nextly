@@ -11,7 +11,6 @@
  * @module problems/check
  */
 import {
-  addressOfRequest,
   publicAddressOf,
   typesWithoutAddress,
   type PageMetadataInput,
@@ -43,6 +42,7 @@ import { destinationOf, pathOf } from "../redirects/addresses";
 import { redirectsSlug } from "../redirects/collection";
 import { redirectMeeting } from "../redirects/meeting";
 import { readProxyStatus } from "../redirects/proxy-seen";
+import { askedAddress } from "../redirects/served";
 import { redirectOf, type StoredRedirect } from "../redirects/store";
 import { designLevelOf } from "../resolver/design-level";
 import { addressOf } from "../resolver/page-levels";
@@ -430,6 +430,7 @@ async function pagesAt(
   const redirect = redirectOf(entry);
   if (redirect.gone) return [];
   const next = await keptAt(
+    ctx,
     destinationOf(redirect, path),
     redirect.locale === "" ? locale : redirect.locale,
     site
@@ -448,10 +449,11 @@ async function pagesAt(
 /**
  * Where a redirect's To address is kept: a path from the root in the
  * redirect's language, or a full address on one of the site's own origins
- * read by the rule a visitor's request is (its language's domain or prefix
- * included). None for an address on another site.
+ * read as the Proxy reads a request (`askedAddress`, an old unprefixed one
+ * in the default language). None for an address on another site.
  */
 async function keptAt(
+  ctx: PluginContext,
   sent: string,
   locale: string,
   site: readonly string[]
@@ -461,10 +463,8 @@ async function keptAt(
   }
   const origin = originOf(sent);
   if (origin === undefined || !site.includes(origin)) return undefined;
-  const kept = await addressOfRequest(new URL(sent));
-  return kept === undefined
-    ? undefined
-    : { locale: kept.locale, path: pathOf(kept.path) };
+  const kept = await askedAddress(ctx, new URL(sent));
+  return { locale: kept.locale, path: pathOf(kept.path) };
 }
 
 /** What the check of one language of a page found, before it is kept. */
@@ -495,8 +495,10 @@ async function examine(
     ...(originOf(ownAddress) === undefined
       ? {}
       : { origin: originOf(ownAddress) }),
-    // Read by the same rule a visitor's request is, as the Proxy reads it.
-    keptOf: url => addressOfRequest(url),
+    // Read as the Proxy reads a request (`askedAddress`): an old unprefixed
+    // address on a site whose every language is prefixed is read in the
+    // default language, where its redirect is kept.
+    keptOf: url => askedAddress(ctx, url),
     holders: (path, locale) => addressHolders(ctx, path, locale),
     pagesOf: (holders, locale, path) =>
       pagesAt(
