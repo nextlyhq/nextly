@@ -42,6 +42,8 @@ const WHOLE: UsageIndexHealth = {
 const NOT_WHOLE: UsageIndexHealth = {
   ...WHOLE,
   coversExistingDocuments: false,
+  // Scopes still to walk: what a count changes.
+  backfillPending: true,
 };
 
 const brand = {

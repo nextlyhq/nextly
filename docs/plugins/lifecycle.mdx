@@ -234,6 +234,40 @@ Once you enable it, a production boot refuses it until that install has run. A
 disabled plugin that was uninstalled, or whose uninstall stopped part way, is still
 refused, as an enabled one is.
 
+## After a migrate
+
+`onMigrate` (`@experimental`) is for work a deploy owes once the schema is in step and
+that no request should wait for, such as filling an index for content that existed
+before it. `nextly migrate` calls it after every run that leaves nothing pending, last,
+after the schema, permissions and roles, translation tables and workflows; so does
+`nextly migrate:fresh`. It never runs at boot, in a dry run, or when `--step` leaves
+migrations pending, and `migrate:create`, `migrate:status` and `migrate:check` never
+call it.
+
+```ts
+import { definePlugin } from "@nextlyhq/plugin-sdk";
+
+export default definePlugin({
+  name: "@acme/nextly-plugin-thing",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.77",
+  async onMigrate(ctx, { applied }) {
+    // `applied` is how many migrations this run applied; 0 is a run that
+    // found nothing to apply, and the hook runs then too.
+    ctx.logger.info(`migrated (${applied} applied)`);
+  },
+});
+```
+
+It runs only for an enabled plugin installed on the database: a first deploy's migrate,
+before `nextly plugins install`, skips it and says so. Each plugin's hook runs in a boot of
+its own, as `onInstall` does, in which only that plugin initialises. It runs after
+migrate's lock is released, so two migrates, or a migrate beside a running app, can call it
+at the same time: write it to be idempotent and safe when run twice at once. If it throws,
+the next plugin's hook still runs, and the command exits non-zero naming the plugin; the
+schema the run applied stays applied, and running `nextly migrate` again runs the hook
+again.
+
 ## Inspecting
 
 ```bash

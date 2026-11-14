@@ -104,6 +104,27 @@ export function indexStillCounting(health: UsageIndexHealth): boolean {
   return !indexIsWhole(health) && health.backfillPending === true;
 }
 
+/**
+ * Why an index the backfill has nothing left to do for is still not whole,
+ * or undefined where it is whole or still counting. Each is a reason no run
+ * of the backfill can remove, so a caller that would otherwise count again
+ * says it instead:
+ *
+ * - `undetermined`: a document past its walk bound, whose uses are not
+ *   counted at all (`anyUndetermined`);
+ * - `unreachable`: content the index cannot address, such as a blocks field
+ *   nested under a named group (`coversExistingDocuments` false with every
+ *   scope walked).
+ */
+export type UsageCoverageGap = "undetermined" | "unreachable";
+
+export function usageCoverageGap(
+  health: UsageIndexHealth
+): UsageCoverageGap | undefined {
+  if (indexIsWhole(health) || indexStillCounting(health)) return undefined;
+  return health.anyUndetermined ? "undetermined" : "unreachable";
+}
+
 /** The backfill's bookkeeping as health reads it, from one snapshot. */
 export interface UsageProgressReading {
   /** Whether the recorded run was walked under the derivation in force now. */
