@@ -97,6 +97,79 @@ function tableOf(db: DatabaseSync, registry: string, slug: string): string {
 }
 
 /**
+ * Move the stored schema version's `seq`, as every writer of registry rows
+ * does once its rows are written: a migration file, `nextly migrate`, another
+ * copy of the app. A server re-reads the registry it holds only when `seq`
+ * moves (`domains/schema/stored-schema-seq.ts`), so rows written without it
+ * would stay unseen by the running suite's server until it restarted, which
+ * is what a deploy of the edited configuration does and this cannot.
+ *
+ * The statement a migration file carries for SQLite, as
+ * `schemaVersionStoreSql` in `domains/schema/schema-version.ts` writes it.
+ */
+function moveSchemaSeq(db: DatabaseSync): void {
+  const now = "CAST(strftime('%s', 'now') AS INTEGER)";
+  const { changes } = db
+    .prepare(
+      `INSERT INTO "nextly_meta" ("key", "value", "updated_at") ` +
+        `VALUES ('schema_version', '{"migration":null,"seq":1}', ${now}) ` +
+        `ON CONFLICT ("key") DO UPDATE SET "value" = json_object(` +
+        `'migration', json_extract("nextly_meta"."value", '$.migration'), ` +
+        `'seq', COALESCE(json_extract("nextly_meta"."value", '$.seq'), 0) + 1), ` +
+        `"updated_at" = ${now}`
+    )
+    .run();
+  expect(changes, "moving the stored schema version").toBe(1);
+}
+
+/** The slugs the server lists in one registry, as the admin's lists read it. */
+async function listedSlugs(
+  api: APIRequestContext,
+  registry: "collections" | "singles"
+): Promise<string[]> {
+  const listed = await api.get(`/admin/api/${registry}?limit=500`);
+  await expectOk(listed, `listing the ${registry}`);
+  const { items } = (await listed.json()) as {
+    items: Array<{ slug?: string; name?: string }>;
+  };
+  return items.map(item => item.slug ?? item.name ?? "");
+}
+
+/**
+ * Wait until the server lists every one of `slugs`. A server reads the stored
+ * version at most every couple of seconds, so a list read straight after the
+ * write can still be the one from before it, and an admin page drawn from
+ * that list keeps it.
+ */
+async function untilListed(
+  api: APIRequestContext,
+  slugs: { collections: string[]; singles: string[] }
+): Promise<void> {
+  for (const registry of ["collections", "singles"] as const) {
+    await expect
+      .poll(
+        async () => {
+          const listed = await listedSlugs(api, registry);
+          return slugs[registry].filter(slug => listed.includes(slug));
+        },
+        { message: `the staged ${registry} listed`, timeout: 15_000 }
+      )
+      .toEqual(slugs[registry]);
+  }
+}
+
+/** The staged collections' and Singles' slugs. */
+function slugsOf(staged: StagedRun): {
+  collections: string[];
+  singles: string[];
+} {
+  return {
+    collections: staged.states.map(state => state.collection.slug),
+    singles: staged.states.map(state => state.single.slug),
+  };
+}
+
+/**
  * Copy `from`'s registry row as a new code-defined row, `overrides` replacing
  * columns by name. Every other column is copied as it is, so the row is one a
  * deploy of the earlier configuration would have written.
@@ -242,9 +315,13 @@ export async function stageRemovedEntities(
       }
       staged.states.push({ state, collection, single, migration });
     }
+    // Once every row is written, so a server that reads the moved version
+    // reads all of them.
+    moveSchemaSeq(db);
   } finally {
     db.close();
   }
+  await untilListed(api, slugsOf(staged));
   return staged;
 }
 
@@ -277,6 +354,9 @@ export async function unstageRemovedEntities(
     for (const id of staged.eventIds) {
       db.prepare("DELETE FROM nextly_schema_events WHERE id = ?").run(id);
     }
+    // So the server forgets the rows too, rather than listing entities whose
+    // tables are gone to the specs that run after this one.
+    moveSchemaSeq(db);
   } finally {
     db.close();
   }
