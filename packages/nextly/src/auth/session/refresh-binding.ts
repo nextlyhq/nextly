@@ -145,14 +145,22 @@ export function evaluateRefreshBinding(
   return reasons.length === 0 ? { kind: "ok" } : { kind: "changed", reasons };
 }
 
+/** The first 96 bits of every IPv4-mapped IPv6 address, as 24 hex digits. */
+const IPV4_MAPPED_PREFIX = `${"0".repeat(20)}ffff`;
+
 /**
- * An IPv4 address written in its IPv6-mapped form (`::ffff:198.51.100.7`), as
- * a dual-stack socket reports one, in its plain form; any other address as it
- * is. The same address in two spellings is one address.
+ * An IPv4 address written in its IPv6-mapped form, in any spelling
+ * (`::ffff:198.51.100.7`, `::ffff:c633:6407`, `0:0:0:0:0:ffff:…`), as the
+ * plain IPv4 address it names; any other address as it is. Read through the
+ * one IPv6 expansion, so every spelling a dual-stack socket or proxy writes is
+ * recognised, and the same address in two spellings is one address.
  */
 function unmapIpv4(addr: string): string {
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(addr);
-  return mapped !== null && IPV4_RE.test(mapped[1]) ? mapped[1] : addr;
+  if (!addr.includes(":")) return addr;
+  const hex = ipv6PrefixHex(addr, 128);
+  if (hex === null || !hex.startsWith(IPV4_MAPPED_PREFIX)) return addr;
+  const v4 = Number.parseInt(hex.slice(IPV4_MAPPED_PREFIX.length), 16);
+  return [24, 16, 8, 0].map(shift => (v4 >>> shift) & 0xff).join(".");
 }
 
 /** How the network changed, or `null` when it did not or cannot be told. */

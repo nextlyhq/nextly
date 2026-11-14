@@ -65,6 +65,23 @@ export function afterSignInAddress(): string {
   return returnAddress() ?? ROUTES.DASHBOARD;
 }
 
+/**
+ * Where a sign-in that has just finished sends the browser, given the
+ * destination the server answered with: that destination when the login
+ * carried one, and otherwise {@link afterSignInAddress}. The server names the
+ * admin root for a login that carried no destination, as a password sign-in
+ * never does, so the root is read as "none". Every way a sign-in finishes
+ * (the password alone, a second factor, a required new password) lands
+ * through here, so a sign-in page's return address holds on each.
+ */
+export function landingAfterSignIn(serverNext?: string | null): string {
+  return serverNext !== undefined &&
+    serverNext !== null &&
+    serverNext !== DEFAULT_ADMIN_PATH
+    ? serverNext
+    : afterSignInAddress();
+}
+
 /** Whether `address` was returned to within the window, in this tab. */
 function returnedLately(address: string, now: number): boolean {
   try {
@@ -83,14 +100,16 @@ function returnedLately(address: string, now: number): boolean {
   }
 }
 
-function rememberReturn(address: string, now: number): void {
+/** Remember a return to `address`; false when it could not be kept. */
+function rememberReturn(address: string, now: number): boolean {
   try {
     window.sessionStorage.setItem(
       LAST_RETURN_KEY,
       JSON.stringify({ address, at: now })
     );
+    return true;
   } catch {
-    // Storage refused: the return still happens, only unremembered.
+    return false;
   }
 }
 
@@ -102,8 +121,9 @@ function rememberReturn(address: string, now: number): void {
  *
  * Not when the same address sent the browser back here moments ago: it
  * refused the session this page found, and opening it again would send the
- * browser between the two for ever. The caller then goes on as it would with
- * nowhere to return to.
+ * browser between the two for ever. Nor when the return cannot be remembered
+ * (storage refused), since nothing would then notice that happening. The
+ * caller then goes on as it would with nowhere to return to.
  */
 export function returnWithSession(
   open: (address: string) => void = address => window.location.replace(address)
@@ -112,7 +132,7 @@ export function returnWithSession(
   if (address === null) return false;
   const now = Date.now();
   if (returnedLately(address, now)) return false;
-  rememberReturn(address, now);
+  if (!rememberReturn(address, now)) return false;
   open(address);
   return true;
 }

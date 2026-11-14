@@ -1,6 +1,5 @@
 "use client";
 
-import { DEFAULT_ADMIN_PATH } from "nextly/admin-path";
 import { useEffect, useRef, useState } from "react";
 
 import { useAuthRefusal } from "@admin/hooks/useAuthRefusal";
@@ -8,7 +7,7 @@ import { getCsrfToken } from "@admin/lib/api/csrf";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { publicApi } from "@admin/lib/api/publicApi";
 import type { AuthRefusal } from "@admin/lib/auth/auth-refusal";
-import { afterSignInAddress } from "@admin/lib/auth/return-address";
+import { landingAfterSignIn } from "@admin/lib/auth/return-address";
 
 /** What an interrupted sign-in left outstanding, once the page has asked. */
 export interface ResumedLogin {
@@ -395,14 +394,9 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
         return { ok: true, continues: true, passwordChangeRequired: raised };
       }
 
-      // The server names the admin root when the login carried no
-      // destination, as a password sign-in never does. The page's own
-      // landing applies then: a sign-in page's return address, or the screen
-      // the form was drawn in place of, through the one rule that decides it.
-      const next =
-        result?.next !== undefined && result.next !== DEFAULT_ADMIN_PATH
-          ? result.next
-          : afterSignInAddress();
+      // The server's destination, or the page's own landing when the login
+      // carried none (`landingAfterSignIn`).
+      const next = landingAfterSignIn(result?.next);
       navigatedRef.current = true;
       window.location.href = next;
       return { ok: true, next };

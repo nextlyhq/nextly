@@ -44,6 +44,26 @@ describe("evaluateRefreshBinding", () => {
     });
   });
 
+  it.each([
+    ["hexadecimal", "::ffff:c633:6407"],
+    ["written out in full", "0:0:0:0:0:ffff:c633:6407"],
+    ["in capitals", "::FFFF:198.51.100.7"],
+  ])(
+    "reads the IPv6-mapped spelling %s as the IPv4 address it names",
+    (_, mapped) => {
+      expect(fromAddress("198.51.100.7", mapped)).toEqual({ kind: "ok" });
+    }
+  );
+
+  it("reports two IPv4-mapped addresses in different /24s as a change", () => {
+    // 198.51.100.7 and 203.0.113.9, both written in hexadecimal: compared as
+    // IPv6 their /48s are both zero and would read as one network.
+    expect(fromAddress("::ffff:c633:6407", "::ffff:cb00:7109")).toEqual({
+      kind: "changed",
+      reasons: ["ipv4-prefix-changed"],
+    });
+  });
+
   it("keeps quiet for an address in the same network", () => {
     expect(fromAddress("198.51.100.7", "198.51.100.42")).toEqual({
       kind: "ok",

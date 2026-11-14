@@ -12,6 +12,7 @@ import { ROUTES } from "@admin/constants/routes";
 
 import {
   afterSignInAddress,
+  landingAfterSignIn,
   returnAddress,
   returnWithSession,
 } from "../return-address";
@@ -82,6 +83,28 @@ describe("afterSignInAddress", () => {
   });
 });
 
+describe("landingAfterSignIn", () => {
+  it("is the return address when the server named only the admin root", () => {
+    // What the server answers for a login that carried no destination.
+    signInReturningTo(CALLBACK);
+    expect(landingAfterSignIn("/admin")).toBe(CALLBACK);
+    expect(landingAfterSignIn(undefined)).toBe(CALLBACK);
+    expect(landingAfterSignIn(null)).toBe(CALLBACK);
+  });
+
+  it("is the destination the login carried", () => {
+    signInReturningTo(CALLBACK);
+    expect(landingAfterSignIn("/admin/collections/posts")).toBe(
+      "/admin/collections/posts"
+    );
+  });
+
+  it("is the dashboard with neither", () => {
+    at(ROUTES.LOGIN);
+    expect(landingAfterSignIn("/admin")).toBe(ROUTES.DASHBOARD);
+  });
+});
+
 describe("returnWithSession", () => {
   it("opens the return address in place of the sign-in page", () => {
     signInReturningTo(CALLBACK);
@@ -110,6 +133,24 @@ describe("returnWithSession", () => {
     vi.setSystemTime(Date.now() + 2_000);
     expect(returnWithSession(open)).toBe(false);
     expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens nothing when the return cannot be remembered", () => {
+    // Without the record, a return the address refuses would come straight
+    // back and be opened again, for ever: the dashboard is the safe answer.
+    signInReturningTo(CALLBACK);
+    const setItem = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(() => {
+        throw new DOMException("refused", "SecurityError");
+      });
+    const open = vi.fn();
+    try {
+      expect(returnWithSession(open)).toBe(false);
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      setItem.mockRestore();
+    }
   });
 
   it("opens it again once that return is long past", () => {
