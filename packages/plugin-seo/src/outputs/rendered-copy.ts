@@ -297,18 +297,99 @@ function unwrapped(text: string): string {
   }
 }
 
-/** An element being closed: what it noted on opening, its words, and what came before it. */
-interface Closing {
-  open: Open;
-  inner: string;
-  before: string;
+/**
+ * The copy as it is written, kept in pieces: adding to its end, and reading
+ * or trimming its last characters, never reads the whole of it again. As
+ * one string, every block's checks of how the copy ends would read it all,
+ * so a page of many blocks took time growing with their square.
+ */
+class CopyText {
+  private readonly pieces: string[] = [];
+  length = 0;
+
+  add(text: string): void {
+    if (text === "") return;
+    this.pieces.push(text);
+    this.length += text.length;
+  }
+
+  /** Its last `count` characters, or all of it where it is shorter. */
+  last(count: number): string {
+    let tail = "";
+    for (let at = this.pieces.length - 1; at >= 0; at -= 1) {
+      if (tail.length >= count) break;
+      const piece = this.pieces[at] ?? "";
+      tail =
+        piece.slice(Math.max(piece.length - (count - tail.length), 0)) + tail;
+    }
+    return tail;
+  }
+
+  endsWith(suffix: string): boolean {
+    return this.last(suffix.length) === suffix;
+  }
+
+  /** Takes the spaces and tabs off its end. */
+  trimEnd(): void {
+    for (
+      let piece = this.pieces.at(-1);
+      piece !== undefined;
+      piece = this.pieces.at(-1)
+    ) {
+      let end = piece.length;
+      while (end > 0 && (piece[end - 1] === " " || piece[end - 1] === "\t")) {
+        end -= 1;
+      }
+      if (end === piece.length) return;
+      this.length -= piece.length - end;
+      if (end > 0) {
+        this.pieces[this.pieces.length - 1] = piece.slice(0, end);
+        return;
+      }
+      this.pieces.pop();
+    }
+  }
+
+  /** What it holds from `start` on: only those pieces are read. */
+  from(start: number): string {
+    const parts: string[] = [];
+    let end = this.length;
+    for (let at = this.pieces.length - 1; at >= 0 && end > start; at -= 1) {
+      const piece = this.pieces[at] ?? "";
+      const pieceStart = end - piece.length;
+      parts.push(pieceStart >= start ? piece : piece.slice(start - pieceStart));
+      end = pieceStart;
+    }
+    return parts.reverse().join("");
+  }
+
+  /** Cuts it back to its first `start` characters. */
+  cut(start: number): void {
+    for (
+      let piece = this.pieces.pop();
+      piece !== undefined;
+      piece = this.pieces.pop()
+    ) {
+      const pieceStart = this.length - piece.length;
+      this.length = pieceStart;
+      if (pieceStart < start) {
+        this.pieces.push(piece.slice(0, start - pieceStart));
+        this.length = start;
+      }
+      if (this.length <= start) return;
+    }
+  }
+
+  toString(): string {
+    return this.pieces.join("");
+  }
 }
 
 /** The writer of one page's copy, as its HTML is read. */
 class CopyWriter {
-  out = "";
+  readonly copy = new CopyText();
   readonly stack: Open[] = [];
-  /** The fenced code blocks, in order, each marked in `out` by its index. */
+  /** The fenced code blocks, in order, each marked in the copy by its index. */
   readonly codes: string[] = [];
 
   private readonly base: string;
@@ -345,8 +426,8 @@ class CopyWriter {
 
   /** Ends the line, with no space left at its end. */
   newLine(): void {
-    this.out = this.out.replace(/[ \t]+$/, "");
-    if (this.out !== "" && !this.out.endsWith("\n")) this.out += "\n";
+    this.copy.trimEnd();
+    if (this.copy.length > 0 && !this.copy.endsWith("\n")) this.copy.add("\n");
   }
 
   /** Starts a block: a blank line between it and what came before. */
@@ -354,12 +435,12 @@ class CopyWriter {
     if (this.inside("table")) {
       // A table row is one line: blocks in a cell are kept apart by a space.
       const inCell = this.inside("td") || this.inside("th");
-      if (inCell && !/[\s|]$/.test(this.out)) this.out += " ";
+      if (inCell && !/[\s|]$/.test(this.copy.last(1))) this.copy.add(" ");
       return;
     }
-    this.out = this.out.replace(/[ \t]+$/, "");
-    if (this.out === "" || this.out.endsWith("\n\n")) return;
-    this.out += this.out.endsWith("\n") ? "\n" : "\n\n";
+    this.copy.trimEnd();
+    if (this.copy.length === 0 || this.copy.endsWith("\n\n")) return;
+    this.copy.add(this.copy.endsWith("\n") ? "\n" : "\n\n");
   }
 
   /** The words of a text run, as the copy holds them. */
@@ -368,15 +449,24 @@ class CopyWriter {
     // Never a code block's mark, which only the writer places.
     const text = decoded(raw).replaceAll(CODE_MARK, "");
     if (this.inside("pre")) {
-      this.out += text;
+      this.copy.add(text);
       return;
     }
     const words = text.replace(/\s+/g, " ");
     if (words.trim() === "") {
-      if (this.out !== "" && !/\s$/.test(this.out)) this.out += " ";
+      this.space();
       return;
     }
-    this.out += this.inside("code") ? this.leading(words) : this.prose(words);
+    this.copy.add(
+      this.inside("code") ? this.leading(words) : this.prose(words)
+    );
+  }
+
+  /** A space, where the copy does not already end in one or begin here. */
+  private space(): void {
+    if (this.copy.length > 0 && !/\s$/.test(this.copy.last(1))) {
+      this.copy.add(" ");
+    }
   }
 
   /** `words` without the space that would lead a line. */
@@ -397,7 +487,7 @@ class CopyWriter {
 
   /** Whether the copy so far ends a line, so what follows begins one. */
   private atLineStart(): boolean {
-    return this.out === "" || this.out.endsWith("\n");
+    return this.copy.length === 0 || this.copy.endsWith("\n");
   }
 
   /** Whether an element is left out of the copy, with everything in it. */
@@ -417,7 +507,7 @@ class CopyWriter {
       if (writes) this.empty(tag, attributes);
       return;
     }
-    const open: Open = { tag, skip, start: this.out.length };
+    const open: Open = { tag, skip, start: this.copy.length };
     if (writes) this.begin(open, attributes);
     this.stack.push(open);
   }
@@ -428,14 +518,16 @@ class CopyWriter {
       this.newLine();
     } else if (tag === "hr") {
       this.newBlock();
-      this.out += "---";
+      this.copy.add("---");
       this.newBlock();
     } else if (tag === "img") {
       const alt = attributeOf(attributes, "alt")?.trim();
       const src = attributeOf(attributes, "src");
       // An image with no words for it is decoration, said nothing of.
       if (alt !== undefined && alt !== "" && src !== undefined) {
-        this.out += `![${escaped(alt)}](${linkTarget(imageAddress(src, this.base))})`;
+        this.copy.add(
+          `![${escaped(alt)}](${linkTarget(imageAddress(src, this.base))})`
+        );
       }
     }
   }
@@ -447,13 +539,13 @@ class CopyWriter {
     // A block that begins a list item stays on its marker's line.
     else if (BLOCKS.has(tag) && !this.atItemStart()) this.newBlock();
     this.beginnerFor(tag)?.(open, attributes);
-    open.start = this.out.length;
+    open.start = this.copy.length;
   }
 
   /** Whether nothing is written yet in the list item being read, past its marker. */
   private atItemStart(): boolean {
     const item = [...this.stack].reverse().find(open => open.tag === "li");
-    return item !== undefined && this.out.length === item.start;
+    return item !== undefined && this.copy.length === item.start;
   }
 
   /** What opening `tag` writes beyond its block's break, where it writes any. */
@@ -473,18 +565,21 @@ class CopyWriter {
   }
 
   /**
-   * A list item's marker, indented to its list's depth and numbered in
-   * order; its width is noted, to indent the item's later blocks by.
+   * A list item's marker, numbered in order and indented to the content of
+   * the item its list is in, however wide that item's marker is, so a list
+   * in a numbered item stays nested; the item's own content column is
+   * noted, to indent its later blocks and lists by.
    */
   private beginItem(open: Open): void {
     this.newLine();
-    const lists = this.lists();
-    const list = lists.at(-1);
+    const list = this.lists().at(-1);
     if (list !== undefined) list.count = (list.count ?? 0) + 1;
     const marker = list?.ordered === true ? `${list.count ?? 1}.` : "-";
-    const lead = `${"  ".repeat(Math.max(lists.length - 1, 0))}${marker} `;
+    // The item this list is in: this item is not on the stack yet.
+    const parent = [...this.stack].reverse().find(each => each.tag === "li");
+    const lead = `${" ".repeat(parent?.indent ?? 0)}${marker} `;
     open.indent = lead.length;
-    this.out += lead;
+    this.copy.add(lead);
   }
 
   /** An ordered list, numbered from its `start`, else from one. */
@@ -499,8 +594,10 @@ class CopyWriter {
   private beginCell(): void {
     const row = [...this.stack].reverse().find(each => each.tag === "tr");
     if (row !== undefined) row.cells = (row.cells ?? 0) + 1;
-    this.out = this.out.replace(/[ \t]+$/, "");
-    this.out += this.out.endsWith("\n") || this.out === "" ? "| " : " | ";
+    this.copy.trimEnd();
+    this.copy.add(
+      this.copy.endsWith("\n") || this.copy.length === 0 ? "| " : " | "
+    );
   }
 
   /** A table row, numbered in its table so the first is read as the header. */
@@ -514,7 +611,7 @@ class CopyWriter {
   /** A link's target, made whole; a link within the page or to a script has none. */
   private beginLink(open: Open, attributes: string): void {
     // Two links in a row would otherwise run together.
-    if (this.out.endsWith(")")) this.out += " ";
+    if (this.copy.endsWith(")")) this.copy.add(" ");
     const href = attributeOf(attributes, "href");
     if (
       href !== undefined &&
@@ -532,70 +629,74 @@ class CopyWriter {
     const open = this.stack[at];
     this.stack.length = at;
     if (open === undefined || open.skip || this.skipping()) return;
-    this.closerFor(tag)({
-      open,
-      inner: this.out.slice(open.start),
-      before: this.out.slice(0, open.start),
-    });
+    this.closerFor(tag)(open);
+  }
+
+  /**
+   * What `open` holds, taken off the copy so a closer can write it again
+   * rewritten: only its own words are read, never the copy before it.
+   */
+  private taken(open: Open): string {
+    const inner = this.copy.from(open.start);
+    this.copy.cut(open.start);
+    return inner;
   }
 
   /** How closing `tag` rewrites what it holds, read after it is closed. */
-  private closerFor(tag: string): (closing: Closing) => void {
+  private closerFor(tag: string): (open: Open) => void {
     const heading = /^h([1-6])$/.exec(tag);
     if (heading !== null) {
-      return closing => this.closeHeading(Number(heading[1]), closing);
+      return open => this.closeHeading(Number(heading[1]), this.taken(open));
     }
     const mark = EMPHASIS[tag];
-    if (mark !== undefined) return closing => this.closeEmphasis(mark, closing);
+    if (mark !== undefined) return open => this.closeEmphasis(mark, open);
     if (tag === "code" && !this.inside("pre")) {
-      return closing => this.closeCode(closing);
+      return open => this.closeCode(this.taken(open));
     }
     if (tag === "th" || (tag === "td" && this.headerRow())) {
-      return closing => this.closeHeaderCell(closing);
+      return open => this.closeHeaderCell(this.taken(open));
     }
-    const closers: Record<string, (closing: Closing) => void> = {
-      a: closing => this.closeLink(closing),
-      pre: closing => this.closePre(closing),
-      blockquote: closing => this.closeQuote(closing),
-      li: closing => this.closeItem(closing),
-      tr: closing => this.closeRow(closing),
+    const closers: Record<string, (open: Open) => void> = {
+      a: open => this.closeLink(open, this.taken(open)),
+      pre: open => this.closePre(this.taken(open)),
+      blockquote: open => this.closeQuote(this.taken(open)),
+      li: open => this.closeItem(open, this.taken(open)),
+      tr: open => this.closeRow(open),
       table: () => this.newBlock(),
     };
-    return closers[tag] ?? (closing => this.closeOther(tag, closing));
+    return closers[tag] ?? (open => this.closeOther(tag, open));
   }
 
   /** A heading, marked by its level. */
-  private closeHeading(level: number, { inner, before }: Closing): void {
+  private closeHeading(level: number, inner: string): void {
     // A heading is emphasis enough: emphasis around all of it is dropped.
     const heading = unwrapped(inner.replace(/\s+/g, " ").trim());
-    this.out =
-      heading === "" ? before : `${before}${"#".repeat(level)} ${heading}`;
+    if (heading !== "") this.copy.add(`${"#".repeat(level)} ${heading}`);
     this.newBlock();
   }
 
   /** A link, its words as its label. */
-  private closeLink({ open, inner, before }: Closing): void {
+  private closeLink(open: Open, inner: string): void {
     // A card that wraps a heading and a paragraph in one link is one line.
     const label = inner
       .split(/\n+/)
       .map(part => part.replace(/^#+\s*/, "").trim())
       .filter(part => part !== "")
       .join(" — ");
-    this.out =
-      before +
-      (label !== "" && open.href !== undefined
+    this.copy.add(
+      label !== "" && open.href !== undefined
         ? `[${label}](${linkTarget(open.href)})`
-        : label);
+        : label
+    );
   }
 
   /**
    * A list item: each line after its first that is indented less than its
    * marker is indented under it, so a later paragraph stays in the item.
    */
-  private closeItem({ open, inner, before }: Closing): void {
+  private closeItem(open: Open, inner: string): void {
     const indent = " ".repeat(open.indent ?? 0);
-    this.out =
-      before +
+    this.copy.add(
       inner
         .split("\n")
         .map((line, at) =>
@@ -603,7 +704,8 @@ class CopyWriter {
             ? line
             : `${indent}${line.trimStart()}`
         )
-        .join("\n");
+        .join("\n")
+    );
     this.newLine();
   }
 
@@ -611,68 +713,73 @@ class CopyWriter {
    * A preformatted block, fenced as code: kept aside and marked where it
    * stands, so it is copied verbatim ({@link withCode}).
    */
-  private closePre({ inner, before }: Closing): void {
+  private closePre(inner: string): void {
     // The line break a browser drops after `<pre>`, and the one that only
     // ends the last line; every other blank line and space is the code's.
     const code = inner.replace(/^\n/, "").replace(/\n$/, "");
     this.codes.push(fencedCode(code));
-    this.out = `${before}${CODE_MARK}${this.codes.length - 1}${CODE_MARK}`;
+    this.copy.add(`${CODE_MARK}${this.codes.length - 1}${CODE_MARK}`);
     this.newBlock();
   }
 
   /** Inline code, fenced in backticks. */
-  private closeCode({ inner, before }: Closing): void {
+  private closeCode(inner: string): void {
     const code = inner.trim();
-    this.out = code === "" ? before : `${before}${inlineCode(code)}`;
+    if (code !== "") this.copy.add(inlineCode(code));
   }
 
   /** Emphasis, marked where it holds words on one line. */
-  private closeEmphasis(mark: string, { inner, before }: Closing): void {
+  private closeEmphasis(mark: string, open: Open): void {
+    // Read first, and taken off only where it is marked.
+    const inner = this.copy.from(open.start);
     const words = inner.trim();
     if (words === "" || words.includes("\n")) return;
     const lead = inner.match(/^\s*/)?.[0] ?? "";
     const trail = inner.match(/\s*$/)?.[0] ?? "";
-    this.out = `${before}${lead}${mark}${words}${mark}${trail}`;
+    this.copy.cut(open.start);
+    this.copy.add(`${lead}${mark}${words}${mark}${trail}`);
   }
 
   /** A quote, each line marked. */
-  private closeQuote({ inner, before }: Closing): void {
+  private closeQuote(inner: string): void {
     const quote = inner.trim();
-    this.out =
-      quote === ""
-        ? before
-        : `${before}${quote
-            .split("\n")
-            .map(line => (line === "" ? ">" : `> ${line}`))
-            .join("\n")}`;
+    if (quote !== "") {
+      this.copy.add(
+        quote
+          .split("\n")
+          .map(line => (line === "" ? ">" : `> ${line}`))
+          .join("\n")
+      );
+    }
     this.newBlock();
   }
 
   /** A header cell, without emphasis around all of it. */
-  private closeHeaderCell({ inner, before }: Closing): void {
+  private closeHeaderCell(inner: string): void {
     // A header cell is emphasis enough, as a heading is.
-    this.out = `${before}${unwrapped(inner.trim())}`;
+    this.copy.add(unwrapped(inner.trim()));
   }
 
   /** A table row, closed by its bar; the first row is followed by the header line. */
-  private closeRow({ open }: Closing): void {
-    this.out = `${this.out.replace(/[ \t]+$/, "")} |\n`;
+  private closeRow(open: Open): void {
+    this.copy.trimEnd();
+    this.copy.add(" |\n");
     if (open.count !== 0) return;
     // The first row is the table's header: one line cell per cell opened,
     // whatever bars the cells' own words hold.
-    this.out += `|${" --- |".repeat(Math.max(open.cells ?? 0, 1))}\n`;
+    this.copy.add(`|${" --- |".repeat(Math.max(open.cells ?? 0, 1))}\n`);
   }
 
   /** Any other element: a list, a block, or an inline element. */
-  private closeOther(tag: string, { inner }: Closing): void {
+  private closeOther(tag: string, open: Open): void {
     if (this.nestedList(tag)) {
       this.newLine();
     } else if (BLOCKS.has(tag)) {
       this.newBlock();
-    } else if (inner === "" && this.out !== "" && !/\s$/.test(this.out)) {
+    } else if (this.copy.length === open.start) {
       // An empty inline element is a separator drawn by CSS: it keeps the
       // words either side apart.
-      this.out += " ";
+      this.space();
     }
   }
 }
@@ -787,7 +894,8 @@ interface Written {
 function writtenOf(source: string, base: string, wholeBody: boolean): Written {
   const writer = new CopyWriter(base, wholeBody);
   read(source, writer);
-  const prose = writer.out
+  const prose = writer.copy
+    .toString()
     .split("\n")
     .map(line => line.replace(/[ \t]+$/, ""))
     // A list item left with no words.
@@ -799,44 +907,65 @@ function writtenOf(source: string, base: string, wholeBody: boolean): Written {
 }
 
 /**
- * The inner HTML of the hidden container React streams a boundary's
- * content in (`<div hidden id="S:0">`), and `html` without it; none where
- * it is not found.
+ * The hidden containers React streams boundaries' content in
+ * (`<div hidden id="S:0">`), each one's inner HTML by its id, and `html`
+ * without them: read in one pass.
  */
-function streamedSegment(
+function streamedSegments(html: string): {
+  segments: Map<string, string>;
+  rest: string;
+} {
+  const segments = new Map<string, string>();
+  let rest = "";
+  let from = 0;
+  const openings = /<div hidden id="(S:[^"]+)">/g;
+  for (
+    let found = openings.exec(html);
+    found !== null;
+    found = openings.exec(html)
+  ) {
+    const end = divEnd(html, found.index);
+    if (end === undefined) break;
+    segments.set(
+      found[1] ?? "",
+      html.slice(found.index + found[0].length, end.inner)
+    );
+    rest += html.slice(from, found.index);
+    from = end.outer;
+    openings.lastIndex = end.outer;
+  }
+  return { segments, rest: rest + html.slice(from) };
+}
+
+/**
+ * Where the `<div>` opened at `start` closes: where its inner HTML ends,
+ * and just past its closing tag, divs inside it counted.
+ */
+function divEnd(
   html: string,
-  id: string
-): { inner: string; rest: string } | undefined {
-  const opening = `<div hidden id="${id}">`;
-  const start = html.indexOf(opening);
-  if (start === -1) return undefined;
+  start: number
+): { inner: number; outer: number } | undefined {
   let depth = 0;
   const divs = /<(\/?)div(?=[\s>])[^>]*>/gi;
   divs.lastIndex = start;
   for (let div = divs.exec(html); div !== null; div = divs.exec(html)) {
     depth += div[1] === "/" ? -1 : 1;
     if (depth === 0) {
-      return {
-        inner: html.slice(start + opening.length, div.index),
-        rest: html.slice(0, start) + html.slice(div.index + div[0].length),
-      };
+      return { inner: div.index, outer: div.index + div[0].length };
     }
   }
   return undefined;
 }
 
 /**
- * `html` with the boundary marked `<template id="B:0">` holding `content`
- * in place of its fallback: everything from the template to the comment
- * that closes the boundary (`<!--/$-->`), boundaries inside it counted.
+ * Where the boundary whose fallback begins at `from` ends: the comment
+ * that closes it (`<!--/$-->`), boundaries inside it counted; the end of
+ * `html` where it is never closed.
  */
-function boundaryFilled(html: string, id: string, content: string): string {
-  const template = `<template id="${id}"></template>`;
-  const start = html.indexOf(template);
-  if (start === -1) return html;
+function boundaryEnd(html: string, from: number): number {
   let depth = 0;
   const comments = /<!--([\s\S]*?)-->/g;
-  comments.lastIndex = start + template.length;
+  comments.lastIndex = from;
   for (
     let comment = comments.exec(html);
     comment !== null;
@@ -844,15 +973,47 @@ function boundaryFilled(html: string, id: string, content: string): string {
   ) {
     const data = comment[1] ?? "";
     if (data === "/$" || data === "/&") {
-      if (depth === 0) {
-        return html.slice(0, start) + content + html.slice(comment.index);
-      }
+      if (depth === 0) return comment.index;
       depth -= 1;
     } else if (["$", "$?", "$~", "$!", "&"].includes(data)) {
       depth += 1;
     }
   }
-  return html;
+  return html.length;
+}
+
+/**
+ * `html` with each boundary the page's script fills (`<template
+ * id="B:0">`, then its fallback) holding its streamed content instead, and
+ * any boundary inside that content filled the same way. Each segment is
+ * used once, and every part of the page is read once.
+ */
+function boundariesFilled(
+  html: string,
+  moves: ReadonlyMap<string, string>,
+  segments: Map<string, string>
+): string {
+  let filled = "";
+  let from = 0;
+  const templates = /<template id="(B:[^"]+)"><\/template>/g;
+  for (
+    let found = templates.exec(html);
+    found !== null;
+    found = templates.exec(html)
+  ) {
+    const segment = moves.get(found[1] ?? "");
+    const content = segment === undefined ? undefined : segments.get(segment);
+    if (segment === undefined || content === undefined) continue;
+    segments.delete(segment);
+    const after = found.index + found[0].length;
+    const end = boundaryEnd(html, after);
+    filled +=
+      html.slice(from, found.index) +
+      boundariesFilled(content, moves, segments);
+    from = end;
+    templates.lastIndex = end;
+  }
+  return filled + html.slice(from);
 }
 
 /** The comments React marks a streamed boundary's start and end with. */
@@ -899,21 +1060,20 @@ function withoutRawText(html: string): string {
  * its raw text taken out. A page that streams renders each Suspense
  * boundary's fallback first, then its content in a hidden container, and a
  * script (`$RC("B:0","S:0")`) moves the content into the fallback's place.
- * The moves are read from the page's scripts, then made, in the page's
- * order, so a boundary streamed inside another is filled once its parent is.
+ * The moves are read from the page's scripts, then made, a boundary
+ * streamed inside another filled with its parent.
  */
 function readableHtml(rendered: string): string {
-  const moves = [...rendered.matchAll(/\$R[CR]\("(B:[^"]+)","(S:[^"]+)"/g)].map(
-    ([, boundary = "", segment = ""]) => ({ boundary, segment })
-  );
-  let html = withoutRawText(rendered);
-  for (const { boundary, segment } of moves) {
-    const found = streamedSegment(html, segment);
-    if (found !== undefined) {
-      html = boundaryFilled(found.rest, boundary, found.inner);
-    }
+  const moves = new Map<string, string>();
+  for (const [, boundary = "", segment = ""] of rendered.matchAll(
+    /\$R[CR]\("(B:[^"]+)","(S:[^"]+)"/g
+  )) {
+    moves.set(boundary, segment);
   }
-  return html;
+  const html = withoutRawText(rendered);
+  if (moves.size === 0) return html;
+  const { segments, rest } = streamedSegments(html);
+  return boundariesFilled(rest, moves, segments);
 }
 
 /**

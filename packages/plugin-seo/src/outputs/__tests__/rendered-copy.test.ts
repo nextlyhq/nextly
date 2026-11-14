@@ -25,6 +25,10 @@
  * - a `<main>` a reader never sees is not the page's main content;
  * - prose that Markdown would read again as a block or a character
  *   reference is escaped;
+ * - a list nested in a numbered item is indented to that item's content, at
+ *   every depth;
+ * - a long page is written in time that grows with its length, not its
+ *   square;
  * - an ordered list keeps the number it starts at, a table's header line
  *   has one cell per header cell, and blocks in a cell stay apart.
  */
@@ -319,5 +323,25 @@ describe("a copy made from the rendered page", () => {
     expect(renderedCopyOf(html, BASE).body).toBe(
       "| A \\| B | C |\n| --- | --- |\n| First paragraph. Second paragraph. | 2 |"
     );
+  });
+
+  it("indents a list nested in a numbered item to that item's content, at every depth", () => {
+    const html = page(
+      "",
+      "<main><ol><li>Outer<ol><li>Inner<ol><li>Deep</li></ol></li></ol><ul><li>Note</li></ul></li></ol></main>"
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe(
+      "1. Outer\n   1. Inner\n      1. Deep\n   - Note"
+    );
+  });
+
+  it("writes a long page in time that grows with its length, not its square", () => {
+    // About 860 KB of paragraphs: well inside the 6 MB a page may be. Read
+    // again whole at every block, as one string, it took tens of seconds.
+    const words = `<p>${"word ".repeat(20)}</p>`.repeat(8000);
+    const started = performance.now();
+    const copy = renderedCopyOf(page("", `<main>${words}</main>`), BASE);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(copy.body.split("\n\n")).toHaveLength(8000);
   });
 });
