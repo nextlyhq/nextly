@@ -574,3 +574,16 @@ export {
   apiKeyPermissionSlugsFor,
   type ApiKeyOperation,
 } from "./domains/auth/api-key-policy";
+
+// The Schema Builder's field-name rule, for the same reason the upload formats
+// are here: the admin checks a name in the BROWSER as it is typed, and a copy of
+// the rule kept there agrees with the save until one of them changes. The save
+// refuses a name through this function, so the panel accepts exactly what the
+// save takes. Its module reaches no database code.
+export {
+  fieldNameProblem,
+  type FieldNamePlace,
+  type FieldNameProblem,
+  type FieldNameProblemKind,
+  type FieldNameSurface,
+} from "./domains/dynamic-collections/field-name-rule";
