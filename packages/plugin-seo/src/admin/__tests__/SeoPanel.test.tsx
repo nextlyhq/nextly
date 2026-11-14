@@ -471,6 +471,71 @@ describe("Advanced", () => {
       };
     }
 
+    /** The switch's own sentence, with Advanced open and the switch off. */
+    async function switchHelp(context: SeoTabContext) {
+      const user = userEvent.setup();
+      render(<Harness context={context} initial={{}} />);
+      await user.click(screen.getByRole("button", { name: /Advanced/ }));
+      return within(inAdvanced());
+    }
+    const REST =
+      " Turn this on only if you want a different one on LinkedIn, Slack and others.";
+
+    it("the switch says shared links use the Google title where nothing else is set for them", async () => {
+      const advanced = await switchHelp(CONTEXT);
+      expect(
+        advanced.getByText(`Shared links use the Google title.${REST}`)
+      ).toBeVisible();
+    });
+
+    it("the switch says shared links use the route's title where the route sets one", async () => {
+      const advanced = await switchHelp(ROUTE_CARD);
+      expect(
+        advanced.getByText(
+          `Shared links use the title this page's route sets for them.${REST}`
+        )
+      ).toBeVisible();
+      expect(
+        advanced.queryByText(`Shared links use the Google title.${REST}`)
+      ).toBeNull();
+    });
+
+    it("the switch says shared links use the template's or design's title where it sets one", async () => {
+      const card = { template: { socialTitle: "The template's card title" } };
+      const template = await switchHelp(withCard(card));
+      expect(
+        template.getByText(
+          `Shared links use the title this page's template sets for them.${REST}`
+        )
+      ).toBeVisible();
+      cleanup();
+      const design = await switchHelp({
+        ...withCard(card),
+        drawnBy: "design",
+      });
+      expect(
+        design.getByText(
+          `Shared links use the title this page's design sets for them.${REST}`
+        )
+      ).toBeVisible();
+    });
+
+    it("the switch says the Google title once one is typed, ahead of the route's", async () => {
+      const user = userEvent.setup();
+      render(
+        <Harness
+          context={ROUTE_CARD}
+          initial={{ metaTitle: "Typed for Google" }}
+        />
+      );
+      await user.click(screen.getByRole("button", { name: /Advanced/ }));
+      expect(
+        within(inAdvanced()).getByText(
+          `Shared links use the Google title.${REST}`
+        )
+      ).toBeVisible();
+    });
+
     it("the Google title, where nothing else is set for shared links", async () => {
       const { title, description, advanced } = await openShared(CONTEXT);
       expect(title).toHaveAttribute("placeholder", LEVELS.pattern.title?.value);
