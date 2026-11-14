@@ -8,7 +8,28 @@ import type {
   PageMetadataInput,
   PluginContext,
 } from "@nextlyhq/plugin-sdk";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+/**
+ * Where the serving decision says each page's copy is: as copyPathsOf
+ * names it, except where a test says another page holds it.
+ */
+const served = vi.hoisted(() => ({
+  taken: new Set<string>(),
+  asked: [] as string[],
+}));
+
+vi.mock("../ai-outputs", () => ({
+  servedCopyAddress: async (_ctx: unknown, loc: string) => {
+    served.asked.push(loc);
+    const url = new URL(loc);
+    const paths = url.pathname.endsWith("/")
+      ? [`${url.pathname}index.md`, `${url.pathname}index.html.md`]
+      : [`${url.pathname}.md`];
+    const free = paths.find(path => !served.taken.has(path));
+    return free === undefined ? undefined : new URL(free, loc).href;
+  },
+}));
 
 import { withCopyLink } from "../copy-link";
 
@@ -32,10 +53,14 @@ async function answered(
   input: PageMetadataInput = POST,
   copies = true
 ): Promise<PageMetadataAnswer> {
-  const resolver = withCopyLink(ctx, { resolve: () => answer }, async () => ({
-    patterns: {},
-    plainTextCopies: copies,
-  }));
+  const resolver = withCopyLink(
+    ctx,
+    { resolve: () => answer },
+    {
+      readRules: async () => ({ patterns: {}, plainTextCopies: copies }),
+      origin: "https://acme.example",
+    }
+  );
   return resolver.resolve(input);
 }
 
@@ -50,8 +75,25 @@ describe("the head's link to a page's plain-text copy", () => {
     ).toEqual({ "text/markdown": "/index.md" });
   });
 
-  it("is not there while copies are off", async () => {
+  it("leads only to an address where the page's own copy is served", async () => {
+    served.taken = new Set(["/blog/hello.md", "/index.md"]);
+    try {
+      // Another page holds the copy's only address: no link.
+      expect((await answered(LISTED)).formats).toBeUndefined();
+      // The home page's index.md is another page's: its other name is linked.
+      expect(
+        (await answered({ ...LISTED, canonical: "/" }, { ...POST, path: "/" }))
+          .formats
+      ).toEqual({ "text/markdown": "/index.html.md" });
+    } finally {
+      served.taken = new Set();
+    }
+  });
+
+  it("is not there while copies are off, and asks nothing then", async () => {
+    served.asked = [];
     expect((await answered(LISTED, POST, false)).formats).toBeUndefined();
+    expect(served.asked).toEqual([]);
   });
 
   it("is not there for a page kept out of search or naming another page as canonical", async () => {

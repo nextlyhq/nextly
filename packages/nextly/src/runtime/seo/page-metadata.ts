@@ -356,6 +356,24 @@ function joinVerification(
   if (joined !== undefined) merged.verification = joined;
 }
 
+type Alternates = NonNullable<Metadata["alternates"]>;
+
+/**
+ * The route's alternates with the answer's laid over them: each the
+ * answer names replaces the route's, and the other forms of the page are
+ * joined by media type, so the answer's link for one type keeps the route's
+ * links for every other, such as its feed.
+ */
+function alternatesOver(
+  kept: Alternates,
+  answered: Metadata["alternates"]
+): Alternates {
+  const merged: Alternates = { ...kept, ...answered };
+  const types = { ...kept.types, ...answered?.types };
+  if (Object.keys(types).length > 0) merged.types = types;
+  return merged;
+}
+
 /**
  * The route's own metadata with the answer laid over it.
  *
@@ -397,7 +415,7 @@ function overCode(code: Metadata | undefined, answered: Metadata): Metadata {
       ? without(alternates, ["canonical"])
       : alternates
     : {};
-  const mergedAlternates = { ...keptAlternates, ...answered.alternates };
+  const mergedAlternates = alternatesOver(keptAlternates, answered.alternates);
   if (Object.keys(mergedAlternates).length > 0) {
     merged.alternates = mergedAlternates;
   }

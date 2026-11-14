@@ -559,6 +559,46 @@ async function pageAsked(
 }
 
 /**
+ * Whether the copy at `url`, a copy's address, is the copy of the page at
+ * `loc`: no page of the site holds the address itself, and the first listed
+ * page it names is that page. The one decision both serving a copy and
+ * linking one make, so a link never leads to another page's copy.
+ */
+async function servesCopyOf(
+  ctx: PluginContext,
+  url: URL,
+  loc: string,
+  config: AiOutputsConfig
+): Promise<boolean> {
+  if ((await copiesTaken(ctx, [url.href])).size > 0) return false;
+  const page = await pageAsked(
+    ctx,
+    url,
+    config,
+    pagesOfCopy(url.pathname),
+    false
+  );
+  return page !== null && new URL(page.loc).pathname === new URL(loc).pathname;
+}
+
+/**
+ * Where the copy of the listed page at `loc` is served, as the head links
+ * it: the first of its copy's addresses that is this page's copy, or none
+ * where another page holds them all.
+ */
+export async function servedCopyAddress(
+  ctx: PluginContext,
+  loc: string,
+  config: AiOutputsConfig
+): Promise<string | undefined> {
+  for (const path of copyPathsOf(loc)) {
+    const url = new URL(path, loc);
+    if (await servesCopyOf(ctx, url, loc, config)) return url.href;
+  }
+  return undefined;
+}
+
+/**
  * The plain-text copy asked for at `url`, or null where none is served
  * there: copies are switched off, the address is not a copy's, or no page
  * the sitemap lists is at the page address it names. Asked `atPage`, `url`

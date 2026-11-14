@@ -946,7 +946,7 @@ describe("the answer's other forms of the page", () => {
     expect(metadataFromAnswer({ formats: {} }).alternates).toBeUndefined();
   });
 
-  it("replace the route's own alternate forms, keeping its language links", async () => {
+  it("replace the route's own link for their media type only, keeping its others and its language links", async () => {
     provide({
       resolve: () => ({
         canonical: "/blog/hello",
@@ -958,7 +958,10 @@ describe("the answer's other forms of the page", () => {
       code: {
         alternates: {
           languages: { de: "/de/blog/hello" },
-          types: { "text/markdown": "/old.md" },
+          types: {
+            "text/markdown": "/old.md",
+            "application/rss+xml": "/blog/feed.xml",
+          },
         },
       },
       tags: [],
@@ -966,7 +969,10 @@ describe("the answer's other forms of the page", () => {
     expect(meta.alternates).toEqual({
       canonical: "/blog/hello",
       languages: { de: "/de/blog/hello" },
-      types: { "text/markdown": "/blog/hello.md" },
+      types: {
+        "text/markdown": "/blog/hello.md",
+        "application/rss+xml": "/blog/feed.xml",
+      },
     });
   });
 

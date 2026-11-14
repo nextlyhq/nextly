@@ -732,6 +732,13 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     options,
     sitemapConfig(options, sitemapSubset)
   );
+  // What the plain-text copies are served and linked by: the Proxy that
+  // answers them and the head that links them make one decision.
+  const plainCopies = {
+    readRules,
+    ...siteOrigin,
+    ...(sitemapSubset === undefined ? {} : { collections: sitemapSubset }),
+  };
   const googleClient = googleClientOf(options);
   // Stops noting changes for IndexNow when the plugin is taken down.
   let stopIndexNow: (() => Promise<void>) | undefined;
@@ -789,7 +796,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
             ),
             structuredDataFromSettings(readStructuredDataRules)
           ),
-          readRules
+          plainCopies
         ),
         readRules
       ),
@@ -918,11 +925,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     proxy: [
       stagingGuard(readRules),
       redirectsProxyHandler(redirectKeys, undefined, goneAnswer),
-      plainCopyProxyHandler({
-        readRules,
-        ...siteOrigin,
-        ...(sitemapSubset === undefined ? {} : { collections: sitemapSubset }),
-      }),
+      plainCopyProxyHandler(plainCopies),
       indexNowKeyProxyHandler({ readRules, ...siteOrigin }),
     ],
     // The optional connections' own state, their credentials sealed: core
