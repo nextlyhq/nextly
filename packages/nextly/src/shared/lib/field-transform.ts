@@ -14,6 +14,7 @@ import type {
 } from "../../collections/fields/types";
 import { normalizeRelationshipValue } from "../../domains/collections/services/collection-utils";
 import { NextlyError } from "../../errors";
+import { addressableFields } from "../addressable-fields";
 
 import { detachData } from "./detach";
 import { storageTypeToken } from "./plugin-storage";
@@ -622,7 +623,9 @@ export function coerceDateFieldsToDate(
   data: Record<string, unknown>,
   fields: ReadonlyArray<{ name?: string; type?: string }>
 ): void {
-  for (const field of fields) {
+  // The fields stored on this object, those inside a group with no name among them: a group with
+  // no name stores its fields where it sits, so a date inside one is a column of this row too.
+  for (const field of addressableFields(fields) as unknown as typeof fields) {
     if (!field.name) continue;
     // A timestamp-backed plugin type binds to the same column a `date` does,
     // so it needs the same coercion: Drizzle refuses to bind a string there.

@@ -233,6 +233,40 @@ describe.each(getConfiguredTestDialects())(
       expect(inside).toBe(beside);
     });
 
+    it("fills the rows of a field inside the group a save makes required", async () => {
+      const t = await boot(dialect);
+      const group = (required: boolean): Field =>
+        ({
+          type: "group",
+          label: "Byline",
+          fields: [{ name: "subtitle", type: "text", required }],
+        }) as Field;
+      await writeCollectionSave(deps(t), {
+        slug: "posts",
+        previous: null,
+        entity: collection("posts", [text("title"), group(false)]),
+        change: "create",
+      });
+      await t.adapter.executeQuery(
+        `INSERT INTO dc_posts (id, title, slug, created_at, updated_at) VALUES ('p1', 'A post', 'a-post', '2026-11-14 00:00:00', '2026-11-14 00:00:00')`
+      );
+
+      // The answer names the field as the schema dialog does, by the column it settles, and it
+      // is found among the row's fields as one beside the group is.
+      await writeCollectionSave(deps(t), {
+        slug: "posts",
+        previous: collection("posts", [text("title"), group(false)]),
+        entity: collection("posts", [text("title"), group(true)]),
+        change: "update",
+        resolutions: [{ column: "subtitle", kind: "fill", value: "Filled" }],
+      });
+
+      const rows = (await t.adapter.executeQuery(
+        "SELECT subtitle FROM dc_posts"
+      )) as unknown as { subtitle: string }[];
+      expect(rows).toEqual([{ subtitle: "Filled" }]);
+    });
+
     it("saves another collection while one holding the group is in the definition file, touching only the one saved", async () => {
       const t = await boot(dialect);
       await writeCollectionSave(deps(t), {
@@ -758,6 +792,40 @@ describe.each(getConfiguredTestDialects())(
           ],
         }
       );
+    });
+
+    it("stores a date inside the group sent as text, as a JSON request sends it", async () => {
+      const t = await singleApp();
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          fields: [
+            text("heading"),
+            {
+              type: "group",
+              label: "When",
+              fields: [{ name: "startsOn", type: "date" }],
+            } as Field,
+          ],
+        }
+      );
+      const singles = t.getService("singleEntryService");
+
+      const saved = await singles.update(
+        "notice",
+        { startsOn: "2026-11-14T09:00:00.000Z", _overwrite: true },
+        { overrideAccess: true }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+      const read = await singles.get("notice", { overrideAccess: true });
+      expect(
+        new Date(
+          String((read.data as unknown as { startsOn: unknown }).startsOn)
+        ).toISOString()
+      ).toBe("2026-11-14T09:00:00.000Z");
     });
   }
 );

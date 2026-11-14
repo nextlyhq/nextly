@@ -627,6 +627,19 @@ interface SettledRows {
  * Builder's push path keeps. A field the table does not have yet counts every
  * row. Refused before anything is written.
  */
+/**
+ * The saved field an answer names, found where the answer was matched (`saveOfSchemaChange`):
+ * among the row's fields, those inside a group with no name included.
+ */
+function answeredField(
+  save: CollectionSave,
+  column: string
+): UiSchemaEntity["fields"][number] | undefined {
+  return fieldsStoredOnRow(save.entity?.fields ?? []).find(
+    f => f.name === column
+  );
+}
+
 async function settledRows(
   deps: CollectionSaveDeps,
   save: CollectionSave,
@@ -640,7 +653,7 @@ async function settledRows(
     : undefined;
   const settled: SettledRows[] = [];
   for (const resolution of save.resolutions ?? []) {
-    const field = save.entity?.fields.find(f => f.name === resolution.column);
+    const field = answeredField(save, resolution.column);
     if (field === undefined) {
       throw NextlyError.validation({
         errors: [

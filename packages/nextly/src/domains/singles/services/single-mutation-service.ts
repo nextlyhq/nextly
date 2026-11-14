@@ -4739,7 +4739,11 @@ export class SingleMutationService extends BaseService {
             // The fields this save supplies, as opposed to those carried over
             // from the draft or the live document it builds on.
             const suppliedFieldNames = new Set<string>();
-            for (const field of singleMeta.fields) {
+            // Every field of the row, those inside a group with no name among them: their
+            // columns are on this row, so an edit to one is held here like one beside the group.
+            for (const field of addressableFields(
+              singleMeta.fields
+            ) as unknown as typeof singleMeta.fields) {
               if (field.name === undefined) continue;
               const column = toSnakeCase(field.name);
               if (Object.prototype.hasOwnProperty.call(mainPayload, column)) {
