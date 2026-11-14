@@ -48,17 +48,11 @@ import {
 } from "../../../shared/address-rule";
 import type { Logger } from "../../../shared/types";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
-import {
-  writeCollectionSave,
-  type BuilderSaveSetup,
-  type CollectionSaveDeps,
+import type {
+  BuilderSaveSetup,
+  CollectionSaveDeps,
 } from "../../schema/builder-save/collection-save";
-import {
-  checkEntitySaveHistory,
-  entitySaveDeps,
-  previousEntity,
-  writeEntitySave,
-} from "../../schema/builder-save/entity-save";
+import { entitySaveDeps } from "../../schema/builder-save/entity-save-deps";
 import { fieldGroupEntity } from "../../schema/builder-save/stored-entity";
 import { writeRegistryRowsWith } from "../../schema/schema-version";
 import { identifierBytes } from "../../schema/services/index-name";
@@ -69,6 +63,15 @@ import { assertSaveLeavesNoFieldGroupCycle } from "../field-group-cycles";
 import { assertNotDiverged } from "./assert-not-diverged";
 import type { FieldGroupRegistryService } from "./field-group-registry-service";
 import { recordStrandedTransition } from "./record-stranded-transition";
+
+/**
+ * The Builder save writer, loaded where a save runs: it brings the migration
+ * generator and runner, which a read, or a save with no writer set up, never
+ * needs.
+ */
+const loadEntitySave = () => import("../../schema/builder-save/entity-save");
+const loadCollectionSave = () =>
+  import("../../schema/builder-save/collection-save");
 
 /**
  * 🔴 The schema service and the table provisioning are loaded on demand, NOT at the top of this
@@ -506,7 +509,10 @@ export class FieldGroupMetadataService {
     // before the first write (the archive of a field leaving translation, just below). A
     // code-first sync writes none: its migrations are the developer's.
     const deps = input.source === "code" ? undefined : this.saveDeps();
-    await checkEntitySaveHistory(deps);
+    if (deps !== undefined) {
+      const { checkEntitySaveHistory } = await loadEntitySave();
+      await checkEntitySaveHistory(deps);
+    }
 
     // A field leaving, joining or replaced in translation has preconditions of its own, asked by
     // the same preflight as the collection and Single settings saves, before the companion changes.
@@ -637,6 +643,7 @@ export class FieldGroupMetadataService {
     },
     move: () => Promise<void>
   ): Promise<void> {
+    const { previousEntity, writeEntitySave } = await loadEntitySave();
     const { existing, input } = edit;
     const stored = fieldGroupEntity(existing);
     // Held in an object, as `move` runs from inside the writer.
@@ -1371,6 +1378,7 @@ export class FieldGroupMetadataService {
     deps: CollectionSaveDeps,
     input: CreateFieldGroupInput
   ): Promise<FieldGroupMigrationStatus> {
+    const { writeCollectionSave } = await loadCollectionSave();
     await writeCollectionSave(deps, {
       kind: "fieldGroup",
       slug: input.slug,

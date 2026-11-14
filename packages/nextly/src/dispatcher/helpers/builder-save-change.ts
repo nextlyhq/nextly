@@ -15,14 +15,11 @@
  * @module dispatcher/helpers/builder-save-change
  */
 import { container } from "../../di/container";
-import {
-  checkSaveHistory,
-  previewCollectionSave,
-  type BuilderSaveSetup,
-  type CollectionSave,
-  type CollectionSaveDeps,
+import type {
+  BuilderSaveSetup,
+  CollectionSave,
+  CollectionSaveDeps,
 } from "../../domains/schema/builder-save/collection-save";
-import { writeEntitySave } from "../../domains/schema/builder-save/entity-save";
 import {
   saveOfSchemaChange,
   type SchemaChangeAnswers,
@@ -36,6 +33,15 @@ import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { consoleLogger } from "../../shared/types";
 
 import { getAdapterFromDI, getLoggerFromDI } from "./di";
+
+/**
+ * The Builder save writer, loaded where a save runs: it brings the migration
+ * generator and runner, which a dispatcher that saves no schema never needs.
+ */
+const loadCollectionSave = () =>
+  import("../../domains/schema/builder-save/collection-save");
+const loadEntitySave = () =>
+  import("../../domains/schema/builder-save/entity-save");
 
 /** The writer's dependencies, or undefined where the app registered no writer. */
 export function builderSaveDeps(): CollectionSaveDeps | undefined {
@@ -64,7 +70,9 @@ export function builderSaveDeps(): CollectionSaveDeps | undefined {
 export async function checkBuilderSaveHistory(
   deps: CollectionSaveDeps | undefined
 ): Promise<void> {
-  if (deps !== undefined) await checkSaveHistory(deps);
+  if (deps === undefined) return;
+  const { checkSaveHistory } = await loadCollectionSave();
+  await checkSaveHistory(deps);
 }
 
 /**
@@ -116,6 +124,7 @@ export async function writeBuilderSchemaChange(
       uiSchemaFile: deps.config.db.uiSchemaFile,
     }),
   });
+  const { writeEntitySave } = await loadEntitySave();
   // Held in an object, as the apply below sets it from inside the writer.
   const failed: { error?: unknown } = {};
   await writeEntitySave(deps, save, async () => {
@@ -184,5 +193,6 @@ export async function reviewBuilderSchemaChange(
       uiSchemaFile: deps.config.db.uiSchemaFile,
     }),
   });
+  const { previewCollectionSave } = await loadCollectionSave();
   return (await previewCollectionSave(deps, save)).notices;
 }
