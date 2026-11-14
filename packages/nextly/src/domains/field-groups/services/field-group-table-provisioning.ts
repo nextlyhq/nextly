@@ -303,10 +303,26 @@ export async function resolveComponentTypeColumn(
   adapter: DrizzleAdapter,
   tableName: string
 ): Promise<string> {
-  const { resolveTypeColumns } = await import(
+  // Derived from the fuller answer, read by the same one catalog listing.
+  return (await resolveComponentTableColumns(adapter, tableName)).typeColumn;
+}
+
+/**
+ * {@link resolveComponentTypeColumn} with the columns the table holds, for a caller that registers
+ * the runtime table over a table it does not alter: a field inside a group with no name whose
+ * column the table lacks yet is then left out of it (`RuntimeSchemaOptions.heldColumns`).
+ */
+export async function resolveComponentTableColumns(
+  adapter: DrizzleAdapter,
+  tableName: string
+): Promise<{ typeColumn: string; columns: readonly string[] | undefined }> {
+  const { resolveTableColumns } = await import(
     "../storage/resolve-storage-names"
   );
   const { STORAGE_FORMAT } = await import("../../../schemas/storage-format");
-  const typeColumns = await resolveTypeColumns(adapter, [tableName]);
-  return typeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type;
+  const held = (await resolveTableColumns(adapter, [tableName])).get(tableName);
+  return {
+    typeColumn: held?.typeColumn ?? STORAGE_FORMAT.columns.type,
+    columns: held?.columns,
+  };
 }

@@ -568,6 +568,60 @@ for (const dialect of getConfiguredTestDialects()) {
       ]);
     }, 120_000);
 
+    it("keeps serving an earlier field group after an edit that alters no table", async () => {
+      const first = await start();
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "fgnseal",
+          label: "Seal",
+          fields: [{ name: "mark", type: "text" }],
+        }
+      );
+      const registry = first.getService("fieldGroupRegistryService");
+      await new FieldGroupMetadataService(
+        registry,
+        first.getService("logger"),
+        first.adapter
+      ).createFieldGroup({
+        slug: "fgnbadge",
+        label: "Badge",
+        tableName: "comp_fgnbadge",
+        fields: besideTheGroup(),
+        source: "ui",
+        locked: false,
+        schemaHash: "earlier",
+      } as never);
+      await registry.updateComponent("fgnbadge", {
+        fields: badgeFields(),
+      } as never);
+      const t = await startWithPages();
+
+      // The field group's own update, with no save writer: it alters no table, and registers the
+      // runtime table again as the table stands.
+      await new FieldGroupMetadataService(
+        t.getService("fieldGroupRegistryService"),
+        t.getService("logger"),
+        t.adapter
+      ).updateFieldGroup({
+        slug: "fgnbadge",
+        label: "Badge, relabelled",
+        fields: badgeFields() as never,
+      });
+
+      const written = await t.nextly.create({
+        collection: "fgnpages" as never,
+        data: { title: "After", badge: { label: "Kept", note: "N" } } as never,
+      });
+      const read = (await t.nextly.findByID({
+        collection: "fgnpages" as never,
+        id: (written.item as { id: string }).id as never,
+      })) as { badge?: Badge };
+      expect(read.badge?.label).toBe("Kept");
+      expect(read.badge?.note ?? null).toBeNull();
+    }, 120_000);
+
     it("brings forward a field group an earlier Builder save made, on record", async () => {
       await start();
       await dispatchComponents(

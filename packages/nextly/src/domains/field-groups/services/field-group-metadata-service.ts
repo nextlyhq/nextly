@@ -1121,7 +1121,7 @@ export class FieldGroupMetadataService {
     const {
       reconcileComponentCompanion,
       registerComponentRuntimeSchema,
-      resolveComponentTypeColumn,
+      resolveComponentTableColumns,
     } = await import("./field-group-table-provisioning");
 
     // 🔴 Probed BEFORE the transition, which is the helper's own documented contract. Resolving it
@@ -1129,10 +1129,14 @@ export class FieldGroupMetadataService {
     // already committed — an enable that dropped the main table's columns while the registry still
     // records the group as non-localized. The discriminator is unaffected by the transition, so
     // asking first is equivalent and fails while nothing has moved.
-    const typeColumn = await resolveComponentTypeColumn(
-      adapter,
-      args.existing.tableName
-    );
+    //
+    // With the columns the main table holds, read by the same listing. This path issues no DDL to
+    // the main table, so a field inside a group with no name whose column the table lacks yet is
+    // still missing after it, and the runtime table registered below leaves it out
+    // (`RuntimeSchemaOptions.heldColumns`); the companion move changes only translated columns,
+    // which such a field never is.
+    const { typeColumn, columns: heldColumns } =
+      await resolveComponentTableColumns(adapter, args.existing.tableName);
 
     const moved = await reconcileComponentCompanion({
       busyTable: { adapter, notify: line => this.logger.warn(line) },
@@ -1154,7 +1158,8 @@ export class FieldGroupMetadataService {
       // migration may have moved it, so which discriminator column it carries is a fact about the
       // database rather than something this code can infer from its own version.
       typeColumn,
-      args.localized
+      args.localized,
+      heldColumns
     );
 
     return moved;

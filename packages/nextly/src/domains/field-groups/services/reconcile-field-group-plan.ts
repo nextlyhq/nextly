@@ -43,7 +43,7 @@ import type {
 } from "../../schema/pipeline/diff/types";
 import {
   fieldsStoredOnRow,
-  getColumnDescriptor,
+  getComponentRowColumnDescriptor,
   toSnakeCase,
   type ColumnOrigin,
   type SupportedDialect,
@@ -765,7 +765,9 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
   const displacedRemovals = new Set<string>();
 
   for (const field of onRow) {
-    const descriptor = getColumnDescriptor(
+    // The column a field group's row gives the field, as its creator and desired table give it: a
+    // many-to-many relationship keeps its list there, where a collection keeps a junction table.
+    const descriptor = getComponentRowColumnDescriptor(
       field as unknown as FieldDefinition,
       dialect,
       "fieldGroup"

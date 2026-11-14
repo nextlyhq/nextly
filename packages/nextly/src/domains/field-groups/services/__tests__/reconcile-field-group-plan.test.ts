@@ -1372,6 +1372,31 @@ describe("planFieldGroupReconcile — fields inside a group with no name", () =>
     expect(result.fields[2]).toMatchObject({ name: "extra" });
   });
 
+  it("keeps a many-to-many relationship, whose values a field group keeps on its row", () => {
+    // A collection keeps such links in a junction table; a field group has none, and keeps the
+    // list in a column of its own row, inside a group with no name as beside it.
+    const tags = {
+      name: "tags",
+      type: "relationship",
+      options: { target: "tags", relationType: "manyToMany" },
+    } as unknown as ReconcilableField;
+    const besideTags = {
+      ...tags,
+      name: "labels",
+    } as unknown as ReconcilableField;
+    const fields = [besideTags, laidOut([tags])];
+    const result = plan({
+      storedFields: fields,
+      liveMain: liveTableFor(fields),
+    });
+
+    expect(result.removed).toEqual([]);
+    expect(result.adopted).toEqual([]);
+    expect(result.awaitingColumns).toEqual([]);
+    expect(result.unchanged).toBe(true);
+    expect(result.fields).toEqual(fields);
+  });
+
   it("expects a text inside the group on the main table of a translated field group", () => {
     // Which fields are translated is read from the declared list, so the text inside the group
     // stays on the row however the field group is translated, and its place needs no repair.

@@ -2112,10 +2112,12 @@ export class DynamicCollectionService extends BaseService {
     junctions: { up: string[]; down: string[] };
     keys: { before: ForeignKeySpec[]; after: ForeignKeySpec[] };
   }> {
-    // Read for this Builder collection's own keys, `relationTo` relationships included.
+    // Read for this Builder collection's own keys, `relationTo` relationships included, those
+    // inside a group with no name among them: they hold keys on the row (`keysTheTableHolds`), so
+    // their targets are read from the registry as the ones beside the group are.
     const targetTables = await collectionTablesBySlug(
       this.adapter,
-      [...oldFields, ...newFields],
+      fieldsStoredOnRow([...oldFields, ...newFields]),
       { builder: true }
     );
     const junctions = this.junctionStatements(
@@ -2199,31 +2201,34 @@ export class DynamicCollectionService extends BaseService {
     const newFields = fieldsStoredOnRow(declaredNewFields);
     // Which fields are translated is read from the declared lists, as the creating SQL and the
     // desired table read it: a field inside a group with no name stays on the row whatever it
-    // says, so its key is this table's.
-    const translated = new Set(
-      [...declaredOldFields, ...declaredNewFields]
-        .filter(field => field.localized === true)
-        .map(field => field.name)
-    );
-    const onMainTable = (field: FieldDefinition) => !translated.has(field.name);
+    // says, so its key is this table's. Each side is read from its own list, so a relationship the
+    // save makes translated keeps its key before and has none after, and the drop is written.
+    const onMainTableOf = (declared: FieldDefinition[]) => {
+      const translated = new Set(
+        declared
+          .filter(field => field.localized === true)
+          .map(field => field.name)
+      );
+      return (field: FieldDefinition) => !translated.has(field.name);
+    };
+    const onMainTableBefore = onMainTableOf(declaredOldFields);
+    const onMainTableAfter = onMainTableOf(declaredNewFields);
     const described = this.relationshipForeignKeys(
       tableName,
-      newFields.filter(onMainTable),
+      newFields.filter(onMainTableAfter),
       targetTables
     );
     const lower = (name: string) => name.toLowerCase();
-    const relationColumns = (fields: FieldDefinition[]) =>
-      new Set(
-        fields
-          .filter(
-            field =>
-              field.type === "relationship" &&
-              onMainTable(field) &&
-              fieldProducesColumn(field)
-          )
-          .map(field => lower(toSnakeCase(field.name)))
-      );
-    const oldRelationColumns = relationColumns(oldFields);
+    const oldRelationColumns = new Set(
+      oldFields
+        .filter(
+          field =>
+            field.type === "relationship" &&
+            onMainTableBefore(field) &&
+            fieldProducesColumn(field)
+        )
+        .map(field => lower(toSnakeCase(field.name)))
+    );
     if (described.length === 0 && oldRelationColumns.size === 0) {
       return { before: [], after: [] };
     }
