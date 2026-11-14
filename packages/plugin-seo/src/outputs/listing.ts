@@ -33,6 +33,7 @@ import {
 import { codePages, heldByDocuments } from "../code-pages/answers";
 import { codePagesSlug } from "../code-pages/collection";
 import type { CodeRoute } from "../code-pages/routes";
+import { lastChangedOf } from "../content-dates/last-changed";
 import { readContentDates } from "../content-dates/store";
 import { languageLinks } from "../languages/links";
 import {
@@ -51,7 +52,7 @@ import { singleKey } from "../problems/page-types";
 import type { SeoAnswer } from "../resolver/order";
 import type { ReadRules } from "../resolver/provider";
 import { isSeoOff } from "../settings/seo-off";
-import { publishedWhere, toLastModified } from "../sitemap";
+import { publishedWhere } from "../sitemap";
 import { mappedImageOf } from "../structured-data/graph";
 import type { ReadStructuredDataRules } from "../structured-data/rules";
 
@@ -579,7 +580,7 @@ async function listed(
   );
   if (at === null) return null;
   if (at === "lost") return { lost: { holder, path: own.path } };
-  const lastModified = contentDate ?? toLastModified(document.updatedAt);
+  const lastModified = lastChangedOf(contentDate, document);
   return {
     page: {
       loc: at.loc,
