@@ -63,6 +63,7 @@ import {
   clearLiveSnapshots,
 } from "../init/schema-snapshot-cache";
 import { seedPermissionsAndRolePresets } from "../init/seed-permissions";
+import { companionReadinessWarmedForTests } from "../init/warm-companion-readiness";
 import { resetDispatcherForTests } from "../route-handler/auth-handler";
 import type { Logger } from "../services/shared";
 import { _resetEnvCache } from "../shared/lib/env";
@@ -802,7 +803,7 @@ export async function createTestNextly(
     // so a boot that fails removes it with the database below.
     const dirs = await instanceDirs(opts.basePath);
     active.scratchDir = dirs.scratchDir;
-    return await bootServices(
+    const booted = await bootServices(
       adapter,
       logger,
       opts,
@@ -810,6 +811,12 @@ export async function createTestNextly(
       restoreEnv,
       dirs
     );
+    // The boot resolves each translation table in the background once it has taken its turn
+    // (`init/warm-companion-readiness`). Settled before the instance is handed over, so a test
+    // that counts or watches what follows the boot meets none of that warm-up's reads among its
+    // own, landing there or not by the machine's timing.
+    await companionReadinessWarmedForTests();
+    return booted;
   } catch (error) {
     // Two different failures reach here, and each needs a different half.
     //
