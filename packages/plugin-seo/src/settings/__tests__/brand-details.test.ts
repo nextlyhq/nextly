@@ -72,6 +72,22 @@ describe("stored brand details", () => {
     [{ contactPoints: [{ contactType: "sales" }] }, "way to reach"],
     [{ parentOrganization: "Example Holdings" }, "parent organization"],
     [{ parentOrganization: { url: "holdings" } }, "whole address"],
+    [
+      { parentOrganization: { url: "https://example.com:bad" } },
+      "whole address",
+    ],
+    [
+      { parentOrganization: { url: "https://example.com:99999" } },
+      "whole address",
+    ],
+    [
+      {
+        contactPoints: [
+          { contactType: "sales", url: "https://example.com:bad" },
+        ],
+      },
+      "whole address",
+    ],
     [{ colour: "blue" }, "colour"],
   ])("refuses %j", (value, said) => {
     expect(brandDetailsProblem(value)).toMatch(said);

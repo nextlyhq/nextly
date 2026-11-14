@@ -35,7 +35,23 @@ export interface BrandDetails {
 /** An email address: no slash or colon, so a web address holding one is not. */
 const EMAIL = /^[^\s@/:]+@[^\s@/:]+\.[^\s@/:]+$/;
 const TELEPHONE = /^\+?[0-9][0-9 ().-]{3,}[0-9]$/;
-const WEB_ADDRESS = /^https?:\/\/[^\s/]+\.\S+$/i;
+/**
+ * Whether `value` is a whole web address, as a URL parser reads it: http
+ * or https, a host with a dot, and nothing a parser refuses (a port that
+ * is not a number, or past 65535), so only a working address is published.
+ */
+function isWebAddress(value: string): boolean {
+  if (/\s/.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return (
+      (url.protocol === "https:" || url.protocol === "http:") &&
+      url.hostname.includes(".")
+    );
+  } catch {
+    return false;
+  }
+}
 const FOUNDING_DATE = /^[0-9]{4}(-[0-9]{2}(-[0-9]{2})?)?$/;
 
 /** The facts the stored value may hold, beside the contact points and the owner. */
@@ -65,7 +81,7 @@ export function foundingDateProblem(value: string): string | null {
 
 /** Why `value` is not a whole web address; null when it is. */
 export function webAddressProblem(value: string): string | null {
-  return WEB_ADDRESS.test(value)
+  return isWebAddress(value)
     ? null
     : "Write the whole address, starting with https://.";
 }
@@ -75,7 +91,7 @@ function contactKindOf(
   value: string
 ): "email" | "telephone" | "url" | undefined {
   // A web address first: one may hold an email address in its query.
-  if (WEB_ADDRESS.test(value)) return "url";
+  if (isWebAddress(value)) return "url";
   if (EMAIL.test(value)) return "email";
   if (TELEPHONE.test(value)) return "telephone";
   return undefined;
