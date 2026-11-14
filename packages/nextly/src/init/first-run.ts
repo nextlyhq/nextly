@@ -22,7 +22,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { busyTableBounds } from "../domains/schema/busy-table/bounds";
-import { runStatementsInTries } from "../domains/schema/busy-table/run-on-session";
 import {
   type ExtensionSchema,
   getActiveExtensionSchema,
@@ -1125,6 +1124,11 @@ async function runTableStatements(
   table: string,
   statements: readonly string[]
 ): Promise<boolean> {
+  // Loaded here, not at the top: the tries' engine is needed only once a statement is sent, and
+  // every start imports this module whether or not it changes a table.
+  const { runStatementsInTries } = await import(
+    "../domains/schema/busy-table/run-on-session"
+  );
   try {
     await runStatementsInTries(adapter, statements, {
       change: `extension table ${table}`,
