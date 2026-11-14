@@ -46,8 +46,11 @@ import {
   copyPathsOf,
   pagesOfCopy,
   plainCopyOf,
+  withFrontMatter,
+  type CopyAbout,
   type CopyField,
 } from "./plain-copy";
+import { renderedCopyAt, RENDERING_HEADER } from "./rendered-fetch";
 import { siteOriginFor } from "./site-origin";
 
 /** What the AI outputs read: the site's rules, and what the sitemap lists. */
@@ -130,8 +133,9 @@ async function linkedCopies(
 /**
  * Each listed page's title and description as the public may read them,
  * and whether the public may read it at all, by its place in `pages`. A page
- * built in code has no entry: its head is the SEO set for its address, which
- * every visitor's page already carries.
+ * built in code has no document: its head is the SEO set for its address,
+ * which every visitor's page already carries, and its copy is made from the
+ * page as it renders, so the public may read it.
  */
 async function listedHeads(
   ctx: PluginContext,
@@ -151,7 +155,8 @@ async function listedHeads(
     const page = pages[at];
     if (page === undefined) return { readable: false };
     if (page.holder.collection === codeSlug) {
-      return { ...codeHeads.get(page.path), readable: false };
+      // Its copy is made from the page as it renders, so it links its copy.
+      return { ...codeHeads.get(page.path), readable: true };
     }
     return {
       ...heads.get(at),
@@ -439,15 +444,73 @@ async function pageAddressesAsked(
   return asked;
 }
 
+/** What a copy's front matter says of `page`, from its head. */
+function aboutOf(
+  page: ListedPage,
+  head: { title?: string; description?: string }
+): CopyAbout {
+  return {
+    ...(head.title === undefined ? {} : { title: head.title }),
+    ...(head.description === undefined ? {} : { description: head.description }),
+    url: page.loc,
+    ...(page.lastModified === undefined
+      ? {}
+      : { lastUpdated: page.lastModified }),
+  };
+}
+
 /**
- * A listed page's plain-text copy, from its published document: its front
- * matter from the head the public may read and the sitemap's last change.
+ * The copy of `page` made from the page as it is rendered, asked for at its
+ * own listed address; its front matter from `head`, else the rendered
+ * page's own head. None where the page does not render.
+ */
+async function renderedCopyFor(
+  ctx: PluginContext,
+  page: ListedPage,
+  head: { title?: string; description?: string }
+): Promise<string | null> {
+  const rendered = await renderedCopyAt(ctx, page.loc, page.loc);
+  if (rendered === null) return null;
+  const title = head.title ?? rendered.title;
+  const description = head.description ?? rendered.description;
+  return withFrontMatter(
+    aboutOf(page, {
+      ...(title === undefined ? {} : { title }),
+      ...(description === undefined ? {} : { description }),
+    }),
+    rendered.body
+  );
+}
+
+/** Whether a copy says anything beyond its heading. */
+const holdsWords = (copy: string): boolean =>
+  copy.replace(/^# [^\n]*\n*/, "").trim() !== "";
+
+/**
+ * A listed page's plain-text copy. A page built in code is copied from the
+ * page as it renders, since it has no stored words; so is a page whose
+ * stored fields hold none beyond its title, such as a Page Builder layout,
+ * whose words only the rendered page shows. Every other page is copied from
+ * its published document, read as the public reads it. The front matter is
+ * the head the public may read, and the sitemap's last change.
+ *
+ * A page is rendered only where `render` says the site names its own
+ * addresses (a production address, or the configured origin): only then is
+ * the listed address one the site chose, never the host a request named,
+ * so no request can send the site to fetch another host.
  */
 async function copyOf(
   ctx: PluginContext,
   page: ListedPage,
-  readRules: ReadRules
+  config: AiOutputsConfig,
+  render: boolean
 ): Promise<string | null> {
+  const { readRules } = config;
+  if (page.holder.collection === codePagesSlug(ctx)) {
+    if (!render) return null;
+    const heads = await codeHeadsOf(ctx, config, readRules);
+    return renderedCopyFor(ctx, page, heads.get(page.path) ?? {});
+  }
   const document = (await publicDocuments([page])).get(readingKey(page));
   if (document === undefined) return null;
   const head = await publicHead(ctx, page, document, readRules);
@@ -459,23 +522,18 @@ async function copyOf(
   const title =
     titleField === undefined ? head.title : textOf(document[titleField]);
   const fields = await fieldsOf(ctx, page.holder.collection);
-  return plainCopyOf({
+  const stored = plainCopyOf({
     ...(title === undefined ? {} : { title }),
     ...(titleField === undefined ? {} : { titleField }),
     document,
     ...(fields === undefined ? {} : { fields }),
     base: page.loc,
-    about: {
-      ...(head.title === undefined ? {} : { title: head.title }),
-      ...(head.description === undefined
-        ? {}
-        : { description: head.description }),
-      url: page.loc,
-      ...(page.lastModified === undefined
-        ? {}
-        : { lastUpdated: page.lastModified }),
-    },
   });
+  if (render && !holdsWords(stored)) {
+    const rendered = await renderedCopyFor(ctx, page, head);
+    if (rendered !== null) return rendered;
+  }
+  return withFrontMatter(aboutOf(page, head), stored);
 }
 
 /**
@@ -628,7 +686,8 @@ async function plainCopyAt(
   const candidates = atPage ? [url.pathname] : pagesOfCopy(url.pathname);
   const page = await pageAsked(ctx, url, config, candidates, atPage);
   if (page === null) return null;
-  const body = await copyOf(ctx, page, config.readRules);
+  const named = await siteOriginFor(url.origin, ctx, config);
+  const body = await copyOf(ctx, page, config, named !== undefined);
   return body === null ? null : { body, page, llmsTxt: rules.llmsTxt === true };
 }
 
@@ -716,6 +775,8 @@ export function plainCopyProxyHandler(
     name: "plain-text-copies",
     async handle(request, ctx) {
       if (request.method !== "GET" && request.method !== "HEAD") return;
+      // A page asked for to make a copy from is the page, never a copy.
+      if (request.headers.has(RENDERING_HEADER)) return;
       const url = new URL(request.url);
       const atPage =
         !url.pathname.endsWith(".md") &&

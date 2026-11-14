@@ -551,9 +551,12 @@ export function plainCopyOf(source: CopySource): string {
     }
   });
   const body = `${parts.join("\n\n")}\n`;
-  return source.about === undefined
-    ? body
-    : `${frontMatterOf(source.about)}\n\n${body}`;
+  return source.about === undefined ? body : withFrontMatter(source.about, body);
+}
+
+/** `body`, a copy's Markdown, begun by front matter naming its page. */
+export function withFrontMatter(about: CopyAbout, body: string): string {
+  return `${frontMatterOf(about)}\n\n${body.trim()}\n`;
 }
 
 /**
