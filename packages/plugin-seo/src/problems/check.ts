@@ -29,6 +29,7 @@ import { pageLanguageLinks } from "../languages/head";
 import {
   heldLanguages,
   singleIn,
+  standingOf,
   type HeldLanguages,
 } from "../languages/versions";
 import { originOf } from "../origin";
@@ -383,44 +384,56 @@ function nameOf(ctx: PluginContext, type: string, id: string): string {
   return pageType.kind === "single" ? singleLabel(ctx, pageType.slug) : id;
 }
 
+/** Whether the sitemap lists a page standing so: an address, not "lost" or none. */
+const isListed = (
+  standing: ReturnType<typeof standingOf>
+): standing is { href: string; loc: string } =>
+  standing !== null && standing !== "lost";
+
 /** How many redirects one link is followed through to reach a page. */
 const MAX_REDIRECT_HOPS = 5;
 
 /**
- * The pages `holders` lead to: each page as it is, and each redirect
- * followed to the page holding its To address, through at most
- * {@link MAX_REDIRECT_HOPS}, so a link to a page's old address counts for
- * the page. A redirect for an address gone for good, or to another site,
- * leads to no page.
+ * The pages a visitor asking for `path` in `locale` arrives at: the pages
+ * holding it, where any does, since an address a page serves is never
+ * redirected; else, through the redirect the request meets, by the same
+ * choice the Proxy makes (`redirectMeeting`: an exact redirect before any
+ * pattern, then the longest pattern), the pages at the address it sends the
+ * request to (`destinationOf`, which carries a pattern's rest across), through
+ * at most {@link MAX_REDIRECT_HOPS}. A redirect for an address gone for good,
+ * or to another site, leads to no page.
  */
-async function pagesBehind(
+async function pagesAt(
   ctx: PluginContext,
-  holders: readonly { collection: string; id: string }[],
+  path: string,
   locale: string,
+  holders: readonly { collection: string; id: string }[],
   hops = 0
 ): Promise<{ collection: string; id: string }[]> {
   const redirects = redirectsSlug(ctx);
-  const pages: { collection: string; id: string }[] = [];
-  for (const holder of holders) {
-    if (holder.collection !== redirects) {
-      pages.push(holder);
-      continue;
-    }
-    if (hops >= MAX_REDIRECT_HOPS) continue;
-    const { data } = await ctx.services.ownCollections.listEntries(redirects, {
-      where: { id: { equals: holder.id } },
-      pagination: { limit: 1, page: 1 },
-      depth: 0,
-    });
-    const [entry] = data as unknown[];
-    if (entry === undefined) continue;
-    const redirect = redirectOf(entry);
-    if (redirect.gone || !redirect.target.startsWith("/")) continue;
-    const language = redirect.locale === "" ? locale : redirect.locale;
-    const next = await addressHolders(ctx, pathOf(redirect.target), language);
-    pages.push(...(await pagesBehind(ctx, next, language, hops + 1)));
-  }
-  return pages;
+  const pages = holders.filter(holder => holder.collection !== redirects);
+  if (pages.length > 0 || hops >= MAX_REDIRECT_HOPS) return pages;
+  const met = await redirectMeeting(ctx, { locale, path });
+  if (met === null) return [];
+  const { data } = await ctx.services.ownCollections.listEntries(redirects, {
+    where: { id: { equals: met } },
+    pagination: { limit: 1, page: 1 },
+    depth: 0,
+  });
+  const [entry] = data as unknown[];
+  if (entry === undefined) return [];
+  const redirect = redirectOf(entry);
+  const sent = destinationOf(redirect, path);
+  if (redirect.gone || !sent.startsWith("/")) return [];
+  const language = redirect.locale === "" ? locale : redirect.locale;
+  const next = pathOf(sent);
+  return pagesAt(
+    ctx,
+    next,
+    language,
+    await addressHolders(ctx, next, language),
+    hops + 1
+  );
 }
 
 /** What the check of one language of a page found, before it is kept. */
@@ -454,7 +467,7 @@ async function examine(
     // Read by the same rule a visitor's request is, as the Proxy reads it.
     keptOf: url => addressOfRequest(url),
     holders: (path, locale) => addressHolders(ctx, path, locale),
-    pagesOf: (holders, locale) => pagesBehind(ctx, holders, locale),
+    pagesOf: (holders, locale, path) => pagesAt(ctx, path, locale, holders),
   });
   const subject = {
     type,
@@ -501,7 +514,16 @@ async function examine(
       ? {}
       : { description: answer.description.value }),
     problems,
-    links: { to: links.to, listed, home: served.path === "/" },
+    // Eligible to be an orphan only where the sitemap lists it, by the same
+    // decision: a page hidden from search, or whose canonical names another
+    // address, does not stand for itself in search.
+    links: {
+      to: links.to,
+      listed: isListed(
+        standingOf(answer, productionAddresses[0] ?? NO_ORIGIN, ownAddress)
+      ),
+      home: served.path === "/",
+    },
     checkedAt: new Date().toISOString(),
   };
 }

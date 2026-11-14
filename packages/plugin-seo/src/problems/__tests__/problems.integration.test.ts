@@ -355,6 +355,99 @@ describe.each(getConfiguredTestDialects())(
       expect(kindsOf(list.problems, harbour)).not.toContain("brokenLink");
     });
 
+    it("follows a pattern redirect with the address asked for, and only the redirect a visitor meets", async () => {
+      const { t, ctx } = await boot(dialect);
+      const boats = await publish(t, {
+        title: "Boats",
+        slug: "boats",
+        excerpt: "Every boat in the harbour.",
+      });
+      const fallback = await publish(t, {
+        title: "Fallback",
+        slug: "fallback",
+        excerpt: "Where old addresses land.",
+      });
+      await until(t, checkedSince(boats));
+      await until(t, checkedSince(fallback));
+      // `/old/*` carries the rest across; `/older/*` sends all to Fallback,
+      // but the exact `/older/boats` answers before it.
+      for (const [source, target] of [
+        ["/old/*", "/blog/*"],
+        ["/older/*", "/blog/fallback"],
+        ["/older/boats", "/blog/boats"],
+      ]) {
+        await ctx.services.collections.withTransaction(tx =>
+          putRedirect(ctx, tx, {
+            locale: "en",
+            origin: "person",
+            source,
+            target,
+          })
+        );
+      }
+      const linking = await publish(t, {
+        title: "Linking",
+        slug: "linking",
+        excerpt: "Links to old addresses.",
+        body: {
+          root: {
+            type: "root",
+            version: 1,
+            children: [
+              {
+                type: "paragraph",
+                version: 1,
+                children: ["/old/boats", "/older/boats"].map(url => ({
+                  type: "link",
+                  url,
+                  version: 1,
+                  children: [{ type: "text", text: "read", version: 1 }],
+                })),
+              },
+            ],
+          },
+        },
+      });
+      await until(t, checkedSince(linking));
+
+      const list = await problemList(ctx, CHECKS, everything);
+      const counts = (id: string) =>
+        list.checked?.find(page => page.id === id)?.links;
+      expect(counts(boats)).toEqual({ inbound: 1, outbound: 0 });
+      // The covering pattern is not the one met, so Fallback gets no link.
+      expect(counts(fallback)).toEqual({ inbound: 0, outbound: 0 });
+      expect(counts(linking)).toEqual({ inbound: 0, outbound: 1 });
+    });
+
+    it("names no orphan of a page whose canonical names another address", async () => {
+      const { t, ctx } = await boot(dialect);
+      const moved = await publish(t, {
+        title: "Moved",
+        slug: "moved",
+        excerpt: "First published elsewhere.",
+        seo: {
+          canonical: "https://first.example/moved",
+          canonicalElsewhere: true,
+        },
+      });
+      const own = await publish(t, {
+        title: "Own",
+        slug: "own",
+        excerpt: "Its own page.",
+      });
+      await until(t, checkedSince(moved));
+      await until(t, checkedSince(own));
+
+      const list = await problemList(ctx, CHECKS, everything);
+      // Left out of the sitemap by its canonical: no orphan, its counts kept.
+      expect(kindsOf(list.problems, moved)).not.toContain("orphanPage");
+      expect(list.checked?.find(page => page.id === moved)?.links).toEqual({
+        inbound: 0,
+        outbound: 0,
+      });
+      expect(kindsOf(list.problems, own)).toContain("orphanPage");
+    });
+
     it("lists no problem of a type whose SEO is switched off, and lists it again once on", async () => {
       const { t, ctx } = await boot(dialect);
       const id = await publish(t, { title: "Harbour", slug: "harbour" });

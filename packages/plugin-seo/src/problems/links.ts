@@ -89,12 +89,14 @@ export interface LinkJudge {
     locale: string
   ) => Promise<readonly { collection: string; id: string }[]>;
   /**
-   * The pages `holders` lead to: a redirect holding an address followed to
-   * the page it sends people to. Each holder as it is where not given.
+   * The pages a request for `path`, which `holders` hold, arrives at: a
+   * redirect followed to the page it sends people to. Each holder as it is
+   * where not given.
    */
   pagesOf?: (
     holders: readonly { collection: string; id: string }[],
-    locale: string
+    locale: string,
+    path: string
   ) => Promise<readonly { collection: string; id: string }[]>;
 }
 
@@ -166,7 +168,7 @@ export async function readLinks(
     }
     const holders = await held;
     const pages = judge.pagesOf
-      ? await judge.pagesOf(holders, kept.locale)
+      ? await judge.pagesOf(holders, kept.locale, path)
       : holders;
     for (const page of pages) {
       to.add(linkedPageKey(page.collection, page.id, kept.locale));
