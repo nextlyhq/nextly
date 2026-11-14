@@ -32,7 +32,8 @@ export interface BrandDetails {
   >;
 }
 
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** An email address: no slash or colon, so a web address holding one is not. */
+const EMAIL = /^[^\s@/:]+@[^\s@/:]+\.[^\s@/:]+$/;
 const TELEPHONE = /^\+?[0-9][0-9 ().-]{3,}[0-9]$/;
 const WEB_ADDRESS = /^https?:\/\/[^\s/]+\.\S+$/i;
 const FOUNDING_DATE = /^[0-9]{4}(-[0-9]{2}(-[0-9]{2})?)?$/;
@@ -73,8 +74,9 @@ export function webAddressProblem(value: string): string | null {
 function contactKindOf(
   value: string
 ): "email" | "telephone" | "url" | undefined {
-  if (EMAIL.test(value)) return "email";
+  // A web address first: one may hold an email address in its query.
   if (WEB_ADDRESS.test(value)) return "url";
+  if (EMAIL.test(value)) return "email";
   if (TELEPHONE.test(value)) return "telephone";
   return undefined;
 }

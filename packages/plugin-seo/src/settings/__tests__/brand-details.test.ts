@@ -96,6 +96,15 @@ describe("one way to reach the brand, as typed", () => {
     });
   });
 
+  it("reads a web address holding an email address as the web address", () => {
+    const support = "https://example.com/support?email=help@example.com";
+    expect(contactPointOf("technical support", support)).toEqual({
+      contactType: "technical support",
+      url: support,
+    });
+    expect(brandDetailsProblem({ email: support })).toMatch("email address");
+  });
+
   it("says what is wrong with what was typed", () => {
     expect(contactProblem("help@example.com")).toBeNull();
     expect(contactProblem("+1 555 0100")).toBeNull();
