@@ -46,6 +46,7 @@ import { _resetEnvCache } from "../../../shared/lib/env";
 import { introspectLiveColumns } from "../../schema/pipeline/diff/introspect-live";
 import { FieldGroupMetadataService } from "../services/field-group-metadata-service";
 import { reconcileFieldGroup } from "../services/field-group-reconcile-service";
+import { registeredComponentColumns } from "../services/field-group-table-provisioning";
 
 interface CaseDatabase {
   adapter: DrizzleAdapter;
@@ -609,6 +610,17 @@ for (const dialect of getConfiguredTestDialects()) {
         label: "Badge, relabelled",
         fields: badgeFields() as never,
       });
+      // The runtime table that update registered, read before anything else registers one: it
+      // names no column the table does not hold.
+      const registered = registeredComponentColumns(
+        t.adapter as never,
+        "comp_fgnbadge"
+      );
+      expect(registered).toBeDefined();
+      expect(
+        LAID_OUT_COLUMNS.filter(column => registered!.has(column))
+      ).toEqual([]);
+      expect(registered!.has("label")).toBe(true);
 
       const written = await t.nextly.create({
         collection: "fgnpages" as never,
