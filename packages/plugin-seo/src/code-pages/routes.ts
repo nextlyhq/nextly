@@ -197,7 +197,15 @@ function appPathsIn(dir: string): string[] {
  * `notFound()` while the build rendered it says so.
  */
 function renderedStatusOf(dir: string, path: string): number | undefined {
-  const name = path === "/" ? "index" : path.slice(1);
+  // The page's file name as Next.js makes it (`normalizePagePath`): the home
+  // page is `index`, and a path that starts with `/index` gains another
+  // `index` before it, so `/index` is `index/index` and never the home page's.
+  const name =
+    path === "/"
+      ? "index"
+      : /^\/index(\/|$)/.test(path)
+        ? `index${path}`
+        : path.slice(1);
   const meta = readJson(
     join(/*turbopackIgnore: true*/ dir, "server", "app", `${name}.meta`)
   );
