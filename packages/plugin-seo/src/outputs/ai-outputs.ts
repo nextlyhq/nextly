@@ -256,42 +256,64 @@ function fileHeadOf(
  * llms.txt are switched on: llms.txt's head, then every page llms.txt lists,
  * in its order, with the words its plain-text copy holds. A page the public
  * may not read, or one built in code, is named by its address alone. Each
- * type's fields and every page's document are read once for the file.
+ * type's fields and every page's document are read once for the file, and a
+ * page's words are built only as the file takes the page, so none past
+ * where the file stops short is ever built. `maxBytes` is the file's size,
+ * 5 MB unless given; only a test gives a smaller one.
  */
 export async function llmsFullTxtOf(
   ctx: PluginContext,
   origin: string,
   config: AiOutputsConfig,
-  rules: SiteRules
+  rules: SiteRules,
+  maxBytes?: number
 ): Promise<string | null> {
   if (rules.llmsTxt !== true || rules.llmsFullTxt !== true) return null;
   const { pages, readRules } = await llmsPagesOf(ctx, origin, config);
   const headOf = await listedHeads(ctx, pages, config, readRules);
+  // The fields of each type with a page the public may read, one read a
+  // type, taken before the file is written so the pages can be built as
+  // the file takes them, with nothing left to wait for.
   const fields = new Map<string, readonly CopyField[] | undefined>();
-  const full: LlmsFullPage[] = [];
   for (const [at, page] of pages.entries()) {
-    const head = headOf(at);
     const { collection } = page.holder;
-    if (head.document !== undefined && !fields.has(collection)) {
+    if (headOf(at).document !== undefined && !fields.has(collection)) {
       fields.set(collection, await fieldsOf(ctx, collection));
     }
-    full.push({
+  }
+  return llmsFullTxt({
+    ...fileHeadOf(origin, rules),
+    pages: fullPagesOf(pages, headOf, fields),
+    listUrl: new URL("/llms.txt", origin).href,
+    ...(maxBytes === undefined ? {} : { maxBytes }),
+  });
+}
+
+/**
+ * The pages of llms-full.txt, in the listing's order, each built only when
+ * the file asks for it: the file stops asking once a page will not fit, so
+ * the words of the pages after it are never built or kept, however large
+ * the site.
+ */
+function* fullPagesOf(
+  pages: readonly ListedPage[],
+  headOf: (at: number) => ListedHead,
+  fields: ReadonlyMap<string, readonly CopyField[] | undefined>
+): Generator<LlmsFullPage> {
+  for (const [at, page] of pages.entries()) {
+    const head = headOf(at);
+    yield {
       title: head.title ?? page.path,
       url: page.loc,
       ...(head.document === undefined
         ? {}
         : {
             body: copyOfDocument(page, head.document, head.title, {
-              fields: fields.get(collection),
+              fields: fields.get(page.holder.collection),
             }),
           }),
-    });
+    };
   }
-  return llmsFullTxt({
-    ...fileHeadOf(origin, rules),
-    pages: full,
-    listUrl: new URL("/llms.txt", origin).href,
-  });
 }
 
 /** The fields a page's type declares, where the site can say. */

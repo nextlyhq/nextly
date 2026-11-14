@@ -113,7 +113,12 @@ export interface LlmsFullFile {
   name: string;
   description?: string;
   intro?: string;
-  pages: readonly LlmsFullPage[];
+  /**
+   * The pages, in order. Any iterable, read one page at a time and no
+   * further than the file can hold, so a lazy one builds no page past
+   * where the file stops short.
+   */
+  pages: Iterable<LlmsFullPage>;
   /** Where llms.txt is, named where the file stops short of every page. */
   listUrl?: string;
   /** The most the file may hold, in bytes: 5 MB unless given. */

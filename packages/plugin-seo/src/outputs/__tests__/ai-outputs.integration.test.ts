@@ -28,19 +28,43 @@ import {
   createNextlyProxy,
   type ContentEntry,
 } from "nextly/runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { lastCatchUp } from "../../address-record/catch-up";
 import { seoPlugin } from "../../plugin";
+import type { ReadRules } from "../../resolver/provider";
 import { SEO_SETTINGS_SLUG } from "../../settings/contract";
+import { readSeoRules } from "../../settings/rules";
+import { llmsFullTxtOf } from "../ai-outputs";
+
+/** How many pages' plain-text copies have been built since last reset. */
+const copies = vi.hoisted(() => ({ built: 0 }));
+
+// Each copy is still built as the plugin builds it; the count is what
+// shows llms-full.txt builds no page it cannot hold.
+vi.mock("../plain-copy", async importOriginal => {
+  const actual = await importOriginal<typeof import("../plain-copy")>();
+  return {
+    ...actual,
+    plainCopyOf: (...args: Parameters<typeof actual.plainCopyOf>) => {
+      copies.built += 1;
+      return actual.plainCopyOf(...args);
+    },
+  };
+});
 
 const SITE = "https://acme.example";
 
 let current: TestNextly | undefined;
 
+/** The SEO plugin's own context in the current test, from its start. */
+let seoContext: PluginContext | undefined;
+
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  seoContext = undefined;
 });
 
 const open = { read: () => true };
@@ -51,18 +75,31 @@ const body = (...children: unknown[]) => ({
   root: { type: "root", children },
 });
 
+/**
+ * The SEO plugin as the site configures it, keeping the context it starts
+ * with, so a test can call an output with the plugin's own reads.
+ */
+function seoHandingOverContext(): ReturnType<typeof seoPlugin> {
+  const plugin = seoPlugin({
+    collections: ["posts", "members", "guides"],
+    singles: ["home"],
+    baseUrl: SITE,
+  });
+  return {
+    ...plugin,
+    init(ctx) {
+      seoContext = ctx;
+      return plugin.init?.(ctx);
+    },
+  };
+}
+
 async function boot(dialect: TestDialect) {
   current = await createTestNextly({
     dialect,
     // The Public role a real boot makes, which judges every visitor's read.
     seedPublic: true,
-    plugins: [
-      seoPlugin({
-        collections: ["posts", "members", "guides"],
-        singles: ["home"],
-        baseUrl: SITE,
-      }),
-    ],
+    plugins: [seoHandingOverContext()],
     collections: [
       defineCollection({
         slug: "posts",
@@ -642,6 +679,43 @@ describe.each(getConfiguredTestDialects())(
       // Not without llms.txt, though its own switch is on.
       await switches(t, { llmsTxt: false, llmsFullTxt: true });
       expect((await rootFile("llms-full.txt")).status).toBe(404);
+    });
+
+    it("builds no page's words past where llms-full.txt stops short", async () => {
+      const t = await boot(dialect);
+      for (const n of [1, 2, 3, 4, 5, 6]) {
+        await post(t, `long-${n}`, "published", {
+          body: body(paragraph(words("Rockets go up. ".repeat(20).trim()))),
+        });
+      }
+      await switches(t, { llmsTxt: true, llmsFullTxt: true });
+      if (seoContext === undefined) throw new Error("no SEO plugin context");
+      const readRules: ReadRules = (ctx, locale) => readSeoRules(ctx, locale);
+      const rules = await readRules(seoContext, undefined);
+
+      // A budget that holds a page or two of the six: the file stops short.
+      copies.built = 0;
+      const cut = await llmsFullTxtOf(
+        seoContext,
+        SITE,
+        { readRules },
+        rules,
+        1024
+      );
+      expect(cut).toContain(
+        `The rest of the site's pages are listed in [llms.txt](${SITE}/llms.txt).`
+      );
+      const held = (cut ?? "").match(/^Source: /gm)?.length ?? 0;
+      // Each page the file holds is built, and the one found not to fit,
+      // but none after it.
+      expect(copies.built).toBeLessThanOrEqual(held + 1);
+
+      // The control: with room for every page, every readable page is
+      // built, more than the cut file built.
+      copies.built = 0;
+      const whole = await llmsFullTxtOf(seoContext, SITE, { readRules }, rules);
+      expect(whole).not.toContain("The rest of the site's pages");
+      expect(copies.built).toBeGreaterThan(held + 1);
     });
 
     it("tells the public nothing it may not read, in llms.txt or a copy's heading", async () => {
