@@ -138,13 +138,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
-    key: "packages/nextly/src/domains/audit/erase-principal.ts#reportPrincipalDeleted \u00b7 select tables",
-    witness:
-      "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
     key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dc_*",
     witness:
       "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
@@ -257,13 +250,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     key: "* (opened the transaction) \u00b7 select nextly_webhooks",
     witness: null,
     reason: REGISTRY,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/audit/erase-principal.ts#reportPrincipalDeleted \u00b7 select tables",
-    witness:
-      "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts",
-    reason: CALLER,
   },
   {
     dialect: "postgresql",
