@@ -39,6 +39,45 @@ function withResolvedDialect(raw: unknown): unknown {
   return implied ? { ...rest, DB_DIALECT: implied } : rest;
 }
 
+/**
+ * The pool and timeout settings, a schema of their own so the database factory can read them
+ * without validating the rest of the environment: a command that names its database hands the
+ * factory its dialect and URL, and the environment's own database target, absent or not, is then
+ * none of the factory's business. The full schema below spreads these in, so both read the keys
+ * by one definition.
+ */
+const _poolSettingsObject = z.object({
+  // These used to carry zod defaults, but the defaults silently overrode the adapter's
+  // intentional cold-start-friendly defaults (e.g. the Postgres adapter's `min: 0` for Neon
+  // auto-suspend recovery, in packages/adapter-postgres/src/index.ts). They are optional so the
+  // factory's `??` chain falls through to adapter-level defaults when the operator has set
+  // nothing.
+  DB_POOL_MAX: z.coerce.number().int().min(1).optional(),
+  DB_POOL_MIN: z.coerce.number().int().min(0).optional(),
+  DB_POOL_IDLE_TIMEOUT: z.coerce.number().int().min(1000).optional(),
+  DB_QUERY_TIMEOUT: z.coerce.number().int().min(1000).optional(),
+});
+
+export type PoolSettings = z.infer<typeof _poolSettingsObject>;
+
+/**
+ * The pool and timeout settings in `source`, validated alone. A value out of range is refused as
+ * the full validation refuses it, naming the key.
+ */
+export function readPoolSettings(
+  source: Record<string, unknown> = process.env
+): PoolSettings {
+  const parsed = _poolSettingsObject.safeParse(source);
+  if (!parsed.success) {
+    consoleLogger.error("Environment validation failed");
+    parsed.error.issues.forEach(issue => {
+      consoleLogger.error(`  ${issue.path.join(".")}: ${issue.message}`);
+    });
+    throw new Error("Invalid environment configuration");
+  }
+  return parsed.data;
+}
+
 const _envObject = z
   .object({
     // Runtime
@@ -52,17 +91,8 @@ const _envObject = z
     DATABASE_URL: z.string().optional(),
     // SQLite-specific path (alternative to DATABASE_URL for SQLite)
     SQLITE_PATH: z.string().optional(),
-    // Pooling & timeouts
-    // Phase 1 fix: these used to carry zod defaults, but the defaults silently
-    // overrode the adapter's intentional cold-start-friendly defaults (e.g.
-    // the Postgres adapter's `min: 0` for Neon auto-suspend recovery — see
-    // packages/adapter-postgres/src/index.ts:140-148). Make them optional so
-    // the factory's `??` chain can fall through to adapter-level defaults
-    // when the operator hasn't set anything.
-    DB_POOL_MAX: z.coerce.number().int().min(1).optional(),
-    DB_POOL_MIN: z.coerce.number().int().min(0).optional(),
-    DB_POOL_IDLE_TIMEOUT: z.coerce.number().int().min(1000).optional(),
-    DB_QUERY_TIMEOUT: z.coerce.number().int().min(1000).optional(),
+    // Pooling & timeouts, defined once (`_poolSettingsObject`).
+    ..._poolSettingsObject.shape,
     DB_HEALTHCHECK_INTERVAL_MS: z.coerce
       .number()
       .int()
