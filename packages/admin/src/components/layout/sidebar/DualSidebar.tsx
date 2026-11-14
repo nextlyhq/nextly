@@ -13,10 +13,12 @@ import {
 import { useMediaContext } from "@admin/context/providers/MediaProvider";
 import {
   NAV_COLLECTIONS_PARAMS,
-  NAV_SINGLES_PARAMS,
   useCollections,
+} from "@admin/hooks/queries/useCollections";
+import {
+  NAV_SINGLES_PARAMS,
   useSingles,
-} from "@admin/hooks/queries";
+} from "@admin/hooks/queries/useSingles";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useRouter } from "@admin/hooks/useRouter";
 import { useSidebarNavigation } from "@admin/hooks/useSidebarNavigation";
@@ -30,6 +32,7 @@ import {
 } from "@admin/lib/permissions/authorization";
 import { resolveCollectionPlacement } from "@admin/lib/plugins/collection-placement";
 import { resolveVisibleMenuItems } from "@admin/lib/plugins/menu";
+import { pluginSettingsLinks } from "@admin/lib/plugins/plugin-settings-permission";
 import { pluginSlug } from "@admin/lib/plugins/plugin-slug";
 import { resolvePluginIcon } from "@admin/lib/plugins/resolve-plugin-icon";
 import type { ApiCollection } from "@admin/types/entities";
@@ -328,6 +331,14 @@ export function DualSidebar({
         "plugins",
         sectionReachable
       ).length > 0,
+    // A plugin settings page a role of the plugin's own may open, which only
+    // this panel links to: the panel's own function, so the rail shows the
+    // entry exactly when the panel draws the link.
+    hasReachablePluginSettings:
+      pluginSettingsLinks(branding?.plugins, {
+        canManageSettings: capabilities.canManageSettings,
+        hasPermission,
+      }).length > 0,
   });
 
   // Whether an entry shows, with an answer still loading read as "shown" for

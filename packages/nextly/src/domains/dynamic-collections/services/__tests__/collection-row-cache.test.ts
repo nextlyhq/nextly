@@ -180,6 +180,112 @@ describe("the collection row cache", () => {
   });
 });
 
+describe("the registry row cache, cold", () => {
+  /** A read held open until `release`, counting how often it began. */
+  function heldReader(stored: { value: Record<string, unknown> }) {
+    const releases: Array<() => void> = [];
+    const read = vi.fn(async () => {
+      const before = structuredClone(stored.value);
+      await new Promise<void>(resolve => {
+        releases.push(resolve);
+      });
+      return before;
+    });
+    return { read, releaseAll: () => releases.splice(0).forEach(r => r()) };
+  }
+
+  it("reads a row once for every caller missing it at once, each handed its own copy", async () => {
+    const database = {};
+    const stored = { value: { slug: "posts", labels: { singular: "Post" } } };
+    const { read, releaseAll } = heldReader(stored);
+
+    const callers = Array.from({ length: 16 }, () =>
+      cachedCollectionRow(database, "posts", read)
+    );
+    await vi.waitFor(() => expect(read).toHaveBeenCalled());
+    releaseAll();
+    const rows = await Promise.all(callers);
+
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(rows).toEqual(Array(16).fill(stored.value));
+    // Each its own: a caller changing what it was handed changes no other.
+    (rows[0].labels as { singular: string }).singular = "Changed";
+    expect(rows[1]).toEqual(stored.value);
+    await expect(cachedCollectionRow(database, "posts", read)).resolves.toEqual(
+      stored.value
+    );
+  });
+
+  it("reads a listing once for every caller missing it at once", async () => {
+    const database = {};
+    let releaseRead: (() => void) | undefined;
+    const read = vi.fn(async () => {
+      await new Promise<void>(resolve => {
+        releaseRead = resolve;
+      });
+      return [{ slug: "a" }, { slug: "b" }];
+    });
+    const slugs = (rows: readonly Readonly<Record<string, unknown>>[]) =>
+      rows.map(row => row.slug);
+
+    const callers = Array.from({ length: 8 }, () =>
+      cachedRegistryListing(database, "dynamic_singles", read, slugs)
+    );
+    await vi.waitFor(() => expect(releaseRead).toBeDefined());
+    releaseRead?.();
+
+    expect(await Promise.all(callers)).toEqual(Array(8).fill(["a", "b"]));
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands a caller after a clear none of a read begun before it", async () => {
+    const database = {};
+    const stored = { value: { slug: "posts", fields: ["title"] } };
+    const { read, releaseAll } = heldReader(stored);
+
+    const before = cachedCollectionRow(database, "posts", read);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    stored.value = { slug: "posts", fields: ["title", "body"] };
+    clearRegistryRowCache();
+    const after = cachedCollectionRow(database, "posts", read);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    releaseAll();
+
+    await expect(before).resolves.toEqual({ slug: "posts", fields: ["title"] });
+    await expect(after).resolves.toEqual({
+      slug: "posts",
+      fields: ["title", "body"],
+    });
+  });
+
+  it("rejects every caller of a failed read, keeps nothing, and reads again for the next", async () => {
+    const database = {};
+    let fail: ((error: Error) => void) | undefined;
+    const failing = vi.fn(
+      () =>
+        new Promise<Record<string, unknown>>((_, reject) => {
+          fail = reject;
+        })
+    );
+    const callers = [
+      cachedCollectionRow(database, "posts", failing),
+      cachedCollectionRow(database, "posts", failing),
+    ];
+    await vi.waitFor(() => expect(fail).toBeDefined());
+    fail?.(new Error("connection lost"));
+    for (const caller of callers) {
+      await expect(caller).rejects.toThrow("connection lost");
+    }
+    expect(failing).toHaveBeenCalledTimes(1);
+
+    const read = readerOf({ value: { slug: "posts" } });
+    await expect(cachedCollectionRow(database, "posts", read)).resolves.toEqual(
+      { slug: "posts" }
+    );
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+});
+
 /**
  * A database handle whose stored schema version reads `seq` (or fails, where
  * `fails` says so) through the real reader, counting its reads: the one

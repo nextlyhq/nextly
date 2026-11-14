@@ -6,7 +6,10 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { DynamicCollectionSchemaService } from "../../../dynamic-collections/services/dynamic-collection-schema-service";
+import {
+  builderColumnIsUnique,
+  DynamicCollectionSchemaService,
+} from "../../../dynamic-collections/services/dynamic-collection-schema-service";
 import { collectionIndexSpecs } from "../../pipeline/diff/build-from-fields";
 import {
   boundedIdentifier,
@@ -17,6 +20,7 @@ import {
   indexNameForColumn,
   indexNameForColumns,
   MAX_INDEX_NAME_LENGTH,
+  movedForeignKeyName,
   uniquenessCanBeAnIndex,
 } from "../index-name";
 
@@ -77,6 +81,8 @@ describe("the emitted DDL and the desired schema agree", () => {
       // defaulted, because the context requires it and a silent default would be the permissive
       // answer this rule exists to stop.
       uniquenessIsIndexable: () => true,
+      // Compared with the Builder creator's DDL, so its rule for a unique column.
+      fieldIsUnique: builderColumnIsUnique,
     }).map(spec => spec.name);
 
     // Every index the desired schema declares must be one the DDL actually installs, or the
@@ -124,6 +130,8 @@ describe("the DDL and the desired schema agree on WHICH indexes exist", () => {
       // Same column, the narrower question: MySQL cannot key a JSON column, so its uniqueness
       // cannot be a named index either.
       uniquenessIsIndexable: () => uniquenessCanBeAnIndex("json", "mysql"),
+      // Compared with the Builder creator's DDL, so its rule for a unique column.
+      fieldIsUnique: builderColumnIsUnique,
     }).map(spec => spec.name);
 
     // Declaring it while the generator skips it makes every reconcile emit a CREATE INDEX that
@@ -242,5 +250,39 @@ describe("uniquenessCanBeAnIndex on MySQL's TEXT and BLOB sizes", () => {
 
   it.each(["postgresql", "sqlite"])("allows text on %s", dialect => {
     expect(uniquenessCanBeAnIndex("text", dialect)).toBe(true);
+  });
+});
+
+describe("movedForeignKeyName", () => {
+  it("names a key moved from the usual name after its new target, and moves it back", () => {
+    expect(
+      movedForeignKeyName(
+        "dc_posts",
+        "owner",
+        "fk_dc_posts_owner",
+        "dc_editors"
+      )
+    ).toBe("fk_dc_posts_owner_to_dc_editors");
+    expect(
+      movedForeignKeyName(
+        "dc_posts",
+        "owner",
+        "fk_dc_posts_owner_to_dc_editors",
+        "dc_authors"
+      )
+    ).toBe("fk_dc_posts_owner");
+  });
+
+  it("skips a name another column's key holds", () => {
+    // `owner_to_dc_editors` is a column of its own, whose usual key name is the moved one.
+    expect(
+      movedForeignKeyName(
+        "dc_posts",
+        "owner",
+        "fk_dc_posts_owner",
+        "dc_editors",
+        new Set(["fk_dc_posts_owner_to_dc_editors"])
+      )
+    ).toBe("fk_dc_posts_owner_to_dc_editors_2");
   });
 });

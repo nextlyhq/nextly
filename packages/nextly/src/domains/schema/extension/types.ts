@@ -147,6 +147,12 @@ export interface DeclaredForeignKey
   name?: string;
   onDelete: DeclaredReferentialAction;
   onUpdate: DeclaredReferentialAction;
+  /**
+   * Who added the key, when it is not the table's owner: the app, or a plugin
+   * that depends on the owner. It travels in the contributor's migrations and
+   * is recorded per element, never in the compiled spec.
+   */
+  contributedBy?: SchemaOwner;
 }
 
 /** A check as DECLARED: the compile step derives the ck_<table>_<name> form. */
@@ -154,6 +160,8 @@ export interface DeclaredCheck {
   /** The author’s semantic name, not the final SQL constraint name. */
   name: string;
   sql: string;
+  /** Who added the check, when it is not the table's owner; as a key's. */
+  contributedBy?: SchemaOwner;
 }
 
 export interface ExtensionIndex {
@@ -199,5 +207,14 @@ export interface ExtensionTable {
   /** Check constraints declared with the table; undefined = none declared. */
   checks?: DeclaredCheck[];
   /** Relation edges declared with the table; undefined = none declared. */
-  relations?: TableRelationInput[];
+  relations?: DeclaredRelation[];
 }
+
+/**
+ * A relation edge on a table, with who added it when that is not the table's
+ * owner: a relation is no database element, so no owner row records it, and
+ * an uninstall asking who relies on a plugin's table reads it from here.
+ */
+export type DeclaredRelation = TableRelationInput & {
+  contributedBy?: SchemaOwner;
+};

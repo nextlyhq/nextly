@@ -105,12 +105,16 @@ import {
   cloneDefault,
 } from "../../../shared/lib/field-defaults";
 import {
+  anyFieldGroupHasAccessRule,
   applyFieldReadAccess,
   callerAccessGrants,
+  hasFieldAccessRule,
+  hasFieldHook,
   runFieldHooks,
   type ReadAccessRedactions,
   type VisitorGrantsLoader,
 } from "../../../shared/lib/field-level-registry";
+import { applyFieldSelection } from "../../../shared/lib/field-selection";
 import { coerceDateFieldsToDate } from "../../../shared/lib/field-transform";
 import {
   reachesPasswordField,
@@ -123,6 +127,7 @@ import type { Logger } from "../../../shared/types";
 import { fieldTrustOf } from "../../collections/services/collection-query-service";
 import { recordWriteEvent } from "../../content-events/write-event";
 import { entityRemovedFromCode } from "../../dynamic-collections/services/removed-from-code-writes";
+import { statedDefaultFits } from "../../dynamic-collections/services/stated-default";
 import {
   liveFieldGroupReadPass,
   withFieldGroupEvidence,
@@ -201,6 +206,7 @@ import type {
 
 import { resolveSingleForRequest } from "./ensure-runtime-table";
 import { readSingleForCreation } from "./single-first-row";
+import { singleReadPlan, tableProjection } from "./single-read-plan";
 import { applyReadShape } from "./single-read-shape";
 import type { SingleRegistryService } from "./single-registry-service";
 import {
@@ -262,6 +268,32 @@ function containsRelationField(
 
 /** Hook namespace prefix for Singles. */
 export const SINGLE_HOOK_NAMESPACE = "single";
+
+/**
+ * Whether a read skips field read rules. Document trust and FIELD trust are
+ * separate questions: `overrideAccess` alone means both, and a caller that
+ * asked for field rules to be enforced keeps its document bypass and gives up
+ * only the field one. One answer for the rules' own pass and for the read
+ * deciding whether a rule will see its row.
+ */
+function fieldRulesSkipped(options: GetSingleOptions): boolean {
+  return options.enforceFieldAccess === true
+    ? false
+    : options.overrideAccess === true;
+}
+
+/**
+ * The document as a read with `select` answers it, by the one meaning `select`
+ * has on every read (`shared/lib/field-selection`). The id and the system
+ * timestamps are always kept, so the answer is still a document; without a
+ * selection it is the document unchanged.
+ */
+function selectedAnswer(
+  doc: SingleDocument,
+  select: Record<string, boolean> | undefined
+): SingleDocument {
+  return select ? (applyFieldSelection(doc, select) as SingleDocument) : doc;
+}
 
 /**
  * Get the hook collection name for a Single.
@@ -1114,6 +1146,65 @@ export class SingleQueryService extends BaseService {
   }
 
   /**
+   * What this read takes from the database. With a `select`, the row's other
+   * columns are left unread where nothing needs them, so a field whose column
+   * is not migrated yet fails only a read that selects it. `readMeta` is the
+   * Single as the read assembles it: its selected fields, or all of them.
+   */
+  private planRead(
+    slug: string,
+    singleMeta: DynamicSingleRecord,
+    hookCollection: string,
+    hooksWaived: boolean,
+    options: GetSingleOptions
+  ): { readMeta: DynamicSingleRecord; columns: string[] | undefined } {
+    const plan = singleReadPlan({
+      fields: singleMeta.fields,
+      select: options.select,
+      wholeRow: this.readNeedsWholeRow(
+        slug,
+        hookCollection,
+        hooksWaived,
+        options
+      ),
+    });
+    return plan.columns === undefined
+      ? { readMeta: singleMeta, columns: undefined }
+      : {
+          readMeta: { ...singleMeta, fields: plan.fields },
+          columns: plan.columns,
+        };
+  }
+
+  /**
+   * Whether this read must take the Single's whole row whatever it selects.
+   * A read hook, the Single's own or a field's, is handed the document, and a
+   * field read rule that runs for this read is judged on it (a field group's
+   * beside it), so any of them may read a field the caller left out. Such a
+   * read takes every column, and only its answer is narrowed.
+   */
+  private readNeedsWholeRow(
+    slug: string,
+    hookCollection: string,
+    hooksWaived: boolean,
+    options: GetSingleOptions
+  ): boolean {
+    if (
+      !hooksWaived &&
+      (this.hookRegistry.hasHooks("beforeRead", hookCollection) ||
+        this.hookRegistry.hasHooks("afterRead", hookCollection) ||
+        hasFieldHook("single", slug, "afterRead"))
+    ) {
+      return true;
+    }
+    if (fieldRulesSkipped(options)) return false;
+    return (
+      hasFieldAccessRule("single", slug, "read") ||
+      anyFieldGroupHasAccessRule("read")
+    );
+  }
+
+  /**
    * Field read rules on one Single document, in place: its own fields, and
    * the fields inside the field groups it holds.
    */
@@ -1134,8 +1225,7 @@ export class SingleQueryService extends BaseService {
     // differently: `overrideAccess` alone means both; a caller that asked for
     // field rules to be enforced keeps its document bypass and gives up only
     // the field one.
-    const skipFieldRules =
-      options.enforceFieldAccess === true ? false : options.overrideAccess;
+    const skipFieldRules = fieldRulesSkipped(options);
     // The field-access identity, never the hook one. A preview judges these
     // fields as the sharer while the hooks go on seeing the anonymous bearer
     // who is actually asking.
@@ -1312,7 +1402,15 @@ export class SingleQueryService extends BaseService {
       // reusing the row an access decision loaded before them: a `beforeRead`
       // hook may write, and a response built from the earlier snapshot would
       // report values the read no longer finds.
-      const read = await this.readDocument(slug, singleMeta, options);
+      // With a `select`, only what the read needs (`planRead`).
+      const { readMeta, columns } = this.planRead(
+        slug,
+        singleMeta,
+        hookCollection,
+        hooksWaived,
+        options
+      );
+      const read = await this.readDocument(slug, readMeta, options, columns);
       let { doc, translations } = read;
 
       // 6. Auto-create if document doesn't exist. Capture the initial version
@@ -1365,7 +1463,7 @@ export class SingleQueryService extends BaseService {
 
       doc = await this.assembleStoredDocument({
         slug,
-        singleMeta,
+        singleMeta: readMeta,
         doc,
         options,
         statusFilterValues: statusFilter ? statusFilter.values : undefined,
@@ -1451,6 +1549,10 @@ export class SingleQueryService extends BaseService {
         stripPasswordFieldValues(doc, singleMeta.fields, passwordReach);
       }
       stripServerOnlyColumns(doc, singleMeta.tableName);
+
+      // The fields asked for: after every hook, rule and strip, so none of
+      // them can put back what was left out; before the version.
+      doc = selectedAnswer(doc, options.select);
 
       // Last, so no hook can drop or forge it. The live row's version, a held
       // draft overlaid on the document included.
@@ -1567,7 +1669,9 @@ export class SingleQueryService extends BaseService {
   private async readDocument(
     slug: string,
     singleMeta: DynamicSingleRecord,
-    options: GetSingleOptions
+    options: GetSingleOptions,
+    /** The columns of the Single's own table to read; undefined reads all. */
+    columns?: string[]
   ): Promise<{
     doc: SingleDocument | null;
     translations: JoinedTranslations | undefined;
@@ -1584,7 +1688,10 @@ export class SingleQueryService extends BaseService {
       // that transaction ends. A read that asked for no lock reads it plainly.
       const doc = await this.adapter.selectOne<SingleDocument>(
         singleMeta.tableName,
-        readLocksRows(this.adapter) ? { forShare: true } : {}
+        {
+          ...(readLocksRows(this.adapter) ? { forShare: true } : {}),
+          ...(columns === undefined ? {} : { columns }),
+        }
       );
       return { doc, translations: undefined };
     }
@@ -1593,6 +1700,9 @@ export class SingleQueryService extends BaseService {
     const joined = await selectEntryWithCompanion({
       db: this.adapter.getDrizzle(),
       mainTable: joinable.mainTable,
+      ...(columns === undefined
+        ? {}
+        : { projection: tableProjection(joinable.mainTable, columns) }),
       where: undefined,
       companionTable: joinable.companion.table,
       localeChain: joinable.localeChain,
@@ -1948,19 +2058,19 @@ export class SingleQueryService extends BaseService {
       // Resolve the field's default (explicit defaultValue, else a required
       // field's type-default) once, regardless of whether it is localized — a
       // localized field's default must reach the companion just the same.
-      if (
-        "defaultValue" in defaultSource &&
-        defaultSource.defaultValue !== undefined
-      ) {
+      const declared = declaredDefaultOf(defaultSource);
+      if (declared !== undefined) {
         // `defaultValue` may be a function `(data) => value`; evaluate it against
         // the document built so far so the stored default is a real value, not a
         // function object. A raw function would be bound as an SQL parameter for
         // the companion/main upsert and fail or persist its stringified form —
         // localized fields now flow through this block, so it must be resolved.
         const resolved =
-          typeof defaultSource.defaultValue === "function"
-            ? defaultSource.defaultValue(logicalDefaults)
-            : defaultSource.defaultValue;
+          typeof declared === "function"
+            ? (declared as (data: Record<string, unknown>) => unknown)(
+                logicalDefaults
+              )
+            : declared;
         // Same direct-insert reasoning for passwords: this path never runs
         // `hashPasswordFieldValues`, so a resolved password default would persist
         // in plaintext. Refuse it (a password must be set explicitly to be hashed).
@@ -2915,4 +3025,32 @@ export class SingleQueryService extends BaseService {
       });
     }
   }
+}
+
+/**
+ * The default a field states: `defaultValue`, as code and the Schema Builder spell it, or else
+ * `default`, as a field saved through the REST API may. A Single's table carries neither as a
+ * column default, so its first document is given the value here or not at all.
+ *
+ * The field payload checks `defaultValue` but keeps `default` as it was sent, so `default` is taken
+ * only where it fits the field as it is (`statedDefaultFits`, the answer the table's own fill
+ * gives): `null`, text for a number, or a value of a type whose default needs checking states
+ * nothing here. Taken as it was sent, it could put NULL in a required field's NOT NULL column, or
+ * text in a number column, and the first read could never write the document.
+ */
+function declaredDefaultOf(field: object): unknown {
+  const stated = field as {
+    type?: unknown;
+    hasMany?: unknown;
+    defaultValue?: unknown;
+    default?: unknown;
+  };
+  if (stated.defaultValue !== undefined) return stated.defaultValue;
+  return typeof stated.type === "string" &&
+    statedDefaultFits(
+      { type: stated.type, hasMany: stated.hasMany },
+      stated.default
+    )
+    ? stated.default
+    : undefined;
 }

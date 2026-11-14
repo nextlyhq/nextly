@@ -1,0 +1,24 @@
+---
+title: PLUGIN_SCHEMA_PREFIX_CHANGED
+description: "A plugin's schema prefix is not the one its existing tables were created under."
+---
+
+## Cause
+
+A plugin's schema prefix is not the one its existing tables were created under.
+
+A plugin's tables are named `<prefix>__<table>`, and the prefix comes from its `contributes.schema.prefix`, or from its name when it declares none. Once its migrations have created its tables, a new prefix would name new, empty tables beside them, and the old tables would keep every row under names nothing declares. Nothing moves the rows to the new names, so the prefix is fixed once the tables exist. A start, a development reload, `nextly migrate` and `nextly plugins install` refuse before planning anything.
+
+## Fix
+
+- Declare `contributes.schema.prefix` with the prefix the message names, the one the tables were created under. The plugin then reads its existing tables again.
+- To start the plugin over under the new prefix instead, uninstall it first with `nextly plugins uninstall`, which drops its tables and their rows.
+
+## Example
+
+```text
+✗ The plugin "@acme/seo" now has the schema prefix "acme_seo", but its tables were created under "seo" (seo__redirects).
+  Why:  A plugin's prefix is fixed once its tables exist, since the rows cannot move to new names.
+  Next: Declare contributes.schema.prefix: "seo" to keep its tables.
+  Docs: https://nextlyhq.com/docs/cli/errors/plugin-schema-prefix-changed  (PLUGIN_SCHEMA_PREFIX_CHANGED)
+```

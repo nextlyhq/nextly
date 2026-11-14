@@ -33,6 +33,7 @@ import { seoPlugin } from "../../plugin";
 import { lastCatchUp } from "../../address-record/catch-up";
 import { recordProxySeen } from "../../redirects/proxy-seen";
 import { putRedirect } from "../../redirects/store";
+import { SEO_SETTINGS_SLUG } from "../../settings/contract";
 import { readSeoRules } from "../../settings/rules";
 import { structuredDataFromSettings } from "../../settings/structured-data-rules";
 import { noSocialCardRules } from "../../social/card";
@@ -264,6 +265,47 @@ describe.each(getConfiguredTestDialects())(
 
       list = await problemList(ctx, CHECKS, everything);
       expect(kindsOf(list.problems, id)).toEqual(["shareImage"]);
+    });
+
+    it("lists no problem of a type whose SEO is switched off, and lists it again once on", async () => {
+      const { t, ctx } = await boot(dialect);
+      const id = await publish(t, { title: "Harbour", slug: "harbour" });
+      await until(t, checkedSince(id));
+      expect(
+        kindsOf((await problemList(ctx, CHECKS, everything)).problems, id)
+      ).toContain("noDescription");
+
+      const switchOff = (types: string[]) =>
+        t.nextly.updateSingle({
+          slug: SEO_SETTINGS_SLUG,
+          data: { _overwrite: true, typesWithSeoOff: types },
+          overrideAccess: true,
+        });
+      await switchOff(["posts"]);
+      expect(
+        kindsOf((await problemList(ctx, CHECKS, everything)).problems, id)
+      ).toEqual([]);
+
+      await switchOff([]);
+      expect(
+        kindsOf((await problemList(ctx, CHECKS, everything)).problems, id)
+      ).toContain("noDescription");
+    });
+
+    it("stops asking for an address for a type whose SEO is switched off", async () => {
+      const { t, ctx } = await boot(dialect);
+      const noAddress = async () =>
+        (await problemList(ctx, CHECKS, everything)).problems.filter(
+          p => p.kind === "noAddress"
+        );
+      expect((await noAddress()).map(p => p.subject.label)).toEqual(["Notes"]);
+
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, typesWithSeoOff: ["notes"] },
+        overrideAccess: true,
+      });
+      expect(await noAddress()).toEqual([]);
     });
 
     it("lists a canonical naming another address, unless the page is confirmed to live elsewhere", async () => {
@@ -770,6 +812,86 @@ describe.each(getConfiguredTestDialects())(
         false
       );
     });
+
+    it("checks a Single again when every language of it is published at once", async () => {
+      const seen: { ctx?: PluginContext } = {};
+      const plugin = seoPlugin({ collections: ["posts"], singles: ["home"] });
+      current = await createTestNextly({
+        dialect,
+        plugins: [
+          {
+            ...plugin,
+            init(ctx) {
+              seen.ctx = ctx;
+              return plugin.init?.(ctx);
+            },
+          },
+        ],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            access: { read: () => true },
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: "home",
+            localized: true,
+            status: true,
+            fields: [text({ name: "title", localized: true })],
+            publicAddress: "/",
+          }),
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const t = current;
+      const ctx = seen.ctx;
+      if (!ctx) throw new Error("the SEO plugin never started");
+      seoContext = ctx;
+      await lastCatchUp();
+      const checks = { ...CHECKS, targets: ["posts"], singles: ["home"] };
+      const homeRows = (found: Record<string, unknown>[]) =>
+        found.filter(row => row.holderCollection === "single:home");
+
+      // Both languages saved as drafts, with a title longer than Google
+      // shows: a draft is not a public page, so nothing is kept of it.
+      for (const locale of ["en", "de"]) {
+        await t.nextly.updateSingle({
+          slug: "home",
+          locale,
+          data: { title: "t".repeat(70), status: "draft", _overwrite: true },
+        });
+      }
+      const draftList = await problemList(ctx, checks, everything);
+      expect(
+        draftList.problems.some(p => p.subject.type === "single:home")
+      ).toBe(false);
+      expect(homeRows(await rows(t))).toEqual([]);
+
+      // Every language published in one go is a save of the Single, so it is
+      // checked again, as a publish of one language through a save is.
+      const published = await t
+        .getService<{
+          publishAllLocales: (
+            slug: string,
+            options: Record<string, unknown>
+          ) => Promise<{ success: boolean }>;
+        }>("singleEntryService")
+        .publishAllLocales("home", {
+          overrideAccess: true,
+          data: { _overwrite: true },
+        });
+      expect(published.success).toBe(true);
+      await until(t, found => homeRows(found).length > 0);
+      const list = await problemList(ctx, checks, everything);
+      expect(
+        list.problems
+          .filter(p => p.subject.type === "single:home")
+          .map(p => p.kind)
+      ).toContain("longTitle");
+    });
   }
 );
 
@@ -831,6 +953,67 @@ describe.each(getConfiguredTestDialects())(
 
       expect(inTransaction.length).toBeGreaterThan(0);
       expect(inTransaction).not.toContain(true);
+    });
+
+    it("lists a page the sitemap holds while an own robots.txt rule blocks it, and drops it once the rule goes", async () => {
+      const { t, ctx } = await boot(dialect);
+      const id = await publish(t, {
+        title: "Harbour at dawn",
+        slug: "harbour",
+        excerpt: "A walk along the harbour.",
+      });
+      await until(t, checkedSince(id));
+      await checkSite(ctx, CHECKS);
+      expect((await problemList(ctx, CHECKS, everything)).outOfDate).toBe(
+        false
+      );
+
+      const text = "User-agent: *\nDisallow: /search\nDisallow: /blog";
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, robotsRules: { text } },
+      });
+      // A settings save can change many pages' results: the full check says so.
+      await until(t, found => found.some(row => row.outOfDate === true));
+      // The sitemap lists every collection here.
+      const listed = { ...CHECKS, sitemap: {} };
+      await checkSite(ctx, listed);
+      let list = await problemList(ctx, listed, everything);
+      expect(list.problems.find(p => p.kind === "robotsBlocked")).toMatchObject(
+        {
+          subject: { type: "posts", id, detail: "/blog/harbour" },
+          what: "Line 3 of your own robots.txt rules keeps crawlers away: Disallow: /blog",
+          fix: { place: "settings", tab: "crawlers" },
+        }
+      );
+
+      // A site that serves its own robots.txt, the plugin's switched off,
+      // is not told the plugin's rules block anything.
+      await checkSite(ctx, { ...listed, servesRobots: false });
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
+      // Nor is a site whose own robots.txt file wins over the plugin's.
+      await checkSite(ctx, {
+        ...listed,
+        siteServesOwnRobots: () => Promise.resolve(true),
+      });
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
+      // A page the sitemap does not list is not one it lists and blocks.
+      await checkSite(ctx, { ...listed, sitemap: { collections: ["notes"] } });
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
+      await checkSite(ctx, listed);
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).toContain("robotsBlocked");
+
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, robotsRules: null },
+      });
+      await checkSite(ctx, listed);
+      list = await problemList(ctx, listed, everything);
+      expect(kindsOf(list.problems, id)).not.toContain("robotsBlocked");
     });
   }
 );

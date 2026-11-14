@@ -2,6 +2,8 @@ import { container } from "../../di/container";
 import type { SupportedDialect } from "../../types/database";
 import { consoleLogger } from "../types";
 
+import { datesFormatted, markDatesFormatted } from "./dates-formatted";
+
 // ============================================================================
 // Global API Date/Time Formatting Constants
 // ============================================================================
@@ -328,10 +330,13 @@ export async function configuredTimezone(): Promise<string | null> {
 
 /**
  * Higher-order function to apply timezone formatting to a JSON response.
+ * A response it already wrote is returned as it is (`datesFormatted`).
  */
 export async function withTimezoneFormatting(
   response: Response
 ): Promise<Response> {
+  if (datesFormatted(response)) return response;
+
   // Opt-out: a handler marked this body as carrying opaque text that must not be
   // rewritten. Checked first, before any early return, so the internal marker is
   // always stripped and never reaches the client (even on a non-JSON body).
@@ -370,9 +375,10 @@ export async function withTimezoneFormatting(
   const headers = new Headers(response.headers);
   headers.set("Content-Type", "application/json");
 
-  return new Response(JSON.stringify(transformed), {
+  const formatted = new Response(JSON.stringify(transformed), {
     status: response.status,
     statusText: response.statusText,
     headers,
   });
+  return markDatesFormatted(formatted);
 }

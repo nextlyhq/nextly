@@ -33,6 +33,7 @@ import {
 } from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
+import { useCollectionFoldedPanel } from "@admin/components/layout/PanelFold";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { EditorOutline } from "@admin/components/shared/loading-frame/outlines";
@@ -119,7 +120,18 @@ function CreateEntryPageSkeleton() {
  * @param props - Page props with route params
  * @returns Create entry page component
  */
-export default function CreateEntryPage({
+export default function CreateEntryPage(
+  props: CreateEntryPageProps
+): React.ReactElement {
+  // The panel folded, where the collection's plugin says its document
+  // screens start so, as the frame's outline of this address was drawn: for
+  // every state the page draws, so here, around them all.
+  useCollectionFoldedPanel(props.params?.slug);
+  return <CreateEntryScreen {...props} />;
+}
+
+/** The page's states: its outline, a failure, or the new entry's editor. */
+function CreateEntryScreen({
   params,
 }: CreateEntryPageProps): React.ReactElement {
   const slug = params?.slug;
@@ -225,6 +237,10 @@ export default function CreateEntryPage({
   }
 
   const collectionLabel = collection.label || collection.name || slug;
+  // The trail's step leads to the collection's list, so it says what the
+  // list and the default editor's trail say: the plural ("Submissions"),
+  // not the one-entry label a collection may also answer as `label`.
+  const listLabel = collection.labels?.plural || collectionLabel;
 
   // A collection removed from code refuses every create, so no form is
   // offered: the notice says why and what to do, with the way back to its
@@ -291,7 +307,7 @@ export default function CreateEntryPage({
           breadcrumbs={
             <CreateEntryBreadcrumbs
               collectionSlug={slug}
-              collectionLabel={collectionLabel}
+              collectionLabel={listLabel}
             />
           }
         >

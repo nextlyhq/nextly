@@ -86,6 +86,7 @@ const BUILDER_METHODS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "previewCollectionDelete",
       "previewSchemaChanges",
       "applySchemaChanges",
+      "checkCollectionAddress",
     ]),
   ],
   [
@@ -96,6 +97,7 @@ const BUILDER_METHODS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       "deleteSingle",
       "previewSingleSchemaChanges",
       "applySingleSchemaChanges",
+      "checkSingleAddress",
     ]),
   ],
   [
@@ -114,6 +116,7 @@ const BUILDER_METHODS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
       // builder's own repair dialog, and answering it where the repair cannot run would describe a
       // change the caller has no way to make.
       "previewComponentReconcile",
+      "checkComponentAddress",
     ]),
   ],
 ]);

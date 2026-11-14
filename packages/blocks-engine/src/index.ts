@@ -65,6 +65,8 @@ export {
   // Reading further reports a reference the page does not render.
   MAX_CLASSES_PER_NODE,
   isTokenRef,
+  tokenRef,
+  tokenRefText,
   isBindingSource,
   isBlockType,
   MAX_BLOCK_TYPE_LENGTH,

@@ -42,7 +42,9 @@ test("the configured brand color reaches --nx-primary as a complete color", asyn
 test("a bg-primary surface paints the brand color instead of going transparent", async ({
   page,
 }) => {
-  await gotoAdmin(page, "/");
+  // A list, whose New button is the admin's primary action: the dashboard
+  // draws no solid primary surface since its cards were redesigned.
+  await gotoAdmin(page, "/collections/posts");
 
   // `~=` matches the whole class, not a substring: the admin uses far more
   // `bg-primary/5` and `bg-primary-500` than plain `bg-primary`, and a

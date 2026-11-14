@@ -307,8 +307,12 @@ import {
   firstReadableTitle,
   sharedStyleRoutes,
   storedDocumentsOf,
+  joinedCount,
   storedSharedStyleUses,
   type SharedStyleUsageSource,
+  type UsageCountJobs,
+  storedIdsAfter,
+  storedPageForms,
 } from "./shared-styles-routes";
 import {
   BREAKPOINT_REMOVAL_UNDONE_AUDIT,
@@ -390,6 +394,7 @@ import {
   registerEntryDesignCascade,
 } from "./templates/entry-design-cascade";
 import { judgeTemplateInTransaction } from "./templates/entry-design-write";
+import { ENTRY_DESIGN_STARTUP_PATH } from "./templates/entry-designs-contract";
 import { entryDesignsRoute } from "./templates/entry-designs-route";
 import {
   templateActionsRoute,
@@ -426,15 +431,18 @@ import { tokenUsageIndex } from "./token-usage";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
 import { unbindPlanRoute } from "./unbind-plan-route";
-import { usageBackfillJob } from "./usage-backfill-job";
+import { type UncoveredPages, uncoveredPagesFrom } from "./uncovered-pages";
+import { USAGE_BACKFILL_JOB, usageBackfillJob } from "./usage-backfill-job";
 import {
   backfillScopes,
   forgetGoneScopes,
   usageBackfillDeps,
   type BackfillHost,
+  backfillSurvey,
 } from "./usage-backfill-wiring";
 import { usageBookkeeping } from "./usage-bookkeeping";
 import { listDocumentsUsingEach } from "./usage-count";
+import { countThePages } from "./usage-count-after-migrate";
 import {
   USAGE_HEALTH_SERVICE,
   usageHealthService,
@@ -1477,13 +1485,23 @@ function siteStyleReads(
   return {
     documentOn,
     styleNow: async () => siteStyleOfDocument(await documentNow(), defaults),
-    definitions: async transaction =>
-      siteDefinitionsOfDocument(
-        transaction === undefined
-          ? await documentNow()
-          : await documentOn(transaction),
-        defaults
-      ),
+    definitions: async transaction => {
+      if (transaction !== undefined) {
+        return siteDefinitionsOfDocument(
+          await documentOn(transaction),
+          defaults
+        );
+      }
+      // Inside a field rewrite's transaction, the definitions it read before
+      // opening it: read through the pool there, they would wait on the
+      // connection the rewrite holds. Imported at call time: server-only.
+      const { siteDefinitionsInScope } = await import(
+        "./host-rewrite/rewrite-scope"
+      );
+      return siteDefinitionsInScope(async () =>
+        siteDefinitionsOfDocument(await documentNow(), defaults)
+      );
+    },
   };
 }
 
@@ -1535,7 +1553,9 @@ function removalDocumentsOn(
 function rewriteInstallFor(
   ctx: Parameters<NonNullable<Parameters<typeof definePlugin>[0]["init"]>>[0],
   opts: PageBuilderOptions,
-  composition: CompositionSetup
+  composition: CompositionSetup,
+  /** The usage indexes' reconciler, read per call: `init` registers it. */
+  reconcile: () => CommittedWriteReconciler | undefined
 ): RewriteInstall {
   // The booted instance through the SDK, the plugin's stable surface, imported
   // at call time for the reason `defaultLayoutDeps` gives.
@@ -1577,6 +1597,34 @@ function rewriteInstallFor(
     },
     store: composition.store,
     limits: () => opts.limits ?? DEFAULT_LIMITS,
+    // The plugin's own service, so a converted document's history names the
+    // Page Builder beside the person who deleted the component.
+    rewriteField: (request, as) =>
+      ctx.services.collections.rewriteField(request, as),
+    // The site's definitions read before the rewrite opens its transaction,
+    // and each copy as it is decided, for the validation core runs inside it
+    // (`host-rewrite/rewrite-scope`).
+    rewriteScope: async (field, run) => {
+      const { withRewriteScope } = await import("./host-rewrite/rewrite-scope");
+      const scope = {
+        siteDefinitions: await composition.siteDefinitions?.(),
+        current: null as { field: string; stored: unknown } | null,
+      };
+      return withRewriteScope(scope, () =>
+        run(stored => {
+          scope.current = { field, stored };
+        })
+      );
+    },
+    // A field rewrite runs no save hooks, the usage indexes' among them, so
+    // each rewritten document is brought in line once the rewrite commits.
+    afterRewrite: async document => {
+      await reconcile()?.({
+        slug: document.slug,
+        documentId: document.id,
+        nextly: await nextly(),
+      });
+    },
   };
 }
 
@@ -2269,9 +2317,49 @@ export const pageBuilder = (
    * components, patterns and Layouts; every other collection with a page
    * builder field holds pages, as the editor's page search reads them.
    */
+  /**
+   * What the count after a migrate or an install runs on: the context's own
+   * jobs, the variable index's health, and the context's log.
+   */
+  const pagesCountOf = (ctx: {
+    services: { jobs: UsageCountJobs };
+    logger: { info: (message: string) => void };
+  }) => ({
+    sweep: (maxDurationMs: number) =>
+      ctx.services.jobs.runSweepNow(USAGE_BACKFILL_JOB, { maxDurationMs }),
+    health: () => usageHealthService(requireInstalled).read(tokenUsageIndex),
+    log: (message: string) => ctx.logger.info(`[page-builder] ${message}`),
+  });
+  /**
+   * The pages the variable index does not cover, from its own records: its
+   * undetermined marker rows, and the types its survey cannot address. Read
+   * as the system, as the rescan reads stored documents (`uncovered-pages`).
+   */
+  const uncoveredPagesOf = (
+    ctx: Parameters<typeof storedPageForms>[0]
+  ): UncoveredPages =>
+    uncoveredPagesFrom({
+      rows: args =>
+        usageTableRows(
+          requireInstalled().db,
+          usageTableOf(tokenUsageIndex)
+        )(args),
+      markers: tokenUsageIndex.whereUndetermined(),
+      unaddressable: async () =>
+        (await backfillSurvey(requireInstalled())).unaddressableTypes,
+      idsAfter: async (collection, after) =>
+        storedIdsAfter(await bootedNextly())(collection, after),
+      forms: async page => storedPageForms(ctx, await bootedNextly())(page),
+    });
+  // The count a removal makes before it judges an index that is not whole,
+  // shared by every removal in this process so a second joins the first.
+  let usageCountNow: ((maxDurationMs: number) => Promise<void>) | null = null;
   const usageSourceOf = <TRow extends UsageSubject>(
     collections: Readonly<Record<string, string | undefined>>,
-    index: UsageIndex<TRow>
+    index: UsageIndex<TRow>,
+    // The context's jobs, which run the usage backfill now: the count a
+    // removal makes before it judges an index that is not whole.
+    jobs: UsageCountJobs
   ): SharedStyleUsageSource => {
     const kinds = new Map<string, SharedStyleUsageKind>([
       [
@@ -2294,6 +2382,15 @@ export const pageBuilder = (
           health,
         }),
       kindOf: collection => kinds.get(collection) ?? "pages",
+      // One count at a time in this process, which every removal joins
+      // (`joinedCount`): the first context's jobs run it, as any context's
+      // run the sweep on the same instance.
+      countNow: maxDurationMs => {
+        usageCountNow ??= joinedCount(budget =>
+          jobs.runSweepNow(USAGE_BACKFILL_JOB, { maxDurationMs: budget })
+        );
+        return usageCountNow(maxDurationMs);
+      },
     };
   };
   // The in-use check a write of the site style that drops a variable is
@@ -2491,6 +2588,18 @@ export const pageBuilder = (
       // Its own rail item after Forms, opening the overview: see
       // `overview/admin-panel.ts`.
       ...PAGE_BUILDER_PLACEMENT,
+    },
+    // A deploy's `nextly migrate`, and `nextly plugins install`, count the
+    // pages into the usage index, so a deployed site starts counted rather
+    // than refusing every removal until someone presses Count now
+    // (`usage-count-after-migrate`). The install covers a first deploy that
+    // migrates before the plugin is installed, which skips `onMigrate`.
+    // Bounded, and safe beside another run, as `onMigrate` must be.
+    onMigrate: async ctx => {
+      await countThePages(pagesCountOf(ctx));
+    },
+    onInstall: async ctx => {
+      await countThePages(pagesCountOf(ctx));
     },
     // Registers what other plugins DECLARED, and resolves the registry service
     // on the way, which is what empties it for the boot. The service is lazy:
@@ -2950,11 +3059,16 @@ export const pageBuilder = (
       // documents. It names no document, since the write's author is not a
       // caller this can ask.
       const variableCheckSetup = {
-        usage: usageSourceOf(ctx.self.collections, tokenUsageIndex),
+        usage: usageSourceOf(
+          ctx.self.collections,
+          tokenUsageIndex,
+          ctx.services.jobs
+        ),
         blocks: allBlocks,
         documents: async () => storedDocumentsOf(ctx, await bootedNextly()),
         limits: opts.limits ?? DEFAULT_LIMITS,
         pathOf: () => "tokens",
+        uncovered: uncoveredPagesOf(ctx),
       };
       // And every write of the site style dropping a variable or a shared
       // style takes the same lock and reads the stored documents again under
@@ -3665,7 +3779,12 @@ export const pageBuilder = (
           lifecycle,
         });
       }
-      rewriteInstall = rewriteInstallFor(ctx, opts, composition);
+      rewriteInstall = rewriteInstallFor(
+        ctx,
+        opts,
+        composition,
+        () => usage.reconcile
+      );
       // The "Bindings to fix" report: each committed write's document judged
       // again, and every document by the sweep once the schema changes.
       bindingReportCtx = ctx;
@@ -4353,7 +4472,12 @@ export const pageBuilder = (
         // the class usage index the installed host maintains.
         ...sharedStyleRoutes({
           configClassIds,
-          usage: ctx => usageSourceOf(ctx.self.collections, classUsageIndex),
+          usage: ctx =>
+            usageSourceOf(
+              ctx.self.collections,
+              classUsageIndex,
+              ctx.services.jobs
+            ),
           // The bounds the class index and the renderer read a page under.
           limits: opts.limits ?? DEFAULT_LIMITS,
         }),
@@ -4363,16 +4487,26 @@ export const pageBuilder = (
         // the shared styles' count route: one sweep fills every index.
         ...variableRoutes({
           defaults: configStyle,
-          usage: ctx => usageSourceOf(ctx.self.collections, tokenUsageIndex),
+          usage: ctx =>
+            usageSourceOf(
+              ctx.self.collections,
+              tokenUsageIndex,
+              ctx.services.jobs
+            ),
           // A block type's own default styles are a use, read per request.
           blocks: allBlocks,
           inUse: (ctx, readNamed) =>
             variableRemovalChecks({
-              usage: usageSourceOf(ctx.self.collections, tokenUsageIndex),
+              usage: usageSourceOf(
+                ctx.self.collections,
+                tokenUsageIndex,
+                ctx.services.jobs
+              ),
               blocks: allBlocks,
               documents: async () =>
                 storedDocumentsOf(ctx, await bootedNextly()),
               limits: opts.limits ?? DEFAULT_LIMITS,
+              uncovered: uncoveredPagesOf(ctx),
               // The first use named only if this caller may open it.
               firstReadable: uses =>
                 firstReadableTitle(
@@ -4513,6 +4647,10 @@ export const pageBuilder = (
             // the section sits above the form there, where an author meets
             // which design the entry is shown with before its fields.
             narrow: "above-form",
+            // The section's read, started as the edit page opens rather than
+            // once the section mounts, so the section is drawn above Status
+            // with the editor instead of pushing it down after.
+            startupReads: [{ path: ENTRY_DESIGN_STARTUP_PATH }],
           },
         ],
         // Delete component on the component store, wherever it is: the

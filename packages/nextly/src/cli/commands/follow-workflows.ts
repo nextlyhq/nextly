@@ -71,6 +71,14 @@ async function followWorkflowsOn(
   logger: Logger
 ): Promise<void> {
   await withCommandServicesLent(adapter, logger, async () => {
+    // A part moved here records its `workflow.stage_changed` event under the same switches a
+    // request's does, so an entity with `webhooks: false` records none. Loaded when the pass
+    // runs: the service registry is more than a thousand modules, which no command loads at
+    // import.
+    const { publishRecordingPoliciesForCommand } = await import(
+      "../../di/register"
+    );
+    await publishRecordingPoliciesForCommand(adapter, config);
     const registry = await buildWorkflowRegistry(config, configPath, {
       components: config.fieldGroups ?? [],
     });

@@ -34,6 +34,7 @@ import {
   clearPluginServices,
   registerPluginService,
 } from "../../../plugins/services/plugin-services-registry";
+import { consoleLogger } from "../../../shared/types";
 import { metadataFromAnswer } from "../answer-metadata";
 import type {
   PageMetadataAnswer,
@@ -659,6 +660,197 @@ describe("the route's own robots", () => {
   });
 });
 
+describe("the answer's display controls", () => {
+  it("places each control in the head as Google spells it", () => {
+    const metadata = metadataFromAnswer({
+      robots: {
+        index: true,
+        follow: true,
+        maxImagePreview: "standard",
+        maxSnippet: 80,
+        nosnippet: true,
+        noimageindex: true,
+        unavailableAfter: "2026-12-31T23:59:00.000Z",
+        noarchive: true,
+        nocache: true,
+      },
+    });
+    expect(metadata.robots).toEqual({
+      index: true,
+      follow: true,
+      "max-image-preview": "standard",
+      "max-snippet": 80,
+      nosnippet: true,
+      noimageindex: true,
+      unavailable_after: "2026-12-31T23:59:00.000Z",
+      noarchive: true,
+      nocache: true,
+    });
+  });
+
+  it("serves the answer's controls where the route gives none", async () => {
+    provide({
+      resolve: () => ({
+        robots: { index: true, follow: true, maxImagePreview: "large" },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: undefined,
+      tags: [],
+    });
+    expect(metadata.robots).toEqual({
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+    });
+  });
+
+  it("serves the stricter of the route's and the answer's limits", async () => {
+    provide({
+      resolve: () => ({
+        robots: {
+          index: true,
+          follow: true,
+          maxImagePreview: "large",
+          maxSnippet: 120,
+          unavailableAfter: "2027-01-01T00:00:00.000Z",
+        },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: {
+        robots:
+          "max-image-preview:standard, max-snippet:50, noarchive, unavailable_after: 2026-06-01T00:00:00.000Z",
+      },
+      tags: [],
+    });
+    expect(metadata.robots).toEqual({
+      index: true,
+      follow: true,
+      "max-image-preview": "standard",
+      "max-snippet": 50,
+      noarchive: true,
+      unavailable_after: "2026-06-01T00:00:00.000Z",
+    });
+  });
+
+  it("lets a page's own stricter choice win over the route's looser one", async () => {
+    provide({
+      resolve: () => ({
+        robots: {
+          index: true,
+          follow: true,
+          maxImagePreview: "none",
+          maxSnippet: 30,
+          nosnippet: true,
+        },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: {
+        robots: {
+          index: true,
+          follow: true,
+          "max-image-preview": "large",
+          "max-snippet": -1,
+        },
+      },
+      tags: [],
+    });
+    expect(metadata.robots).toEqual({
+      index: true,
+      follow: true,
+      "max-image-preview": "none",
+      "max-snippet": 30,
+      nosnippet: true,
+    });
+  });
+
+  it.each([
+    [
+      "an image preview size Google has no name for",
+      { maxImagePreview: "huge" },
+    ],
+    ["a snippet length that is not a whole number", { maxSnippet: 2.5 }],
+    ["a snippet length below no limit", { maxSnippet: -2 }],
+    ["a switch that is not on or off", { nosnippet: "yes" }],
+    ["a date that is not text", { unavailableAfter: 20261231 }],
+  ])("refuses an answer with %s", async (_, controls) => {
+    provide({
+      resolve: () =>
+        ({
+          title: "Answered",
+          robots: { index: true, follow: true, ...controls },
+        }) as unknown as PageMetadataAnswer,
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: { title: "Own" },
+      tags: [],
+    });
+    expect(metadata.title).toBe("Own");
+  });
+});
+
+describe("a date to leave results that is not one", () => {
+  it.each([
+    ["text that names no date", "not-a-date"],
+    ["a day the calendar does not have", "2026-02-30T00:00:00Z"],
+    ["a time the clock does not have", "2026-12-31T25:00:00Z"],
+    ["a date with no time", "2026-12-31"],
+    ["a time with no zone", "2026-12-31T23:59:00"],
+  ])("leaves out %s, keeps the rest, and says so once", async (_, value) => {
+    const warn = vi.spyOn(consoleLogger, "warn").mockImplementation(() => {});
+    provide({
+      resolve: () => ({
+        title: "Answered",
+        robots: {
+          index: true,
+          follow: true,
+          maxImagePreview: "large",
+          unavailableAfter: value,
+        },
+      }),
+    });
+    const first = await pageMetadataFor({ ...page, code: undefined, tags: [] });
+    await pageMetadataFor({ ...page, code: undefined, tags: [] });
+    expect(first.title).toEqual({ absolute: "Answered" });
+    expect(first.robots).toEqual({
+      index: true,
+      follow: true,
+      "max-image-preview": "large",
+    });
+    const said = warn.mock.calls.filter(([message]) =>
+      String(message).includes(value)
+    );
+    expect(said).toHaveLength(1);
+    warn.mockRestore();
+  });
+
+  it("serves a date and time with its zone, as Google reads it", async () => {
+    provide({
+      resolve: () => ({
+        robots: {
+          index: true,
+          follow: true,
+          unavailableAfter: "2026-12-31T23:59:00+05:00",
+        },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: undefined,
+      tags: [],
+    });
+    expect(metadata.robots).toMatchObject({
+      unavailable_after: "2026-12-31T23:59:00+05:00",
+    });
+  });
+});
+
 describe("the route's own canonical", () => {
   it("is kept where the answer has none, such as a type with no public address", async () => {
     provide({ resolve: () => ({ title: "Feature" }) });
@@ -734,5 +926,139 @@ describe("a worker where nothing has started Nextly yet", () => {
     const code: Metadata = { title: "Own" };
     expect(await pageMetadataFor({ ...page, code, tags: [] })).toBe(code);
     expect(start.calls).toBe(1);
+  });
+});
+
+describe("the answer's other forms of the page", () => {
+  it("are placed as alternate links by media type, beside the canonical", () => {
+    expect(
+      metadataFromAnswer({
+        canonical: "/blog/hello",
+        formats: { "text/markdown": "/blog/hello.md" },
+      }).alternates
+    ).toEqual({
+      canonical: "/blog/hello",
+      types: { "text/markdown": "/blog/hello.md" },
+    });
+  });
+
+  it("are nothing where the answer has none, or an empty set", () => {
+    expect(metadataFromAnswer({ formats: {} }).alternates).toBeUndefined();
+  });
+
+  it("replace the route's own link for their media type only, keeping its others and its language links", async () => {
+    provide({
+      resolve: () => ({
+        canonical: "/blog/hello",
+        formats: { "text/markdown": "/blog/hello.md" },
+      }),
+    });
+    const meta = await pageMetadataFor({
+      ...page,
+      code: {
+        alternates: {
+          languages: { de: "/de/blog/hello" },
+          types: {
+            "text/markdown": "/old.md",
+            "application/rss+xml": "/blog/feed.xml",
+          },
+        },
+      },
+      tags: [],
+    });
+    expect(meta.alternates).toEqual({
+      canonical: "/blog/hello",
+      languages: { de: "/de/blog/hello" },
+      types: {
+        "text/markdown": "/blog/hello.md",
+        "application/rss+xml": "/blog/feed.xml",
+      },
+    });
+  });
+
+  it("refuse the answer whole where one is keyed by anything but a media type", async () => {
+    provide({
+      resolve: () => ({
+        title: "Answered",
+        formats: { "markdown copy": "/blog/hello.md" },
+      }),
+    });
+    const code: Metadata = { title: "Own" };
+    expect(await pageMetadataFor({ ...page, code, tags: [] })).toEqual(code);
+  });
+});
+
+describe("the answer's verification tags", () => {
+  it("are placed as meta tags by name", () => {
+    expect(
+      metadataFromAnswer({
+        verification: {
+          "msvalidate.01": "8A2F61C4",
+          "p:domain_verify": "a91c7e04",
+        },
+      })
+    ).toEqual({
+      verification: {
+        other: { "msvalidate.01": "8A2F61C4", "p:domain_verify": "a91c7e04" },
+      },
+    });
+  });
+
+  it("are nothing where the answer has none, or an empty set", () => {
+    expect(metadataFromAnswer({}).verification).toBeUndefined();
+    expect(
+      metadataFromAnswer({ verification: {} }).verification
+    ).toBeUndefined();
+  });
+
+  it("join the route's own, keeping both where they share a name", async () => {
+    provide({
+      resolve: () => ({
+        verification: {
+          "msvalidate.01": "ANSWERED",
+          "yandex-verification": "y1",
+        },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: {
+        verification: { google: "g1", other: { "msvalidate.01": "OWN" } },
+      },
+      tags: [],
+    });
+    expect(metadata.verification).toEqual({
+      google: "g1",
+      other: {
+        "msvalidate.01": ["OWN", "ANSWERED"],
+        "yandex-verification": "y1",
+      },
+    });
+  });
+
+  it("keep the route's own where the answer has none", async () => {
+    provide({ resolve: () => ({ title: "Answered" }) });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: { verification: { google: "g1" } },
+      tags: [],
+    });
+    expect(metadata.verification).toEqual({ google: "g1" });
+  });
+
+  it("refuse an answer naming a tag by something that is not a meta name", async () => {
+    provide({
+      resolve: () => ({
+        title: "Answered",
+        verification: { 'x" onload="alert(1)': "a" },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: { title: "Own" },
+      tags: [],
+    });
+    expect(metadata.verification).toBeUndefined();
+    expect(cacheOutcomes).toEqual([{ refused: true }]);
   });
 });

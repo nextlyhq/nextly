@@ -3,12 +3,14 @@
  *
  * @module cli/__tests__/error-cases/schema
  */
+import { clearLeftoverStorage } from "../../../domains/schema/services/leftover-storage";
 import {
   assertAdapterPostgresSchema,
-  assertSupportedPostgresSchema,
+  refuseMovedInstallation,
   validatePostgresSchema,
 } from "../../../domains/schema/services/postgres-schema";
 import { NextlyError } from "../../../errors/nextly-error";
+import { CliError } from "../../errors";
 import { parseUiSchema } from "../../../schemas/_zod/ui-schema";
 
 import { PROJECT, type ErrorCases } from "./types";
@@ -23,9 +25,48 @@ function thrownBy(fn: () => unknown): unknown {
   throw new Error("expected the call to throw");
 }
 
+/** What `fn` rejects with; a case whose thrower resolves has failed to reach its cause. */
+async function rejectedBy(fn: () => Promise<unknown>): Promise<unknown> {
+  try {
+    await fn();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected the call to reject");
+}
+
 export const SCHEMA_CASES = {
+  // A Single created again after its first attempt was removed, whose field-group rows still name
+  // its table as their parent. No table of its own stands, so no database is read: the rows found
+  // elsewhere refuse the create before anything is dropped.
+  CREATE_BLOCKED_BY_LEFTOVER_TABLE: () =>
+    rejectedBy(() =>
+      clearLeftoverStorage({
+        adapter: {
+          tableExists: async () => false,
+          getDrizzle: () => undefined,
+          getCapabilities: () => ({ dialect: "postgresql" }),
+          dropTable: async () => undefined,
+        },
+        kind: "single",
+        slug: "home",
+        tableName: "single_home",
+        makesJunctionTables: true,
+        ownedElsewhere: async () => [{ table: "comp_hero", rows: 2 }],
+        logger: { info: () => undefined },
+        dropFamily: async () => undefined,
+      })
+    ),
+  // Retired: nothing raises it now, so the case is the error as its last release printed it, which
+  // the code's docs page keeps as its example.
   POSTGRES_SCHEMA_UNSUPPORTED: () =>
-    thrownBy(() => assertSupportedPostgresSchema("tenant_a")),
+    new CliError("POSTGRES_SCHEMA_UNSUPPORTED", {
+      what: 'db.postgres.schema is "tenant_a", but a PostgreSQL schema other than "public" is not supported yet.',
+      why: 'Nextly can only create and migrate its tables in "public".',
+      next: 'Remove db.postgres.schema (and any schema option on the database adapter), or set it to "public".',
+    }),
+  POSTGRES_SCHEMA_MOVED: () =>
+    thrownBy(() => refuseMovedInstallation("tenant_a", ["public"], false)),
   POSTGRES_SCHEMA_MISMATCH: () =>
     thrownBy(() => assertAdapterPostgresSchema("public", "tenant_a")),
   POSTGRES_SCHEMA_INVALID: () =>

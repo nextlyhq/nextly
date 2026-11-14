@@ -19,6 +19,7 @@ import {
 import { expectNoAxeViolations } from "./support/axe";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
+import { countEveryPage } from "./support/usage-count";
 
 // The homepage is reseeded and saved, and the site's variables are changed
 // and restored, as the other builder files do.
@@ -91,6 +92,8 @@ test("a type size picked for a heading is stored as a reference, and follows the
   test.setTimeout(180_000);
   const before = await storedTokens(page);
   try {
+    // Dropping a variable is refused until every page is counted.
+    await countEveryPage(page.request);
     const seeded = await page.request.patch(SITE_STYLE, {
       data: { tokens: { tokens: TYPE_SCALE }, _overwrite: true },
     });
@@ -189,6 +192,8 @@ test("a type size picked for a heading is stored as a reference, and follows the
   } finally {
     // Off the homepage first: a variable still in use cannot be removed.
     await emptyHomepage(page);
+    // Dropping a variable is refused until every page is counted.
+    await countEveryPage(page.request);
     const restored = await page.request.patch(SITE_STYLE, {
       data: { tokens: before, _overwrite: true },
     });
@@ -204,6 +209,8 @@ test("Escape closes an open picker and leaves the selection, and the next one go
   test.setTimeout(150_000);
   const before = await storedTokens(page);
   try {
+    // Dropping a variable is refused until every page is counted.
+    await countEveryPage(page.request);
     const seeded = await page.request.patch(SITE_STYLE, {
       data: { tokens: { tokens: TYPE_SCALE }, _overwrite: true },
     });
@@ -265,6 +272,8 @@ test("Escape closes an open picker and leaves the selection, and the next one go
   } finally {
     // Off the homepage first: a variable still in use cannot be removed.
     await emptyHomepage(page);
+    // Dropping a variable is refused until every page is counted.
+    await countEveryPage(page.request);
     const restored = await page.request.patch(SITE_STYLE, {
       data: { tokens: before, _overwrite: true },
     });

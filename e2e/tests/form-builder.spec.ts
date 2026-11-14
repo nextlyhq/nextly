@@ -37,12 +37,18 @@ async function openPage(page: Page, label: string) {
 const saveButton = (page: Page) =>
   page.getByRole("banner").getByRole("button", { name: "Save", exact: true });
 
-/** A new form with the name given, on the create page. */
+/**
+ * A new form named `name` and this run's stamp, on the create page. Stamped
+ * because a form's slug comes from its name, and a second run on the same
+ * database is refused the first one's; the heading still contains `name`.
+ */
 async function newForm(page: Page, name: string) {
   await gotoAdmin(page, "/collections/forms/create");
   // The name is typed on Settings; the header shows it once given.
   await openPage(page, "Settings");
-  await page.getByRole("textbox", { name: "Name" }).fill(name);
+  await page
+    .getByRole("textbox", { name: "Name" })
+    .fill(`${name} ${Date.now()}`);
   await openPage(page, "Builder");
 }
 
@@ -161,7 +167,7 @@ test("refuses to delete a field another refers to", async ({ page }) => {
   await expect(page.getByRole("menuitem", { name: "Delete" })).toBeDisabled();
 });
 
-test("seeds a default notification, edits it in place, and guards referenced fields", async ({
+test("seeds a default notification, edits it on its own page, and guards referenced fields", async ({
   page,
 }) => {
   await newForm(page, "E2E Notifications Form");
@@ -172,45 +178,47 @@ test("seeds a default notification, edits it in place, and guards referenced fie
   // A new form arrives pre-seeded with one admin-notification rule, ready to
   // send with the starter message rather than waiting for one.
   await openPage(page, "Notifications");
-  await expect(page.getByText("Admin notification")).toBeVisible();
+  const rule = () =>
+    page
+      .getByRole("list", { name: "Notifications" })
+      .getByRole("listitem")
+      .filter({ hasText: "Admin notification" });
+  await expect(rule()).toContainText("Message: Form submission");
   await expect(
     includingHidden(page).getByText("No template — will not send")
   ).toHaveCount(0);
 
-  // Edit in place: the row expands into an editor on the page, not a panel
-  // over it. Scoped to that region rather than to the page so a control with
-  // the same name elsewhere cannot satisfy these steps.
-  const toggle = page.getByRole("button", {
-    name: "Edit notification Admin notification",
-  });
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  // The rule opens on a page of its own, at the form's own address, and the
+  // form not yet saved stays as it is: nothing asks to save or discard it.
+  await rule().getByRole("link", { name: "Admin notification" }).click();
+  await expect(page).toHaveURL(/[?&]section=/);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue(
+    "Admin notification"
+  );
 
-  // There is no overlay. A `getByRole("dialog")` here would have found the
-  // sheet this replaced, which is how this test failed when it moved.
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-
-  // `:visible`: a hidden copy of this page, which Next.js may keep mounted,
-  // holds the same id.
-  const editor = page.locator('[id^="notification-editor-"]:visible');
-  await editor
-    .getByRole("textbox", { name: "Recipient address" })
+  await page
+    .getByRole("textbox", { name: "Add to Team addresses" })
     .fill("team@example.com");
+  await page.keyboard.press("Enter");
 
-  await editor.getByLabel("Reply-To").click();
-  await page.getByRole("option", { name: "The visitor (email field)" }).click();
-  await editor.getByLabel("Visitor email field").click();
-  await page.getByRole("option", { name: "Email" }).click();
+  await page.getByRole("combobox", { name: "Reply-To" }).click();
+  await page.getByRole("option", { name: "The visitor, field: Email" }).click();
 
-  await editor.getByRole("button", { name: "Add condition" }).click();
-  await editor.getByLabel("Comparison").click();
-  await page.getByRole("option", { name: "Is not empty" }).click();
+  await page.getByRole("radio", { name: "Only when…" }).click();
+  await expect(
+    page.getByRole("combobox", { name: "Condition 1 field" })
+  ).toHaveText("Email");
+  await page.getByRole("combobox", { name: "Condition 1 comparison" }).click();
+  await page.getByRole("option", { name: "is not empty" }).click();
 
-  // No save press: the editor writes through to the form as it is typed, and
-  // the page's own action bar is the only commit. The summary above proves it
-  // — it is driven by the same state the editor is writing.
-  await expect(page.getByText("Conditional")).toBeVisible();
-  await expect(page.getByText("To team@example.com")).toBeVisible();
+  // No save press: the page writes through to the form as it is edited, and
+  // the form's own Save is the only commit. The list says so, from the same
+  // state the page writes.
+  await page.getByRole("link", { name: "All notifications" }).click();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(rule()).toContainText("team@example.com");
+  await expect(rule()).toContainText("Only when Email is not empty");
 
   // The email field is referenced by the rule's reply-to and condition, so
   // its delete is blocked back on the Builder tab.
@@ -222,10 +230,8 @@ test("seeds a default notification, edits it in place, and guards referenced fie
   // Round trip: the rule, its condition, and the guard all persist.
   await createAndReopen(page, "E2E Notifications Form");
   await openPage(page, "Notifications");
-  await expect(page.getByText("Admin notification")).toBeVisible({
-    timeout: 30_000,
-  });
-  await expect(page.getByText("Conditional")).toBeVisible();
+  await expect(rule()).toContainText("team@example.com", { timeout: 30_000 });
+  await expect(rule()).toContainText("Only when Email is not empty");
 });
 
 test("the preview is an interactive simulation with real confirmation", async ({

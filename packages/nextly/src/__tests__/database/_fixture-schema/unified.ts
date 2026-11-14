@@ -810,6 +810,10 @@ export const nextlyTables: TableDefinition[] = [
         columns: ["user_id"],
       },
       {
+        name: "user_roles_role_id_idx",
+        columns: ["role_id"],
+      },
+      {
         name: "user_roles_expires_at_idx",
         columns: ["expires_at"],
       },

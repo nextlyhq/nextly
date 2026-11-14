@@ -1,5 +1,7 @@
 /**
- * Where a harness instance writes the files a Builder save generates.
+ * Where a harness instance writes the files it generates: a Builder save's
+ * migration, the migration log a schema apply appends to, and an uploaded
+ * file with the `.gitignore` local storage keeps beside it.
  *
  * `registerServices` takes those paths from its `basePath` and falls back to
  * the working directory, which under a test runner is the package being
@@ -18,7 +20,10 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { defineCollection } from "../../collections/config/define-collection";
+import { text } from "../../collections/fields/helpers";
 import { dispatchCollections } from "../../dispatcher/handlers/collection-dispatcher";
+import { pdfDocument } from "../../services/upload-validation/__tests__/format-fixtures";
 import type { ServiceContainer } from "../../services";
 import { definePlugin } from "../plugin-context";
 import {
@@ -105,6 +110,48 @@ for (const dialect of getConfiguredTestDialects()) {
       current = undefined;
       expect(existsSync(t.basePath)).toBe(false);
       expect(readdirSync(scratchTmp)).toEqual([]);
+    }, 60_000);
+
+    it("keeps an uploaded file below its own folder, never the working directory", async () => {
+      const t = await createTestNextly({ dialect });
+      current = t;
+      const pdf = pdfDocument("scratch");
+
+      await t.nextly.media.upload({
+        file: {
+          data: pdf,
+          name: "scratch.pdf",
+          mimetype: "application/pdf",
+          size: pdf.length,
+        },
+      });
+
+      // Local storage writes the file, and a `.gitignore` for the uploads
+      // folder two levels above it: both below the instance's own folder.
+      expect(await filesBelow(join(t.basePath, "public/uploads"))).not.toEqual(
+        []
+      );
+      expect(await filesBelow(workingDir)).toEqual([]);
+    }, 60_000);
+
+    it("appends to the migration log below its own folder, never the working directory", async () => {
+      // A collection in code, whose table the boot's schema apply creates
+      // and logs.
+      const t = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "logged",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      current = t;
+
+      expect(existsSync(join(t.basePath, ".nextly/logs/migrations.log"))).toBe(
+        true
+      );
+      expect(await filesBelow(workingDir)).toEqual([]);
     }, 60_000);
 
     it("uses a folder the caller gives as given, and keeps it", async () => {

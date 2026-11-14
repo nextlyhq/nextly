@@ -13,6 +13,8 @@ import {
 } from "../address-record/catch-up";
 import type { CodeRoute } from "../code-pages/routes";
 import type { ReadRules } from "../resolver/provider";
+import { ROBOTS_SERVED_BY_HEADER } from "../settings/robots-rules";
+import type { ReadStructuredDataRules } from "../structured-data/rules";
 
 import { llmsTxtOf } from "./ai-outputs";
 import { listPages } from "./listing";
@@ -29,6 +31,8 @@ export interface RootFilesConfig {
    */
   origin?: string;
   readRules: ReadRules;
+  /** Structured data's rules, for the images a content type maps. */
+  readStructuredDataRules?: ReadStructuredDataRules;
   /** Whether the sitemap is served, and what it lists and splits by. */
   sitemap?: { collections?: readonly string[]; limits: SitemapLimits };
   /** Whether robots.txt is served, and what it asks AI crawlers. */
@@ -57,6 +61,20 @@ async function originOf(
 }
 
 const notFound = () => new Response("Not found", { status: 404 });
+
+/**
+ * The warnings already given, so one about stored rules that are not served
+ * is logged once per process, not on every robots.txt request. Bounded, so a
+ * value edited again and again cannot grow it without end.
+ */
+const warned = new Set<string>();
+
+/** Logs `message` the first time it is seen. */
+function warnOnce(message: string, warn: (message: string) => void): void {
+  if (warned.has(message) || warned.size >= 20) return;
+  warned.add(message);
+  warn(message);
+}
 
 /**
  * The answer while the address record catches up, or after a catch-up that
@@ -102,6 +120,9 @@ export async function sitemapResponse(
   const { pages } = await listPages(ctx, {
     origin,
     readRules: config.readRules,
+    ...(config.readStructuredDataRules === undefined
+      ? {}
+      : { readStructuredDataRules: config.readStructuredDataRules }),
     ...(config.codeRoutes === undefined
       ? {}
       : { codeRoutes: config.codeRoutes }),
@@ -147,14 +168,26 @@ export function rootFileRoutes(config: RootFilesConfig): PluginRoute[] {
           "text/plain; charset=utf-8"
         );
         // The site's own choice where it has made one, else the plugin's.
-        const { aiCrawlers } = await config.readRules(ctx, undefined);
+        const { aiCrawlers, robotsRules, robotsRulesRefused } =
+          await config.readRules(ctx, undefined);
+        if (robotsRulesRefused !== undefined) {
+          warnOnce(
+            `The SEO settings' own robots.txt rules are not served: ${robotsRulesRefused} Save them again on Settings, Search engines and AI.`,
+            message => ctx.logger.warn(message)
+          );
+        }
         const body = robotsTxt({
           aiCrawlers: aiCrawlers ?? robots.aiCrawlers,
           ...(sitemap === undefined
             ? {}
             : { sitemap: `${origin}/sitemap.xml` }),
+          ...(robotsRules === undefined ? {} : { ownRules: robotsRules.text }),
         });
-        return new Response(body, { headers });
+        // Says the file is the plugin's, so the settings screen can tell a
+        // site that serves its own robots.txt instead.
+        return new Response(body, {
+          headers: { ...headers, [ROBOTS_SERVED_BY_HEADER]: "plugin-seo" },
+        });
       },
     });
   }

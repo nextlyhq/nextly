@@ -783,9 +783,11 @@ export interface PluginContributions<W extends AnyWidget = AnyWidget> {
    *
    * `target` names entities by slug, or, as a {@link ContentTypeScope}
    * (`@experimental`), every content type the site defines except the ones
-   * listed, including Schema Builder types made later. A scope never reaches a
-   * plugin's own types or Nextly's system ones, and leaves alone a type that
-   * already has a field of the same name rather than refusing to boot.
+   * listed, including Schema Builder types made later. A scope never reaches
+   * Nextly's system types, nor a plugin's own types apart from a collection
+   * marked `siteContent`, and leaves alone a type that already has a field of
+   * the same name rather than refusing to boot. `typesExtendedBy` says which
+   * types a field was added to.
    */
   extend?: Array<{
     target: string | string[] | ContentTypeScope;

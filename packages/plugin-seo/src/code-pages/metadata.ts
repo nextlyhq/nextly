@@ -40,6 +40,7 @@ import {
   codePageDocument,
   nameOfAddress,
   readCodePage,
+  statedDateOf,
   type CodePageRow,
 } from "./store";
 
@@ -168,11 +169,13 @@ async function codePageAsk(
       // next visit, a page built ahead of time included.
       tags,
     },
-    // Named as the route names it now, never as a call once recorded it.
+    // Named as the route names it now, never as a call once recorded it,
+    // and dated only where the route states a date.
     codePageDocument(
       address,
       row,
-      textOf(options.name) ?? nameOfAddress(address)
+      textOf(options.name) ?? nameOfAddress(address),
+      statedDateOf(own)
     ),
     {
       collection: found.collection,

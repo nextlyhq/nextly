@@ -306,6 +306,18 @@ describe.each(getConfiguredTestDialects())(
       });
     }
 
+    /** Every grant, as `role:permission`, sorted. */
+    async function grants(): Promise<string[]> {
+      return on(async adapter => {
+        const rows = await adapter.executeQuery<Record<string, unknown>>(
+          `SELECT r.${q}slug${q} AS role, p.${q}slug${q} AS permission FROM ${q}role_permissions${q} rp JOIN ${q}roles${q} r ON r.${q}id${q} = rp.${q}role_id${q} JOIN ${q}permissions${q} p ON p.${q}id${q} = rp.${q}permission_id${q}`
+        );
+        return rows
+          .map(row => `${String(row.role)}:${String(row.permission)}`)
+          .sort();
+      });
+    }
+
     /** The lines that say a permission's orphan mark changed. */
     const markLines = (said: readonly string[]) =>
       said.filter(line => /orphan mark cleared|marked orphaned/.test(line));
@@ -468,7 +480,7 @@ describe.each(getConfiguredTestDialects())(
       });
     }, 240_000);
 
-    it("changes no orphan mark when an older build's nextly migrate finds a migration its folder lacks", async () => {
+    it("changes no orphan mark and no grant when an older build's nextly migrate finds a migration its folder lacks", async () => {
       const older = config({
         permissions: [["export", "mop-posts"]],
         plugins: [plugin("@test/mop-forms", ["export", "mop-submissions"])],
@@ -488,6 +500,7 @@ describe.each(getConfiguredTestDialects())(
           .map(([slug]) => slug)
           .sort()
       ).toEqual(["export-mop-posts", "export-mop-submissions"]);
+      const granted = await grants();
 
       // The older build's folder: the newer migration and its snapshot gone.
       const aside = join(dir, "aside");
@@ -509,6 +522,8 @@ describe.each(getConfiguredTestDialects())(
 
       expect(code, said.join("\n")).toBe(3);
       expect(await marks()).toEqual(migrated);
+      // Every grant of every role as it was, the dropped permissions' included.
+      expect(await grants()).toEqual(granted);
 
       // The control that the comparison sees a run that writes: with the
       // newer build's files back, the same configuration's run goes ahead,

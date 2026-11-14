@@ -499,6 +499,9 @@ importers:
       '@nextlyhq/plugin-page-builder':
         specifier: workspace:*
         version: link:../packages/plugin-page-builder
+      '@nextlyhq/plugin-seo':
+        specifier: workspace:*
+        version: link:../packages/plugin-seo
       '@nextlyhq/tsconfig':
         specifier: workspace:*
         version: link:../packages/tsconfig
@@ -1243,6 +1246,9 @@ importers:
       eslint:
         specifier: ^9.39.1
         version: 9.39.1(jiti@2.7.0)(supports-color@7.2.0)
+      oxc-parser:
+        specifier: ^0.155.0
+        version: 0.155.0
       oxlint:
         specifier: 1.89.0
         version: 1.89.0(oxlint-tsgolint@7.0.2004)

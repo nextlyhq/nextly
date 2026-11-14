@@ -16,6 +16,7 @@ import { useMemo } from "react";
 import type { BuilderFieldError } from "@admin/lib/builder/field-validators";
 import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
 import type { VisibleRow } from "@admin/lib/builder/outline/outline-model";
+import { isPendingDelete } from "@admin/lib/builder/outline/pending-rows";
 
 import { AddPlace, withAddPlaces, type AddPlaceItem } from "./AddPlace";
 import type { OutlineActions } from "./outline-types";
@@ -106,7 +107,12 @@ export function OutlineTree({
               error={errors.get(node.id)?.message}
               selected={node.id === selectedId}
               tabStop={node.id === tabStopId}
-              draggable={!finding && node.own && node.readOnly === null}
+              draggable={
+                !finding &&
+                node.own &&
+                node.readOnly === null &&
+                !isPendingDelete(node)
+              }
               onSelect={actions.select}
               onToggle={onToggle}
               registerRow={registerRow}

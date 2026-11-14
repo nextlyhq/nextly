@@ -38,7 +38,7 @@ import {
 } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import { fetcher } from "@admin/lib/api/fetcher";
 import type { MutationResponse } from "@admin/lib/api/response-types";
 import { collectionApi } from "@admin/services/collectionApi";

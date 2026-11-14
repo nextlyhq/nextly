@@ -8,6 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
+import { registerColumns } from "@admin/components/ui/table/data-table";
 
 import UserTable from "../UserTable";
 
@@ -88,5 +89,29 @@ describe("UserTable columns", () => {
     expect(within(table).getByText("NAME")).toBeDefined();
     expect(screen.getAllByText("Mona Lisa").length).toBeGreaterThan(0);
     expect(within(table).queryByText("ID")).toBeNull();
+  });
+});
+
+describe("the users list's outline", () => {
+  it("draws the columns a plugin adds to the users list, as the table will", () => {
+    const remove = registerColumns("users", () => [
+      { name: "plan", header: "Plan", width: 120 },
+    ]);
+    try {
+      useUsers.mockReturnValue({
+        data: undefined,
+        isLoading: true,
+        isFetching: true,
+        isError: false,
+        error: null,
+      });
+      render(<UserTable />);
+      const outline = screen.getByTestId("screen-outline");
+      // The positive control: a column of the list's own, in the outline.
+      expect(within(outline).getAllByText("ROLE").length).toBeGreaterThan(0);
+      expect(within(outline).getByText("Plan")).toBeTruthy();
+    } finally {
+      remove();
+    }
   });
 });

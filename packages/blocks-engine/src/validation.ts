@@ -330,6 +330,7 @@ const DOCUMENT_ISSUE_CODES = {
     "A node lists more classes than the compiler will apply to it.",
   "invalid-attributes": "A node attributes field is not a string map.",
   "invalid-css-id": "A node cssId is not a string.",
+  "invalid-nosnippet": "A node nosnippet mark is not true or false.",
   "unknown-node-type": "A node type is not registered.",
   "invalid-style-state": "A style state key is not a known interactive state.",
   "invalid-style-values": "A style values entry is not an object.",
@@ -1884,6 +1885,7 @@ function validateNode(
     state.skipValueParsing
   );
   validateAttributes(node, path, issues);
+  validateNosnippet(node, path, issues);
   validateStyles(node, path, state);
   validateVisibility(node, path, state);
   validateBindings(node, path, issues);
@@ -2140,6 +2142,23 @@ function validateClasses(
     chargeIssueBudget(budget, [issue]);
     issues.push(issue);
   }
+}
+
+/** The "never quote this" mark is on or off, never another value. */
+function validateNosnippet(
+  node: BlockNode,
+  path: string,
+  issues: ValidationIssue[]
+): void {
+  if (node.nosnippet === undefined || typeof node.nosnippet === "boolean") {
+    return;
+  }
+  issues.push({
+    path: pointer(path, "nosnippet"),
+    code: "invalid-nosnippet",
+    severity: "error",
+    message: "A node nosnippet mark must be true or false.",
+  });
 }
 
 function validateAttributes(

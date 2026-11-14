@@ -85,8 +85,10 @@ export type HostStep = (
  * - `refused`: the step refused one of its forms.
  * - `pending-draft`: its working draft was rewritten, but its live row holds
  *   what the step would rewrite, and the live row cannot be written without
- *   putting the draft live. The author publishes or discards the draft, and the
- *   rewrite is tried again.
+ *   putting the draft live: a Single, or a collection entry the person may
+ *   not rewrite with its draft (they may update it but not publish it), or a
+ *   run walked with no copies writer. The author publishes or discards the
+ *   draft, and the rewrite is tried again.
  * - `not-permitted`: the person the rewrite runs as may not update it (or, for
  *   a live row, publish it).
  * - `unreadable`: it could not be read, or read to the end.

@@ -16,7 +16,11 @@ import type { NextlyServiceConfig } from "../di/register";
 import { container } from "../di/container";
 import { resolveUploadPolicy } from "../services/upload-validation/upload-policy";
 
-import { withWithheldConfig } from "./plugin-config-view";
+import {
+  pluginConfigView,
+  setupConfigKeysOf,
+  withWithheldConfig,
+} from "./plugin-config-view";
 import { createPluginContext } from "./plugin-context";
 
 afterEach(() => {
@@ -172,5 +176,37 @@ describe("a setup transformer's result", () => {
 
     expect(rebuilt.perLanguageStorage).toBe(false);
     expect(rebuilt.experimental).toBeUndefined();
+  });
+});
+
+describe("the app's password hasher is withheld from plugins", () => {
+  const hasher = {
+    hash: (password: string) => Promise.resolve(`h:${password}`),
+    verify: () => Promise.resolve(false),
+    reach: "unbounded" as const,
+  };
+  const config = {
+    auth: { minPasswordLength: 8, passwordHasher: hasher },
+  } as unknown as NextlyServiceConfig;
+
+  it("is not in ctx.config's auth block, whose other settings are", () => {
+    const view = pluginConfigView(config) as { auth?: Record<string, unknown> };
+    expect(view.auth).toEqual({ minPasswordLength: 8 });
+  });
+
+  it("is not handed to a setup transformer, and one it returns is not taken", () => {
+    const handed = setupConfigKeysOf(config) as {
+      auth?: Record<string, unknown>;
+    };
+    expect(handed.auth).toEqual({ minPasswordLength: 8 });
+    const forged = {
+      ...hasher,
+      verify: () => Promise.resolve(true),
+    };
+    const rebuilt = withWithheldConfig(config, {
+      auth: { minPasswordLength: 12, passwordHasher: forged },
+    }) as { auth?: { minPasswordLength?: number; passwordHasher?: unknown } };
+    expect(rebuilt.auth?.minPasswordLength).toBe(12);
+    expect(rebuilt.auth?.passwordHasher).toBe(hasher);
   });
 });

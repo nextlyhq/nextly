@@ -17,11 +17,16 @@ import { z } from "zod";
 
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { respondAction } from "../../api/response-shapes";
+import { appPasswordRule } from "../../di/password-digester";
 import { afterCommittedWrite } from "../../errors/committed-write";
 import { NextlyError } from "../../errors/nextly-error";
 import { getNextlyLogger } from "../../observability/logger";
 import type { PluginContext } from "../../plugins/plugin-context";
-import { EmailSchema, PasswordSchema } from "../../schemas/_zod/validation";
+import {
+  createPasswordSchema,
+  EmailSchema,
+  PasswordSchema,
+} from "../../schemas/_zod/validation";
 import type { AuthUser } from "../../types/auth";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
@@ -161,7 +166,11 @@ export async function handleRegister(
       regBody = await deps.authHooks.runBeforeRegister(regBody, deps.pluginCtx);
     }
 
-    const parsed = RegisterPayloadSchema.safeParse(regBody);
+    // The password judged by the app's hasher, as the account it creates
+    // will be: its reach in place of bcrypt's 72 bytes.
+    const parsed = RegisterPayloadSchema.extend({
+      password: createPasswordSchema(appPasswordRule()),
+    }).safeParse(regBody);
     if (!parsed.success) {
       throw NextlyError.validation({
         errors: parsed.error.issues.map(issue => ({

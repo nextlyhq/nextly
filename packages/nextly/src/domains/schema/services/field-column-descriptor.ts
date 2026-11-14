@@ -41,6 +41,7 @@ import {
 import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { isFieldGroupFieldType } from "../../field-groups/storage/field-group-field-type";
+import { toSnakeCase } from "../field-rules";
 import { getFieldType } from "../field-types/field-type-registry";
 
 export type SupportedDialect = "postgresql" | "mysql" | "sqlite";
@@ -165,12 +166,9 @@ export function columnsThatMayHoldNull(
     .map(field => toSnakeCase(field.name));
 }
 
-export function toSnakeCase(name: string): string {
-  return name
-    .replace(/([A-Z])/g, "_$1")
-    .toLowerCase()
-    .replace(/^_/, "");
-}
+// The name-to-column rule lives in the browser-safe field rules, which the
+// Builder reaches too; re-exported so this module stays its home for callers.
+export { toSnakeCase } from "../field-rules";
 
 /**
  * The physical columns a list of fields occupies.

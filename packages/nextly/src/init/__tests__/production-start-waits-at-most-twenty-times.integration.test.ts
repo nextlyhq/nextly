@@ -12,7 +12,8 @@
  *
  * The configuration starts no plugin and runs no migrations at start, the two the bound leaves
  * out. The count is the same for 5 entities and for 50: nothing the start waits for grows with
- * them.
+ * them. And nothing the start began is still on its way when it resolves: work it does not wait
+ * for begins after it, so none of it lands among the start's own round trips by timing.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -57,6 +58,12 @@ const MOST_WAITS = 20;
 
 /** How long each round trip is held: long beside the time between two sent together. */
 const DELAY_MS = 40;
+
+/**
+ * How long a new connection is held: not the statements' hold, so a statement waiting for a client
+ * is never handed one by a tie between a released client and a newly connected one.
+ */
+const CONNECTION_DELAY_MS = 55;
 
 /** `count` entities: collections, Singles and field groups in turn, each with a field. */
 function entities(count: number) {
@@ -138,8 +145,13 @@ describe.each(getConfiguredTestDialects())(
       await setup.disconnect().catch(() => undefined);
     }
 
-    /** The round trips a production start of `count` entities makes before it resolves. */
-    async function startOf(count: number): Promise<RoundTrip[]> {
+    /**
+     * The round trips a production start of `count` entities makes before it resolves, and those
+     * among them still on their way when it does.
+     */
+    async function startOf(
+      count: number
+    ): Promise<RoundTrip[] & { open: RoundTrip[] }> {
       const shape = entities(count);
       await migrated(shape);
       vi.stubEnv("NODE_ENV", "production");
@@ -149,6 +161,7 @@ describe.each(getConfiguredTestDialects())(
       const probe = await adapterFor();
       const recorder = await recordRoundTrips(probe, dialect, {
         delayMs: DELAY_MS,
+        connectionDelayMs: CONNECTION_DELAY_MS,
       });
       try {
         const begun = performance.now();
@@ -156,9 +169,14 @@ describe.each(getConfiguredTestDialects())(
           config: sanitizeConfig(defineConfig(shape)) as never,
         });
         const resolved = performance.now();
-        return recorder.trips.filter(
+        const made = recorder.trips.filter(
           trip => trip.startedAt >= begun && trip.startedAt < resolved
         );
+        return Object.assign(made, {
+          open: made.filter(
+            trip => trip.endedAt === undefined || trip.endedAt > resolved
+          ),
+        });
       } finally {
         recorder.uninstall();
         await startSettled();
@@ -179,6 +197,10 @@ describe.each(getConfiguredTestDialects())(
       const fifty = await startOf(50);
 
       expect(five.length, "the start was recorded").toBeGreaterThan(0);
+      // Work the start does not wait for, begun while it still runs, lands among its round trips or
+      // after them by the machine's timing: here, it is begun only once the start has resolved.
+      expect(shown(five.open)).toEqual([]);
+      expect(shown(fifty.open)).toEqual([]);
       expect(sequentialWaits(five), shown(five).join("\n")).toBeLessThanOrEqual(
         MOST_WAITS
       );

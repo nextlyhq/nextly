@@ -192,15 +192,20 @@ export const AuthRateLimitConfigSchema = z.object({
  * boot names them, and the check sends nothing or uses the default.
  */
 export const BreachedPasswordsConfigSchema = z.object({
+  // Strict arms: a source naming both `url` and `range` matches neither and is refused, rather
+  // than matched as a `url` source with its `range` stripped while the check, handed the source
+  // unparsed, would ask the `range`.
   source: z.union([
     z.literal("pwned-passwords"),
-    z.object({ url: z.string() }),
-    z.object({
-      range: z.custom<(prefix: string) => Promise<readonly string[]>>(
-        value => typeof value === "function",
-        { message: "range must be a function" }
-      ),
-    }),
+    z.object({ url: z.string() }).strict(),
+    z
+      .object({
+        range: z.custom<(prefix: string) => Promise<readonly string[]>>(
+          value => typeof value === "function",
+          { message: "range must be a function" }
+        ),
+      })
+      .strict(),
   ]),
   timeoutMs: z.number().optional(),
 });

@@ -15,7 +15,7 @@ import {
   CURRENT_USER_CAPABILITIES_KEY,
   askAccessAgain,
 } from "./current-user-access";
-import { fieldGroupKeys } from "./queries";
+import { fieldGroupKeys } from "./queries/useFieldGroups";
 
 /** Ask again every content cache a schema change makes stale. */
 export function invalidateContentCaches(queryClient: QueryClient): void {

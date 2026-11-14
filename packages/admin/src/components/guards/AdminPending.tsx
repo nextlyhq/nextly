@@ -101,6 +101,48 @@ function StatusFrame({
   );
 }
 
+/**
+ * Signed in, but the account holds no role, so there is no staff work here:
+ * every action would be refused by the server. Says who is signed in and what
+ * would change it, offers to check again once an administrator has given a
+ * role, and to sign out, rather than drawing screens that refuse everything.
+ */
+export function AdminNoRole({
+  email,
+  onCheckAgain,
+  onSignOut,
+}: {
+  email: string | null;
+  onCheckAgain: () => void;
+  onSignOut: () => void;
+}): React.JSX.Element {
+  return (
+    <StatusFrame role="alert">
+      <p className="text-lg font-semibold text-foreground">
+        You don&apos;t have access to the admin yet.
+      </p>
+      <p className="max-w-md text-base text-muted-foreground">
+        {email ? (
+          <>
+            You&apos;re signed in as{" "}
+            <span className="font-medium text-foreground">{email}</span>, but
+            your account has no role on this site.
+          </>
+        ) : (
+          <>Your account has no role on this site.</>
+        )}{" "}
+        Ask an administrator to give you one, then check again.
+      </p>
+      <div className="flex gap-3">
+        <Button onClick={onCheckAgain}>Check again</Button>
+        <Button variant="outline" onClick={onSignOut}>
+          Sign out
+        </Button>
+      </div>
+    </StatusFrame>
+  );
+}
+
 /** The server could not answer, after its retries. */
 export function AdminUnavailable({
   onRetry,

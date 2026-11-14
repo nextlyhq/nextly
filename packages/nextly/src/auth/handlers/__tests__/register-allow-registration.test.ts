@@ -3,7 +3,10 @@
  * turns it on (`auth.allowRegistration`). While it is off, a registration is
  * refused before anything is created or sent.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { useLoadedPasswordHasher } from "../../../di/password-digester";
+import type { PasswordHasher } from "../../password/policy";
 
 import { sanitizeConfig } from "../../../shared/types/config";
 import { buildAuthRouterDeps } from "../deps-bridge";
@@ -12,7 +15,7 @@ import { routeAuthRequest } from "../router";
 
 const ORIGIN = "http://localhost:3000";
 
-function registration(): Request {
+function registration(password = "Pass1234!"): Request {
   return new Request(`${ORIGIN}/admin/api/auth/register`, {
     method: "POST",
     headers: {
@@ -22,7 +25,7 @@ function registration(): Request {
     },
     body: JSON.stringify({
       email: "stranger@example.com",
-      password: "Pass1234!",
+      password,
       name: "Stranger",
       csrfToken: "csrf-test-token",
     }),
@@ -136,5 +139,34 @@ describe("the registration choice, as the admin's signed-out screens learn it", 
       (await setupStatus({ auth: { allowRegistration: true } }))
         .allowRegistration
     ).toBe(true);
+  });
+});
+
+describe("a registration's password with the app's own hasher", () => {
+  /** An unbounded app hasher: it reads a password longer than bcrypt's 72 bytes whole. */
+  const unbounded: PasswordHasher = {
+    name: "unbounded",
+    reach: "unbounded",
+    hash: password => Promise.resolve(`own$${password}`),
+    verify: (password, stored) => Promise.resolve(stored === `own$${password}`),
+  };
+  /** 80 bytes: past bcrypt's 72. */
+  const LONG = `Str0ng-P@ss-${"x".repeat(68)}`;
+  afterEach(() => useLoadedPasswordHasher(undefined));
+
+  it("is judged by the hasher, which reads it whole", async () => {
+    useLoadedPasswordHasher(unbounded);
+    const on = deps(true);
+    const res = await handleRegister(registration(LONG), on);
+    expect(res.status).toBe(200);
+    expect(on.registerUser).toHaveBeenCalledTimes(1);
+  });
+
+  it("is judged by bcrypt's 72 bytes without one", async () => {
+    // The control: the same password is refused where bcrypt hashes it.
+    const on = deps(true);
+    const res = await handleRegister(registration(LONG), on);
+    expect(res.status).toBe(400);
+    expect(on.registerUser).not.toHaveBeenCalled();
   });
 });

@@ -61,16 +61,36 @@ function focusedName(page: Page): Promise<string> {
   });
 }
 
-/** Tab forward until the control with this name has focus. */
-async function tabTo(page: Page, name: string | RegExp): Promise<void> {
+/**
+ * Tab until the control with this name has focus: forward, or back with
+ * Shift+Tab to a control above the one focused, as a keyboard user goes back
+ * rather than round the whole page.
+ */
+async function tabTo(
+  page: Page,
+  name: string | RegExp,
+  direction: "forward" | "back" = "forward"
+): Promise<void> {
+  const key = direction === "forward" ? "Tab" : "Shift+Tab";
   for (let presses = 0; presses < 80; presses += 1) {
     const focused = await focusedName(page);
     if (typeof name === "string" ? focused === name : name.test(focused)) {
       return;
     }
-    await page.keyboard.press("Tab");
+    await page.keyboard.press(key);
   }
   throw new Error(`Tab never reached ${String(name)}`);
+}
+
+/**
+ * Into the page by the admin's skip link, the first stop on the page, past
+ * the rail and the Content panel's list of every collection and Single.
+ */
+async function skipToContent(page: Page): Promise<void> {
+  await page.keyboard.press("Tab");
+  await expect(page.locator(":focus")).toHaveAccessibleName("Skip to content");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("main")).toBeFocused();
 }
 
 const focusedId = (page: Page) =>
@@ -96,11 +116,13 @@ test.describe("comparing two versions", () => {
     await expect(page.locator("ins", { hasText: "stands now" })).toBeVisible();
 
     // Next change lands on the second change, Previous on the first: each is
-    // brought into view and given focus.
+    // brought into view and given focus. Both sit above the changes, so from
+    // a change the way back to them is Shift+Tab.
+    await skipToContent(page);
     await tabTo(page, "Next change");
     await page.keyboard.press("Enter");
     await expect.poll(() => focusedId(page)).toBe("version-change-details");
-    await tabTo(page, "Previous change");
+    await tabTo(page, "Previous change", "back");
     await page.keyboard.press("Enter");
     await expect.poll(() => focusedId(page)).toBe("version-change-summary");
 
@@ -112,8 +134,9 @@ test.describe("comparing two versions", () => {
     await page.keyboard.press("Enter");
     await expect(page.getByText("Title", { exact: true })).toBeVisible();
 
-    // Side by side, chosen by keyboard, is kept for the next comparison.
-    await tabTo(page, "Side by side");
+    // Side by side, chosen by keyboard, is kept for the next comparison. It
+    // sits above the fields just unfolded.
+    await tabTo(page, "Side by side", "back");
     await page.keyboard.press("Space");
     await expect(
       page.getByRole("button", { name: "Side by side" })

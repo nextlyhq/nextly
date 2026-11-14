@@ -21,7 +21,10 @@ import {
 
 import { addressHolders } from "../address-record/participant";
 import { productionAddressesOf } from "../canonical";
+import type { CodeRoute } from "../code-pages/routes";
 import { readConnections } from "../connections/store";
+import { refreshContentDates } from "../content-dates/record";
+import { pruneContentDates } from "../content-dates/store";
 import { pageLanguageLinks } from "../languages/head";
 import {
   heldLanguages,
@@ -29,7 +32,11 @@ import {
   type HeldLanguages,
 } from "../languages/versions";
 import { originOf } from "../origin";
-import { listPages } from "../outputs/listing";
+import {
+  listPages,
+  type ListedPage,
+  type ListingProblem,
+} from "../outputs/listing";
 import { isRecord, textOf } from "../plain-values";
 import { destinationOf, pathOf } from "../redirects/addresses";
 import { redirectsSlug } from "../redirects/collection";
@@ -40,6 +47,13 @@ import { designLevelOf } from "../resolver/design-level";
 import { addressOf } from "../resolver/page-levels";
 import { resolveSeo, type ReadRules } from "../resolver/provider";
 import { readRouteValues, routeValuesKey } from "../route-values/store";
+import {
+  crawledPathOf,
+  robotsBlockOf,
+  servedGroups,
+  type RobotsBlock,
+} from "../settings/robots-blocks";
+import { isSeoOff } from "../settings/seo-off";
 import type { ReadSocialCardRules } from "../social/card";
 import { shareImageProblems } from "../social/problems";
 import { readStanding } from "../staging/guard";
@@ -54,6 +68,7 @@ import {
   type Problem,
   type ProblemListBody,
 } from "./contract";
+import { datesCheckScope, datesTodayProblems } from "./dates-check";
 import { addressShapes, brokenLinks } from "./links";
 import { canonicalIsOwn, pageProblems } from "./page-checks";
 import { pageTypeOf, singleKey } from "./page-types";
@@ -95,6 +110,68 @@ export interface ProblemChecks {
   /** The Singles SEO is added to. */
   singles: readonly string[];
   readers: CheckReaders;
+  /**
+   * Whether the plugin serves the site's robots.txt: where it does not, its
+   * rules block nothing, and no page is said to be blocked by them.
+   */
+  servesRobots?: boolean;
+  /**
+   * Whether the site serves a robots.txt of its own, which wins over the
+   * plugin's: then its rules block nothing either.
+   */
+  siteServesOwnRobots?: (
+    rules: Awaited<ReturnType<ReadRules>>
+  ) => Promise<boolean>;
+  /**
+   * The pages the site's routes render from their own code, which the
+   * sitemap lists beside the entries, where the site has any.
+   */
+  codeRoutes?: () => readonly CodeRoute[];
+  /**
+   * What the sitemap lists, where the site serves one: its collections
+   * where it names only some.
+   */
+  sitemap?: { collections?: readonly string[] };
+}
+
+/**
+ * Whether the sitemap lists pages of `type`: none where no sitemap is
+ * served, a Single's always, a collection's where the sitemap names none or
+ * names it.
+ */
+function inSitemap(checks: ProblemChecks, type: string): boolean {
+  const sitemap = checks.sitemap;
+  if (sitemap === undefined) return false;
+  if (sitemap.collections === undefined) return true;
+  return (
+    pageTypeOf(type).kind === "single" || sitemap.collections.includes(type)
+  );
+}
+
+/**
+ * The robots.txt rule keeping search engines from a page the sitemap lists,
+ * as page facts, where one does: judged over the file the plugin serves,
+ * so nothing where it serves none, the site serves its own, or the sitemap
+ * leaves the page out.
+ */
+async function robotsBlockFor(
+  checks: ProblemChecks,
+  type: string,
+  rules: Awaited<ReturnType<ReadRules>>,
+  ownAddress: string
+): Promise<{ robotsBlock?: RobotsBlock }> {
+  if (checks.servesRobots === false || !inSitemap(checks, type)) return {};
+  if ((await checks.siteServesOwnRobots?.(rules)) === true) return {};
+  const robotsBlock = robotsBlockOf(
+    servedGroups({
+      aiCrawlers: rules.aiCrawlers ?? "all",
+      ...(rules.robotsRules === undefined
+        ? {}
+        : { ownRules: rules.robotsRules.text }),
+    }),
+    crawledPathOf(ownAddress)
+  );
+  return robotsBlock === undefined ? {} : { robotsBlock };
 }
 
 /** Every type the checks read pages of, by its kept key. */
@@ -332,6 +409,7 @@ async function examine(
   const problems = pageProblems({
     subject,
     answer,
+    ...(await robotsBlockFor(checks, type, rules, ownAddress)),
     canonicalIsOwn: canonicalIsOwn(
       answer,
       productionAddresses[0] ?? NO_ORIGIN,
@@ -575,13 +653,22 @@ async function runSiteCheck(
       }
     });
   }
+  // The content dates of pages no longer listed in a language go, so the
+  // table holds rows only for pages the sitemap may still list.
+  await pruneContentDates(ctx);
+  // The listing of the types SEO is added to, read once for what it leaves
+  // out, and its pages' content dates caught up where a publish reached no
+  // save hook.
+  const listing = await siteListing(ctx, checks, checks.targets);
+  await refreshContentDates(ctx, listing.pages);
   await saveSiteCheck(ctx, {
     startedAt,
     checkedAt: new Date().toISOString(),
     // Each language of a page is a page to a search engine.
     pagesChecked: seen.size,
     problems: [
-      ...(await leftOutOfListing(ctx, checks)),
+      ...(await leftOutOfListing(ctx, listing.problems)),
+      ...(await sitemapDateProblems(ctx, checks)),
       ...redirectChainProblems(await redirectChains(ctx)),
     ],
   });
@@ -591,22 +678,53 @@ async function runSiteCheck(
 const NO_ORIGIN = "https://site.invalid";
 
 /**
+ * The site's listing of `collections` (every public type where none are
+ * named), with the pages built in code, as the sitemap is made.
+ */
+async function siteListing(
+  ctx: PluginContext,
+  checks: ProblemChecks,
+  collections: readonly string[] | undefined
+): Promise<{ pages: ListedPage[]; problems: ListingProblem[] }> {
+  const rules = await checks.readers.readRules(ctx, undefined);
+  const origin =
+    productionAddressesOf(rules.productionAddresses)[0] ?? NO_ORIGIN;
+  return listPages(ctx, {
+    origin,
+    readRules: checks.readers.readRules,
+    ...(collections === undefined ? {} : { collections }),
+    ...(checks.codeRoutes === undefined
+      ? {}
+      : { codeRoutes: checks.codeRoutes }),
+  });
+}
+
+/**
+ * The dates problem of the addresses the sitemap itself lists, read after
+ * the content dates are caught up; none where the site serves no sitemap.
+ */
+async function sitemapDateProblems(
+  ctx: PluginContext,
+  checks: ProblemChecks
+): Promise<Problem[]> {
+  const scope = datesCheckScope(checks);
+  if (scope === undefined) return [];
+  const { pages } = await siteListing(ctx, checks, scope.collections);
+  return datesTodayProblems(
+    ctx,
+    pages.map(page => page.lastModified)
+  );
+}
+
+/**
  * The pages the sitemap leaves out though their type declares them an
  * address, read by the same listing the sitemap is made from, and named as
  * their last check left them.
  */
 async function leftOutOfListing(
   ctx: PluginContext,
-  checks: ProblemChecks
+  problems: readonly ListingProblem[]
 ): Promise<Problem[]> {
-  const rules = await checks.readers.readRules(ctx, undefined);
-  const origin =
-    productionAddressesOf(rules.productionAddresses)[0] ?? NO_ORIGIN;
-  const { problems } = await listPages(ctx, {
-    origin,
-    readRules: checks.readers.readRules,
-    collections: checks.targets,
-  });
   const labels = new Map(
     (await readPages(ctx)).map(row => [
       `${row.subject.type}:${row.subject.id}`,
@@ -956,7 +1074,12 @@ export async function problemList(
   now: number = Date.now()
 ): Promise<ProblemListBody> {
   const site = await readSiteCheck(ctx);
-  const rows = await readPages(ctx);
+  const rules = await checks.readers.readRules(ctx, undefined);
+  // A type whose SEO is switched off raises no problems. What was found for
+  // its pages is kept, so switching it on again shows it at once.
+  const on = (page: PageRef | undefined) =>
+    page === undefined || !isSeoOff(rules, page.type);
+  const rows = (await readPages(ctx)).filter(row => on(row.subject));
   const allowed = await reader.pages([
     ...rows.map(row => row.subject),
     ...site.problems.flatMap(problem => pageOf(problem) ?? []),
@@ -967,14 +1090,19 @@ export async function problemList(
       return false;
     }
     const page = pageOf(problem);
-    return page === undefined || allowed.has(pageRefKey(page));
+    return on(page) && (page === undefined || allowed.has(pageRefKey(page)));
   });
-  const rules = await checks.readers.readRules(ctx, undefined);
   const addresses = productionAddressesOf(rules.productionAddresses);
   const host =
     addresses[0] === undefined ? undefined : new URL(addresses[0]).host;
   const problems = once([
-    ...(await siteProblems(ctx, checks, addresses, reader)),
+    // A type-level problem (a type with no address) names its type and no
+    // page, and goes with the type's switch too.
+    ...(await siteProblems(ctx, checks, addresses, reader)).filter(
+      problem =>
+        problem.subject.type === undefined ||
+        !isSeoOff(rules, problem.subject.type)
+    ),
     ...found,
     ...pages.flatMap(row => row.problems),
     ...sharedValueProblems(pages),

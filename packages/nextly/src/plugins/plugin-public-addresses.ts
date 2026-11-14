@@ -22,6 +22,7 @@ import type { HeldDocument } from "../domains/public-addresses/held-listing";
 import {
   addParticipant,
   firstHolder,
+  newSaveKey,
   recordEverywhere,
   removeParticipant,
   type AddressHolder,
@@ -53,6 +54,24 @@ import {
 export interface ParticipantTransaction {
   db: PluginTransaction;
   transaction: PluginCollectionTransaction;
+  /**
+   * @experimental The same object for every call core makes about one
+   * question: each `holderOf` of one save, or of one `move`, and the
+   * `record` that follows. The next save or `move` gets a new one, even on
+   * the same transaction. It reaches nothing itself; a participant keeps by
+   * it what it has already done for the question, such as a lock row it has
+   * taken.
+   *
+   * Narrower than `InTransactionContext.transactionKey`, which is one object
+   * for the whole transaction. A transaction can roll back to a savepoint
+   * between two saves (one entry of a batch refused), and PostgreSQL then
+   * lets go of the row locks taken after the savepoint while MySQL keeps
+   * them, so what was done for an earlier save may not stand for the next.
+   * Within one question core opens no savepoint between the calls, so what a
+   * participant did earlier in it still stands; a participant that rolls
+   * back a savepoint of its own must forget what it did inside it.
+   */
+  saveKey: object;
 }
 
 /**
@@ -173,13 +192,14 @@ export interface PublicAddressesDeps {
 async function withParticipantTransaction<T>(
   deps: PublicAddressesDeps,
   tx: TransactionContext,
+  saveKey: object,
   work: (handles: ParticipantTransaction) => Promise<T>
 ): Promise<T> {
   try {
     return await deps.bindTo(tx, db =>
       withWriteTransactionToken(
         tx,
-        transaction => work({ db, transaction }),
+        transaction => work({ db, transaction, saveKey }),
         "ctx.publicAddresses"
       )
     );
@@ -206,12 +226,12 @@ export function pluginPublicAddresses(
     const known = runners.get(participant);
     if (known) return known;
     const runner: ParticipantRunner = {
-      holderOf: (address, asker, batch, tx) =>
-        withParticipantTransaction(deps, tx, handles =>
+      holderOf: (address, asker, batch, tx, saveKey) =>
+        withParticipantTransaction(deps, tx, saveKey, handles =>
           participant.holderOf(address, asker, batch, handles)
         ),
-      record: (batch, tx) =>
-        withParticipantTransaction(deps, tx, handles =>
+      record: (batch, tx, saveKey) =>
+        withParticipantTransaction(deps, tx, saveKey, handles =>
           participant.record(batch, handles)
         ),
     };
@@ -285,6 +305,9 @@ async function settleMoves(
   tx: TransactionContext
 ): Promise<{ refused: RefusedAddressUpdate[] }> {
   const refused: RefusedAddressUpdate[] = [];
+  // One question, however many rounds the refusals take: no round opens a
+  // savepoint, so what a participant did in an earlier one still stands.
+  const saveKey = newSaveKey();
   let standing = [...updates];
   // Asked again until nothing more is refused: an update judged against a
   // batch in which another lets an address go must not stand once that
@@ -292,7 +315,7 @@ async function settleMoves(
   for (;;) {
     const refusedNow: RefusedAddressUpdate[] = [];
     for (const update of standing) {
-      const clash = await firstHolder(update, standing, tx);
+      const clash = await firstHolder(update, standing, tx, saveKey);
       if (clash !== null) refusedNow.push({ update, ...clash });
     }
     if (refusedNow.length === 0) break;
@@ -301,6 +324,6 @@ async function settleMoves(
       update => !refusedNow.some(r => r.update === update)
     );
   }
-  if (standing.length > 0) await recordEverywhere(standing, tx);
+  if (standing.length > 0) await recordEverywhere(standing, tx, saveKey);
   return { refused };
 }

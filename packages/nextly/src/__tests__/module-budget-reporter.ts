@@ -133,6 +133,19 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * stage history, plugin events, received webhooks, public addresses), and it
  * took six files that sat just under the heavy line over it, with a seventh
  * that reaches the PostgreSQL bundle; both hold whether CI measures one fewer.
+ * The tail mean's pin rose to 1,390 when a week of features filled the room
+ * the last pin left. Two edges had brought the Builder save writer and the
+ * busy-table runner back into every file that loads the registry: the Single
+ * and field-group services and the Single and field-group dispatchers' save
+ * helper imported the writer at import, and the collection sync and the first
+ * start the runner. They now load each where a save runs or a statement is
+ * sent, which took two Single dispatcher tests back under the heavy line and
+ * the tail from 1,394 to 1,359 measured, the heavy files and their chains as
+ * pinned. The rest, from the 1,323 the last pin was measured at, is features'
+ * modules on chains every heavy file already held (the busy-table tries a
+ * schema push runs in, the app's password digester, plugins' startup reads, a
+ * field rewrite across versions, a Single read's column plan); 1,390 holds
+ * whether CI measures a few fewer.
  * Each
  * pin is the higher measurement plus its margin, at
  * most the lower measurement plus it, so it holds on both. A run that
@@ -140,7 +153,7 @@ export const JUDGED_PROJECT = "nextly (isolated)";
  * the list is refreshed with them. The pins are edited by hand so that a
  * change to one is a line a reviewer reads; only the list has a command.
  */
-export const BUDGET = { heavyFiles: 65, tailMeanModules: 1_357 };
+export const BUDGET = { heavyFiles: 65, tailMeanModules: 1_390 };
 const MARGIN = { heavyFiles: 3, tailMeanModules: 35 };
 const PINNED_HEAVY_FILES = new URL(
   "./module-budget-heavy-files.json",

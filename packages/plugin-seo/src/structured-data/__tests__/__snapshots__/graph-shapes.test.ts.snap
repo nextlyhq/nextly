@@ -444,28 +444,6 @@ exports[`whole graphs of a site's pages > keeps the shape of the home page 1`] =
     "url": "https://nextlyhq.com/",
   },
   {
-    "@id": "https://nextlyhq.com/#faq",
-    "@type": "FAQPage",
-    "mainEntity": [
-      {
-        "@type": "Question",
-        "acceptedAnswer": {
-          "@type": "Answer",
-          "text": "An open-source content platform for Next.js.",
-        },
-        "name": "What is Nextly?",
-      },
-      {
-        "@type": "Question",
-        "acceptedAnswer": {
-          "@type": "Answer",
-          "text": "Nextly is MIT licensed.",
-        },
-        "name": "Is Nextly free?",
-      },
-    ],
-  },
-  {
     "@id": "https://nextlyhq.com/#softwareApplication",
     "@type": "SoftwareApplication",
     "applicationCategory": "DeveloperApplication",

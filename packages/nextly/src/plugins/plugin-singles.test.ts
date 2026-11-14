@@ -136,10 +136,15 @@ describe("listing Singles creates nothing", () => {
     // of the ones that exist today, so an operation added later is caught by
     // this test rather than by whoever is debugging a site full of Singles
     // nobody created.
-    const writes = ops.filter(op =>
-      /insert|update|delete|upsert|create|drop|alter|execute|transaction/i.test(
-        op
-      )
+    // `transactionOpenInFlow` only asks whether the calling flow is inside a
+    // transaction (the listing is read from the cache when it is not); it
+    // opens nothing and writes nothing.
+    const writes = ops.filter(
+      op =>
+        op !== "transactionOpenInFlow" &&
+        /insert|update|delete|upsert|create|drop|alter|execute|transaction/i.test(
+          op
+        )
     );
     expect(writes).toEqual([]);
   });

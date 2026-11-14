@@ -28,7 +28,12 @@ import type {
 import { NextlyError } from "../../../errors/nextly-error";
 import { drizzleTableToTableSpec } from "../../../schemas/_internal/drizzle-to-tablespec";
 import { scanSql } from "../migrate/sql-scan";
-import type { ColumnSpec, IndexSpec, TableSpec } from "../pipeline/diff/types";
+import type {
+  ColumnSpec,
+  ForeignKeySpec,
+  IndexSpec,
+  TableSpec,
+} from "../pipeline/diff/types";
 
 import { enumChecks } from "./enum-check";
 import {
@@ -305,6 +310,11 @@ export async function runAfterDrizzle(args: {
     coreTableNames: readonly string[];
     pluginPrefixes: readonly string[];
   };
+  /**
+   * The declared foreign keys, so a refused removal of a table names each
+   * key that points at it.
+   */
+  foreignKeys?: readonly ForeignKeyOn[];
 }): Promise<Record<string, unknown>> {
   if (args.hooks.length === 0) return args.tables;
 
@@ -338,48 +348,145 @@ export async function runAfterDrizzle(args: {
   // and that is exactly the set these rules exist for.
   for (const [name, value] of Object.entries(tables)) {
     if (value === args.tables[name]) continue;
-    if (args.protectedTables.has(name)) {
-      refuse(
-        name,
-        "a change to a core, entity or adopted table",
-        "Nextly maintains core and entity tables (use contributes.extend for entity fields), and an adopted table is never migrated at all."
-      );
+    // A key returned with no table is a removal. The hook reshapes tables;
+    // what exists is the declaration's to say, and a table dropped here would
+    // leave its owner row, its migrations and every key pointing at it
+    // describing a table the runtime no longer has. A key naming a table
+    // nothing compiled is no table at all, and is dropped.
+    if (value === undefined || value === null) {
+      if (!(name in args.tables)) {
+        delete tables[name];
+        continue;
+      }
+      refuseRemovedTable(name, args.foreignKeys ?? []);
     }
-    const owner = args.owners.get(name);
-    // A plugin's table is its own to describe. An app reshaping it would make
-    // the plugin's migrations disagree with the table they are meant to own.
-    if (owner?.kind === "plugin") {
-      refuse(
-        name,
-        `a change to a table owned by plugin "${owner.id}"`,
-        "An app may only shape its own tables here."
-      );
-    }
-    // A name no compile produced, and that no rule above claims, is a table
-    // the hook introduced. It is the app's, so it answers to the app's naming
-    // rule: a managed prefix
-    // (`dc_`, `single_`, `comp_`, `nextly_`) would be reconciled — and
-    // dropped — by the pipeline that owns it, a `_locales` suffix by the
-    // localization layer, and a plugin's namespace by that plugin.
-    if (!(name in args.tables)) {
-      assertUsableAppTableName(
-        name,
-        args.naming.coreTableNames,
-        args.naming.pluginPrefixes
-      );
-    }
-    assertColumnsConvertible(value as Table, name);
-    assertTableConvertible(value as Table, name, args.dialect);
-    if (getTableName(value as Table) !== name) {
-      refuse(
-        name,
-        `a table whose SQL name is "${getTableName(value as Table)}"`,
-        "The key and the table name must match."
-      );
-    }
+    assertReturnedTable(name, value as Table, args);
   }
 
   return tables;
+}
+
+/**
+ * The rules a table a hook returned in place of, or beside, the compiled ones
+ * is held to: never a core, entity, adopted or plugin's table, an introduced
+ * one named as an app table must be, and nothing the model cannot carry.
+ */
+function assertReturnedTable(
+  name: string,
+  table: Table,
+  args: Pick<
+    Parameters<typeof runAfterDrizzle>[0],
+    "dialect" | "tables" | "owners" | "protectedTables" | "naming"
+  >
+): void {
+  if (args.protectedTables.has(name)) {
+    refuse(
+      name,
+      "a change to a core, entity or adopted table",
+      "Nextly maintains core and entity tables (use contributes.extend for entity fields), and an adopted table is never migrated at all."
+    );
+  }
+  const owner = args.owners.get(name);
+  // A plugin's table is its own to describe. An app reshaping it would make
+  // the plugin's migrations disagree with the table they are meant to own.
+  if (owner?.kind === "plugin") {
+    refuse(
+      name,
+      `a change to a table owned by plugin "${owner.id}"`,
+      "An app may only shape its own tables here."
+    );
+  }
+  // A name no compile produced, and that no rule above claims, is a table
+  // the hook introduced. It is the app's, so it answers to the app's naming
+  // rule: a managed prefix
+  // (`dc_`, `single_`, `comp_`, `nextly_`) would be reconciled — and
+  // dropped — by the pipeline that owns it, a `_locales` suffix by the
+  // localization layer, and a plugin's namespace by that plugin.
+  if (!(name in args.tables)) {
+    assertUsableAppTableName(
+      name,
+      args.naming.coreTableNames,
+      args.naming.pluginPrefixes
+    );
+  }
+  assertColumnsConvertible(table, name);
+  assertTableConvertible(table, name, args.dialect);
+  if (getTableName(table) !== name) {
+    refuse(
+      name,
+      `a table whose SQL name is "${getTableName(table)}"`,
+      "The key and the table name must match."
+    );
+  }
+}
+
+/** A declared foreign key, with the table it is declared on. */
+export interface ForeignKeyOn {
+  table: string;
+  fk: ForeignKeySpec;
+}
+
+/** A validation error at a hook's table, the path every refusal here takes. */
+function refuseAt(table: string, message: string): never {
+  throw NextlyError.validation({
+    errors: [
+      { path: `db.schema.afterDrizzle.${table}`, code: "INVALID", message },
+    ],
+  });
+}
+
+/** Refuse a hook's removal of a compiled table, naming the keys aimed at it. */
+function refuseRemovedTable(
+  name: string,
+  foreignKeys: readonly ForeignKeyOn[]
+): never {
+  const pointing = foreignKeys.filter(
+    ({ table, fk }) => fk.referencesTable === name && table !== name
+  );
+  if (pointing.length === 0) {
+    refuseAt(
+      name,
+      `The hook removed the table "${name}". A hook may reshape a declared table but not remove it; remove the table from its declaration instead.`
+    );
+  }
+  refuseAt(
+    name,
+    `The hook removed the table "${name}", which ${pointing
+      .map(({ table, fk }) => `the foreign key "${fk.name}" on "${table}"`)
+      .join(
+        " and "
+      )} references. Keep the table, or remove the table and the key from their declarations.`
+  );
+}
+
+/**
+ * Refuse a declared foreign key whose target column an `afterDrizzle` hook
+ * removed or renamed, judged on the specs the migrations carry.
+ *
+ * The keys were checked against the declared tables before any hook ran
+ * (`assertForeignKeyTargetsExist`); a hook rebuilding the TARGET table can
+ * still leave a key pointing at a column that is gone, which every dialect
+ * refuses only when the migration applies. A target with no spec here (a
+ * core, entity or adopted table) is one no hook may reshape.
+ */
+export function assertForeignKeyTargetsAfterHooks(
+  specs: readonly TableSpec[]
+): void {
+  const byName = new Map(specs.map(spec => [spec.name, spec]));
+  for (const spec of specs) {
+    for (const fk of spec.foreignKeys ?? []) {
+      const target = byName.get(fk.referencesTable);
+      if (target === undefined) continue;
+      const gone = fk.referencesColumns.find(
+        name => !target.columns.some(column => column.name === name)
+      );
+      if (gone === undefined) continue;
+      refuseAt(
+        target.name,
+        `The hook removed column "${gone}" from "${target.name}", which the foreign key "${fk.name}" on "${spec.name}" references. Keep the column, or remove the key from the declaration of "${spec.name}".`
+      );
+    }
+  }
 }
 
 /** Two derived columns describe the same column in every compared respect. */
@@ -513,16 +620,25 @@ export function specAfterHook(args: {
     }
   }
 
+  for (const fk of args.compiledSpec.foreignKeys ?? []) {
+    const gone = fk.columns.find(name => !present.has(name));
+    if (gone !== undefined) {
+      refuseAt(
+        args.compiledSpec.name,
+        `The hook removed column "${gone}" from "${args.compiledSpec.name}", which the foreign key "${fk.name}" declared on that table stands on. Keep the column, or remove the key from the table's declaration.`
+      );
+    }
+  }
+
   return {
     ...args.compiledSpec,
     columns,
     indexes,
+    // Kept whole: a key whose own column the hook removed is refused below
+    // rather than dropped, since the author declared the constraint and a
+    // migration model without it leaves every database without it too.
     ...(args.compiledSpec.foreignKeys !== undefined
-      ? {
-          foreignKeys: args.compiledSpec.foreignKeys.filter(fk =>
-            covers(fk.columns)
-          ),
-        }
+      ? { foreignKeys: args.compiledSpec.foreignKeys }
       : {}),
     ...(args.compiledSpec.checks !== undefined ? { checks: keptChecks } : {}),
   };

@@ -346,6 +346,57 @@ describe("the list", () => {
     expect(navigateTo).toHaveBeenLastCalledWith("/admin/collections/pages/8");
   });
 
+  it("marks a page of a type with SEO off, its title its own code's, and offers no Edit SEO", async () => {
+    listed = [
+      ...ITEMS,
+      {
+        path: "/authors/mobeen",
+        name: "Mobeen",
+        source: "entry",
+        from: "Authors",
+        standing: "seo-off",
+        sources: {},
+        entry: { kind: "collection", slug: "authors", id: "9" },
+      },
+    ];
+    render(<SeoPagesPage />);
+    const row = rowOf("Mobeen");
+    expect(row.getByText("SEO off")).toBeTruthy();
+    expect(row.getByText("Set by the page's own code")).toBeTruthy();
+    expect(row.getByText("Authors has SEO off")).toBeTruthy();
+    const user = userEvent.setup();
+    await user.click(row.getByRole("button", { name: "Row actions" }));
+    expect(
+      await screen.findByRole("menuitem", {
+        name: "Inspect what search engines receive",
+      })
+    ).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Edit SEO" })).toBeNull();
+  });
+
+  it("opens filtered to the pages with SEO off where the address asks", () => {
+    listed = [
+      ...ITEMS,
+      {
+        path: "/authors/mobeen",
+        name: "Mobeen",
+        source: "entry",
+        from: "Authors",
+        standing: "seo-off",
+        sources: {},
+        entry: { kind: "collection", slug: "authors", id: "9" },
+      },
+    ];
+    window.history.replaceState(null, "", "/admin/seo/pages?status=seo-off");
+    try {
+      render(<SeoPagesPage />);
+      expect(table().getByText("Mobeen")).toBeTruthy();
+      expect(table().queryByText("Home")).toBeNull();
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
   it("opens a translation's entry in its own language", async () => {
     vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
       data:

@@ -15,10 +15,12 @@
  *
  * A key that does not resolve costs a lookup, so failed lookups are bounded
  * before the next one: by the source's own budget, or for unresolved sources
- * by a ceiling of their own. Once a bound is spent, key requests under it are
- * refused before any lookup until the window turns, which can refuse a valid
- * key sent under the same bound, and nothing else. A plugin's people are
- * bounded the same way, per plugin.
+ * by the id the key carries, which the server verifies without a lookup, and
+ * for a key without one by a ceiling those keys share. Once a bound is spent,
+ * key requests under it are refused before any lookup until the window turns.
+ * An invalid key cannot carry a verified id, so its failures never spend the
+ * bound of a key that does; a key made before ids can still be refused under
+ * the shared ceiling. A plugin's people are bounded the same way, per plugin.
  *
  * @module middleware/rest-limits
  */
@@ -26,6 +28,7 @@ import { buildErrorResponse } from "../api/error-response";
 import { readOrGenerateRequestId } from "../api/request-id";
 import { recordRefusalReason } from "../auth/access/refusal-message";
 import { container } from "../di/container";
+import { verifiedApiKeyId } from "../domains/auth/lib/api-key-id";
 import { LIMIT_STORE_CALL_TIMEOUT_MS } from "../domains/limits/call-deadline";
 import { openWhileStoreIsDown } from "../domains/limits/core-limit-outage";
 import { guardedAppRateLimitStore } from "../domains/limits/core-limit-store";
@@ -206,10 +209,7 @@ class RestLimits implements RestLimitDecider {
     const source = this.sourceBucket(request, operation);
     const rawKey = presentedApiKey(request);
     if (rawKey !== null) {
-      const bound = source ?? {
-        key: `ratelimit:unresolved:key-lookups:${operation}`,
-        limit: this.settings.keyLookups[operation],
-      };
+      const bound = source ?? this.unresolvedKeyBound(rawKey, operation);
       return this.admitKey(request, rawKey, bound, keys);
     }
     if (source) return this.count(request, source);
@@ -320,6 +320,27 @@ class RestLimits implements RestLimitDecider {
         }
       : {
           key: `ratelimit:person-failed:${plugin}:${source}:${operation}`,
+          limit: this.settings.perAddress[operation],
+        };
+  }
+
+  /**
+   * The bound on failed lookups for a key sent from a source the server cannot
+   * resolve. A key carrying an id this install made (`verifiedApiKeyId`, no
+   * lookup) is bounded under that id alone, with an address's budget: an
+   * invalid key cannot carry one, so a flood of them never refuses it. A key
+   * without one (made before ids, or not this install's) shares the ceiling
+   * every such key spends.
+   */
+  private unresolvedKeyBound(rawKey: string, operation: Operation): Bucket {
+    const id = verifiedApiKeyId(rawKey);
+    return id === null
+      ? {
+          key: `ratelimit:unresolved:key-lookups:${operation}`,
+          limit: this.settings.keyLookups[operation],
+        }
+      : {
+          key: `ratelimit:unresolved:key-lookups:${operation}:id:${id}`,
           limit: this.settings.perAddress[operation],
         };
   }

@@ -13,6 +13,7 @@ import { assertNoForeignDrops } from "../../../domains/schema/ownership/drop-gua
 import { assertDependenciesInstalled } from "../../../domains/schema/ownership/install-plan";
 import type { OwnerRecord } from "../../../domains/schema/ownership/owner-registry";
 import { assertPluginsInstalled } from "../../../domains/schema/ownership/plugin-install-gate";
+import { assertPluginPrefixesKept } from "../../../domains/schema/ownership/plugin-prefix-check";
 import { assertSchemaVersionUsable } from "../../../domains/schema/ownership/schema-version-check";
 import {
   planUninstall,
@@ -347,6 +348,22 @@ export const PLUGIN_CASES = {
         states: new Map(),
         production: true,
         warn: () => {},
+      })
+    ),
+  // As `assertPluginPrefixesKept` throws it for a plugin whose tables were created under "seo".
+  PLUGIN_SCHEMA_PREFIX_CHANGED: () =>
+    thrown(() =>
+      assertPluginPrefixesKept({
+        prefixes: new Map([[PLUGIN, "acme_seo"]]),
+        owners: [
+          {
+            ...APP_POSTS,
+            tableName: "seo__redirects",
+            ownerKind: "plugin",
+            ownerId: PLUGIN,
+            migratedBy: PLUGIN,
+          },
+        ],
       })
     ),
   PLUGIN_SCHEMA_UNINSTALLED: () =>

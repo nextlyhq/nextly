@@ -13,6 +13,7 @@ import {
   assertRunnableStatements,
   marksNoTransaction,
   statementRefusals,
+  transactionControlOf,
 } from "../../domains/schema/migrate/split-sql";
 
 import { registerMigrateCommand, splitSqlStatements } from "./migrate";
@@ -366,7 +367,10 @@ describe("a doubled delimiter escapes the delimiter, it does not end the literal
     ]);
   });
 
-  it("leaves a file's own transaction brackets to the runner's transaction", () => {
+  it("keeps every bracket of a file holding two transactions, for the runner to refuse", () => {
+    // The COMMIT and START TRANSACTION in the middle would commit the first
+    // half on its own. Dropped, with or without the outer pair, the file
+    // would silently run as one.
     const sql = [
       `BEGIN;`,
       `ALTER TABLE "t" ADD COLUMN "a" TEXT;`,
@@ -376,9 +380,43 @@ describe("a doubled delimiter escapes the delimiter, it does not end the literal
       `END TRANSACTION;`,
     ].join("\n");
     expect(splitSqlStatements(sql, "postgresql")).toEqual([
+      "BEGIN",
       `ALTER TABLE "t" ADD COLUMN "a" TEXT`,
+      "COMMIT",
+      "START TRANSACTION",
       `ALTER TABLE "t" ADD COLUMN "b" TEXT`,
+      "END TRANSACTION",
     ]);
+  });
+
+  it.each([
+    [
+      "a COMMIT with no BEGIN before it",
+      `ALTER TABLE t ADD COLUMN a TEXT;\nCOMMIT;`,
+    ],
+    [
+      "a BEGIN with nothing closing it",
+      `BEGIN;\nALTER TABLE t ADD COLUMN a TEXT;`,
+    ],
+    [
+      "a COMMIT part-way",
+      `ALTER TABLE t ADD COLUMN a TEXT;\nCOMMIT;\nALTER TABLE t ADD COLUMN b TEXT;`,
+    ],
+  ])("keeps %s, which wraps nothing", (_case, sql) => {
+    const statements = splitSqlStatements(sql, "postgresql");
+    expect(statements.some(s => s === "COMMIT" || s === "BEGIN")).toBe(true);
+  });
+
+  it("keeps a wrapping pair in a file run outside a transaction, for the refusal there to name", () => {
+    expect(
+      splitSqlStatements(
+        `BEGIN;\nALTER TABLE t ADD COLUMN a TEXT;\nCOMMIT;`,
+        "postgresql",
+        {
+          transaction: false,
+        }
+      )
+    ).toEqual(["BEGIN", "ALTER TABLE t ADD COLUMN a TEXT", "COMMIT"]);
   });
 
   it("keeps a statement that would undo or split the runner's transaction, for the runner to refuse", () => {
@@ -396,22 +434,26 @@ describe("a doubled delimiter escapes the delimiter, it does not end the literal
   });
 
   it.each([
-    ["sqlite", "BEGIN IMMEDIATE TRANSACTION"],
-    ["sqlite", "BEGIN EXCLUSIVE"],
-    ["sqlite", "BEGIN DEFERRED"],
-    ["postgresql", "BEGIN ISOLATION LEVEL SERIALIZABLE"],
-    ["postgresql", "BEGIN WORK READ WRITE"],
-    ["postgresql", "START TRANSACTION ISOLATION LEVEL REPEATABLE READ"],
-    ["mysql", "START TRANSACTION READ WRITE"],
-    ["mysql", "START TRANSACTION WITH CONSISTENT SNAPSHOT"],
-    ["mysql", "COMMIT WORK AND NO CHAIN"],
-    ["postgresql", "/* opens */ BEGIN"],
+    ["sqlite", "BEGIN IMMEDIATE TRANSACTION", "COMMIT"],
+    ["sqlite", "BEGIN EXCLUSIVE", "COMMIT"],
+    ["sqlite", "BEGIN DEFERRED", "END TRANSACTION"],
+    ["postgresql", "BEGIN ISOLATION LEVEL SERIALIZABLE", "COMMIT"],
+    ["postgresql", "BEGIN WORK READ WRITE", "END"],
+    [
+      "postgresql",
+      "START TRANSACTION ISOLATION LEVEL REPEATABLE READ",
+      "COMMIT",
+    ],
+    ["mysql", "START TRANSACTION READ WRITE", "COMMIT"],
+    ["mysql", "START TRANSACTION WITH CONSISTENT SNAPSHOT", "COMMIT"],
+    ["mysql", "BEGIN", "COMMIT WORK AND NO CHAIN"],
+    ["postgresql", "/* opens */ BEGIN", "COMMIT"],
   ] as const)(
-    "leaves out %s's transaction bracket `%s`",
-    (dialect, bracket) => {
+    "leaves out %s's wrapping pair `%s` ... `%s`",
+    (dialect, opener, closer) => {
       expect(
         splitSqlStatements(
-          `${bracket};\nALTER TABLE t ADD COLUMN a TEXT;\nCOMMIT;`,
+          `${opener};\nALTER TABLE t ADD COLUMN a TEXT;\n${closer};`,
           dialect
         )
       ).toEqual(["ALTER TABLE t ADD COLUMN a TEXT"]);
@@ -617,6 +659,67 @@ describe("routine and trigger bodies", () => {
         "sqlite"
       )
     ).toEqual(["UPDATE t SET a = CASE WHEN b THEN 1 END"]);
+  });
+});
+
+describe("statementRefusals of a transaction bracket part-way through", () => {
+  it.each([
+    ["postgresql", "COMMIT", "would end the runner's transaction early"],
+    ["postgresql", "END", "would end the runner's transaction early"],
+    ["mysql", "COMMIT WORK", "would end the runner's transaction early"],
+    [
+      "sqlite",
+      "BEGIN",
+      "would open a transaction inside the one the runner holds",
+    ],
+    [
+      "mysql",
+      "START TRANSACTION",
+      "would open a transaction inside the one the runner holds",
+    ],
+  ] as const)(
+    "refuses on %s: %s, naming it and the marker",
+    (dialect, statement, effect) => {
+      const [refusal] = statementRefusals(
+        ["INSERT INTO t VALUES (1)", statement, "INSERT INTO t VALUES (2)"],
+        dialect
+      );
+      expect(refusal?.code).toBe("TRANSACTION_CONTROL_IN_MIGRATION");
+      expect(refusal?.statement).toBe(statement);
+      expect(refusal?.message).toContain(effect);
+      expect(refusal?.message).toContain("`-- nextly:no-transaction`");
+      expect(() =>
+        assertRunnableStatements(
+          splitSqlStatements(
+            `INSERT INTO t VALUES (1);\n${statement};\nINSERT INTO t VALUES (2);`,
+            dialect
+          ),
+          dialect,
+          "0001_x.sql"
+        )
+      ).toThrow(/0001_x\.sql was refused, and nothing in it ran/);
+    }
+  );
+
+  it("names transaction: false for a module", () => {
+    const [refusal] = statementRefusals(["COMMIT"], "postgresql", {
+      transaction: true,
+      unit: "module",
+    });
+    expect(refusal?.message).toContain("A module with `transaction: false`");
+  });
+
+  it("refuses nothing in a file wrapped whole in BEGIN and COMMIT", () => {
+    // The control: the split leaves the wrapper out.
+    expect(
+      statementRefusals(
+        splitSqlStatements(
+          "BEGIN;\nINSERT INTO t VALUES (1);\nCOMMIT;",
+          "postgresql"
+        ),
+        "postgresql"
+      )
+    ).toEqual([]);
   });
 });
 
@@ -949,14 +1052,37 @@ describe("a migration marked to run outside a transaction", () => {
     }
   );
 
-  it.each(needsTransaction)(
+  // A bracket alone wraps nothing, so an unmarked file refuses it too; one
+  // that wraps the whole file is left out by the split, tested beside the
+  // split. Savepoints and transaction-scoped settings run inside the
+  // runner's transaction.
+  const brackets = needsTransaction.filter(
+    ([dialect, statement]) =>
+      transactionControlOf(statement, dialect) === "bracket"
+  );
+  const inTransactionOnly = needsTransaction.filter(
+    ([dialect, statement]) =>
+      transactionControlOf(statement, dialect) !== "bracket"
+  );
+
+  it.each(inTransactionOnly)(
     "keeps allowing it in an unmarked file on %s: %s",
     (dialect, statement) => {
-      // The control: a bracket is left out of an unmarked file by the split,
-      // and the rest run inside the runner's transaction.
+      // The control: the same statement runs inside the runner's transaction.
       expect(
         statementRefusals(splitSqlStatements(statement, dialect), dialect)
       ).toEqual([]);
+    }
+  );
+
+  it.each(brackets)(
+    "refuses a bracket that wraps nothing in an unmarked file on %s: %s",
+    (dialect, statement) => {
+      expect(
+        statementRefusals(splitSqlStatements(statement, dialect), dialect).map(
+          r => r.code
+        )
+      ).toEqual(["TRANSACTION_CONTROL_IN_MIGRATION"]);
     }
   );
 
@@ -976,10 +1102,9 @@ describe("a migration marked to run outside a transaction", () => {
     dialect => {
       const sql =
         "BEGIN;\nCREATE TABLE t (id int);\nCOMMIT;\nSTART TRANSACTION;\nEND;";
-      // Split as an unmarked file runs, the brackets are left out.
-      expect(splitSqlStatements(sql, dialect)).toEqual([
-        "CREATE TABLE t (id int)",
-      ]);
+      // Split as an unmarked file runs, they are kept too: four brackets
+      // wrap no file whole, and that file refuses them.
+      expect(splitSqlStatements(sql, dialect)).toHaveLength(5);
       // Split as a marked file runs, they are kept, and each is refused.
       const statements = splitSqlStatements(sql, dialect, {
         transaction: false,

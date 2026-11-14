@@ -71,9 +71,12 @@ function confirmationStub(
     previewId: pending === null ? 0 : 1,
     isOpen: pending !== null,
     isApplying: false,
+    isBusy: false,
     request: vi.fn(),
     setOpen: vi.fn(),
     settle: vi.fn(),
+    beginPreview: vi.fn(),
+    endPreview: vi.fn(),
     beginApply: vi.fn(),
     endApply: vi.fn(),
   };
@@ -87,6 +90,8 @@ type Overrides = {
   applyFn?: () => Promise<SchemaApplyOutcome>;
   onNoChanges?: (fields: FieldDefinition[]) => void;
   onApplied?: (fields: FieldDefinition[]) => void | Promise<void>;
+  /** The settings the preview and the apply are sent with, read at each render. */
+  previewedWith?: () => unknown;
 };
 
 function setup(overrides: Overrides = {}) {
@@ -98,7 +103,7 @@ function setup(overrides: Overrides = {}) {
   const onNoChanges = overrides.onNoChanges ?? vi.fn();
   const onApplied = overrides.onApplied ?? vi.fn();
 
-  const { result } = renderHook(() =>
+  const { result, rerender, unmount } = renderHook(() =>
     useSchemaSave({
       slug: "slug" in overrides ? overrides.slug : "posts",
       missingSlugMessage: "Collection slug is missing",
@@ -111,10 +116,20 @@ function setup(overrides: Overrides = {}) {
       apply: applyFn,
       onNoChanges,
       onApplied,
+      previewedWith: overrides.previewedWith?.(),
     })
   );
 
-  return { result, confirmation, previewFn, applyFn, onNoChanges, onApplied };
+  return {
+    result,
+    rerender,
+    unmount,
+    confirmation,
+    previewFn,
+    applyFn,
+    onNoChanges,
+    onApplied,
+  };
 }
 
 beforeEach(() => {
@@ -244,6 +259,122 @@ describe("a refusal's reasons", () => {
 });
 
 describe("confirmApply", () => {
+  // What the dialog showed is what is applied: fields changed after the
+  // preview, by an edit or an undo while it was on its way, are not applied
+  // unseen. The person saves again and reviews them.
+  it("applies nothing when the fields changed after the preview", async () => {
+    const pending = preview();
+    const confirmation = confirmationStub(pending);
+    let fields = FIELDS;
+    const { result, applyFn } = setup({
+      confirmation,
+      getValidatedFields: () => fields,
+      previewFn: vi.fn(() => Promise.resolve(pending)),
+    });
+    await act(async () => {
+      result.current.handleSave();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(confirmation.request).toHaveBeenCalledWith(pending)
+    );
+
+    fields = [...FIELDS, { ...FIELDS[0]!, name: "added_later" }];
+    await act(async () => result.current.confirmApply({}, []));
+
+    expect(applyFn).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith(
+      "The fields or settings changed after the preview. Save again to review what changes."
+    );
+    expect(confirmation.settle).toHaveBeenCalledTimes(1);
+  });
+
+  // The preview and the apply are both sent the entity's localization, read at
+  // their own renders. A change to it after the preview (turned off, or reset
+  // by Discard all) would apply a storage the dialog never showed.
+  it("applies nothing when the localization the preview was made with changed", async () => {
+    const pending = preview();
+    const confirmation = confirmationStub(pending);
+    let localized = true;
+    const { result, rerender, applyFn } = setup({
+      confirmation,
+      previewFn: vi.fn(() => Promise.resolve(pending)),
+      previewedWith: () => ({ localized }),
+    });
+    await act(async () => {
+      result.current.handleSave();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(confirmation.request).toHaveBeenCalledWith(pending)
+    );
+
+    localized = false;
+    rerender();
+    await act(async () => result.current.confirmApply({}, []));
+
+    expect(applyFn).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith(
+      "The fields or settings changed after the preview. Save again to review what changes."
+    );
+    expect(confirmation.settle).toHaveBeenCalledTimes(1);
+  });
+
+  // While the preview is on its way nothing is on screen to say a save has
+  // started, yet what it answers is acted on: the page is told it is busy so
+  // Discard all cannot clear what the save is about to keep.
+  // Leaving the page drops its pending changes; a preview that answers after
+  // that must not save them, nor put a confirmation in front of nobody.
+  it("persists nothing when the preview answers after the page has gone", async () => {
+    let answer: (value: SchemaPreviewResponse) => void = () => {};
+    const confirmation = confirmationStub();
+    const { result, unmount, onNoChanges } = setup({
+      confirmation,
+      previewFn: vi.fn(
+        () =>
+          new Promise<SchemaPreviewResponse>(resolve => {
+            answer = resolve;
+          })
+      ),
+    });
+    await act(async () => {
+      result.current.handleSave();
+      await Promise.resolve();
+    });
+
+    unmount();
+    await act(async () => answer(preview({ hasChanges: false })));
+    await act(async () => answer(preview()));
+
+    expect(onNoChanges).not.toHaveBeenCalled();
+    expect(confirmation.request).not.toHaveBeenCalled();
+  });
+
+  it("marks the save busy while its preview is on its way", async () => {
+    let answer: (value: SchemaPreviewResponse) => void = () => {};
+    const confirmation = confirmationStub();
+    const { result } = setup({
+      confirmation,
+      previewFn: vi.fn(
+        () =>
+          new Promise<SchemaPreviewResponse>(resolve => {
+            answer = resolve;
+          })
+      ),
+    });
+    await act(async () => {
+      result.current.handleSave();
+      await Promise.resolve();
+    });
+    expect(confirmation.beginPreview).toHaveBeenCalledTimes(1);
+    expect(confirmation.endPreview).not.toHaveBeenCalled();
+
+    await act(async () => answer(preview()));
+    await waitFor(() =>
+      expect(confirmation.endPreview).toHaveBeenCalledTimes(1)
+    );
+  });
+
   it("applies the confirmed change and reports it once", async () => {
     const pending = preview();
     const confirmation = confirmationStub(pending);

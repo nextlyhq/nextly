@@ -31,7 +31,7 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 
-import { toast } from "@admin/components/ui";
+import { toast } from "@admin/components/ui/toaster";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import {
   toastMutationResult,

@@ -649,6 +649,7 @@ export const EntryTable: ForwardRefExoticComponent<
       // the rows are.
       skeleton={
         <EntryTableSkeleton
+          list={collection.slug}
           headers={columns
             .filter(column => !column.hidden)
             .map(column => column.header)}

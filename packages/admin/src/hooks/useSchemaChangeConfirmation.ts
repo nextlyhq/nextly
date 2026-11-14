@@ -32,6 +32,7 @@ export function useSchemaChangeConfirmation(): SchemaChangeConfirmation {
   const [previewId, setPreviewId] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
+  const [isPreviewing, setIsPreviewing] = useState(false);
 
   const request = useCallback((next: SchemaPreviewResponse) => {
     setPreview(next);
@@ -48,6 +49,9 @@ export function useSchemaChangeConfirmation(): SchemaChangeConfirmation {
     setIsOpen(false);
     setPreview(null);
   }, []);
+
+  const beginPreview = useCallback(() => setIsPreviewing(true), []);
+  const endPreview = useCallback(() => setIsPreviewing(false), []);
 
   const beginApply = useCallback(() => {
     setIsApplying(true);
@@ -71,13 +75,17 @@ export function useSchemaChangeConfirmation(): SchemaChangeConfirmation {
       previewId,
       isOpen,
       isApplying,
+      isBusy: isPreviewing || isApplying,
       request,
       setOpen,
       settle,
+      beginPreview,
+      endPreview,
       beginApply,
       endApply,
     }),
     [
+      isPreviewing,
       preview,
       previewId,
       isOpen,
@@ -85,6 +93,8 @@ export function useSchemaChangeConfirmation(): SchemaChangeConfirmation {
       request,
       setOpen,
       settle,
+      beginPreview,
+      endPreview,
       beginApply,
       endApply,
     ]

@@ -129,6 +129,81 @@ interface RecordedRow {
   kind: SettingsEntityKind;
   slug: string;
   write: () => Promise<"created" | "updated" | "unchanged">;
+  /** The top-level field names the record declares. */
+  recordedFields: readonly string[];
+  /** The top-level field names the stored row holds; undefined where none was read. */
+  storedFields: readonly string[] | undefined;
+}
+
+/**
+ * A registry row that differs from the registry source: one `nextly migrate`
+ * would write (`missing`) or rewrite (`differs`). The field names say what a
+ * reader can see differ; a row whose fields agree differs in its settings.
+ */
+export interface RowBehindSource {
+  kind: SettingsEntityKind;
+  slug: string;
+  row: "missing" | "differs";
+  /** Fields the record declares and the row lacks. */
+  missingFields: string[];
+  /** Fields the row holds and the record does not declare. */
+  extraFields: string[];
+}
+
+/**
+ * Every registry row that differs from `source`, judged by the writer itself
+ * (`RecordedWriteOptions.judgeOnly`) and writing nothing, so a row named here
+ * is exactly one {@link writeRegistryFromSource} would write. A row that
+ * cannot be judged is listed in `failed`, as `<kind> <slug>`.
+ */
+export async function rowsBehindSource(
+  source: Extract<RegistrySource, { kind: "snapshot" }>,
+  deps: RegistryWriteDeps
+): Promise<{ behind: RowBehindSource[]; failed: string[] }> {
+  const chain = source.chain ?? [source.entities];
+  const { rows } = await recordedRows(
+    source,
+    deps,
+    clearedSettings(source.entities, chain.slice(0, -1)),
+    true
+  );
+  const behind: RowBehindSource[] = [];
+  const failed: string[] = [];
+  for (const row of rows) {
+    let step: "created" | "updated" | "unchanged";
+    try {
+      step = await row.write();
+    } catch {
+      failed.push(`${row.kind} ${row.slug}`);
+      continue;
+    }
+    if (step === "unchanged") continue;
+    const stored = new Set(row.storedFields ?? []);
+    const recorded = new Set(row.recordedFields);
+    behind.push({
+      kind: row.kind,
+      slug: row.slug,
+      row: step === "created" ? "missing" : "differs",
+      missingFields:
+        step === "created"
+          ? []
+          : row.recordedFields.filter(name => !stored.has(name)),
+      extraFields: (row.storedFields ?? []).filter(name => !recorded.has(name)),
+    });
+  }
+  return { behind, failed };
+}
+
+/** The top-level field names of a field list, as a record or a row holds it. */
+function fieldNamesOf(fields: unknown): string[] {
+  if (!Array.isArray(fields)) return [];
+  return fields.flatMap(field => {
+    const name =
+      typeof field === "object" && field !== null
+        ? (field as { name?: unknown }).name
+        : undefined;
+    return typeof name === "string" && name !== "" ? [name] : [];
+  });
 }
 
 /** The registry rows read once, by kind and slug; a kind absent where its table could not be read. */
@@ -295,7 +370,9 @@ async function tableStands(
 async function recordedRows(
   source: Extract<RegistrySource, { kind: "snapshot" }>,
   deps: RegistryWriteDeps,
-  cleared: ReadonlyMap<string, ReadonlySet<UnsaidSetting>>
+  cleared: ReadonlyMap<string, ReadonlySet<UnsaidSetting>>,
+  /** Each row's `write` answers what it would do and writes nothing (`rowsBehindSource`). */
+  judgeOnly = false
 ): Promise<{ rows: RecordedRow[]; stored: StoredRows }> {
   const collections = new CollectionRegistryService(deps.adapter, deps.logger);
   const singles = new SingleRegistryService(deps.adapter, deps.logger);
@@ -324,6 +401,21 @@ async function recordedRows(
     ...(cleared.has(`${kind}:${slug}`)
       ? { cleared: cleared.get(`${kind}:${slug}`) }
       : {}),
+    ...(judgeOnly ? { judgeOnly } : {}),
+  });
+  // The field names each side holds, for a row judged to differ.
+  const names = (
+    recorded: RecordedEntitySettings,
+    stored: ReadonlyMap<string, unknown> | undefined,
+    slug: string
+  ) => ({
+    recordedFields: fieldNamesOf(recorded.settings.fields),
+    storedFields:
+      stored === undefined
+        ? undefined
+        : fieldNamesOf(
+            (stored.get(slug) as { fields?: unknown } | undefined)?.fields
+          ),
   });
   // A row the registry holds is left out unless `rewrites` asks for it. A
   // registry that could not be read holds nothing known, so its rows are
@@ -344,6 +436,7 @@ async function recordedRows(
       .map(([slug, recorded]) => ({
         kind: "collection" as const,
         slug,
+        ...names(recorded, storedCollections, slug),
         write: () =>
           collections.writeRecordedCollection(
             recordedCollection(slug, recorded),
@@ -357,6 +450,7 @@ async function recordedRows(
       .map(([slug, recorded]) => ({
         kind: "single" as const,
         slug,
+        ...names(recorded, storedSingles, slug),
         write: () =>
           singles.writeRecordedSingle(
             recordedSingle(slug, recorded),
@@ -370,6 +464,7 @@ async function recordedRows(
       .map(([slug, recorded]) => ({
         kind: "fieldGroup" as const,
         slug,
+        ...names(recorded, storedFieldGroups, slug),
         write: () => {
           // Projected inside the row's own write, so a record that cannot be
           // read costs that row alone.

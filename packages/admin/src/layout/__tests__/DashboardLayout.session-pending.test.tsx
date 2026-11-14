@@ -28,6 +28,8 @@ vi.mock("@admin/components/layout/sidebar", () => ({
 }));
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => ({}),
+  // The workspace's half still on its way, as while the session is checked.
+  useBrandingStatus: () => ({ isPending: true, isUnavailable: false }),
 }));
 vi.mock("@admin/components/shared/ThemeAwareLogo", () => ({
   ThemeAwareLogo: () => <svg data-testid="logo" />,

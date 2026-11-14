@@ -6,7 +6,15 @@
 // filled from the default language, and given the setting before its translations column goes. When
 // the values cannot take the setting, the reload changes nothing and says why.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 
 import { defineCollection, defineConfig } from "../../config";
 import { CollectionRegistryService } from "../../domains/collections/services/collection-registry-service";
@@ -264,50 +272,52 @@ describe.each(getConfiguredTestDialects())(
             () => "taken",
             () => "refused"
           );
-        const textOf = (query: unknown) =>
-          JSON.stringify(
-            (query as { queryChunks?: unknown }).queryChunks ?? ""
-          );
-        const drizzle = handle.adapter.getDrizzle.bind(handle.adapter);
-        vi.spyOn(handle.adapter, "getDrizzle").mockImplementation(() => {
-          const db = drizzle() as {
-            transaction(run: (tx: unknown) => Promise<void>): Promise<void>;
-          };
-          return new Proxy(db, {
-            get(target, key, receiver) {
-              if (key !== "transaction")
-                return Reflect.get(target, key, receiver);
-              return (run: (tx: unknown) => Promise<void>) =>
-                target.transaction(tx =>
-                  run(
-                    new Proxy(tx as object, {
-                      get(t, k, r) {
-                        if (k !== "execute") return Reflect.get(t, k, r);
-                        return async (query: unknown) => {
-                          const done = await (
-                            t as { execute(q: unknown): Promise<unknown> }
-                          ).execute(query);
-                          const text = textOf(query);
-                          // Right after the final copy onto main, from another connection.
-                          if (
-                            late.signalled !== true &&
-                            text.includes(`UPDATE \\"${TABLE}\\"`) &&
-                            text.includes(COMPANION)
-                          ) {
-                            late.signalled = true;
-                            copied();
-                            await new Promise(resolve =>
-                              setTimeout(resolve, 300)
-                            );
-                          }
-                          return done;
-                        };
-                      },
-                    })
-                  )
-                );
-            },
-          }) as ReturnType<typeof drizzle>;
+        // Watched at the driver, under every path a statement takes: the move's statements run
+        // through the busy-table runner on a session of its own, not through the adapter's
+        // Drizzle handle, each led by its schema-lock and unit markers. The final copy is the copy
+        // onto main that its unit sends after its own first statement (the lock it takes against
+        // writes, on PostgreSQL), where the move's earlier copy opens a unit of its own. Watched
+        // that way, it is found whether or not that lock is there.
+        const { driverEntryPoints, ownerOf } = await import(
+          "../../__tests__/helpers/record-statements"
+        );
+        const [{ instance }] = await driverEntryPoints(
+          handle.adapter as never,
+          "postgresql"
+        );
+        const driver = ownerOf(instance, "query") as Record<string, unknown>;
+        const query = driver.query as (...args: unknown[]) => unknown;
+        const sentInUnit = new Map<string, number>();
+        driver.query = function (this: unknown, ...args: unknown[]): unknown {
+          const first = args[0] as { text?: unknown } | string | undefined;
+          const text =
+            typeof first === "string"
+              ? first
+              : typeof first?.text === "string"
+                ? first.text
+                : "";
+          const unit = /nextly-unit:(\S+) \*\//.exec(text)?.[1] ?? "";
+          const earlier = sentInUnit.get(unit) ?? 0;
+          sentInUnit.set(unit, earlier + 1);
+          const bare = text.replace(/\/\*[\s\S]*?\*\//g, "").trim();
+          const sent = query.apply(this, args);
+          const finalCopy =
+            late.signalled !== true &&
+            unit !== "" &&
+            earlier > 0 &&
+            bare.startsWith(`UPDATE "${TABLE}"`) &&
+            bare.includes(COMPANION);
+          if (!finalCopy || !(sent instanceof Promise)) return sent;
+          return sent.then(async (done: unknown) => {
+            late.signalled = true;
+            copied();
+            // Held between the final copy and the drop, from inside the move's own transaction.
+            await new Promise(resolve => setTimeout(resolve, 300));
+            return done;
+          });
+        };
+        onTestFinished(() => {
+          driver.query = query;
         });
 
         loaded.config = configWith({ localized: false });

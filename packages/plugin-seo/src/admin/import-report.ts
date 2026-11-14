@@ -1,7 +1,7 @@
 /**
  * What Import's last step and its result say, worked out from the engine's
  * dry run alone: the four counts in values (set, the same as automatic,
- * kept, skipped as never served), each page's result for its title and its
+ * kept, skipped as the page's code sets its own), each page's result for its title and its
  * description, and the report a person can download. Nothing here decides
  * an outcome: the engine did, per page and per value, and this only counts
  * and words what it said.
@@ -39,7 +39,7 @@ export const RESULT_WORDS: Readonly<
   set: { label: "Will set" },
   same: { label: "Same as automatic", why: "left empty" },
   kept: { label: "Kept", why: "already typed" },
-  neverServed: { label: "Skipped", why: "never served" },
+  neverServed: { label: "Skipped", why: "the page's code sets its own" },
   withDraft: { label: "With the draft", why: "live once published" },
   waiting: { label: "Skipped", why: "a draft waits" },
   absent: { label: "Nothing to import", why: "not in the source" },
@@ -267,9 +267,11 @@ function counted(n: number, one: string, many: string): string {
 }
 
 /**
- * What the note on matching says about values never served: that they are
- * skipped, and why, or that they are included; none where the dry run
- * skipped none and they are not included.
+ * What the note on matching says about values a page's code overrides: that
+ * they are skipped, and why, or that they are included; none where the dry
+ * run skipped none and they are not included. It says what the plugin knows
+ * now, that the page's code sets its own value, never that a value was never
+ * served: what a page showed before the plugin is unknown to it.
  */
 export function neverServedWords(
   run: DryRunBody | undefined,
@@ -279,7 +281,7 @@ export function neverServedWords(
   // Shown while included too, so the choice can be taken back.
   if (include) {
     return {
-      title: "Values never served are included",
+      title: "Values the page's code overrides are included",
       text: "Values a page's own code sets will be imported, which changes what those pages show.",
     };
   }
@@ -288,10 +290,10 @@ export function neverServedWords(
   const [only] = skipped.labels;
   const who =
     skipped.labels.length === 1
-      ? `${only ?? ""} sets its own title and description in its code`
-      : `${skipped.labels.join(", ")} set their own titles and descriptions in their code`;
+      ? `${only ?? ""} sets its own title and description in its code now`
+      : `${skipped.labels.join(", ")} set their own titles and descriptions in their code now`;
   return {
-    title: `${counted(skipped.pages, "page's values are", "pages' values are")} never served, so they'll be skipped`,
-    text: `${who}, so the values stored in ${sourceLabel} never reached the page. Importing them would change what the page shows.`,
+    title: `${counted(skipped.pages, "page sets its", "pages set their")} own values in code, so they'll be skipped`,
+    text: `${who}, so importing the values stored in ${sourceLabel} would change what the page shows. Include them if the page showed them before and should again.`,
   };
 }

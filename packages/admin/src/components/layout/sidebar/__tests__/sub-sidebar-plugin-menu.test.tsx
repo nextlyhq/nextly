@@ -43,7 +43,10 @@ vi.mock("@admin/hooks/useCurrentUserPermissions", () => ({
     },
   }),
 }));
-vi.mock("@admin/hooks/queries", () => ({
+vi.mock("@admin/hooks/queries/useCollections", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("@admin/hooks/queries/useCollections")
+  >()),
   useCollections: () => ({
     data: { items: [] },
     isLoading: false,

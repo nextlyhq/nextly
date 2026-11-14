@@ -1012,9 +1012,8 @@
     ]
   },
   "packages/nextly/src/services/collections/collection-entry-service.ts": {
-    "count": 7,
+    "count": 6,
     "digests": [
-      "2f095e3a68a58ceb",
       "371447533163ac46",
       "452725d4fc8fc3c7",
       "7e24d0d33b9cfad2",

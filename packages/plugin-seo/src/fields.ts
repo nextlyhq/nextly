@@ -1,10 +1,18 @@
 // Field factories + FieldConfig come from the plugin SDK — the stable
 // plugin-authoring surface (per AGENTS.md), not core internals.
-import { checkbox, text, textarea, upload } from "@nextlyhq/plugin-sdk";
+import {
+  checkbox,
+  date,
+  number,
+  text,
+  textarea,
+  upload,
+} from "@nextlyhq/plugin-sdk";
 import type { FieldConfig } from "@nextlyhq/plugin-sdk";
 
 // The lengths the SEO tab and the problem list warn past, a leaf.
 import { DESCRIPTION_LIMIT, TITLE_LIMIT } from "./problems/text-checks";
+import { IMAGE_PREVIEW_SIZES } from "./resolver/display";
 
 /**
  * The default fields placed INSIDE the `seo` group on each target collection
@@ -75,6 +83,52 @@ export function defaultSeoFields(
     text({
       name: "structuredDataType",
       label: "Structured data type",
+    }),
+    // How search results may show the page, Google's display controls. Each
+    // is empty or off by default: an empty image preview size follows the
+    // site's default, which asks for large previews.
+    text({
+      name: "maxImagePreview",
+      label: "Image preview size",
+      validate: (value: unknown) =>
+        value === null ||
+        value === undefined ||
+        value === "" ||
+        (IMAGE_PREVIEW_SIZES as readonly unknown[]).includes(value) ||
+        "Choose large, standard or none.",
+    }),
+    // A shorter text under the link. No characters is refused: "no snippet"
+    // is how a page shows none, with the words that say what it costs.
+    number({
+      name: "maxSnippet",
+      label: "Text under the link, characters at most",
+      min: 1,
+    }),
+    checkbox({
+      name: "nosnippet",
+      label: "No text under the link",
+      defaultValue: false,
+    }),
+    checkbox({
+      name: "noimageindex",
+      label: "Keep this page's images out of image search",
+      defaultValue: false,
+    }),
+    date({
+      name: "unavailableAfter",
+      label: "Drop from search after",
+    }),
+    // For other search engines: each its own switch, and nothing else sets
+    // either.
+    checkbox({
+      name: "noarchive",
+      label: "noarchive",
+      defaultValue: false,
+    }),
+    checkbox({
+      name: "nocache",
+      label: "nocache",
+      defaultValue: false,
     }),
   ];
 }

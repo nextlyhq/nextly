@@ -14,6 +14,7 @@ import {
   Alert,
   AlertDescription,
   apiErrorMessage,
+  isApiError,
   Badge,
   Button,
   FormActions,
@@ -57,11 +58,15 @@ import { useAddressParam } from "./address";
 import { ConnectionsTab } from "./connections";
 import { ContentTypesTab } from "./content-types";
 import { useLeaveWarning } from "./leave-warning";
+import { ownRulesSaveProblem, useRobotsRulesCheck } from "./robots-rules";
 import { AdminLink, SeoTrail } from "./section";
 import {
   changesOf,
+  verificationDraftOf,
   draftOf,
+  switchChangesText,
   rebasedDraft,
+  robotsRulesDraftOf,
   structuredDataOf,
   type SettingsDefaults,
   type SettingsDraft,
@@ -181,7 +186,7 @@ export function SeoSettingsPage(): JSX.Element {
           <Alert variant="warning" className="mb-4">
             <AlertDescription>
               The SEO settings could not be read again. What is on screen is
-              kept. {apiErrorMessage(failed)}
+              kept. {readFailure(failed)}
             </AlertDescription>
           </Alert>
         ) : null}
@@ -190,6 +195,8 @@ export function SeoSettingsPage(): JSX.Element {
           tab={open}
           stored={settings.data}
           serverAddresses={where.data?.serverAddresses ?? []}
+          // Yes until the server says otherwise.
+          canChange={where.data?.canChange !== false}
           {...split}
           typesFailed={types.error !== null}
           reread={async () => {
@@ -205,7 +212,7 @@ export function SeoSettingsPage(): JSX.Element {
     body = (
       <Alert variant="destructive">
         <AlertDescription>
-          The SEO settings could not be read. {apiErrorMessage(failed)}
+          The SEO settings could not be read. {readFailure(failed)}
         </AlertDescription>
       </Alert>
     );
@@ -461,6 +468,18 @@ function SetupBanner({
   );
 }
 
+/**
+ * Why the settings could not be read, for a person: a database not migrated
+ * for a field the settings gained says what to run, in plain words, rather
+ * than core's message naming the field and the Single.
+ */
+function readFailure(failed: Error): string {
+  if (isApiError(failed) && failed.code === "ENTITY_NOT_MIGRATED") {
+    return "The database needs `nextly migrate` for the new SEO settings. A developer runs `nextly migrate:create` and then `nextly migrate`; the site keeps serving its pages meanwhile.";
+  }
+  return apiErrorMessage(failed);
+}
+
 /** The open tab's rows. */
 function SettingsPanel({
   tab,
@@ -469,9 +488,18 @@ function SettingsPanel({
   switchedOff,
   typesFailed,
   serverAddresses,
+  rulesCheck,
+  stored,
+  canChange,
 }: {
   tab: TabId;
   tabProps: TabProps;
+  /** Whether the reader may change the settings. */
+  canChange: boolean;
+  /** Which sitemap pages the own robots.txt rules being typed block. */
+  rulesCheck: ReturnType<typeof useRobotsRulesCheck>;
+  /** The settings as stored, which what was saved is read from. */
+  stored: StoredSettings;
   types: readonly SeoContentType[];
   switchedOff: readonly SwitchedOffType[];
   typesFailed: boolean;
@@ -485,9 +513,22 @@ function SettingsPanel({
     case "brand":
       return <BrandTab {...tabProps} />;
     case "crawlers":
-      return <CrawlersTab {...tabProps} serverAddresses={serverAddresses} />;
+      return (
+        <CrawlersTab
+          {...tabProps}
+          serverAddresses={serverAddresses}
+          rulesCheck={rulesCheck.check}
+          retryRulesCheck={rulesCheck.retry}
+        />
+      );
     case "connections":
-      return <ConnectionsTab {...tabProps} />;
+      return (
+        <ConnectionsTab
+          {...tabProps}
+          saved={verificationDraftOf(stored.verificationCodes)}
+          serverAddresses={serverAddresses}
+        />
+      );
     case "types":
       return typesFailed ? (
         <Alert variant="destructive">
@@ -500,6 +541,8 @@ function SettingsPanel({
           {...tabProps}
           types={types}
           switchedOff={switchedOff}
+          savedOff={draftOf(stored).typesWithSeoOff}
+          canChange={canChange}
         />
       );
   }
@@ -512,10 +555,50 @@ function firstSetupStep(stepsDone: number): 1 | 2 | 3 {
     : (Math.min(stepsDone + 1, SETUP_STEPS) as 1 | 2 | 3);
 }
 
+/**
+ * The content type switches `draft` changes from what is stored, in words,
+ * each type by its label; null where none changed.
+ */
+function switchSummary(
+  stored: StoredSettings,
+  draft: SettingsDraft,
+  defaults: SettingsDefaults,
+  types: readonly { key: string; label: string }[],
+  switchedOff: readonly { key: string; label: string }[]
+): string | null {
+  return switchChangesText(
+    draftOf(stored, defaults),
+    draft,
+    new Map([...types, ...switchedOff].map(type => [type.key, type.label]))
+  );
+}
+
+/**
+ * What stops `draft` being saved, if anything: a value the form refuses, or
+ * own robots.txt rules that would block what the sitemap lists.
+ */
+function saveProblem(
+  draft: SettingsDraft,
+  types: readonly SeoContentType[],
+  serverAddresses: readonly string[],
+  stored: StoredSettings,
+  check: ReturnType<typeof useRobotsRulesCheck>["check"]
+): string | null {
+  return (
+    draftProblem(draft, types, serverAddresses) ??
+    ownRulesSaveProblem(
+      draft.robotsRules,
+      robotsRulesDraftOf(stored.robotsRules).text,
+      check
+    )
+  );
+}
+
 /** Cancel and Save changes under a tab, saying what waits to be saved. */
 function SaveBar({
   changed,
   problem,
+  summary,
   saving,
   cancel,
   save,
@@ -523,6 +606,8 @@ function SaveBar({
   changed: boolean;
   /** What stops the changes being saved, if anything does. */
   problem: string | null;
+  /** The content type switches waiting to be saved, in words, if any. */
+  summary?: string | null;
   saving: boolean;
   cancel: () => void;
   save: () => void;
@@ -530,7 +615,11 @@ function SaveBar({
   return (
     <FormActions
       dirty={changed}
-      {...(changed && problem !== null ? { message: problem } : {})}
+      {...(changed && problem !== null
+        ? { message: problem }
+        : changed && summary
+          ? { message: summary }
+          : {})}
     >
       <Button
         type="button"
@@ -607,11 +696,14 @@ function SettingsScreen({
   switchedOff,
   typesFailed,
   reread,
+  canChange,
 }: {
   slug: string;
   tab: TabId;
   stored: StoredSettings;
   serverAddresses: readonly string[];
+  /** Whether the reader may change the settings. */
+  canChange: boolean;
   types: readonly SeoContentType[];
   switchedOff: readonly SwitchedOffType[];
   typesFailed: boolean;
@@ -627,7 +719,17 @@ function SettingsScreen({
     () => !finished && !draft.setupDismissed
   );
   const changes = changesOf(stored, draft, defaults);
-  const problem = draftProblem(draft, types, serverAddresses);
+  const rulesCheck = useRobotsRulesCheck(
+    draft.robotsRules.text,
+    draft.hiddenTypes
+  );
+  const problem = saveProblem(
+    draft,
+    types,
+    serverAddresses,
+    stored,
+    rulesCheck.check
+  );
   useLeaveWarning(changes !== null);
   useHeldDraft(slug, stored, draft, changes !== null);
 
@@ -658,10 +760,14 @@ function SettingsScreen({
         switchedOff={switchedOff}
         typesFailed={typesFailed}
         serverAddresses={serverAddresses}
+        rulesCheck={rulesCheck}
+        stored={stored}
+        canChange={canChange}
       />
       <SaveBar
         changed={changes !== null}
         problem={problem}
+        summary={switchSummary(stored, draft, defaults, types, switchedOff)}
         saving={saving}
         cancel={cancel}
         save={saveChanges}

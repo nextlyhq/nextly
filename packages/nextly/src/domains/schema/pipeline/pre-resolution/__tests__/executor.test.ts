@@ -391,3 +391,36 @@ describe("executePreResolutionOps - MySQL string narrowing", () => {
     );
   });
 });
+
+// On MySQL and SQLite each rename or drop commits as it runs: a run stopped part-way must know how
+// many finished, so it is told after each one, not only once the phase returns.
+describe("executePreResolutionOps - each finished statement told as it finishes", () => {
+  it("tells each leading statement and each op as it finishes, and none after a failure", async () => {
+    let sent = 0;
+    const tx = {
+      execute: vi.fn(async () => {
+        sent += 1;
+        if (sent === 3) throw new Error("lock wait timeout");
+        return { rows: [] };
+      }),
+    };
+    const ops: Operation[] = [
+      { type: "drop_table", tableName: "dc_a" } satisfies DropTableOp,
+      { type: "drop_table", tableName: "dc_b" } satisfies DropTableOp,
+    ];
+    let told = 0;
+    await expect(
+      executePreResolutionOps(
+        tx,
+        ops,
+        "mysql",
+        ["ALTER TABLE x DROP CHECK c"],
+        () => {
+          told += 1;
+        }
+      )
+    ).rejects.toThrow("lock wait timeout");
+    // The leading statement and the first drop finished; the second drop failed.
+    expect(told).toBe(2);
+  });
+});

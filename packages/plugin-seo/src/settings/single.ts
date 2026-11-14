@@ -3,7 +3,8 @@
  * production addresses, default description and share image, the title
  * pattern of each content type, the brand facts every output reads, what kind
  * of site it is, what AI tools may do, which optional outputs for AI tools
- * are switched on, and how far first-time setup got.
+ * are switched on, the codes other services verify the site with, whether
+ * pages ask for large image previews, and how far first-time setup got.
  *
  * A Single rather than plugin settings because it is content: its text is
  * kept per language where the site is translated, its images are media
@@ -29,12 +30,15 @@ import { holdsManageSeo } from "../permissions";
 import { SEO_PLUGIN_NAME, SEO_SETTINGS_SLUG, SETUP_STEPS } from "./contract";
 import { SEPARATORS } from "./patterns";
 import { productionAddressesProblem } from "./production-addresses";
+import { robotsRulesProblem } from "./robots-rules-stored";
 import {
   hiddenTypesProblem,
+  typesWithSeoOffProblem,
   patternsProblem,
   socialProfilesProblem,
 } from "./stored-values";
 import { structuredDataSettingsProblem } from "./structured-data-choices";
+import { verificationProblem } from "./verification-stored";
 
 /**
  * The cache tags every read of the SEO settings carries. Each write to the
@@ -128,10 +132,34 @@ export function seoSettingsSingle(): SingleConfig {
         label: "Content types hidden from search",
         validate: refusing(hiddenTypesProblem),
       }),
+      // The content types whose SEO is switched off: a list of keys, a
+      // collection's slug or `single:<slug>`, as `hiddenTypes` keys them.
+      // Off changes no schema and no stored value; every type is on until
+      // listed here.
+      json({
+        name: "typesWithSeoOff",
+        label: "Content types with SEO off",
+        validate: refusing(typesWithSeoOffProblem),
+      }),
       json({
         name: "structuredData",
         label: "Structured data",
         validate: refusing(structuredDataSettingsProblem),
+      }),
+      // The site's own robots.txt lines, served after the plugin's, and the
+      // person's confirmation of the sitemap pages they block. A line that
+      // would keep every crawler from the whole site is refused here too.
+      json({
+        name: "robotsRules",
+        label: "Your own robots.txt rules",
+        validate: refusing(robotsRulesProblem),
+      }),
+      // The codes other services read from the home page's head to confirm
+      // the site is the owner's: only codes, each checked on the way in.
+      json({
+        name: "verificationCodes",
+        label: "Verification codes",
+        validate: refusing(verificationProblem),
       }),
       // The optional connections and outputs, each off until switched on.
       checkbox({ name: "indexNow", label: "IndexNow" }),
@@ -139,6 +167,13 @@ export function seoSettingsSingle(): SingleConfig {
       checkbox({
         name: "plainTextCopies",
         label: "Plain-text copies of pages",
+      }),
+      // On by default: only a stored `false` turns it off, so a site whose
+      // database has no value for it yet asks for large previews too.
+      checkbox({
+        name: "largeImagePreviews",
+        label: "Large image previews",
+        defaultValue: true,
       }),
       number({
         name: "setupStep",

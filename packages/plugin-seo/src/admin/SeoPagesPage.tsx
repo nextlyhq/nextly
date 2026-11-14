@@ -82,6 +82,16 @@ interface AddressesBody {
 type Mode = "view" | "edit";
 
 /** The mode the screen's own address asks for. */
+/**
+ * The status the address opens the list on (`?status=seo-off`, as the
+ * Overview links to it), else every status; only read as the screen opens.
+ */
+function statusInAddress(): PagesFilter["status"] {
+  if (typeof window === "undefined") return "all";
+  const named = new URLSearchParams(window.location.search).get("status");
+  return STATUS_ORDER.find(each => each === named) ?? "all";
+}
+
 function modeInAddress(): Mode {
   if (typeof window === "undefined") return "view";
   return new URLSearchParams(window.location.search).get("mode") === "edit"
@@ -108,6 +118,7 @@ const STATUS_BADGE: Record<PageStatus, BadgeProps["variant"]> = {
   notice: "info",
   "not-connected": "warning",
   hidden: "outline",
+  "seo-off": "outline",
   unknown: "outline",
 };
 
@@ -198,11 +209,11 @@ function ModeActions({
 /** The Pages screen, as the admin mounts it. */
 export function SeoPagesPage(): JSX.Element {
   const [mode, setMode] = useState<Mode>(modeInAddress);
-  const [filter, setFilter] = useState<PagesFilter>({
+  const [filter, setFilter] = useState<PagesFilter>(() => ({
     query: "",
     type: "all",
-    status: "all",
-  });
+    status: statusInAddress(),
+  }));
   // Kept here, not in Edit mode, so a look at View mode and back keeps them.
   const [edits, setEdits] = useState<PageEdits>({});
   // A save on its way holds the mode, so its boxes stay locked until it ends.
@@ -351,7 +362,11 @@ function actionsFor(
     {
       id: "edit-seo",
       label: "Edit SEO",
-      isVisible: () => entry !== undefined || item.seo !== undefined,
+      // Nothing to edit where the type's SEO is off: its pages have no SEO
+      // tab while it is.
+      isVisible: () =>
+        item.standing !== "seo-off" &&
+        (entry !== undefined || item.seo !== undefined),
       onSelect: () =>
         entry === undefined
           ? openPanel(item)
@@ -489,16 +504,26 @@ function pageColumns(
     {
       name: "title",
       header: "Title in search",
-      cell: ({ row }) => (
-        <div className="flex w-[220px] min-w-0 flex-col gap-0.5">
-          <span className="truncate" title={row.title}>
-            {row.title ?? "—"}
-          </span>
-          <span className="truncate text-xs text-muted-foreground">
-            {titleSourceText(row)}
-          </span>
-        </div>
-      ),
+      cell: ({ row }) =>
+        // A type with SEO off gets nothing from the plugin: its route
+        // serves only what its own code sets.
+        row.standing === "seo-off" ? (
+          <div className="flex w-[220px] min-w-0 flex-col gap-0.5">
+            <span className="truncate">Set by the page&apos;s own code</span>
+            <span className="truncate text-xs text-muted-foreground">
+              {row.from} has SEO off
+            </span>
+          </div>
+        ) : (
+          <div className="flex w-[220px] min-w-0 flex-col gap-0.5">
+            <span className="truncate" title={row.title}>
+              {row.title ?? "—"}
+            </span>
+            <span className="truncate text-xs text-muted-foreground">
+              {titleSourceText(row)}
+            </span>
+          </div>
+        ),
     },
     {
       name: "description",

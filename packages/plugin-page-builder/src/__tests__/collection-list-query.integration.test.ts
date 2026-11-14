@@ -362,7 +362,7 @@ describe.each(getConfiguredTestDialects())(
       ]).toContain(JSON.stringify(found));
     });
 
-    it("matches nothing with in on a has-many relation, on every database", async () => {
+    it("matches the entries holding any of the ids with in on a has-many relation, on every database", async () => {
       // The relation is stored and the public reads it...
       const { items } = await createPublicReader(t.nextly, {
         locale: "en",
@@ -372,18 +372,31 @@ describe.each(getConfiguredTestDialects())(
         select: ["categories"],
       });
       expect(JSON.stringify(items[0]?.categories)).toContain(String(ids.Alpha));
-      // ...but `in` does not read as "includes any of": it matches nothing,
-      // and fails nothing. So a list may not filter by such a field (refused
-      // at save), and the editor does not offer one.
-      const outcome = await drawn(
-        {
-          collection: POSTS,
-          filters: [{ field: "categories", op: "in", value: [ids.Alpha] }],
-          sort: "title",
-        },
-        { diagnostics: true }
-      );
-      expect(outcome).toEqual({ titles: [], note: null });
+      // ...and `in` reads as "includes any of": an entry is kept when its list
+      // holds one of the ids, whichever place in the list it has.
+      const holding = async (wanted: string[]) =>
+        drawn(
+          {
+            collection: POSTS,
+            filters: [
+              {
+                field: "categories",
+                op: "in",
+                value: wanted.map(name => ids[name]),
+              },
+            ],
+            sort: "title",
+          },
+          { diagnostics: true }
+        );
+      expect(await holding(["Alpha"])).toEqual({
+        titles: ["Café crème", "Zebra notes"],
+        note: null,
+      });
+      expect(await holding(["Gamma", "Beta"])).toEqual({
+        titles: ["Café crème", "Crème brûlée", "Ñandú facts"],
+        note: null,
+      });
     });
 
     it("sorts empty values last in either direction, an empty string as a value", async () => {

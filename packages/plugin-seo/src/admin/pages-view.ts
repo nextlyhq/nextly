@@ -22,14 +22,16 @@ import {
 } from "../problems/contract";
 
 /**
- * How a page stands, as its Status says: the most serious problem the
- * problem list holds for it; else, for a page built in code whose route
- * doesn't call the plugin, not connected; else hidden from search, or good.
+ * How a page stands, as its Status says: SEO off where its type's SEO is
+ * switched off; else the most serious problem the problem list holds for it;
+ * else, for a page built in code whose route doesn't call the plugin, not
+ * connected; else hidden from search, or good.
  */
 export type PageStatus =
   | ProblemSeverity
   | "not-connected"
   | "hidden"
+  | "seo-off"
   | "good"
   | "unknown";
 
@@ -40,6 +42,7 @@ export const STATUS_TEXT: Readonly<Record<PageStatus, string>> = {
   notice: "Notice",
   "not-connected": "Not connected",
   hidden: "Hidden",
+  "seo-off": "SEO off",
   good: "Good",
   unknown: "Not checked",
 };
@@ -50,6 +53,7 @@ export const STATUS_ORDER: readonly PageStatus[] = [
   ...SEVERITY_ORDER,
   "not-connected",
   "hidden",
+  "seo-off",
 ];
 
 /** The key the problem list names a page by: its type, id and language. */
@@ -125,6 +129,8 @@ export function statusOf(
   item: SiteAddress,
   byPage: ProblemsByPage | undefined
 ): PageStatus {
+  // Known without the problem list, which never checks such a page.
+  if (item.standing === "seo-off") return "seo-off";
   if (byPage === undefined) return "unknown";
   // A page the list didn't check for this reader, such as one their read
   // rule leaves out or one published since, has no problem listed and no

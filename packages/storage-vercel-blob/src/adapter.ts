@@ -404,7 +404,10 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
       type: "vercel-blob",
       name: "VercelBlobStorageAdapter",
       supportsSignedUrls: false, // Vercel Blob URLs are public by default
-      supportsClientUploads: true, // Via handleUpload API
+      // No: Vercel Blob has no pre-signed upload Nextly can bind to a checked
+      // type and size, so `clientUploads` is refused for it rather than signing
+      // nothing. Its large files go through the standard upload.
+      supportsClientUploads: false,
     };
   }
 

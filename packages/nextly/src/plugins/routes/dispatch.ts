@@ -23,6 +23,7 @@ import {
 } from "../../auth/middleware";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { beginSessionConsultation } from "../../auth/plugin-auth-api";
+import { signInForNavigation } from "../../auth/redirect/sign-in-for-navigation";
 import { actorFromAuthContext } from "../../auth/request-actor";
 import { getSession } from "../../auth/session/get-session";
 import { container } from "../../di/container";
@@ -64,6 +65,7 @@ import {
   publicCallerCredential,
   rateLimitKey,
   routeCsrfMode,
+  routeDeclaresAccess,
   shouldNotStore,
   type CallerCredential,
 } from "./route-options";
@@ -166,6 +168,23 @@ async function resolvePluginRouteAuth(
       // whether that cookie authenticates is what decides, not the presence
       // of it or of any other cookie.
       credential: publicCallerCredential(req, await sessionAuthenticates(req)),
+    };
+  }
+
+  // A route that says nothing about what reaching it takes could act on the
+  // whole site for anyone signed in, a role-less account or a key with no
+  // grants included. Refused for every caller, before any credential is read,
+  // until it declares a permission, `checksAccess: true` or `siteWide: false`.
+  if (!routeDeclaresAccess(route)) {
+    return {
+      error: NextlyError.forbidden({
+        logContext: {
+          reason: "plugin-route-undeclared",
+          plugin: self.name,
+          method: route.method,
+          path: route.path,
+        },
+      }),
     };
   }
 
@@ -590,19 +609,19 @@ export function pluginRouteAuthRequired(
   req: Request,
   route: PluginRoute
 ): Response {
+  const refusal = NextlyError.authRequired({
+    logContext: {
+      reason: "plugin-route-auth-required-before-boot",
+      path: route.path,
+    },
+  });
+  // A browser opening the route is sent to sign in, as once booted.
   return markPluginResponse(
-    buildErrorResponse(
-      NextlyError.authRequired({
-        logContext: {
-          reason: "plugin-route-auth-required-before-boot",
-          path: route.path,
-        },
-      }),
-      {
+    staffSignIn(req, route, refusal) ??
+      buildErrorResponse(refusal, {
         requestId: readOrGenerateRequestId(req),
         flattened: currentFlattenedErrors(),
-      }
-    ),
+      }),
     route
   );
 }
@@ -999,6 +1018,55 @@ async function routeAuthWithinLimit(
 }
 
 /**
+ * The redirect to sign in and back for a browser opening a staff route
+ * without a usable session, or `null` when the refusal is answered as it is
+ * (`signInForNavigation`). Not for a route asking for a plugin's kind of
+ * person: the admin's sign-in is not how that person signs in, so it would
+ * only send them back to the same refusal.
+ */
+function staffSignIn(
+  req: Request,
+  route: PluginRoute,
+  error: NextlyError
+): Response | null {
+  return route.principal === undefined ? signInForNavigation(req, error) : null;
+}
+
+/** The answer to a request its route's auth refused with `error`. */
+function refusedAuth(
+  req: Request,
+  matched: RouteMatch,
+  error: NextlyError
+): Response {
+  const signIn = staffSignIn(req, matched.route, error);
+  if (signIn) return markPluginResponse(signIn, matched.route);
+  const requestId = readOrGenerateRequestId(req);
+  // A server fault here, such as a permission the route cannot work out, is
+  // the plugin's to fix, so it is logged with what caused it. A refusal of
+  // the caller is not: it is the gate working.
+  if (error.statusCode >= 500) {
+    try {
+      getNextlyLogger().error({
+        kind: "plugin-route-error",
+        ...error.toLogJSON(requestId),
+        plugin: matched.pluginName,
+        path: matched.route.path,
+      });
+    } catch {
+      // A logger that fails must not cost the caller the answer below, as
+      // the dispatcher and `withErrorHandler` hold for theirs.
+    }
+  }
+  return markPluginResponse(
+    buildErrorResponse(error, {
+      requestId,
+      flattened: currentFlattenedErrors(),
+    }),
+    matched.route
+  );
+}
+
+/**
  * Run a matched plugin route. Enforces secure-by-default auth,
  * builds the per-request {@link PluginRouteContext} (the plugin's boot context
  * plus `user`/`params`), and invokes the handler, isolating any thrown error
@@ -1045,32 +1113,7 @@ export async function runPluginRoute(
     );
   }
   const auth = settled.resolved;
-  if ("error" in auth) {
-    const requestId = readOrGenerateRequestId(req);
-    // A server fault here, such as a permission the route cannot work out, is
-    // the plugin's to fix, so it is logged with what caused it. A refusal of
-    // the caller is not: it is the gate working.
-    if (auth.error.statusCode >= 500) {
-      try {
-        getNextlyLogger().error({
-          kind: "plugin-route-error",
-          ...auth.error.toLogJSON(requestId),
-          plugin: matched.pluginName,
-          path: matched.route.path,
-        });
-      } catch {
-        // A logger that fails must not cost the caller the answer below, as
-        // the dispatcher and `withErrorHandler` hold for theirs.
-      }
-    }
-    return markPluginResponse(
-      buildErrorResponse(auth.error, {
-        requestId,
-        flattened: currentFlattenedErrors(),
-      }),
-      matched.route
-    );
-  }
+  if ("error" in auth) return refusedAuth(req, matched, auth.error);
 
   // Before the handler: a rate limit that runs after the work it is limiting
   // has already paid for the request it meant to refuse. Through

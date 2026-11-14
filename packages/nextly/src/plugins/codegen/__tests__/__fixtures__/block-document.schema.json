@@ -995,6 +995,9 @@
         "cssId": {
           "type": "string"
         },
+        "nosnippet": {
+          "type": "boolean"
+        },
         "attributes": {
           "type": "object",
           "additionalProperties": {

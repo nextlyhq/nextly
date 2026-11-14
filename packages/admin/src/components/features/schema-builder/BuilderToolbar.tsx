@@ -1,30 +1,35 @@
-// Simplified toolbar: no icon tile, no Hooks button, no unsaved-count badge
-// (the Save button's enabled state is the only unsaved signal).
+// Simplified toolbar: no icon tile, no Hooks button. The number of unsaved
+// changes is shown at all times, beside the Undo, Redo and Discard all that
+// act on them.
 //
 // Code-first entities show a "Read-only" badge next to the name. Their Save
 // stays disabled, but Settings stays enabled so the config can be inspected
 // read-only.
 import { Badge, Button } from "@nextlyhq/ui";
 import { ChevronLeft } from "lucide-react";
-import Link from "next/link";
 import type { JSX } from "react";
 
 import { Lock, Plus, Settings } from "@admin/components/icons";
+import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
+import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
 
 // Prose names the kind through the shared table, so the toolbar spells each
 // kind as every other builder message does.
 import { BUILDER_KIND_NOUN, type BuilderConfig } from "./builder-config";
-import { mayLeaveBuilder } from "./leave-builder";
+import { PendingChangesControls } from "./PendingChangesControls";
 
 type Props = {
   config: BuilderConfig;
   name: string;
-  /** Number of unsaved field changes. Drives Save-schema enable state only;
-   */
+  /** Number of unsaved changes: shown, and what enables Save. */
   unsavedCount: number;
+  /** The pending changes Undo, Redo and Discard all act on. */
+  pending: BuilderPendingChanges;
   /** True when the entity is code-first / locked from UI edits. */
   locked?: boolean;
+  /** A save is on its way, its preview included. */
+  saving?: boolean;
   /** Opens the field picker for a field at the end of the list. */
   onAddField: () => void;
   onOpenSettings: () => void;
@@ -57,7 +62,9 @@ export function BuilderToolbar({
   config,
   name,
   unsavedCount,
+  pending,
   locked = false,
+  saving = false,
   onAddField,
   onOpenSettings,
   onSave,
@@ -67,22 +74,17 @@ export function BuilderToolbar({
     ? `This ${BUILDER_KIND_NOUN[config.kind]} is managed in code. Update its definition in code to make changes.`
     : undefined;
 
-  // The crumb is the page's only exit, and no builder page mounts a
-  // navigation guard — a click with unsaved fields would discard them
-  // silently. Blocked with a confirm while dirty.
-  const handleCrumbClick = (e: { preventDefault: () => void }) => {
-    if (!mayLeaveBuilder(unsavedCount, config.kind)) e.preventDefault();
-  };
-
   return (
     <div className="flex items-center gap-3 px-6 py-3 border-b border-border sticky top-0 z-30 bg-background">
       <div className="flex items-center gap-3 min-w-0">
         {/* The crumb is a LINK, not a label: builder pages render standalone
             (no dashboard sidebar), so on a phone this is the only way back to
-            the list — plain text left the reader stranded after saving. */}
+            the list — plain text left the reader stranded after saving.
+            The admin's own Link: it moves through the admin's history, which
+            the page's unsaved-changes guard watches, so leaving with changes
+            pending asks first here as it does everywhere else. */}
         <Link
           href={KIND_LIST_ROUTE[config.kind]}
-          onClick={handleCrumbClick}
           className="flex items-center gap-0.5 min-w-0 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           aria-label={`Back to ${kindListName(config.kind)}`}
         >
@@ -105,6 +107,12 @@ export function BuilderToolbar({
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        <PendingChangesControls
+          pending={pending}
+          count={unsavedCount}
+          locked={locked}
+          saving={saving}
+        />
         {/* Adding is an edit, so a read-only entity has no add here. */}
         {!locked && (
           // Icon only on a phone, so the entity's name keeps its room; the

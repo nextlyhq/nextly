@@ -275,7 +275,15 @@ function rule(field: ValidatableField, key: string): unknown {
   return nested?.[key];
 }
 
-function numberRule(field: ValidatableField, key: string): number | undefined {
+/**
+ * A field's numeric rule `key`, in either spelling (on the field or under
+ * `validation`). Exported so a caller deciding whether a field can be left
+ * empty reads the same rule this validator enforces.
+ */
+export function numberRule(
+  field: ValidatableField,
+  key: string
+): number | undefined {
   const v = rule(field, key);
   return typeof v === "number" ? v : undefined;
 }

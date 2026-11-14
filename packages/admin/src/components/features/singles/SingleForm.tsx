@@ -34,6 +34,7 @@ import { pluginDocumentLock } from "@admin/components/features/entries/EntryForm
 import {
   topLevelFieldNames,
   useContentFields,
+  useWithoutWithheldFields,
   useDocumentPanelParts,
   useDocumentPlace,
 } from "@admin/components/features/entries/EntryForm/document-place";
@@ -145,6 +146,7 @@ import {
   versionAwareToolbarSlots,
 } from "@admin/components/features/versions/viewed-version-host";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
+import { useEditorRevealHold } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { useDiscardSingleWorkingDraft } from "@admin/hooks/queries/useDiscardSingleWorkingDraft";
 import { usePublishAllSingleLocales } from "@admin/hooks/queries/usePublishAllSingleLocales";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
@@ -322,6 +324,17 @@ export interface SingleFormProps {
    * absent, it unlocks as it stands.
    */
   latest?: DocumentLatest;
+  /**
+   * The page's outline of this editor, drawn in its place a moment longer
+   * while what finishes the editor is on its way (`useEditorRevealHold`): the claim
+   * on the Single, and `revealWaiting`. Absent, the editor is drawn at once.
+   */
+  revealOutline?: React.ReactNode;
+  /**
+   * Whether reads the page started for the editor's parts are still on their
+   * way (`usePlaceStartupReads`): the editor holds its outline for them too.
+   */
+  revealWaiting?: boolean;
   /** Additional CSS classes */
   className?: string;
 }
@@ -703,6 +716,8 @@ export function SingleForm({
   documentBanner,
   documentView,
   latest,
+  revealOutline,
+  revealWaiting = false,
 }: SingleFormProps): React.JSX.Element {
   // Generate Zod schema from field configurations. Singles render title/slug
   // read-only from config, so relax their required rule — submitting must not
@@ -956,6 +971,16 @@ export function SingleForm({
     // the latest copy: one that cannot would say it shows what it does not.
     version: latest ? version.startedFrom : undefined,
   });
+  // Drawn whole: the outline stays until the claim says who holds the Single
+  // and the parts' started reads are in, briefly at most, as the entry
+  // editor's does.
+  const holdReveal = useEditorRevealHold(
+    revealOutline !== undefined,
+    { claim: lockSurface.settling, reads: revealWaiting },
+    // Each document waits for its own claim and reads: the same editor moved
+    // straight to the next one begins its hold again.
+    `single:${schema.slug}/${document.id ?? ""}`
+  );
   // A gained Single's latest version starts the whole form again, whatever
   // its `updatedAt` says, and the lock holds until it has; the document views
   // key on the count it carries. Someone else's change is said over it.
@@ -976,7 +1001,12 @@ export function SingleForm({
   // Single, whose slug its config fixes). Per the
   // special-casing. Any user-defined field with admin.position: "sidebar"
   // now renders inline like every other Builder field.
-  const allFields = schema.fields;
+  // Less any field a plugin's switch keeps off this Single, which is then
+  // drawn nowhere and never decides the takeover layout.
+  const allFields = useWithoutWithheldFields(
+    { single: schema.slug },
+    schema.fields
+  ) as typeof schema.fields;
   const titleField = allFields.find(f => "name" in f && f.name === "title");
   const slugField = allFields.find(f => "name" in f && f.name === "slug");
   // Takeover layout: a field flagged `layout: "takeover"` (when active) collapses the
@@ -1027,11 +1057,14 @@ export function SingleForm({
     ...(editingLanguage ? { language: editingLanguage } : {}),
     ...(editingLocale ? { locale: editingLocale } : {}),
   });
+  // The version's values are read over every declared field, the withheld
+  // ones too: a drawn field's condition may name one of them.
   const viewedVersionHost = useViewedVersion(
     allFields,
     takeoverTypes,
     versionFor,
-    editorRestore
+    editorRestore,
+    schema.fields
   );
   const {
     viewingVersion,
@@ -1571,6 +1604,12 @@ export function SingleForm({
   // field keeps its value in the form, so Save still stores them.
   const fieldNames = useMemo(() => topLevelFieldNames(allFields), [allFields]);
   const contentFields = useContentFields(documentPlace, fieldNames, mainFields);
+  // A past version is drawn as it was stored, less any field a plugin's
+  // switch keeps off this Single now.
+  const shownHistoricalFields = useWithoutWithheldFields(
+    documentPlace.context,
+    historicalFields
+  );
   // The side panel's sections in the order the server placed them, with the
   // sections plugins declared at the Single's page among them, as on a
   // collection entry's page.
@@ -1732,6 +1771,8 @@ export function SingleForm({
     ...(onViewApi === undefined ? {} : { onViewApi }),
   };
 
+  if (holdReveal) return <>{revealOutline}</>;
+
   return (
     // A single is only ever edited standalone, so unlike the entry editor there
     // is no embedded case to exclude.
@@ -1740,7 +1781,7 @@ export function SingleForm({
       // A save alone: during a recovery, work that reaches the form after its
       // one read is still unsaved, so leaving still asks.
       disabled={isSubmitting}
-      fields={schema.fields}
+      fields={allFields}
       // Same rule as the entry editor: a refused switch takes its seed with it.
       onCancel={onSeedHandled}
     >
@@ -1771,7 +1812,7 @@ export function SingleForm({
           // shows: a field covering the bar reports what the bar would have.
           documentStatus={editedStatus}
           // The fields, so a field inside a repeater's row has an address.
-          fields={schema.fields}
+          fields={allFields}
           // So a field recording its own state stays quiet where this does.
           keepsRecoveryPoints={keepsRecoveryPoints}
         >
@@ -1836,7 +1877,7 @@ export function SingleForm({
                           recovery={recovery}
                           viewingVersion={viewingVersion}
                           recovering={recovering}
-                          fields={schema.fields}
+                          fields={allFields}
                           // A document view has no header, so the banner goes
                           // in among its own: an author working in the view
                           // still sees the document is in a scheduled release.
@@ -2037,7 +2078,7 @@ export function SingleForm({
                                     <SingleFormFieldsPanel
                                       document={document}
                                       singleSlug={schema.slug}
-                                      historicalFields={historicalFields}
+                                      historicalFields={shownHistoricalFields}
                                       historicalValues={historicalValues}
                                       isSubmitting={isSubmitting}
                                       mainFields={contentFields}

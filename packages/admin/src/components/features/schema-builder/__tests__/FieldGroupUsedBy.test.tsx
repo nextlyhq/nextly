@@ -4,7 +4,7 @@
  * of them; and says so when it does not know, rather than showing nothing.
  */
 import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   act,
@@ -14,6 +14,8 @@ import {
   screen,
   within,
 } from "@admin/__tests__/utils";
+
+import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 
 import { FieldGroupUsedBy } from "../FieldGroupUsedBy";
 
@@ -38,7 +40,7 @@ describe("FieldGroupUsedBy", () => {
       ],
       meta: { total: 4 },
     });
-    render(<FieldGroupUsedBy slug="seo" unsavedCount={0} />);
+    render(<FieldGroupUsedBy slug="seo" />);
 
     const section = await screen.findByRole("region", {
       name: "Where this field group is used",
@@ -69,7 +71,7 @@ describe("FieldGroupUsedBy", () => {
 
   it("says it is used in nothing the reader can read, and claims no more", async () => {
     get.mockResolvedValue({ items: [], meta: { total: 0 } });
-    render(<FieldGroupUsedBy slug="seo" unsavedCount={0} />);
+    render(<FieldGroupUsedBy slug="seo" />);
     expect(
       await screen.findByText(
         "Not used in any collection, Single or field group you can read."
@@ -79,7 +81,7 @@ describe("FieldGroupUsedBy", () => {
 
   it("says it does not know, rather than that it is used nowhere", async () => {
     get.mockRejectedValue(new Error("down"));
-    render(<FieldGroupUsedBy slug="seo" unsavedCount={0} />);
+    render(<FieldGroupUsedBy slug="seo" />);
     expect(
       await screen.findByText(/could not be read, so it is not known/)
     ).toBeInTheDocument();
@@ -89,7 +91,7 @@ describe("FieldGroupUsedBy", () => {
   it("says it does not know after a failed refresh, not the answer it had", async () => {
     const queryClient = createTestQueryClient();
     get.mockResolvedValueOnce({ items: [], meta: { total: 0 } });
-    render(<FieldGroupUsedBy slug="seo" unsavedCount={0} />, { queryClient });
+    render(<FieldGroupUsedBy slug="seo" />, { queryClient });
     expect(
       await screen.findByText(
         "Not used in any collection, Single or field group you can read."
@@ -113,7 +115,7 @@ describe("FieldGroupUsedBy", () => {
       },
     });
     get.mockResolvedValueOnce({ items: [], meta: { total: 0 } });
-    const first = render(<FieldGroupUsedBy slug="seo" unsavedCount={0} />, {
+    const first = render(<FieldGroupUsedBy slug="seo" />, {
       queryClient,
     });
     expect(
@@ -132,7 +134,7 @@ describe("FieldGroupUsedBy", () => {
       ],
       meta: { total: 1 },
     });
-    render(<FieldGroupUsedBy slug="seo" unsavedCount={0} />, { queryClient });
+    render(<FieldGroupUsedBy slug="seo" />, { queryClient });
     expect(screen.queryByText(/Not used in any/)).toBeNull();
     expect(
       await screen.findByText(
@@ -141,47 +143,68 @@ describe("FieldGroupUsedBy", () => {
     ).toBeInTheDocument();
   });
 
-  it("asks before a link leaves an editor with unsaved changes", async () => {
-    get.mockResolvedValue({
-      items: [
-        { entityType: "collection", entitySlug: "posts", fieldPath: "seo" },
-      ],
-      meta: { total: 1 },
-    });
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    try {
-      render(<FieldGroupUsedBy slug="seo" unsavedCount={2} />);
-      navigateTo.mockClear();
-      const link = await screen.findByRole("link", { name: "posts" });
-      // Declined: the editor and its changes stay.
-      fireEvent.click(link);
-      expect(confirm).toHaveBeenCalledTimes(1);
-      expect(confirm.mock.calls[0]?.[0]).toContain("unsaved changes");
-      expect(navigateTo).not.toHaveBeenCalled();
-    } finally {
-      confirm.mockRestore();
-    }
-  });
-
-  it("leaves without asking when nothing is unsaved", async () => {
-    get.mockResolvedValue({
-      items: [
-        { entityType: "collection", entitySlug: "posts", fieldPath: "seo" },
-      ],
-      meta: { total: 1 },
-    });
-    const confirm = vi.spyOn(window, "confirm");
-    try {
-      render(<FieldGroupUsedBy slug="seo" unsavedCount={0} />);
-      navigateTo.mockClear();
-      const link = await screen.findByRole("link", { name: "posts" });
-      fireEvent.click(link);
-      expect(confirm).not.toHaveBeenCalled();
-      expect(navigateTo).toHaveBeenCalledWith(
-        "/admin/builder/collections/posts"
+  // Each link leaves for another editor, which discards unsaved changes, so
+  // the editor's guard asks first, as it does for every other way out. The
+  // links ask nothing themselves: one question, not two.
+  describe("leaving through a link", () => {
+    const start = window.location.pathname;
+    const usedByPosts = () =>
+      get.mockResolvedValue({
+        items: [
+          { entityType: "collection", entitySlug: "posts", fieldPath: "seo" },
+        ],
+        meta: { total: 1 },
+      });
+    // Followed as the admin's router follows it, so the guard can hold it.
+    const follow = () =>
+      navigateTo.mockImplementation((path: string) =>
+        window.history.pushState(null, "", path)
       );
-    } finally {
+    afterEach(() => {
+      navigateTo.mockReset();
+      window.history.replaceState(null, "", start);
+    });
+
+    it("with unsaved changes: declined stays; agreed leaves", async () => {
+      usedByPosts();
+      follow();
+      const confirm = vi.spyOn(window, "confirm");
+      render(
+        <UnsavedChangesGuard isDirty>
+          <FieldGroupUsedBy slug="seo" />
+        </UnsavedChangesGuard>
+      );
+      const link = await screen.findByRole("link", { name: "posts" });
+      fireEvent.click(link);
+      const prompt = await screen.findByRole("alertdialog");
+      expect(window.location.pathname).toBe(start);
+      fireEvent.click(
+        within(prompt).getByRole("button", { name: /keep editing/i })
+      );
+      expect(window.location.pathname).toBe(start);
+
+      fireEvent.click(link);
+      fireEvent.click(
+        within(await screen.findByRole("alertdialog")).getByRole("button", {
+          name: /discard/i,
+        })
+      );
+      expect(window.location.pathname).toBe("/admin/builder/collections/posts");
+      expect(confirm).not.toHaveBeenCalled();
       confirm.mockRestore();
-    }
+    });
+
+    it("leaves without asking when nothing is unsaved", async () => {
+      usedByPosts();
+      follow();
+      render(
+        <UnsavedChangesGuard isDirty={false}>
+          <FieldGroupUsedBy slug="seo" />
+        </UnsavedChangesGuard>
+      );
+      fireEvent.click(await screen.findByRole("link", { name: "posts" }));
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(window.location.pathname).toBe("/admin/builder/collections/posts");
+    });
   });
 });

@@ -7,11 +7,52 @@
   "main": "dist/index.mjs",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
+  "//": "./kit and ./kit/* are internal and unstable: they exist for @nextlyhq/plugin-sdk/admin, which is the path plugins import, and their exports change in any release. Applications import the root.",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
+    },
+    "./kit": {
+      "types": "./dist/kit.d.ts",
+      "import": "./dist/kit.mjs",
+      "default": "./dist/kit.mjs"
+    },
+    "./kit/core": {
+      "types": "./dist/kit/core.d.ts",
+      "import": "./dist/kit/core.mjs",
+      "default": "./dist/kit/core.mjs"
+    },
+    "./kit/document": {
+      "types": "./dist/kit/document.d.ts",
+      "import": "./dist/kit/document.mjs",
+      "default": "./dist/kit/document.mjs"
+    },
+    "./kit/field-ui": {
+      "types": "./dist/kit/field-ui.d.ts",
+      "import": "./dist/kit/field-ui.mjs",
+      "default": "./dist/kit/field-ui.mjs"
+    },
+    "./kit/media": {
+      "types": "./dist/kit/media.d.ts",
+      "import": "./dist/kit/media.mjs",
+      "default": "./dist/kit/media.mjs"
+    },
+    "./kit/plugin-parts": {
+      "types": "./dist/kit/plugin-parts.d.ts",
+      "import": "./dist/kit/plugin-parts.mjs",
+      "default": "./dist/kit/plugin-parts.mjs"
+    },
+    "./kit/table": {
+      "types": "./dist/kit/table.d.ts",
+      "import": "./dist/kit/table.mjs",
+      "default": "./dist/kit/table.mjs"
+    },
+    "./kit/widgets": {
+      "types": "./dist/kit/widgets.d.ts",
+      "import": "./dist/kit/widgets.mjs",
+      "default": "./dist/kit/widgets.mjs"
     },
     "./testing": {
       "types": "./dist/testing.d.ts",
@@ -31,7 +72,8 @@
     "./style.css": "./dist/styles/globals.css"
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/bundle-modules.json"
   ],
   "scripts": {
     "build": "tsdown && node scripts/build-css.mjs && node scripts/stamp-dist.mjs",

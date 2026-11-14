@@ -169,8 +169,10 @@ export async function documentsIn(
 }
 
 /** `readRules`, read at most once for each language it is asked in. */
-export function onceEach(readRules: ReadRules): ReadRules {
-  const read = new Map<string | undefined, ReturnType<ReadRules>>();
+export function onceEach<T = Awaited<ReturnType<ReadRules>>>(
+  readRules: (ctx: PluginContext, locale: string | undefined) => Promise<T>
+): (ctx: PluginContext, locale: string | undefined) => Promise<T> {
+  const read = new Map<string | undefined, Promise<T>>();
   return (ctx, locale) => {
     let rules = read.get(locale);
     if (rules === undefined) {

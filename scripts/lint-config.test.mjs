@@ -480,6 +480,34 @@ describe("each guard, at a path no allowlist names", () => {
   }, 120_000);
 });
 
+// A plugin imports the SDK's entry where the SDK re-exports a core one: in a
+// first-party plugin's source, and in the playground's fixture plugins, which
+// double as examples. (Test files are outside the repository's lint.) The SDK itself is the re-exporter, so the
+// same import there is its job and reported nowhere.
+describe("the plugin SDK's re-exported entries, from a plugin", () => {
+  const violation =
+    'import { col } from "nextly/schema-extension";\n' +
+    'import { eq } from "nextly/db-operators";\n' +
+    'import { createTestNextly } from "nextly/testing";\n' +
+    "export const probe = [col, eq, createTestNextly];\n";
+  const reached = [
+    "packages/plugin-seo/src/lint-probe-sdk-entry.ts",
+    "apps/playground/src/plugins/lint-probe-fixture/plugin.ts",
+  ];
+  const exempt = "packages/plugin-sdk/src/lint-probe-sdk-entry.ts";
+
+  it("reports each of the three in a plugin, and none in the SDK", () => {
+    const probes = Object.fromEntries(
+      [...reached, exempt].map(path => [path, violation])
+    );
+    const counts = countsPerFile(
+      lintProbes(probes),
+      "eslint(no-restricted-imports)"
+    );
+    expect(counts).toEqual(Object.fromEntries(reached.map(path => [path, 3])));
+  }, 120_000);
+});
+
 // The tab-indicator guard reads every file a call site can live in: each
 // extension JSX is legal in, outside `src` as well as in it, and in an app as
 // well as a package. A path the committed `files` miss is a call site never

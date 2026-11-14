@@ -5,7 +5,7 @@
  */
 import { tmpdir } from "node:os";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../../../config";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
@@ -47,6 +47,7 @@ const silentLogger = {
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  vi.unstubAllEnvs();
 });
 
 /** A document with a cap of 3 versions, saved once (version 1). */
@@ -538,6 +539,9 @@ describe.each(getConfiguredTestDialects())(
       // A Single made in the admin: one defined in code is locked against
       // deletion. Per-dialect slug, as the suites share one process.
       const slug = `pin_${dialect.slice(0, 2)}_masthead`;
+      // A Builder create builds its table in development only; elsewhere it
+      // writes the migration and leaves the Single pending, with no table.
+      vi.stubEnv("NODE_ENV", "development");
       current = await createTestNextly({ dialect });
       await dispatchSingles(
         "createSingle",

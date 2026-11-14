@@ -1258,6 +1258,19 @@ describe("mintPreviewLink", () => {
     expect(afterRevoke.valid).toBe(false);
   });
 
+  it("reads the site address it links to from the row, never a kept copy", async () => {
+    // The settings row is followed elsewhere, and a copy may be up to the
+    // read interval old. Where a link sends its holder is part of what the
+    // link grants, so an address saved through another instance a moment ago
+    // has to apply to a link minted now.
+    await mintPreviewLink(post({ collection: "pages", entryId: "7" }));
+
+    expect(getSettings).toHaveBeenCalled();
+    for (const call of getSettings.mock.calls) {
+      expect(call).toEqual([{ fresh: true }]);
+    }
+  });
+
   it("scopes the token to the entry that was asked for", async () => {
     const body = await json(
       await mintPreviewLink(post({ collection: "pages", entryId: "7" }))

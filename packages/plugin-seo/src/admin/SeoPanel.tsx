@@ -93,7 +93,11 @@ export interface SeoPanelProps {
 }
 
 /** The values whose problems the Advanced section holds. */
-const ADVANCED_VALUES: readonly string[] = ["structuredData", "image"];
+const ADVANCED_VALUES: readonly string[] = [
+  "structuredData",
+  "image",
+  "display",
+];
 
 export function SeoPanel(props: SeoPanelProps): ReactNode {
   const { context, answers, problems, values, writable, errors, onSet } = props;

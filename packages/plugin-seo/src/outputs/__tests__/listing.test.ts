@@ -76,6 +76,29 @@ vi.mock("../../address-record/store", async importOriginal => ({
     .recordDouble,
 }));
 
+/** When each page's content last changed, by `<id>@<language>`. */
+const contentDates = new Map<string, string>();
+/** The content dates read, one batch at a time. */
+const dateReads: string[][] = [];
+
+// The content dates the save hooks keep, as the listing reads them.
+vi.mock("../../content-dates/store", () => ({
+  readContentDates: async (
+    _ctx: unknown,
+    _collection: string,
+    ids: readonly string[],
+    locale: string
+  ) => {
+    dateReads.push([...ids]);
+    const found = new Map<string, string>();
+    for (const id of ids) {
+      const date = contentDates.get(`${id}@${locale}`);
+      if (date !== undefined) found.set(id, date);
+    }
+    return found;
+  },
+}));
+
 /** The language each page was resolved in, by id. */
 const resolvedIn = new Map<string, string | undefined>();
 
@@ -158,6 +181,8 @@ const holds = (id: string, path: string, locale = "en"): Row => ({
 describe("the pages the site lists", () => {
   beforeEach(() => {
     answers.clear();
+    contentDates.clear();
+    dateReads.length = 0;
     documentReads.length = 0;
     for (const language of Object.keys(domains)) delete domains[language];
   });
@@ -185,6 +210,33 @@ describe("the pages the site lists", () => {
     );
 
     expect(readRules).toHaveBeenCalledTimes(1);
+  });
+
+  it("dates a page by when its content last changed, its own last save where none is kept, reading the dates once a batch", async () => {
+    for (const id of ["1", "2"]) {
+      answers.set(id, {
+        robots: listed,
+        canonical: { value: `/${id === "1" ? "a" : "b"}`, from: "address" },
+      });
+    }
+    contentDates.set("1@en", "2026-10-01T00:00:00.000Z");
+
+    const { pages } = await listPages(
+      context(
+        [
+          { id: "1", slug: "a", updatedAt: "2026-11-13T09:00:00.000Z" },
+          { id: "2", slug: "b", updatedAt: "2026-11-12T09:00:00.000Z" },
+        ],
+        [holds("1", "/a"), holds("2", "/b")]
+      ),
+      { origin: SITE }
+    );
+
+    expect(pages.map(page => [page.path, page.lastModified])).toEqual([
+      ["/a", "2026-10-01T00:00:00.000Z"],
+      ["/b", "2026-11-12T09:00:00.000Z"],
+    ]);
+    expect(dateReads).toEqual([["1", "2"]]);
   });
 
   it("stops reading pages once it has listed as many as it was asked for", async () => {
@@ -428,6 +480,8 @@ const at = (canonical: string): SeoAnswer => ({
 describe("each page's language versions", () => {
   beforeEach(() => {
     answers.clear();
+    contentDates.clear();
+    dateReads.length = 0;
     documentReads.length = 0;
     for (const language of Object.keys(domains)) delete domains[language];
   });

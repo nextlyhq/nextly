@@ -341,7 +341,10 @@ const PAGES: PageCase[] = [
         "operatingSystem",
         "offers",
       ],
-      FAQPage: ["mainEntity"],
+      // The hand-written graph also described the page's questions as an
+      // FAQPage beside the app. The plugin describes questions only on a
+      // page whose kind someone chose as Questions and answers, so a home
+      // page described as an app gets none, though its route lists them.
     },
   },
 ];

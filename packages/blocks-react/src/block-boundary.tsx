@@ -591,6 +591,8 @@ interface StoredDecoration {
   cssId: string | undefined;
   /** The author's attribute bag, when it is one. */
   attributes: Record<string, unknown> | undefined;
+  /** Whether the node is marked never to be quoted in search snippets. */
+  nosnippet: boolean;
   /** Whether the node contributes anything at all besides editor markers. */
   any: boolean;
 }
@@ -608,7 +610,9 @@ interface StoredDecoration {
  * `any` is derived here rather than recomputed by the caller, so "this node
  * decorates nothing" has one definition.
  */
-function storedDecoration(node: ResolvedBlockNode): StoredDecoration {
+function storedDecoration(
+  node: Pick<BlockNode, "cssId" | "attributes" | "nosnippet">
+): StoredDecoration {
   const cssId = typeof node.cssId === "string" ? node.cssId : undefined;
   const attributes =
     typeof node.attributes === "object" &&
@@ -618,8 +622,15 @@ function storedDecoration(node: ResolvedBlockNode): StoredDecoration {
       : undefined;
   const hasAttributes =
     attributes !== undefined && Object.keys(attributes).length > 0;
+  // Only a stored `true` marks it: anything else a document holds is no mark.
+  const nosnippet = node.nosnippet === true;
 
-  return { cssId, attributes, any: cssId !== undefined || hasAttributes };
+  return {
+    cssId,
+    attributes,
+    nosnippet,
+    any: cssId !== undefined || hasAttributes || nosnippet,
+  };
 }
 
 /**
@@ -758,6 +769,9 @@ function withNodeAttributes(
    * What this rule decides is which of the NODE's two spellings reaches the
    * page, never whether the block may keep an id of its own.
    */
+  // "Never quote this": a boolean attribute, so its value is empty. Google
+  // ignores any value a boolean attribute is given.
+  if (decoration.nosnippet) extra["data-nosnippet"] = "";
   const renderedId = renderedDomId(node);
   if (renderedId !== undefined) extra.id = renderedId;
   // LAST, so every marker wins over a value the document or the block tried to
@@ -869,7 +883,10 @@ function nodeRootReason(
     Object.entries(attributes).some(
       ([name, value]) => isAllowedAttribute(name) && typeof value === "string"
     );
-  if (!hasCssId && !hasAttributes) return null;
+  // The "never quote this" mark, read as the element's attributes are
+  // assembled, so the guard and the render agree on whether there is one.
+  const marked = storedDecoration(node).nosnippet;
+  if (!hasCssId && !hasAttributes && !marked) return null;
   // Rendering NOTHING is a decision, not a failure, and the two must not share
   // an answer. `core/image` with no usable source returns null on purpose —
   // an `<img>` with no `src` re-requests the current page in some browsers —
@@ -904,7 +921,11 @@ function nodeRootReason(
   if (declaresNothing || rendersNothing(output)) return null;
   const noRoot = noHostRootReason(shape);
   if (noRoot === null) return null;
-  const named = hasCssId ? "`cssId`" : "attributes";
+  const named = hasCssId
+    ? "`cssId`"
+    : hasAttributes
+      ? "attributes"
+      : "the `nosnippet` mark";
   // A primitive or a list, on the other hand, is real output with no single
   // element to carry the fields, so it loses them anyway — silently, and with
   // the same broken anchors as a wrapper root. The format says a block renders

@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 
 import { NextlyError } from "../../errors";
 import {
-  SYSTEM_COLUMNS,
+  immutableSystemColumnNames,
   type SystemColumnEntity,
 } from "../../lib/system-columns";
 import { canonicalJson } from "../../shared/lib/canonical-json";
@@ -50,9 +50,35 @@ export function stillApproved(
   return (
     stored === approvalDigest(snapshot, entity, exemptFields) ||
     stored ===
-      digestLeavingOut(snapshot, documentSystemKeys(entity), exemptFields)
+      digestLeavingOut(snapshot, LEGACY_DIGEST_KEYS[entity], exemptFields)
   );
 }
+
+/**
+ * The keys an approval's digest left out before it left out every framework column (alpha.74 and
+ * alpha.75): the document's system keys as those releases listed them. Spelled out rather than read
+ * from `documentSystemKeys`, so a later change to that list cannot change what a digest those
+ * releases stored is compared with.
+ */
+const LEGACY_SHARED_DIGEST_KEYS = [
+  "id",
+  "createdAt",
+  "updatedAt",
+  "status",
+  "_rev",
+  "_revision",
+  "_changed_by_kind",
+  "_changed_by_id",
+  "_changed_by_principal_kind",
+  "_changed_at",
+];
+const LEGACY_DIGEST_KEYS: Readonly<
+  Record<SystemColumnEntity, ReadonlySet<string>>
+> = {
+  // A Single has no owner column, so a field it declares under that name is content.
+  collection: new Set([...LEGACY_SHARED_DIGEST_KEYS, "createdBy"]),
+  single: new Set(LEGACY_SHARED_DIGEST_KEYS),
+};
 
 /** The digest of `snapshot` without the top-level keys `system` and `exemptFields` name. */
 function digestLeavingOut(
@@ -90,11 +116,11 @@ function digestLeavingOut(
  * two versions nobody edited.
  */
 function keysLeftOut(entity: SystemColumnEntity): ReadonlySet<string> {
+  // The framework columns no client writes come from the one projection of them
+  // (`immutableSystemColumnNames`, both spellings), not a copy of it.
   return new Set([
     ...documentSystemKeys(entity),
-    ...SYSTEM_COLUMNS.filter(
-      column => column.appliesTo.includes(entity) && !column.writableByClient
-    ).flatMap(column => [column.name, column.camelName]),
+    ...immutableSystemColumnNames(entity),
   ]);
 }
 

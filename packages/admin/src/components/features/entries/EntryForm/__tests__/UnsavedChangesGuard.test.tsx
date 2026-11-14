@@ -424,6 +424,19 @@ describe("moving between a document and its own views", () => {
       "/admin/singles/home",
       "/admin/singles/home?history=1&version=4",
     ],
+    // A new entry has no id yet, and its own address is the create page: a
+    // part of the form it opens there, by the view's own key, is the same
+    // unsaved entry.
+    [
+      "a new entry to one part of itself",
+      "/admin/collections/pages/create",
+      "/admin/collections/pages/create?section=hero-1",
+    ],
+    [
+      "one part of a new entry back to the whole",
+      "/admin/collections/pages/create?section=hero-1",
+      "/admin/collections/pages/create",
+    ],
   ])("stays, without asking, from %s", async (_case, from, to) => {
     // The same page answers both addresses and keeps the same form mounted,
     // so nothing unsaved is left behind.
@@ -451,6 +464,16 @@ describe("moving between a document and its own views", () => {
       "a view in another language",
       "/admin/collections/pages/1/builder",
       "/admin/collections/pages/1/builder?locale=de",
+    ],
+    [
+      "another collection's new entry",
+      "/admin/collections/pages/create",
+      "/admin/collections/posts/create?section=hero-1",
+    ],
+    [
+      "a new entry in another language",
+      "/admin/collections/pages/create",
+      "/admin/collections/pages/create?locale=de",
     ],
     [
       // Nothing answers it, so the page that does unmounts the form.

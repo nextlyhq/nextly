@@ -25,6 +25,10 @@ import type { DynamicFieldGroupInsert } from "../../../schemas/dynamic-field-gro
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
+import {
+  builtByFor,
+  isCodeOwned,
+} from "../../schema/pipeline/registered-collections";
 import type { SupportedDialect } from "../../schema/services/field-column-descriptor";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
@@ -32,7 +36,6 @@ import type { FieldGroupRegistryService } from "./field-group-registry-service";
 import type { FieldGroupSchemaService } from "./field-group-schema-service";
 import {
   planFieldGroupReconcile,
-  type ExpectedColumnDefault,
   type ReconcileAdoption,
   type ReconcileBlocker,
   type ReconcilePlan,
@@ -143,10 +146,11 @@ function asCreatorField(
  * group nothing is wrong with.
  *
  * The two tables have DIFFERENT builders, which is why this is keyed by table rather than resolved
- * once. `FieldGroupSchemaService` builds the main table; the localization renderer builds the
- * companion, and it spells the same field differently — a PostgreSQL `email` is `VARCHAR(255)` on
- * one and `TEXT` on the other. The planner supplies the table it OBSERVED the column in, so a
- * stored placement flag that is itself wrong cannot select the wrong builder.
+ * once. A Builder save's migration builds the main table from the column descriptor; the
+ * localization renderer builds the companion, and the two can spell the same field differently — a
+ * MySQL `date` is `timestamp` on one and `DATETIME(3)` on the other. The planner supplies the table
+ * it OBSERVED the column in, so a stored placement flag that is itself wrong cannot select the
+ * wrong builder.
  *
  * Returns `undefined` where neither builder claims the field, which the planner skips rather than
  * blocks: an underivable expectation is not evidence of drift.
@@ -159,38 +163,46 @@ async function expectedColumnTypeResolver(
 ): Promise<
   (field: FieldDefinition, table: ReconcileTable) => string | undefined
 > {
-  const { FieldGroupSchemaService } = await import(
-    "./field-group-schema-service"
+  const { getComponentRowColumnDescriptor } = await import(
+    "../../schema/services/field-column-descriptor"
   );
   const { fieldToLocalizedColumnSpec } = await import(
     "../../i18n/migration/field-to-column-spec"
   );
   const { ddlType } = await import("../../i18n/migration/ddl-types");
 
-  const creator = new FieldGroupSchemaService(dialect);
-
   return (field, table) => {
     if (table === "companion") {
       const spec = fieldToLocalizedColumnSpec(field, dialect, "fieldGroup");
       return spec ? ddlType(spec, dialect) : undefined;
     }
-    // The parameter's own declared type. `FieldDefinition` and the config shape describe the same
-    // stored field from two layers, and naming the target keeps the compiler checking this call.
-    const type = creator.columnTypeFor(asCreatorField(field));
-    return type ?? undefined;
+    // The main table as a Builder create builds it today: through the save writer's migration,
+    // whose columns are the column descriptor's for a field group's row.
+    return getComponentRowColumnDescriptor(field, dialect, "fieldGroup")
+      ?.dialectType;
   };
 }
 
 /**
- * The DEFAULT each builder would give a field, alongside the type resolver above.
- *
- * Split from it rather than folded in because the two answers have different shapes: a type is a
- * value or nothing, while a default has to distinguish "writes none" from "cannot say" — and the
- * companion is exactly the case that needs the distinction. Its columns are rendered by the
- * localization path, which this module does not model defaults for, so a companion-resident column
- * reports `known: false` and is skipped rather than being claimed to have no default. Claiming
- * that would turn every localized checkbox carrying a default into a refusal.
+ * The type the main table's creator gave a field before it built its columns from the column
+ * descriptor (`preBuilderSaveColumnType`): the one earlier spelling the planner accepts beside
+ * {@link expectedColumnTypeResolver}'s, because field groups built that way still exist and nothing
+ * migrates their columns. None for the companion, whose builder has not changed.
  */
+async function preBuilderSaveColumnTypeResolver(
+  dialect: SupportedDialect
+): Promise<
+  (field: FieldDefinition, table: ReconcileTable) => string | undefined
+> {
+  const { preBuilderSaveColumnType } = await import(
+    "./pre-builder-save-column-type"
+  );
+  return (field, table) =>
+    table === "companion"
+      ? undefined
+      : (preBuilderSaveColumnType(asCreatorField(field), dialect) ?? undefined);
+}
+
 /**
  * The DEFAULT each system column is created with, asked of the code that creates them.
  *
@@ -207,21 +219,23 @@ async function structuralColumnDefaults(
   return new FieldGroupSchemaService(dialect).structuralColumnDefaults();
 }
 
-async function expectedColumnDefaultResolver(
+/**
+ * The DEFAULT the field group's creator writes for a field's main column, or `undefined` where it
+ * writes none.
+ *
+ * Accepted beside the default a table built from the definition carries, which the planner asks of
+ * the desired-table builder: a Builder save writes no DEFAULT for a user column, while the creator,
+ * run by `nextly db:sync` and by a create with no save writer, writes a checkbox's. Tables of both
+ * kinds exist, so either is the field's default.
+ */
+async function creatorColumnDefaultResolver(
   dialect: SupportedDialect
-): Promise<
-  (field: FieldDefinition, table: ReconcileTable) => ExpectedColumnDefault
-> {
+): Promise<(field: FieldDefinition) => string | undefined> {
   const { FieldGroupSchemaService } = await import(
     "./field-group-schema-service"
   );
   const creator = new FieldGroupSchemaService(dialect);
-
-  return (field, table) => {
-    if (table === "companion") return { known: false };
-    const value = creator.columnDefaultFor(asCreatorField(field));
-    return value === null ? { known: true } : { known: true, value };
-  };
+  return field => creator.columnDefaultFor(asCreatorField(field)) ?? undefined;
 }
 
 /**
@@ -352,7 +366,11 @@ async function assessFieldGroupReconcile(
     liveCompanion,
     typeColumn,
     expectedColumnType: await expectedColumnTypeResolver(dialect),
-    expectedColumnDefault: await expectedColumnDefaultResolver(dialect),
+    preBuilderSaveColumnType: await preBuilderSaveColumnTypeResolver(dialect),
+    creatorColumnDefault: await creatorColumnDefaultResolver(dialect),
+    // Whose column rules built the table, read from the row as every other reader of the registry
+    // reads it, so the indexes a field implies are judged by the rules that made its column.
+    builtBy: builtByFor("fieldGroup", !isCodeOwned(existing)),
     structuralColumnDefaults: await structuralColumnDefaults(dialect),
   });
 

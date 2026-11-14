@@ -41,6 +41,11 @@ import { collectDeclarations } from "../declarations";
 import { headerSlotOf, validUserMenuItem } from "../header-item";
 import type { PluginDefinition } from "../plugin-context";
 
+import {
+  ADMIN_KIT_MODULE,
+  ADMIN_ROOT_EXPORTS,
+  ADMIN_ROOT_MODULE,
+} from "./admin-root-exports";
 import { isPageBuilderActive, PAGE_BUILDER_PLUGIN } from "./block-manifest";
 
 /** What a component in the map is for, as a fault about it names it. */
@@ -517,6 +522,24 @@ interface ParsedPath {
   member: string;
 }
 
+/**
+ * The module a path's component is imported from: the module as written, save
+ * a name `@nextlyhq/admin`'s root no longer exports. The root holds only what
+ * an application mounts, and the rest of the admin's surface moved to
+ * `@nextlyhq/admin/kit`. A path declared before that move names the root, and
+ * the map reads `_pN.Name` from a namespace import, which for a name the root
+ * does not export is undefined with no error: the component would silently
+ * draw nothing after an upgrade. The registry key stays the path as declared,
+ * which is what the admin looks the component up by.
+ */
+function adminEntryOf(p: ParsedPath): string {
+  return p.module === ADMIN_ROOT_MODULE &&
+    p.member !== "default" &&
+    !ADMIN_ROOT_EXPORTS.includes(p.member)
+    ? ADMIN_KIT_MODULE
+    : p.module;
+}
+
 function parsePath(path: string): ParsedPath {
   const hash = path.indexOf("#");
   if (hash === -1) return { path, module: path, member: "default" };
@@ -825,7 +848,7 @@ export function buildComponentImportMap(
   const importOf = (p: ParsedPath) =>
     fromConfig.has(p.path)
       ? importedFromConfig(p.module, configImport)
-      : p.module;
+      : adminEntryOf(p);
   const modules = Array.from(
     new Set([...parsed, ...handedOff].map(importOf))
   ).sort();

@@ -12,7 +12,6 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { loadBuilderEntities } from "../../di/load-dynamic-tables";
 import { withMigrationExcluded } from "../../domains/field-groups/migration/sync-guard";
-import { readRecordedEntities } from "../../domains/i18n/migration/recorded-before";
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import { assertConfiguredSiblingFields } from "../../domains/schema/sibling-fields";
 import { describeError } from "../../errors/index";
@@ -24,15 +23,11 @@ import type { LoadConfigResult } from "../utils/config-loader";
 
 import type { ResolvedDevOptions } from "./db-sync";
 import {
-  ensureLocalizedCompanions,
   judgeOrphanRemoval,
   performPermissionSeeding,
-  publishExtensionSchema,
-  syncCollections,
-  syncComponents,
-  syncSingles,
   syncUserFields,
 } from "./dev-build";
+import { syncSchemaInOrder } from "./sync-schema";
 
 /** Debounce delay in milliseconds */
 const DEBOUNCE_DELAY_MS = 500;
@@ -125,59 +120,9 @@ export function createDebouncedSync(
             // the same consent first; a no ends this re-sync, not the watch.
             await judgeOrphanRemoval(configToSync, adapter, options, context);
 
-            // Every entity as the registry records it before the syncs below rewrite it, so the
-            // companion pass after them can tell a field this edit newly translates.
-            const recordedBefore =
-              options.autoSync !== false
-                ? await readRecordedEntities(
-                    adapter as unknown as DrizzleAdapter,
-                    configToSync.config,
-                    error =>
-                      logger.warn(
-                        `The registry could not be read, so no translations column is judged this run: ${describeError(error)}`
-                      )
-                  )
-                : undefined;
-
-            // Before the pushes, for the same reason the one-shot `db:sync` does it: a watched
-            // edit that enables localization removes the translatable columns from the desired
-            // schema, so the push wants to drop them. Copying first makes that drop a cleanup
-            // rather than a loss.
-            if (options.autoSync !== false) {
-              await ensureLocalizedCompanions(
-                configToSync.config,
-                adapter,
-                context,
-                "beforeApply",
-                { recordedBefore }
-              );
-            }
-
-            // Unconditional, so the orphan scan still runs when the config declares none of a
-            // type: deleting the last entry of a kind is precisely what orphans its table, making
-            // a zero count the case where the scan matters most.
-            // Before the pushes, which plan plugin tables and contributed
-            // elements from it.
-            await publishExtensionSchema(configToSync, adapter, context);
-            await syncCollections(configToSync, adapter, options, context);
-            await syncSingles(configToSync, adapter, options, context);
-            await syncComponents(configToSync, adapter, options, context);
-
-            // Turning on localization is a config edit, so it arrives through this
-            // watcher as often as through `db:sync`. The companion table is not part of
-            // the push pipeline, and creating it here rather than at the next boot is
-            // what keeps a running server from advertising localization it cannot store.
-            // Suppressed under `--no-auto-sync` for the same reason the rest of the
-            // push is: it issues DDL and can copy rows.
-            if (options.autoSync !== false) {
-              await ensureLocalizedCompanions(
-                configToSync.config,
-                adapter,
-                context,
-                "afterApply",
-                { recordedBefore }
-              );
-            }
+            // The registry read, the companion passes, the pushes and the move of fields a translated
+            // entity makes shared, in one order (`syncSchemaInOrder`).
+            await syncSchemaInOrder(configToSync, adapter, options, context);
 
             // Sync user_ext table (always — handles both code and UI fields)
             await syncUserFields(configToSync, adapter, options, context);

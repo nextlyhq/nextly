@@ -65,6 +65,40 @@ describe("changeSummary", () => {
 });
 
 describe("eventSentence", () => {
+  it("says what a field rewrite changed, and names a plugin acting for a person", () => {
+    const rewrite = (payload: Record<string, unknown>) =>
+      eventSentence(event({ kind: "field-rewritten", payload }), partsLabel);
+    expect(rewrite({ field: "layout", copies: ["live"] })).toBe(
+      "Rewrote layout on the live copy"
+    );
+    expect(rewrite({ field: "layout", copies: ["live", "draft"] })).toBe(
+      "Rewrote layout on the live copy and its draft"
+    );
+    expect(
+      rewrite({
+        field: "layout",
+        copies: ["live", "draft:en", "draft:es"],
+        plugin: "page-builder",
+      })
+    ).toBe("Rewrote layout on the live copy and 2 drafts via page-builder");
+    expect(rewrite({ field: "layout", copies: ["draft"] })).toBe(
+      "Rewrote layout in its draft only"
+    );
+  });
+
+  it("names a plugin acting on its own behalf as the rewrite's actor", () => {
+    expect(
+      eventActor(
+        event({
+          kind: "field-rewritten",
+          actorKind: "plugin",
+          actorId: "page-builder",
+          actorName: "page-builder",
+        })
+      )
+    ).toEqual({ kind: "plugin", name: "page-builder" });
+  });
+
   it("says what each kind of event did, and to what", () => {
     expect(
       eventSentence(event({ kind: "unpublished", parts: ["en"] }), partsLabel)

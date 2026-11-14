@@ -8,6 +8,7 @@
 
 import type { SchemaRegistry } from "../../database/schema-registry";
 import { FieldGroupMetadataService } from "../../domains/field-groups/services/field-group-metadata-service";
+import type { BuilderSaveSetup } from "../../domains/schema/builder-save/collection-save";
 import type { CollectionRelationshipService } from "../../services/collections/collection-relationship-service";
 import {
   FieldGroupDataService,
@@ -24,7 +25,18 @@ export function registerComponentServices(ctx: RegistrationContext): void {
   // FieldGroupRegistryService — registry for component definitions
   container.registerSingleton<FieldGroupRegistryService>(
     "fieldGroupRegistryService",
-    () => new FieldGroupRegistryService(adapter, logger)
+    () => {
+      const registry = new FieldGroupRegistryService(adapter, logger);
+      // A field group's delete writes its migration as a collection's does,
+      // whichever entry point deletes it, so no snapshot after it still
+      // records its tables.
+      if (container.has("builderSaveSetup")) {
+        registry.setBuilderSave(
+          container.get<BuilderSaveSetup>("builderSaveSetup")
+        );
+      }
+      return registry;
+    }
   );
 
   // FieldGroupSchemaService — utility for generating component table schemas.
@@ -41,12 +53,21 @@ export function registerComponentServices(ctx: RegistrationContext): void {
   // allowed to disagree about whether the table gets made at all.
   container.registerSingleton<FieldGroupMetadataService>(
     "fieldGroupMetadataService",
-    () =>
-      new FieldGroupMetadataService(
+    () => {
+      const service = new FieldGroupMetadataService(
         container.get<FieldGroupRegistryService>("fieldGroupRegistryService"),
         logger,
         adapter
-      )
+      );
+      // A field group's save writes its migration as a collection's does, so
+      // its table is on record for every migration after it.
+      if (container.has("builderSaveSetup")) {
+        service.setBuilderSave(
+          container.get<BuilderSaveSetup>("builderSaveSetup")
+        );
+      }
+      return service;
+    }
   );
 
   // FieldGroupDataService — CRUD for component instance data.

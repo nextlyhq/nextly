@@ -42,6 +42,7 @@ import {
   versionAwareToolbarSlots,
 } from "@admin/components/features/versions/viewed-version-host";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
+import { useEditorRevealHold } from "@admin/components/shared/loading-frame/delayed-reveal";
 import { toast } from "@admin/components/ui";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
 import type { DocumentLatest } from "@admin/hooks/queries/useStoredReferences";
@@ -61,6 +62,7 @@ import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { editsOffered, useUpdateAnswer } from "@admin/hooks/useUpdateAnswer";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
 import { versionForLanguage } from "@admin/lib/document-version";
+import { readsHeldDraft } from "@admin/lib/held-draft";
 import { cn } from "@admin/lib/utils";
 import { entryApi } from "@admin/services/entryApi";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
@@ -81,6 +83,7 @@ import { pluginDocumentLock } from "./document-lock-affordances";
 import {
   topLevelFieldNames,
   useContentFields,
+  useWithoutWithheldFields,
   useDocumentPanelParts,
   useDocumentPlace,
 } from "./document-place";
@@ -212,6 +215,17 @@ export interface EntryFormProps {
    * - Layout is single column
    */
   embedded?: boolean;
+  /**
+   * The page's outline of this editor, drawn in its place a moment longer
+   * while what finishes the editor is on its way (`useEditorRevealHold`): the claim
+   * on the document, and `revealWaiting`. Absent, the editor is drawn at once.
+   */
+  revealOutline?: ReactNode;
+  /**
+   * Whether reads the page started for the editor's parts are still on their
+   * way (`usePlaceStartupReads`): the editor holds its outline for them too.
+   */
+  revealWaiting?: boolean;
   /**
    * Opens this entry's API response.
    *
@@ -365,6 +379,8 @@ export function EntryForm({
   sourceValues,
   translation,
   embedded = false,
+  revealOutline,
+  revealWaiting = false,
   className,
   onViewApi,
   documentActions,
@@ -478,6 +494,9 @@ export function EntryForm({
     recovering || changeAwaiting
   );
 
+  // Whether this editor reads the held draft rather than the live entry: as
+  // the caller read it, or as the collection says (`readsHeldDraft`).
+  const readsDraft = readDraft ?? readsHeldDraft(collection);
   // Content-locale context for field components — the active locale's writing
   // direction (RTL for Arabic/Hebrew/…), the collection's master localization switch (so a
   // field can tell whether it is translatable), and whether the active language differs from
@@ -499,7 +518,7 @@ export function EntryForm({
     shown: () => ({
       version: versionStartedFrom(),
       locale,
-      draft: readDraft ?? collection.draftsEnabled === true,
+      draft: readsDraft,
     }),
   });
   // Publishing every language waits for the entry's recordings in flight.
@@ -587,7 +606,16 @@ export function EntryForm({
   // no user-defined fields may use `admin.position: 'sidebar'`, and any
   // legacy `seoField` name match is dropped — components (including ones
   // named "seo") render inline like every other field.
-  const allFields = getCollectionFields(collection);
+  // Less any field a plugin's switch keeps off this collection, which is
+  // then drawn nowhere and never decides the takeover layout.
+  const declaredFields = useMemo(
+    () => getCollectionFields(collection),
+    [collection]
+  );
+  const allFields = useWithoutWithheldFields(
+    { collection: collectionSlug },
+    declaredFields
+  ) as ReturnType<typeof getCollectionFields>;
   const slugField = allFields.find(f => f.name === "slug");
   const titleField = allFields.find(f => f.name === "title");
 
@@ -644,7 +672,7 @@ export function EntryForm({
         readShown: () =>
           entryApi.findByID(collection.name, String(entry?.id ?? ""), {
             locale,
-            draft: readDraft ?? collection.draftsEnabled === true,
+            draft: readsDraft,
           }),
       }),
     [
@@ -652,9 +680,8 @@ export function EntryForm({
       defaultLocale,
       versionStartedFrom,
       collection.name,
-      collection.draftsEnabled,
       entry?.id,
-      readDraft,
+      readsDraft,
     ]
   );
   // What a restore puts values back into: this form. The document's lock is
@@ -672,11 +699,14 @@ export function EntryForm({
     ...(editingLanguage ? { language: editingLanguage } : {}),
     ...(editingLocale ? { locale: editingLocale } : {}),
   });
+  // The version's values are read over every declared field, the withheld
+  // ones too: a drawn field's condition may name one of them.
   const viewedVersionHost = useViewedVersion(
     allFields,
     takeoverTypes,
     versionFor,
-    editorRestore
+    editorRestore,
+    declaredFields
   );
   const {
     viewingVersion,
@@ -807,6 +837,16 @@ export function EntryForm({
     // latest copy: one that cannot would say it shows what it does not.
     version: latest ? versionStartedFrom : undefined,
   });
+  // Drawn whole: the outline stays until the claim says who holds the entry
+  // and the parts' started reads are in, briefly at most, so a colleague's
+  // banner or a plugin's section does not push the fields down as it lands.
+  const holdReveal = useEditorRevealHold(
+    revealOutline !== undefined,
+    { claim: lockSurface.settling, reads: revealWaiting },
+    // Each document waits for its own claim and reads: the same editor moved
+    // straight to the next one begins its hold again.
+    `collection:${collectionSlug}/${entry?.id ?? ""}`
+  );
   // A gained entry's latest version starts the whole form again, whatever
   // its `updatedAt` says, and the lock holds until it has; the document views
   // key on the count it carries. Someone else's change is said over it.
@@ -855,6 +895,12 @@ export function EntryForm({
   // plugin's tab takes over, by the same rule as the page's own content:
   // they are drawn, and edited, in their tab.
   const besideFields = useContentFields(documentPlace, fieldNames, allFields);
+  // A past version is drawn as it was stored, less any field a plugin's
+  // switch keeps off this type now.
+  const shownHistoricalFields = useWithoutWithheldFields(
+    documentPlace.context,
+    historicalFields
+  );
   const renderEntryFields = useCallback(
     (excludePath: string, presentation?: EntryFieldsPresentation) =>
       fieldsBesidePanel(besideFields, excludePath, {
@@ -1279,7 +1325,7 @@ export function EntryForm({
         isCreateMode={mode === "create"}
         {...contextDocumentStatus}
         // The fields, so a field inside a repeater's row has an address.
-        fields={getCollectionFields(collection)}
+        fields={allFields}
         // So a field recording its own state stays quiet where this does.
         keepsRecoveryPoints={keepsRecoveryPoints}
       >
@@ -1346,7 +1392,7 @@ export function EntryForm({
                 means "keep the current password" (the stored hash never
                 round-trips), so it is not treated as a required-field miss. */}
               <EntryFormContent
-                fields={getCollectionFields(collection)}
+                fields={allFields}
                 disabled={savePending}
                 // Without the permission to save, the entry is shown as it is
                 // rather than as a form whose changes go nowhere.
@@ -1368,6 +1414,8 @@ export function EntryForm({
     );
   }
 
+  if (holdReveal) return <>{revealOutline}</>;
+
   // Standalone mode: the trail in the admin's top bar, then the document bar,
   // the banners under it, the title and slug, the fields, and the (optional)
   // right rail. No DocumentTabs and no separate page title h1: the title
@@ -1382,7 +1430,7 @@ export function EntryForm({
       // A save alone: during a recovery, work that reaches the form after its
       // one read is still unsaved, so leaving still asks.
       disabled={savePending}
-      fields={getCollectionFields(collection)}
+      fields={allFields}
       // A refused switch takes its seed with it. The request to fill the target
       // from this language was made ALONGSIDE a navigation; if the navigation
       // does not happen, the request did not either — and a seed left behind
@@ -1453,7 +1501,7 @@ export function EntryForm({
                   {...contextDocumentStatus}
                   // The fields, so a field inside a repeater's row has an
                   // address the Page Builder and other views open it by.
-                  fields={getCollectionFields(collection)}
+                  fields={allFields}
                   // So a field recording its own state, the Page Builder's
                   // canvas, stays quiet where the editor's recording does.
                   keepsRecoveryPoints={keepsRecoveryPoints}
@@ -1508,7 +1556,7 @@ export function EntryForm({
                           recovery={recovery}
                           viewingVersion={viewingVersion}
                           recovering={recovering}
-                          fields={getCollectionFields(collection)}
+                          fields={allFields}
                           // A document view has no header, so the banner goes
                           // in among its own: an author working in the view
                           // still sees the document is in a scheduled release.
@@ -1744,7 +1792,9 @@ export function EntryForm({
                       answers a published version through the same surface. Its
                       comparison bar is drawn among the banners under the bar. */}
                                     <ViewedVersionBody
-                                      fields={historicalFields ?? contentFields}
+                                      fields={
+                                        shownHistoricalFields ?? contentFields
+                                      }
                                       values={historicalValues ?? undefined}
                                       // A submit in flight withholds restore too: a
                                       // restore racing the ordinary save would let

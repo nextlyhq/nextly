@@ -649,6 +649,33 @@ export const PLUGIN_CODES = defineCodes({
       },
     ],
   },
+  PLUGIN_SCHEMA_PREFIX_CHANGED: {
+    cause:
+      "A plugin's schema prefix is not the one its existing tables were created under.",
+    from: [
+      {
+        // As `assertPluginPrefixesKept` throws it, before anything is planned: what changed, why
+        // the prefix is fixed, and the declaration that keeps the tables.
+        code: "CONFLICT",
+        reason: "plugin-schema-prefix-changed",
+        describe: error => {
+          const [what = error.publicMessage, ...rest] = sentences(
+            error.publicMessage
+          );
+          const next = rest.at(-1);
+          return {
+            what,
+            why:
+              rest.slice(0, -1).join(" ") ||
+              "A plugin's prefix is fixed once its tables exist, since the rows cannot move to new names.",
+            next:
+              next ??
+              "Declare the prefix its tables were created under in contributes.schema.prefix.",
+          };
+        },
+      },
+    ],
+  },
   PLUGIN_SCHEMA_UNINSTALLED: {
     cause:
       "A plugin that has been uninstalled is still listed in the configuration.",

@@ -9,7 +9,10 @@
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { hashPassword } from "../../../auth/password/index";
+import {
+  hashPassword,
+  type PasswordHasher,
+} from "../../../auth/password/index";
 import { getDialectTables } from "../../../database/index";
 import { generateSqliteCoreTableStatements } from "../../../database/sqlite-core-tables";
 import { describeError } from "../../../errors/index";
@@ -375,7 +378,9 @@ describe.each(getConfiguredTestDialects())(
         });
       };
 
-      await new PlainTextPasswordCleanup(t.adapter, consoleLogger, 2).clear();
+      await new PlainTextPasswordCleanup(t.adapter, consoleLogger, {
+        pageSize: 2,
+      }).clear();
 
       expect((await account(t, "zzz")).passwordHash).toBeNull();
     });
@@ -418,6 +423,41 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await signInError(t, "colon@example.com", NEW_PASSWORD)
       ).toBeNull();
+    });
+
+    it("never counts a value the configured hasher recognises", async () => {
+      const t = await boot(dialect);
+      await seed(t);
+      // A hasher whose own values look like the short plain one: its
+      // sign-in takes them, so they are not plain text to this clean-up.
+      const anyValue: PasswordHasher = {
+        name: "own",
+        reach: "unbounded",
+        hash: password => Promise.resolve(password),
+        verify: (password, stored) => Promise.resolve(password === stored),
+      };
+      const own: PasswordHasher = {
+        ...anyValue,
+        isHash: stored => stored === SHORT_PLAIN,
+      };
+      const found = await new PlainTextPasswordCleanup(
+        t.adapter,
+        consoleLogger,
+        { hasher: own }
+      ).find();
+      // The control is the first case: without the hasher, `short` is found.
+      expect([...found].sort()).toEqual(
+        PLAIN_KINDS.filter(kind => kind !== "short")
+          .map(kind => `user-${kind}`)
+          .sort()
+      );
+      // A hasher that declares no isHash may have written any value, so none
+      // is taken for plain text.
+      expect(
+        await new PlainTextPasswordCleanup(t.adapter, consoleLogger, {
+          hasher: anyValue,
+        }).find()
+      ).toEqual([]);
     });
   }
 );

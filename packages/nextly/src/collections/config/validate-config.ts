@@ -29,7 +29,10 @@ import {
   COLLECTION_ID_TYPES,
 } from "../../domains/collections/services/collection-db-options";
 import { resolveLocalizedFieldNames } from "../../domains/i18n/classify-fields";
-import { publicAddressErrors } from "../../domains/public-addresses/public-address-template";
+import {
+  publicAddressErrors,
+  publicAddressFieldProblem,
+} from "../../domains/public-addresses/public-address-template";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import {
   isManagedIndexName,
@@ -834,6 +837,19 @@ export function validateCollectionConfig(
   errors.push(
     ...publicAddressErrors(config.publicAddress, "collection", config.fields)
   );
+  // The field holding each entry's own address, where one is named.
+  const fieldProblem = publicAddressFieldProblem(
+    config.publicAddressField,
+    config.publicAddress,
+    Array.isArray(config.fields) ? config.fields : []
+  );
+  if (fieldProblem !== null) {
+    errors.push({
+      path: "publicAddressField",
+      code: "PUBLIC_ADDRESS_INVALID",
+      message: fieldProblem,
+    });
+  }
 
   return {
     valid: errors.length === 0,

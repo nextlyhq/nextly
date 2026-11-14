@@ -1,49 +1,57 @@
 /**
- * A plugin module that adds a column to a collection's table, run against a
- * database where development push already made that column, on every
- * configured dialect.
+ * A plugin's column on a collection's table that development push already
+ * made, migrated through the app's own stream, on every configured dialect.
  *
  * The column is made by the real push: booting with the plugin's schema hook
- * creates the collection's table through `applyDesiredSchema`, which applies
- * the hook's contribution to the entity's desired spec. The module is then
- * generated from the same hook by the real generator and handed to the
- * development boot's migrate step. A column that matches the module is
- * adopted without running the module's ALTER; one that does not is refused
- * as drift, by name, and nothing is recorded.
+ * creates the collection's table with it through `applyDesiredSchema`. Then
+ * `nextly migrate:create` writes the app's migration from the same
+ * configuration and `nextly migrate` applies it, as a project moving from
+ * development to migrations does. A column that matches the migration is
+ * adopted without running its statements, keeping its values; one that does
+ * not is refused as drift, and nothing is recorded.
+ *
+ * The app's stream, not the plugin's: `migrate:create --plugin` compiles a
+ * plugin with its declared dependencies alone, never the app's entity tables,
+ * so no plugin module carries a column on one. The app's migrations carry
+ * every contribution to its collections, Singles and field groups, whoever
+ * made it, and a push records such a column as the app's stream's.
  */
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import { defineCollection, defineConfig, text } from "../../../config";
+import { createAdapter } from "../../../database/factory";
 import { SchemaEventsRepository } from "../../../domains/schema/events/schema-events-repository";
-import {
-  addedElements,
-  withEntityContributions,
-} from "../../../domains/schema/extension/entity-contributions";
 import { col, type ColumnBuilder } from "../../../domains/schema/extension/dsl";
-import { compileExtensionSchema } from "../../../domains/schema/extension/publish";
-import { buildPluginMigration } from "../../../domains/schema/migrate-create/generate-plugin";
-import type { PluginMigration } from "../../../domains/schema/migrate/plugin/plugin-migration";
-import { pluginMigrationArgs } from "../../../domains/schema/migrate/plugin/run-plugin-migrations";
-import type { TableSpec } from "../../../domains/schema/pipeline/diff/types";
-import { desiredCollectionTable } from "../../../domains/schema/pipeline/desired-collection-table";
-import { migrateAtDevBoot } from "../../../init/boot-apply";
+import { setNonInteractive } from "../../../domains/schema/migrate/can-prompt";
+import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   definePlugin,
   type PluginDefinition,
 } from "../../../plugins/plugin-context";
 import {
   createTestNextly,
-  getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { _resetEnvCache } from "../../../shared/lib/env";
+import type { CommandContext } from "../../program";
 import { createLogger } from "../../utils/logger";
-import { migrateCore } from "../migrate";
+import { runMigrate } from "../migrate";
+import { runMigrateCreate } from "../migrate-create";
 
-const ALL = ["postgresql", "mysql", "sqlite"] as const;
+/** The config the commands load, set by each step before it runs them. */
+const loaded = vi.hoisted(() => ({
+  config: undefined as unknown,
+}));
+vi.mock("../../utils/config-loader", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../utils/config-loader")>()),
+  loadConfig: async () => ({ config: loaded.config, dependencies: [] }),
+}));
+
 const PLUGIN = "@test/pushcol-search";
 /** The collection's slug; its table is named for this file alone. */
 const SLUG = "pushcol_posts";
@@ -56,10 +64,7 @@ const posts = defineCollection({
 });
 
 /** A plugin whose schema hook adds `searchVector` to the collection's table. */
-function contributor(
-  column: () => ColumnBuilder,
-  migrations?: PluginMigration[]
-): PluginDefinition {
+function contributor(column: () => ColumnBuilder): PluginDefinition {
   return definePlugin({
     name: PLUGIN,
     version: "1.0.0",
@@ -73,183 +78,201 @@ function contributor(
             });
           },
         ],
-        ...(migrations ? { migrations } : {}),
       },
     },
   });
 }
 
-/** The extension schema the configured app compiles for one dialect. */
-async function extensionSchemaFor(
-  dialect: TestDialect,
-  plugin: PluginDefinition
-) {
-  const schema = await compileExtensionSchema({
-    dialect,
-    plugins: [plugin],
-    config: { collections: [posts] },
-    logger: { warn: () => {} },
-  });
-  if (!schema) throw new Error("no extension schema compiled");
-  return schema;
-}
+/** The app's configuration, the plugin declaring its column as text. */
+const appConfig = defineConfig({
+  collections: [posts],
+  plugins: [contributor(() => col.text({ nullable: true }))],
+  db: { migrationsDir: "./migrations" },
+});
+
+let dir: string;
+let instance: TestNextly | undefined;
+let previousDialect: string | undefined;
+let previousUrl: string | undefined;
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "nextly-pushcol-"));
+  mkdirSync(join(dir, "migrations"));
+  previousDialect = process.env.DB_DIALECT;
+  previousUrl = process.env.DATABASE_URL;
+  // The migration file is named by the clock.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(Date.UTC(2026, 10, 14, 12, 0, 0, 0)));
+});
+
+afterEach(async () => {
+  vi.useRealTimers();
+  await instance?.destroy();
+  instance = undefined;
+  if (previousDialect === undefined) delete process.env.DB_DIALECT;
+  else process.env.DB_DIALECT = previousDialect;
+  if (previousUrl === undefined) delete process.env.DATABASE_URL;
+  else process.env.DATABASE_URL = previousUrl;
+  _resetEnvCache();
+  rmSync(dir, { recursive: true, force: true });
+});
 
 /**
- * The plugin's module for its contribution, generated for every dialect by
- * the real generator. The collection's table is a foreign table to the
- * plugin: its baseline is the collection's own desired table, and the
- * contributed side is that table with the plugin's contribution applied by
- * the helper dev push applies it with.
+ * Boots with the collection and the plugin's hook, so the push creates the
+ * table and the column, where the commands reach it through `DATABASE_URL`.
+ * SQLite runs on a file in the test's directory, since an in-memory database
+ * is unreachable from the commands' connection.
  */
-async function moduleFor(
+async function bootPushing(
+  dialect: TestDialect,
   column: () => ColumnBuilder
-): Promise<PluginMigration> {
-  const plugin = contributor(column);
-  const none = { postgresql: [], mysql: [], sqlite: [] };
-  const contributedByDialect = {} as Record<(typeof ALL)[number], TableSpec[]>;
-  const contributedBaselineByDialect = {} as Record<
-    (typeof ALL)[number],
-    TableSpec[]
-  >;
-  const contributions: NonNullable<
-    Parameters<typeof buildPluginMigration>[0]["contributions"]
-  > = {};
-  for (const dialect of ALL) {
-    const bare = desiredCollectionTable(
-      { slug: SLUG, tableName: TABLE, fields: posts.fields },
-      dialect
-    );
-    const withColumn = withEntityContributions(
-      bare,
-      await extensionSchemaFor(dialect, plugin),
-      bare,
-      dialect
-    );
-    contributedByDialect[dialect] = [withColumn];
-    contributedBaselineByDialect[dialect] = [bare];
-    contributions[dialect] = { [TABLE]: addedElements(bare, withColumn) };
+): Promise<TestNextly> {
+  const declared = { collections: [posts], plugins: [contributor(column)] };
+  if (dialect !== "sqlite") {
+    return createTestNextly({ dialect, ...declared });
   }
-  const built = buildPluginMigration({
-    pluginName: PLUGIN,
-    schemaVersion: 1,
-    name: "v1",
-    now: new Date(Date.UTC(2026, 9, 1, 10, 0, 0)),
-    tablesByDialect: none,
-    contributedByDialect,
-    contributedBaselineByDialect,
-    contributions,
-    existing: [],
-  });
-  if (!built) throw new Error("no module generated");
-  return built.module;
+  const url = `file:${join(dir, "test.db")}`;
+  process.env.DB_DIALECT = "sqlite";
+  process.env.DATABASE_URL = url;
+  _resetEnvCache();
+  const adapter = await createAdapter({ type: "sqlite", url } as Parameters<
+    typeof createAdapter
+  >[0]);
+  return createTestNextly({ adapter, ...declared });
 }
 
-describe.each(getConfiguredTestDialects())(
-  "a plugin module adding a column dev push already made to a collection (%s)",
+/** A command's context, with everything it says captured. */
+function command(): { context: CommandContext; said: string[] } {
+  const said: string[] = [];
+  const base = createLogger({ quiet: true });
+  const capture = (message: string) => {
+    said.push(message);
+  };
+  return {
+    context: {
+      logger: {
+        ...base,
+        info: capture,
+        warn: capture,
+        success: capture,
+        error: capture,
+      },
+      options: {},
+      cwd: dir,
+    } as CommandContext,
+    said,
+  };
+}
+
+/** `nextly migrate:create --name=<name> --non-interactive` over the app's config: the file it wrote. */
+async function migrateCreate(name: string): Promise<string> {
+  loaded.config = appConfig;
+  const { context, said } = command();
+  const printed = vi.spyOn(console, "error").mockImplementation(message => {
+    said.push(String(message));
+  });
+  const exit = vi.spyOn(process, "exit").mockImplementation(code => {
+    throw new Error(`exit ${String(code)}\n${said.join("\n")}`);
+  });
+  setNonInteractive(true);
+  try {
+    await runMigrateCreate(name, { cwd: dir }, context);
+  } finally {
+    setNonInteractive(false);
+    printed.mockRestore();
+    exit.mockRestore();
+  }
+  const file = readdirSync(join(dir, "migrations")).find(f =>
+    f.endsWith(`_${name}.sql`)
+  );
+  expect(file, `no migration named ${name}\n${said.join("\n")}`).toBeDefined();
+  return file!;
+}
+
+/** `nextly migrate --non-interactive` over the app's config: what it threw, if anything. */
+async function migrate(): Promise<unknown> {
+  loaded.config = appConfig;
+  const { context } = command();
+  setNonInteractive(true);
+  try {
+    await runMigrate({ cwd: dir, throwOnFailure: true }, context);
+    return undefined;
+  } catch (error) {
+    return error;
+  } finally {
+    setNonInteractive(false);
+  }
+}
+
+/** One stored post, with a value in the pushed column. */
+async function seedRow(value: string | number): Promise<string> {
+  const created = await instance!.nextly.create({
+    collection: SLUG,
+    data: { title: "first" },
+    overrideAccess: true,
+  });
+  const id = (created.item as { id: string }).id;
+  await instance!.adapter.update(
+    TABLE,
+    { [COLUMN]: value },
+    { and: [{ column: "id", op: "=", value: id }] }
+  );
+  return id;
+}
+
+/** The ledger row of `file`, as status and statement count. */
+async function ledgerOf(dialect: TestDialect, file: string) {
+  const rows = await new SchemaEventsRepository(
+    instance!.adapter.getDrizzle(),
+    dialect
+  ).listFileApplies();
+  return rows
+    .filter(row => row.filename === file)
+    .map(row => [row.status, row.statementsExecuted ?? 0]);
+}
+
+describeEachDialect(
+  "a plugin's column dev push already made on a collection's table, through the app's migration",
   dialect => {
-    let handle: TestNextly | undefined;
+    it("adopts a matching pushed column without running the migration, keeping its values", async () => {
+      instance = await bootPushing(dialect, () => col.text({ nullable: true }));
+      const id = await seedRow("indexed");
+      const file = await migrateCreate("create_posts");
 
-    afterEach(async () => {
-      await handle?.adapter.executeQuery(`DROP TABLE IF EXISTS ${TABLE}`);
-      await handle?.destroy();
-      handle = undefined;
-    });
+      expect(await migrate()).toBeUndefined();
 
-    /** Boot with the plugin's hook, so the push creates the column. */
-    async function bootPushing(column: () => ColumnBuilder) {
-      const booted = await createTestNextly({
-        ...(dialect === "sqlite" ? {} : { dialect }),
-        collections: [posts],
-        plugins: [contributor(column)],
-      });
-      handle = booted;
-      return booted;
-    }
-
-    /** One stored post, with a value in the pushed column. */
-    async function seedRow(booted: TestNextly, value: string | number) {
-      const created = await booted.nextly.create({
-        collection: SLUG,
-        data: { title: "first" },
-        overrideAccess: true,
-      });
-      const id = (created.item as { id: string }).id;
-      await booted.adapter.update(
-        TABLE,
-        { [COLUMN]: value },
-        { and: [{ column: "id", op: "=", value: id }] }
-      );
-      return id;
-    }
-
-    /** The development boot's migrate step, with the plugin's module. */
-    async function migrate(booted: TestNextly, module: PluginMigration) {
-      const plugin = contributor(() => col.text({ nullable: true }), [module]);
-      return migrateAtDevBoot({
-        migrateCore,
-        adapter: booted.adapter,
-        extensionSchema: await extensionSchemaFor(dialect, plugin),
-        pluginMigrations: await pluginMigrationArgs([plugin]),
-        // No app migrations: an absent directory is read as none.
-        migrationsDir: join(tmpdir(), `nx-pushcol-absent-${process.pid}`),
-        logger: createLogger({ quiet: true }),
-        label: "[test]",
-      });
-    }
-
-    /** The ledger rows of the plugin's modules, as status and statement count. */
-    async function pluginLedger(booted: TestNextly) {
-      const rows = await new SchemaEventsRepository(
-        booted.adapter.getDrizzle(),
-        dialect
-      ).listFileApplies();
-      return rows
-        .filter(row => (row.filename ?? "").startsWith(`plugin:${PLUGIN}/`))
-        .map(row => [row.status, row.statementsExecuted ?? 0]);
-    }
-
-    it("adopts a matching pushed column without running the module, keeping its values", async () => {
-      const module = await moduleFor(() => col.text({ nullable: true }));
-      // The module does carry the ALTER, so a zero statement count below is
-      // an adoption and not an empty module.
-      expect(module.dialects[dialect].up.join("\n")).toContain(COLUMN);
-      const booted = await bootPushing(() => col.text({ nullable: true }));
-      const id = await seedRow(booted, "indexed");
-
-      const result = await migrate(booted, module);
-
-      expect(result.pluginModulesApplied).toBe(1);
-      expect(await pluginLedger(booted)).toEqual([["applied", 0]]);
-      const row = await booted.adapter.selectOne<Record<string, unknown>>(
+      expect(await ledgerOf(dialect, file)).toEqual([["applied", 0]]);
+      const row = await instance.adapter.selectOne<Record<string, unknown>>(
         TABLE,
         { where: { and: [{ column: "id", op: "=", value: id }] } }
       );
       expect(row?.[COLUMN]).toBe("indexed");
     });
 
-    it("refuses a pushed column whose type differs from the module's, naming the table and column", async () => {
-      const module = await moduleFor(() => col.text({ nullable: true }));
-      // Pushed as an integer: the module declares text.
-      const booted = await bootPushing(() => col.integer({ nullable: true }));
-      await seedRow(booted, 7);
-
-      const refused = await migrate(booted, module).then(
-        () => undefined,
-        (error: unknown) => error
+    it("refuses a pushed column whose type differs from the migration's as drift, recording nothing", async () => {
+      // Pushed as an integer: the configuration declares text.
+      instance = await bootPushing(dialect, () =>
+        col.integer({ nullable: true })
       );
+      const id = await seedRow(7);
+      const file = await migrateCreate("create_posts");
 
+      const refused = await migrate();
+
+      // The app's first migration compares the whole table, so its drift
+      // names the table the column is on.
       expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_DRIFT" });
-      // Named by the drift item itself, not only by the migration's name.
-      const driftItems =
-        (refused as { logContext?: { driftItems?: { detail: string }[] } })
-          .logContext?.driftItems ?? [];
+      expect((refused as Error).message).toContain(TABLE);
       expect(
-        driftItems.some(item => item.detail.includes(`${TABLE}.${COLUMN}`))
-      ).toBe(true);
-      expect((refused as Error).message).toContain(`${TABLE}.${COLUMN}`);
-      expect(
-        (await pluginLedger(booted)).filter(([status]) => status === "applied")
+        (await ledgerOf(dialect, file)).filter(
+          ([status]) => status === "applied"
+        )
       ).toEqual([]);
+      const row = await instance.adapter.selectOne<Record<string, unknown>>(
+        TABLE,
+        { where: { and: [{ column: "id", op: "=", value: id }] } }
+      );
+      expect(Number(row?.[COLUMN])).toBe(7);
     });
   }
 );

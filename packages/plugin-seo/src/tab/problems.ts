@@ -28,9 +28,10 @@ export interface SeoProblem {
     | "no-description"
     | "description-too-long"
     | "structured-data"
-    | "share-image";
+    | "share-image"
+    | "drop-date-passed";
   /** The value it is about, where the tab marks it. */
-  value: "title" | "description" | "structuredData" | "image";
+  value: "title" | "description" | "structuredData" | "image" | "display";
   /** What is wrong, in one plain sentence. */
   text: string;
 }
@@ -87,6 +88,15 @@ export function seoProblems(
   }
   for (const problem of more.shareImage?.problems ?? []) {
     problems.push({ id: "share-image", value: "image", text: problem.message });
+  }
+  // The page leaves search once its date passes, as the problem list says
+  // of a published page.
+  if (answer.display?.unavailableAfter?.passed === true) {
+    problems.push({
+      id: "drop-date-passed",
+      value: "display",
+      text: "The date to drop this page from search has passed, so it is hidden from search now.",
+    });
   }
   return problems;
 }

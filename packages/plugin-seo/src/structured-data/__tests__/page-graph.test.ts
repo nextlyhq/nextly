@@ -850,18 +850,62 @@ describe("questions and answers", () => {
     expect(nodeOf(nodes, "FAQPage")?.mainEntity).toEqual(AS_NODES);
   });
 
-  it("are described beside a page of another kind that shows them", async () => {
+  // Questions and answers markup only where someone chose the kind: a page
+  // of another kind gets none beside it, from its route or from a field.
+  it.each([
+    [
+      "from its route",
+      singleInput("home", { id: "h1" }, { questions: QUESTIONS }),
+    ],
+    ["from a field", singleInput("home", { id: "h1", faq: QUESTIONS })],
+  ])(
+    "are not described beside a page of another kind showing them %s",
+    async (_, input) => {
+      const { nodes, problems } = await buildStructuredData(
+        context(),
+        input,
+        answerAt("/", "Rext AI"),
+        rules()
+      );
+
+      expect(nodeOf(nodes, "WebPage")).toBeDefined();
+      expect(nodeOf(nodes, "FAQPage")).toBeUndefined();
+      expect(JSON.stringify(nodes)).not.toContain("Question");
+      expect(problems).toEqual([]);
+    }
+  );
+
+  it("are not described beside a page whose content type chose another kind", async () => {
     const { nodes } = await buildStructuredData(
       context(),
-      singleInput("home", { id: "h1" }, { questions: QUESTIONS }),
-      answerAt("/", "Rext AI"),
+      singleInput(
+        "about",
+        { id: "a1", faq: QUESTIONS },
+        { questions: QUESTIONS }
+      ),
+      answerAt("/about", "About"),
+      rules({ types: { "single:about": { type: "aboutPage" } } })
+    );
+
+    expect(nodeOf(nodes, "AboutPage")).toBeDefined();
+    expect(JSON.stringify(nodes)).not.toContain("FAQPage");
+  });
+
+  it("are described on a page whose own choice is Questions and answers", async () => {
+    const { nodes } = await buildStructuredData(
+      context(),
+      singleInput("help", {
+        id: "h1",
+        title: "Help",
+        faq: QUESTIONS,
+        seo: { structuredDataType: "faqPage" },
+      }),
+      answerAt("/help", "Help"),
       rules()
     );
 
-    expect(nodeOf(nodes, "WebPage")).toBeDefined();
-    expect(nodeOf(nodes, "FAQPage")).toEqual({
-      "@type": "FAQPage",
-      "@id": `${ORIGIN}/#faq`,
+    expect(nodeOf(nodes, "FAQPage")).toMatchObject({
+      "@id": `${ORIGIN}/help#webpage`,
       mainEntity: AS_NODES,
     });
   });

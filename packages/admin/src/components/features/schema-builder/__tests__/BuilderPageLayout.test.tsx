@@ -7,7 +7,7 @@ import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen, within } from "@admin/__tests__/utils";
+import { act, render, screen, within } from "@admin/__tests__/utils";
 import { convertToFieldDefinition } from "@admin/lib/builder";
 import {
   buildOutline,
@@ -88,6 +88,13 @@ function makeBuilder(): BuilderFieldsApi {
     handleFieldUpdate: vi.fn(),
     handleNestedFieldAdd: vi.fn(),
     validateFields: vi.fn(() => ({ valid: true })),
+    resetFields: vi.fn(),
+    clearHistory: vi.fn(),
+    historyStep: 0,
+    canUndo: false,
+    canRedo: false,
+    undo: vi.fn(() => null),
+    redo: vi.fn(() => null),
   };
 }
 
@@ -102,6 +109,16 @@ function renderLayout(
     name: "Posts",
     locked: false,
     unsavedCount: 0,
+    pending: {
+      changes: [],
+      marks: new Map(),
+      saved: [],
+      canUndo: false,
+      canRedo: false,
+      undo: () => null,
+      redo: () => null,
+      discardAll: () => {},
+    },
     savedFieldIds: new Set<string>(),
     onSave: vi.fn(),
     settings,
@@ -179,6 +196,21 @@ describe("BuilderPageLayout", () => {
 
     renderLayout({ isSaving: true });
     expect(screen.getByText("Saving collection changes…")).toBeInTheDocument();
+  });
+
+  // A save on its way keeps what it was started with: discarding then would
+  // clear the editor while the save could still write the discarded values.
+  it("offers no Discard all while a save or its preview is on its way", () => {
+    const { unmount } = renderLayout({ unsavedCount: 2 });
+    expect(
+      screen.getByRole("button", { name: "Discard all changes" })
+    ).toBeEnabled();
+    unmount();
+
+    renderLayout({ unsavedCount: 2, isSaving: true });
+    expect(
+      screen.getByRole("button", { name: "Discard all changes" })
+    ).toBeDisabled();
   });
 
   it("carries the lock through to the field list", () => {
@@ -314,33 +346,33 @@ describe("BuilderPageLayout", () => {
     beforeEach(() => navigateTo.mockClear());
     afterEach(() => vi.restoreAllMocks());
 
-    it("asks first while there are unsaved changes, and stays when declined", async () => {
-      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-      withSeo(2);
-      await openFromMenu();
-      expect(confirm).toHaveBeenCalledTimes(1);
-      expect(confirm.mock.calls[0][0]).toContain("unsaved changes");
-      expect(navigateTo).not.toHaveBeenCalled();
+    // The reference goes; the field group's own fields, shown beneath it,
+    // stay where they are defined.
+    it("deleting it says the field goes, not the field group's own fields", async () => {
+      withSeo(0);
+      const user = userEvent.setup();
+      screen.getByTestId("field-row-seo").focus();
+      await user.keyboard("{Shift>}{F10}{/Shift}");
+      await user.click(await screen.findByRole("menuitem", { name: "Delete" }));
+      expect(
+        screen.getByText("Deleted SEO. Undo brings it back.")
+      ).toBeInTheDocument();
     });
 
-    it("leaves once the editor agrees", async () => {
-      vi.spyOn(window, "confirm").mockReturnValue(true);
+    // The page's guard asks before any navigation while changes are pending
+    // (see "leaving with pending changes" below), so opening a field group
+    // only navigates: asking here as well would ask twice.
+    it("navigates to the field group's editor without asking itself", async () => {
+      const confirm = vi.spyOn(window, "confirm");
       withSeo(2);
       await openFromMenu();
+      expect(confirm).not.toHaveBeenCalled();
       expect(navigateTo).toHaveBeenCalledTimes(1);
       expect(navigateTo.mock.calls[0][0]).toContain("seo");
     });
 
-    it("leaves without asking when nothing is unsaved", async () => {
+    it("navigates from the settings panel too, without asking itself", async () => {
       const confirm = vi.spyOn(window, "confirm");
-      withSeo(0);
-      await openFromMenu();
-      expect(confirm).not.toHaveBeenCalled();
-      expect(navigateTo).toHaveBeenCalledTimes(1);
-    });
-
-    it("asks first from the settings panel too", async () => {
-      const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
       // The id the outline gives the field group's own field.
       const metaTitle = flattenOutline(
         buildOutline([...fields, seo], {
@@ -358,8 +390,99 @@ describe("BuilderPageLayout", () => {
       await userEvent.click(
         await screen.findByRole("button", { name: /Open the field group/ })
       );
-      expect(confirm).toHaveBeenCalledTimes(1);
-      expect(navigateTo).not.toHaveBeenCalled();
+      expect(confirm).not.toHaveBeenCalled();
+      expect(navigateTo).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Every way out goes through the history the admin's router writes, which
+  // the page's guard watches: an in-app link, the field group's editor, and
+  // the browser's back. A reload and closing the tab are asked about by the
+  // browser itself, and are covered in the browser tests.
+  describe("leaving with pending changes", () => {
+    const start = window.location.pathname;
+    afterEach(() => window.history.replaceState(null, "", start));
+
+    const leave = () =>
+      act(() => window.history.pushState(null, "", "/admin/somewhere-else"));
+
+    it("asks first, and stays when the editor keeps editing", async () => {
+      renderLayout({ unsavedCount: 2 });
+      leave();
+      const dialog = await screen.findByRole("alertdialog");
+      expect(window.location.pathname).toBe(start);
+      await userEvent.click(
+        within(dialog).getByRole("button", { name: /keep editing/i })
+      );
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(window.location.pathname).toBe(start);
+    });
+
+    it("leaves once the editor chooses to discard", async () => {
+      renderLayout({ unsavedCount: 2 });
+      leave();
+      await userEvent.click(
+        within(await screen.findByRole("alertdialog")).getByRole("button", {
+          name: /discard/i,
+        })
+      );
+      expect(window.location.pathname).toBe("/admin/somewhere-else");
+    });
+
+    // The crumb back to the list is a link like the admin's others: it moves
+    // through the admin's own history, which the guard watches, so it asks
+    // as every other way out does.
+    it("asks first when the crumb back to the list is clicked", async () => {
+      const actual = await vi.importActual<
+        typeof import("@admin/lib/navigation")
+      >("@admin/lib/navigation");
+      navigateTo.mockImplementationOnce(actual.navigateTo);
+      renderLayout({ unsavedCount: 2 });
+      await userEvent.click(
+        screen.getByRole("link", { name: /back to collections/i })
+      );
+      expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+      expect(window.location.pathname).toBe(start);
+    });
+
+    it("does not ask with nothing pending", () => {
+      renderLayout({ unsavedCount: 0 });
+      leave();
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(window.location.pathname).toBe("/admin/somewhere-else");
+    });
+
+    it("does not ask on a read-only entity, which has nothing to lose", () => {
+      renderLayout({ unsavedCount: 0, locked: true });
+      leave();
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
+
+    // A save on its way writes what it was started with: discarding then would
+    // leave the page while the save could still write the discarded values.
+    // A save on its way still writes what it was started with, even when an
+    // undo since has brought the pending count back to none: the way out waits
+    // for it rather than leaving the save to land unseen.
+    it("asks before leaving while a save is on its way, with nothing pending", async () => {
+      renderLayout({ unsavedCount: 0, isSaving: true });
+      leave();
+      const dialog = await screen.findByRole("alertdialog");
+      expect(window.location.pathname).toBe(start);
+      expect(
+        within(dialog).getByRole("button", { name: /discard/i })
+      ).toBeDisabled();
+    });
+
+    it("offers no Discard Changes while a save is on its way", async () => {
+      renderLayout({ unsavedCount: 2, isSaving: true });
+      leave();
+      const dialog = await screen.findByRole("alertdialog");
+      expect(
+        within(dialog).getByRole("button", { name: /discard/i })
+      ).toBeDisabled();
+      expect(
+        within(dialog).getByRole("button", { name: /keep editing/i })
+      ).toBeEnabled();
     });
   });
 });

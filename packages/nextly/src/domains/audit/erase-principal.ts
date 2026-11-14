@@ -99,6 +99,12 @@ export interface PrincipalErasureAdapter extends OpenTransactionProbe {
   transaction<T>(work: (tx: TransactionContext) => Promise<T>): Promise<T>;
   /** Whether a table exists, for one a database may not have yet. */
   tableExists?(table: string): Promise<boolean>;
+  /**
+   * The same lookup on a transaction's own connection, for a report made in
+   * one: asked through the pool instead, it waits, on a pool of one, for the
+   * connection that transaction holds.
+   */
+  tableExistsThrough?(tx: TransactionContext, table: string): Promise<boolean>;
 }
 
 /**
@@ -137,12 +143,12 @@ export async function reportPrincipalDeleted(
   // The record of content events is erased only where it exists: a database
   // that has not run `nextly migrate` since it arrived lacks it, and an update
   // against a missing table would fail the whole report.
-  const contentEventsExist =
-    adapter.tableExists === undefined
-      ? true
-      : await adapter.tableExists(CONTENT_EVENTS_TABLE);
-  const tables = principalErasureTables(dialect, contentEventsExist);
-  const erase = (tx: TransactionContext) =>
+  const tablesBy = async (exists?: (table: string) => Promise<boolean>) =>
+    principalErasureTables(
+      dialect,
+      exists === undefined ? true : await exists(CONTENT_EVENTS_TABLE)
+    );
+  const eraseIn = (tx: TransactionContext, tables: ErasureTables) =>
     erasePrincipal(
       tx.getDrizzle<PrincipalErasureDb>(),
       server,
@@ -155,15 +161,31 @@ export async function reportPrincipalDeleted(
     // Refused before anything is marked: a handle that is not a plugin
     // transaction's names no transaction to hold the lock.
     const link = linkedTransaction(options.tx, OPERATION);
-    // Marked before the lock is asked for, so an audit write the plugin
-    // started alongside the report joins the transaction too.
+    // Marked, and the report's work started on the transaction, before this
+    // awaits anything, the table probe included. A delivery record the plugin
+    // started alongside the report then finds the lock held and waits for the
+    // report's statements (`runContained`). Marked any later, a record arriving
+    // meanwhile wrote beside the report on the same connection, and its failed
+    // insert aborted the transaction under the report's next statement.
     markHoldsDeletionLock(options.tx as object);
-    await link.run(erase);
+    await link.run(async tx => {
+      // Asked on the transaction's connection, which it holds by now.
+      const through = adapter.tableExistsThrough?.bind(adapter);
+      const exists = through
+        ? (table: string) => through(tx, table)
+        : adapter.tableExists?.bind(adapter);
+      return eraseIn(tx, await tablesBy(exists));
+    });
     return;
   }
   // A precondition: refused before the report's own transaction is opened.
   assertNoOpenTransaction(adapter, OPERATION);
-  await runAdapterTransaction(adapter.transaction.bind(adapter), erase);
+  // Probed before the transaction opens, so the probe never waits for a
+  // connection the transaction holds.
+  const tables = await tablesBy(adapter.tableExists?.bind(adapter));
+  await runAdapterTransaction(adapter.transaction.bind(adapter), tx =>
+    eraseIn(tx, tables)
+  );
 }
 
 /** A staff user's deletion, once it holds the deleted-people lock. */

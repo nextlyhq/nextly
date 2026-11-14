@@ -14,9 +14,9 @@ vi.mock("@admin/lib/api/publicApi", () => ({
   publicApi: { get: (...args: unknown[]) => mockGet(...args) },
 }));
 
-const mockIsAuthenticated = vi.fn();
+const mockSessionStanding = vi.fn();
 vi.mock("@admin/lib/auth/session", () => ({
-  isAuthenticated: (...args: unknown[]) => mockIsAuthenticated(...args),
+  sessionStanding: (...args: unknown[]) => mockSessionStanding(...args),
   SessionUnavailableError: class extends Error {},
 }));
 
@@ -46,7 +46,11 @@ describe("restartSessionCheck", () => {
     mockGet
       .mockReturnValueOnce(new Promise(() => {}))
       .mockResolvedValue({ isSetup: true, requiresSetupToken: false });
-    mockIsAuthenticated.mockResolvedValue(true);
+    mockSessionStanding.mockResolvedValue({
+      isAuthenticated: true,
+      hasRole: true,
+      email: "owner@example.com",
+    });
 
     const { result } = renderHook(() => useAuthSession(), { wrapper });
     await act(async () => {
@@ -63,6 +67,8 @@ describe("restartSessionCheck", () => {
       expect(result.current.data).toEqual({
         isSetup: true,
         isAuthenticated: true,
+        hasRole: true,
+        email: "owner@example.com",
       })
     );
   });

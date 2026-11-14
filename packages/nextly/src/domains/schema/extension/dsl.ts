@@ -1395,6 +1395,61 @@ function resolveRelations(
   });
 }
 
+/**
+ * The one-edges a table's own foreign keys carry, as a `ref()` column
+ * carries one: a key already says which row a value points at, and asking
+ * the author to say it again as a relation is a second place to keep in
+ * step. Named by the key's column, as a `ref()` column's edge is.
+ *
+ * A key over one column only: an edge joins one column to one, so a
+ * composite key carries none and a declared relation is the way to query
+ * through it. None either where a declared relation or a `ref()` column's
+ * edge already joins that column to that table, or already holds the name:
+ * the author's own edge wins, as it does over a `ref()` column's. Each edge
+ * names the referenced column. Derived by the compiler (`relationsOf`),
+ * once the keys' targets are checked, rather than by `defineTable`: which
+ * edges the registry can resolve depends on what the target is
+ * (`keyRelationsOf`).
+ */
+export function foreignKeyRelations(
+  foreignKeys: readonly DeclaredForeignKey[],
+  columns: readonly { name: string; key: string }[],
+  existing: readonly TableRelationInput[]
+): TableRelationInput[] {
+  const columnKeys = new Set(columns.map(column => column.key));
+  const names = new Set(existing.map(rel => rel.name));
+  const edges: TableRelationInput[] = [];
+  for (const fk of foreignKeys) {
+    if (fk.columns.length !== 1) continue;
+    const [fromColumn] = fk.columns;
+    const [toColumn] = fk.referencesColumns;
+    const joined = [...existing, ...edges].some(
+      rel =>
+        rel.kind === "one" &&
+        rel.fromColumn === fromColumn &&
+        rel.targetTable === fk.referencesTable
+    );
+    if (joined) continue;
+    const key =
+      columns.find(column => column.name === fromColumn)?.key ?? fromColumn;
+    const name = implicitEdgeName(key, columnKeys);
+    // A relation and a column share the row's namespace, and the fallback
+    // name (`<key>Ref`) is not checked against the columns by
+    // `implicitEdgeName`: a table holding a column of that name gets no
+    // edge for the key rather than a pair Drizzle refuses.
+    if (names.has(name) || columnKeys.has(name)) continue;
+    names.add(name);
+    edges.push({
+      name,
+      kind: "one",
+      targetTable: fk.referencesTable,
+      fromColumn,
+      toColumn,
+    });
+  }
+  return edges;
+}
+
 /** The name of the one-edge a `ref()` column carries; see `defineTable`. */
 function implicitEdgeName(
   key: string,
@@ -1465,6 +1520,36 @@ function resolveChecks(
     assertQuotableIdentifier(input.name, path, "A check name");
     return { name: input.name, sql: input.sql };
   });
+}
+
+/**
+ * Resolve foreign keys, checks and relations against a table that already
+ * exists, by the rules `defineTable` applies to its own: what `extendTable`
+ * adds to a table is validated exactly as a declared table's are, so the two
+ * answers cannot drift. `columns` are the table's columns as they stand,
+ * contributed ones included, since a key may sit on a column added with it.
+ */
+export function resolveTableConstraints(
+  tableName: string,
+  columns: readonly ResolvedColumn[],
+  opts: Omit<TableDefinitionOptions, "indexes">
+): Pick<TableDefinition, "foreignKeys" | "checks" | "relations"> {
+  const byName = new Map(columns.map(column => [column.name, column.key]));
+  return {
+    foreignKeys: resolveForeignKeys(
+      tableName,
+      columns,
+      byName,
+      opts.foreignKeys ?? []
+    ),
+    checks: resolveChecks(tableName, opts.checks ?? []),
+    relations: resolveRelations(
+      tableName,
+      columns,
+      byName,
+      opts.relations ?? []
+    ),
+  };
 }
 
 /**

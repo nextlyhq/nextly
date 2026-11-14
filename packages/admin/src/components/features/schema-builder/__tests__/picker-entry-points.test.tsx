@@ -18,6 +18,7 @@ import { render, screen } from "@admin/__tests__/utils";
 import { buildOutline } from "@admin/lib/builder/outline/outline-model";
 
 import { BuilderToolbar } from "../BuilderToolbar";
+import { NO_PENDING_CHANGES } from "./no-pending-changes";
 import type { BuilderConfig } from "../builder-config";
 import { Outline, type OutlineCallbacks } from "../outline/Outline";
 import type { BuilderField } from "../types";
@@ -98,6 +99,7 @@ describe("picker entry points", () => {
         config={config}
         name="Posts"
         unsavedCount={0}
+        pending={NO_PENDING_CHANGES}
         onAddField={onAddField}
         onOpenSettings={vi.fn()}
         onSave={vi.fn()}
@@ -217,6 +219,7 @@ describe("picker entry points", () => {
         config={config}
         name="Posts"
         unsavedCount={0}
+        pending={NO_PENDING_CHANGES}
         locked
         onAddField={vi.fn()}
         onOpenSettings={vi.fn()}

@@ -521,8 +521,8 @@ export function passwordClearUnconfirmed(
 ): CliError {
   return new CliError("PASSWORD_CLEAR_UNCONFIRMED", {
     what: `Nothing was changed: --apply also needs ${confirmFlag}.`,
-    why: `${confirmFlag} is your statement that no stored password was written by a custom passwordHasher, now or earlier. A custom hasher's hashes can look like plain text here, and clearing them locks those people out.`,
-    next: `If no custom passwordHasher ever wrote a password, run \`nextly ${command} --apply ${confirmFlag}\`.`,
+    why: `${confirmFlag} is your statement that every stored password was written by core's bcrypt or by the passwordHasher in nextly.config.ts, now and earlier. Another hasher's hashes can look like plain text here, and clearing them locks those people out.`,
+    next: `If no other passwordHasher ever wrote a password, run \`nextly ${command} --apply ${confirmFlag}\`.`,
   });
 }
 

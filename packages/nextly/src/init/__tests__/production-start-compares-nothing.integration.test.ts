@@ -24,6 +24,9 @@
  * - the two registry tables, for the rules left in their retired
  *   `access_rules` column;
  * - the plugin readiness check's reads of the ledger;
+ * - on PostgreSQL, the check that the configured schema is the one holding the
+ *   installation, which asks which schemas hold the migration history table,
+ *   so a moved `db.postgres.schema` is refused before a table is created;
  * - on SQLite, the one-time timestamp repair, upkeep the start runs after it
  *   resolves, which reads each table's columns to find the timestamps.
  * Anything else that reads a table's shape (the drift check of each
@@ -85,6 +88,7 @@ interface Asker {
     | "per-language layout"
     | "component discriminator"
     | "plugin readiness"
+    | "installation schema"
     | "sqlite timestamp repair";
   /**
    * A schema introspection: the code that called it (its nearest frames,
@@ -193,6 +197,18 @@ vi.mock(
     };
   }
 );
+vi.mock("../../domains/schema/services/postgres-schema", async original => {
+  const actual =
+    await original<
+      typeof import("../../domains/schema/services/postgres-schema")
+    >();
+  return {
+    ...actual,
+    assertInstallationInConfiguredSchema: asking.label(() => ({
+      kept: "installation schema",
+    }))(actual.assertInstallationInConfiguredSchema),
+  };
+});
 // The one-time repair of SQLite timestamps, upkeep the start runs after it
 // resolves: it reads each table's columns to find the timestamps to repair,
 // and compares nothing with the configuration.
@@ -460,6 +476,7 @@ describe.each(getConfiguredTestDialects())(
           "component discriminator",
           "per-language layout",
           "plugin readiness",
+          ...(dialect === "postgresql" ? ["installation schema"] : []),
         ]) {
           expect(kept, `${reader} is seen`).toContain(reader);
         }

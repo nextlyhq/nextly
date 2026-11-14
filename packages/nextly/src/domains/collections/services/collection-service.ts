@@ -72,6 +72,12 @@ import type {
 import { BaseService } from "../../../shared/base-service";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import {
+  parseFieldRewrite,
+  rewriteCallerOf,
+  rewritesSingle,
+  type FieldRewriteResult,
+} from "../../versions/field-rewrite";
 import type { WhereFilter } from "../query/query-operators";
 
 import type { CollectionMetadataService } from "./collection-metadata-service";
@@ -728,7 +734,12 @@ export class CollectionService extends BaseService {
     );
 
     if (!result.success) {
-      this.logger.warn("Entry creation failed", {
+      // A duplicate is thrown to the caller, which receives it and decides:
+      // several writers making one row at once (parallel build workers) is
+      // no fault, so only other failures are warned of here. Told by its
+      // code, since other refusals (a hook's conflict) answer 409 too.
+      const log = result.code === "DUPLICATE" ? "debug" : "warn";
+      this.logger[log]("Entry creation failed", {
         collectionName,
         message: result.message,
         statusCode: result.statusCode,
@@ -1073,6 +1084,45 @@ export class CollectionService extends BaseService {
     this.logger.info("Entry updated", { collectionName, entryId });
 
     return result.data as CollectionEntry;
+  }
+
+  /**
+   * @experimental Rewrite one field of an entry on its live copy and on every
+   * pending draft that holds it, in one transaction, without publishing, from
+   * the version the caller read. See `domains/versions/field-rewrite`.
+   *
+   * @param input - The rewrite of an entry, parsed here (`FieldRewriteRequest`)
+   * @param context - Who it is made as
+   * @param plugin - The plugin making it, by the name it booted under, for
+   *   history. Passed only by a plugin's own services, from its identity.
+   * @throws NextlyError if it is refused
+   */
+  async rewriteField(
+    input: unknown,
+    context: RequestContext,
+    plugin?: string
+  ): Promise<FieldRewriteResult> {
+    const request = parseFieldRewrite(input);
+    // A Single's rewrite reaches the Single's own write path, which a
+    // plugin's services route it to before this one.
+    if (rewritesSingle(request)) {
+      throw NextlyError.invalidInput({
+        message:
+          "A collection entry's rewrite names `collection` and `id`; this service rewrites no Single.",
+      });
+    }
+    const result = await this.entryService.rewriteField({
+      request,
+      ...rewriteCallerOf(context, plugin),
+    });
+    if (!result.success) {
+      throw this.mapLegacyErrorToNextlyError(result, {
+        entity: "entry",
+        collectionName: request.collection,
+        entryId: request.id,
+      });
+    }
+    return result.data as FieldRewriteResult;
   }
 
   /**

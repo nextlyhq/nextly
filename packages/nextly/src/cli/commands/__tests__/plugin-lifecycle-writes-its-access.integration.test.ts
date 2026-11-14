@@ -110,6 +110,8 @@ const state = vi.hoisted(() => ({
   failRelease: false,
   /** How many times an injected failure was reached. */
   injected: 0,
+  /** How many times the hooked plugin's `onInstall` ran. */
+  hookRuns: 0,
 }));
 
 vi.mock("../../utils/config-loader", async importOriginal => {
@@ -250,6 +252,29 @@ const APP_NAMED_DECLARING = definePlugin({
   },
 });
 
+/** A plugin with an `onInstall`, counting its runs, in two releases. */
+const HOOKED = definePlugin({
+  name: "@test/pla-hooked",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: {
+    permissions: [{ action: "pull", resource: "pla-hooked", label: "Pull" }],
+  },
+  onInstall: () => {
+    state.hookRuns += 1;
+  },
+});
+const HOOKED_NEXT = definePlugin({
+  ...HOOKED,
+  version: "1.1.0",
+  contributes: {
+    permissions: [
+      { action: "pull", resource: "pla-hooked", label: "Pull" },
+      { action: "push", resource: "pla-hooked", label: "Push" },
+    ],
+  },
+});
+
 /** A plugin configured and never installed: no lifecycle record names it. */
 const NEVER = definePlugin({
   name: "@test/pla-never",
@@ -353,6 +378,7 @@ describe.each(getConfiguredTestDialects())(
       state.failRecordOf = undefined;
       state.failRelease = false;
       state.injected = 0;
+      state.hookRuns = 0;
       runAs(NEW);
     }, 60_000);
 
@@ -1027,5 +1053,160 @@ describe.each(getConfiguredTestDialects())(
         all.filter(row => presets.has(row.split(" ")[1]));
       expect(ofPresets(await grantRows())).toEqual(ofPresets(rows));
     }, 240_000);
+
+    describe("an install of a plugin already recorded installed", () => {
+      const DIGEST_SCHEDULE = "schedule-pla-digest";
+
+      /** How many lifecycle events name `name`. */
+      const events = (name: string) =>
+        reading(
+          async adapter =>
+            (
+              await new SchemaEventsRepository(
+                adapter.getDrizzle(),
+                dialect
+              ).listPluginLifecycle()
+            ).filter(row => row.scopeSlug === name).length
+        );
+
+      it("adds the permission its upgraded package declares, sets every preset role's grants and records the release, appending no event, with no nextly migrate between", async () => {
+        await migrateCreate();
+        await migrate(NEW);
+        await install(DIGEST.name);
+        expect(await events(DIGEST.name)).toBe(1);
+        // The control: the first release declares no schedule permission.
+        expect(await permission(DIGEST_SCHEDULE)).toBeUndefined();
+
+        await install(DIGEST.name, NEW, [FEEDS, DIGEST_NEXT]);
+
+        expect(await permission(DIGEST_SCHEDULE)).toEqual({
+          owner: DIGEST.name,
+          orphaned: false,
+        });
+        expect(held(await grantRows(), "admin")).toContain(DIGEST_SCHEDULE);
+        expect(await recorded()).toBe(NEW);
+        expect(await events(DIGEST.name)).toBe(1);
+        expect((await lifecycle())[DIGEST.name]).toEqual({
+          state: "installed",
+        });
+      }, 240_000);
+
+      it("runs no onInstall, though its upgraded package adds a permission it then holds", async () => {
+        await migrateCreate();
+        await migrate(NEW);
+        await install(HOOKED.name, NEW, [FEEDS, HOOKED]);
+        expect(state.hookRuns).toBe(1);
+
+        await install(HOOKED.name, NEW, [FEEDS, HOOKED_NEXT]);
+
+        expect(state.hookRuns).toBe(1);
+        expect(await permission("push-pla-hooked")).toEqual({
+          owner: HOOKED.name,
+          orphaned: false,
+        });
+        expect(await events(HOOKED.name)).toBe(1);
+      }, 240_000);
+
+      it("runs onInstall again, and records the install, after an uninstall", async () => {
+        // The control: a finished uninstall makes the next install a first one.
+        await migrateCreate();
+        await migrate(NEW);
+        await install(HOOKED.name, NEW, [FEEDS, HOOKED]);
+        await uninstall(HOOKED.name, false, NEW, [FEEDS, HOOKED]);
+
+        await install(HOOKED.name, NEW, [FEEDS, HOOKED]);
+
+        expect(state.hookRuns).toBe(2);
+        expect((await lifecycle())[HOOKED.name]).toEqual({
+          state: "installed",
+        });
+      }, 240_000);
+
+      it("sets every preset role's grants as a release whose presets resolve differently does, and records that release, appending no event", async () => {
+        await migrateCreate();
+        await migrate(OLD);
+        await install(FEEDS.name, OLD);
+        // The control: the older release's viewer holds the export.
+        expect(held(await grantRows(), "viewer")).toContain("export-pla-posts");
+        expect(await recorded()).toBe(OLD);
+
+        await install(FEEDS.name, NEW);
+
+        const rows = await grantRows();
+        expect(held(rows, "viewer")).not.toContain("export-pla-posts");
+        expect(held(rows, "author")).toContain("delete-pla-posts");
+        expect(await recorded()).toBe(NEW);
+        expect(await events(FEEDS.name)).toBe(1);
+      }, 240_000);
+
+      it("writes no permission, grant or release record when it stops just before the release record", async () => {
+        // Installed from the older release, so the newer one's repeat install
+        // has a release record to write.
+        await migrateCreate();
+        await migrate(OLD);
+        await install(DIGEST.name, OLD);
+        runAs(NEW);
+        const before = await everything();
+        expect(before.recorded).toBe(OLD);
+
+        state.failRelease = true;
+        await expect(
+          install(DIGEST.name, NEW, [FEEDS, DIGEST_NEXT])
+        ).rejects.toThrow("stopped just before the release is recorded");
+
+        expect(state.injected).toBeGreaterThan(0);
+        expect(await everything()).toEqual(before);
+        expect(await events(DIGEST.name)).toBe(1);
+      }, 240_000);
+
+      it("is refused in production from an older release, naming the recorded release, before it adds the upgrade's permission", async () => {
+        await migrateCreate();
+        await migrate(NEW);
+        await install(DIGEST.name, NEW);
+        const before = await everything();
+
+        const refused = install(DIGEST.name, OLD, [FEEDS, DIGEST_NEXT]);
+        await expect(refused).rejects.toMatchObject({ code: "CONFLICT" });
+        await expect(refused).rejects.toThrow(
+          `Run this command from Nextly ${NEW} or newer`
+        );
+
+        expect(await everything()).toEqual(before);
+        expect(await permission(DIGEST_SCHEDULE)).toBeUndefined();
+        expect(await events(DIGEST.name)).toBe(1);
+      }, 240_000);
+
+      it("clears the orphan mark of a permission it declares again, restoring its grants as they were, appending no event", async () => {
+        await migrateCreate();
+        await migrate(NEW);
+        await install(DIGEST.name, NEW, [FEEDS, DIGEST_NEXT]);
+        const scheduleGrants = (rows: readonly string[]) =>
+          rows
+            .filter(row => row.endsWith(` ${DIGEST_SCHEDULE}`))
+            .map(row => row.split(" ").slice(1).join(" "))
+            .sort();
+        const granted = scheduleGrants(await grantRows());
+        expect(granted.length).toBeGreaterThan(0);
+
+        // The app's next migration, written while the configured package
+        // no longer declared it, applied: its snapshot speaks for the plugin
+        // and leaves the permission out, which orphans it.
+        await migrateCreate("digest_drops_schedule", configWith(FEEDS, DIGEST));
+        await migrate(NEW, configWith(FEEDS, DIGEST));
+        expect(await permission(DIGEST_SCHEDULE)).toEqual({
+          owner: DIGEST.name,
+          orphaned: true,
+        });
+
+        await install(DIGEST.name, NEW, [FEEDS, DIGEST_NEXT]);
+
+        expect(await permission(DIGEST_SCHEDULE)).toEqual({
+          owner: DIGEST.name,
+          orphaned: false,
+        });
+        expect(scheduleGrants(await grantRows())).toEqual(granted);
+        expect(await events(DIGEST.name)).toBe(1);
+      }, 240_000);
+    });
   }
 );

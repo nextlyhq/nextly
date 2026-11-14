@@ -13,8 +13,11 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 
 import { useBranding } from "@admin/context/providers/BrandingProvider";
-import { NAV_COLLECTIONS_PARAMS, useCollections } from "@admin/hooks/queries";
-import { useEveryNavCollection } from "@admin/hooks/queries/useCollections";
+import {
+  NAV_COLLECTIONS_PARAMS,
+  useCollections,
+  useEveryNavCollection,
+} from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { useSidebarPins } from "@admin/hooks/useSidebarPins";
 import {

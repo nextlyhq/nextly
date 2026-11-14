@@ -361,6 +361,117 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    describe("while another session holds the collection's table", () => {
+      let free: () => void = () => {};
+      let holding: Promise<unknown> = Promise.resolve();
+      let holder: DrizzleAdapter | undefined;
+      const previous = {
+        tryBound: process.env.NEXTLY_LOCK_TIMEOUT,
+        total: process.env.NEXTLY_LOCK_TIMEOUT_TOTAL,
+      };
+
+      beforeEach(() => {
+        // Short bounds, so the tries run in seconds: one second a try, four in all.
+        process.env.NEXTLY_LOCK_TIMEOUT = "1";
+        process.env.NEXTLY_LOCK_TIMEOUT_TOTAL = "4";
+      });
+
+      afterEach(async () => {
+        free();
+        await holding.catch(() => {});
+        await holder?.disconnect();
+        holder = undefined;
+        for (const [key, value] of [
+          ["NEXTLY_LOCK_TIMEOUT", previous.tryBound],
+          ["NEXTLY_LOCK_TIMEOUT_TOTAL", previous.total],
+        ] as const) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      });
+
+      /**
+       * A second session holds `dc_posts` until `free()`: on PostgreSQL and MySQL an open
+       * transaction that has read it, so a schema change waits for its lock; on SQLite an open
+       * write transaction on a second connection to the file, which holds the whole database.
+       */
+      async function holdTheTable(): Promise<void> {
+        let held: () => void = () => {};
+        const isHeld = new Promise<void>(resolve => {
+          held = resolve;
+        });
+        const freed = new Promise<void>(resolve => {
+          free = resolve;
+        });
+        const on =
+          dialect === "sqlite"
+            ? (holder = (await createAdapter({
+                type: "sqlite",
+                url: process.env.DATABASE_URL,
+              } as Parameters<
+                typeof createAdapter
+              >[0])) as unknown as DrizzleAdapter)
+            : adapter;
+        holding = on.transaction(async tx => {
+          await tx.execute(
+            dialect === "sqlite"
+              ? "UPDATE dc_posts SET title = title"
+              : "SELECT id FROM dc_posts"
+          );
+          held();
+          await freed;
+        });
+        await isHeld;
+      }
+
+      const create = () =>
+        writeCollectionSave(deps(), {
+          slug: "posts",
+          previous: null,
+          entity: posts([text("title")]),
+          change: "create",
+        });
+      const addSubtitle = (logger: CollectionSaveDeps["logger"] = quiet) =>
+        writeCollectionSave(deps({ logger }), {
+          slug: "posts",
+          previous: posts([text("title")]),
+          entity: posts([text("title"), text("subtitle")]),
+          change: "update",
+        });
+
+      it("waits in tries, then stops as table busy with nothing changed", async () => {
+        await create();
+        await holdTheTable();
+        const notices: string[] = [];
+        await expect(
+          addSubtitle({
+            ...quiet,
+            warn: (line: string) => {
+              notices.push(line);
+            },
+          })
+        ).rejects.toMatchObject({ code: "NEXTLY_TABLE_BUSY" });
+        // A notice for each try after the first, in the save's log.
+        expect(notices.length).toBeGreaterThan(0);
+        expect(await columns()).not.toContain("subtitle");
+        expect((await appliedRows()).map(r => r.filename)).toEqual(
+          migrationFiles().slice(0, 1)
+        );
+      }, 30_000);
+
+      it("applies the change on a later try once the table is free", async () => {
+        await create();
+        await holdTheTable();
+        // Freed during the first pause, after the first try ended waiting.
+        setTimeout(() => free(), 1_500);
+        await addSubtitle();
+        expect(await columns()).toContain("subtitle");
+        expect((await appliedRows()).map(r => r.filename)).toEqual(
+          migrationFiles()
+        );
+      }, 30_000);
+    });
+
     it("leaves no file and puts the definition back when the statements fail with nothing applied", async () => {
       // Declared 255 characters wide, so making `code` unique is the index alone on every dialect
       // (on MySQL a unique field that states no width is also bounded, a change of its own).
@@ -415,6 +526,167 @@ describe.each(getConfiguredTestDialects())(
         change: "update",
       });
       expect(await columns()).toContain("subtitle");
+    });
+
+    it("writes a relationship key an update adds into its file, and the table holds it", async () => {
+      // The relationship as the admin writes it, added to a table that already exists: its key
+      // reaches the file on every dialect, SQLite's as a rebuild of the table carrying the key.
+      const authorKey = {
+        name: "fk_dc_posts_author",
+        columns: ["author"],
+        referencesTable: "dc_authors",
+        referencesColumns: ["id"],
+        onDelete: "set null" as const,
+        onUpdate: "no action" as const,
+      };
+      await writeCollectionSave(deps(), {
+        slug: "authors",
+        previous: null,
+        entity: {
+          slug: "authors",
+          labels: { singular: "Author", plural: "Authors" },
+          fields: [text("name")],
+        } as UiSchemaEntity,
+        change: "create",
+      });
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("title")]),
+        change: "create",
+      });
+      const author = {
+        name: "author",
+        type: "relationship",
+        relationTo: "authors",
+      } as UiSchemaEntity["fields"][number];
+
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: posts([text("title")]),
+        entity: posts([text("title"), author]),
+        change: "update",
+        keys: { before: [], after: [authorKey] },
+      });
+
+      const files = migrationFiles();
+      const up = readFileSync(
+        join(dir, "migrations", files[files.length - 1]!),
+        "utf-8"
+      );
+      expect(up, up).toMatch(/REFERENCES\s+[`"]?dc_authors/);
+      const live = await introspectLiveSnapshot(
+        adapter.getDrizzle(),
+        dialect === "postgresql" ? "postgresql" : dialect,
+        ["dc_posts"]
+      );
+      expect(
+        live.tables[0]?.foreignKeys?.map(fk => ({
+          columns: fk.columns,
+          referencesTable: fk.referencesTable,
+        }))
+      ).toEqual([{ columns: ["author"], referencesTable: "dc_authors" }]);
+
+      // A later save that rebuilds the table for another change (SQLite makes a column required by
+      // rebuilding it) keeps the key: the file's rebuild carries it.
+      const later = await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: posts([text("title"), author]),
+        entity: posts([text("title", { required: true }), author]),
+        change: "update",
+        keys: { before: [authorKey], after: [authorKey] },
+      });
+      expect(later.applied).toBe(true);
+      const kept = await introspectLiveSnapshot(
+        adapter.getDrizzle(),
+        dialect === "postgresql" ? "postgresql" : dialect,
+        ["dc_posts"]
+      );
+      expect(
+        kept.tables[0]?.foreignKeys?.map(fk => fk.referencesTable)
+      ).toEqual(["dc_authors"]);
+    });
+
+    it("moves a relationship key in its file, adding the new key before dropping the old one", async () => {
+      const authorKey = {
+        name: "fk_dc_posts_author",
+        columns: ["author"],
+        referencesTable: "dc_authors",
+        referencesColumns: ["id"],
+        onDelete: "set null" as const,
+        onUpdate: "no action" as const,
+      };
+      const movedKey = {
+        ...authorKey,
+        name: "fk_dc_posts_author_to_dc_editors",
+        referencesTable: "dc_editors",
+      };
+      for (const slug of ["authors", "editors"]) {
+        await writeCollectionSave(deps(), {
+          slug,
+          previous: null,
+          entity: {
+            slug,
+            labels: { singular: slug, plural: slug },
+            fields: [text("name")],
+          } as UiSchemaEntity,
+          change: "create",
+        });
+      }
+      const pointingAt = (relationTo: string) =>
+        ({
+          name: "author",
+          type: "relationship",
+          relationTo,
+        }) as UiSchemaEntity["fields"][number];
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: null,
+        entity: posts([text("title")]),
+        change: "create",
+      });
+      await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: posts([text("title")]),
+        entity: posts([text("title"), pointingAt("authors")]),
+        change: "update",
+        keys: { before: [], after: [authorKey] },
+      });
+
+      const moved = await writeCollectionSave(deps(), {
+        slug: "posts",
+        previous: posts([text("title"), pointingAt("authors")]),
+        entity: posts([text("title"), pointingAt("editors")]),
+        change: "update",
+        keys: { before: [authorKey], after: [movedKey] },
+      });
+
+      expect(moved.applied).toBe(true);
+      const files = migrationFiles();
+      const up = readFileSync(
+        join(dir, "migrations", files[files.length - 1]!),
+        "utf-8"
+      ).split("-- DOWN")[0]!;
+      if (dialect !== "sqlite") {
+        // The new key is added before the old one goes, so the column is never left unkeyed.
+        expect(
+          up.indexOf("fk_dc_posts_author_to_dc_editors"),
+          up
+        ).toBeGreaterThan(-1);
+        expect(up.indexOf("fk_dc_posts_author_to_dc_editors"), up).toBeLessThan(
+          up.search(
+            /DROP (FOREIGN KEY|CONSTRAINT) (IF EXISTS )?[`"]?fk_dc_posts_author[`"]?(\s|;|$)/m
+          )
+        );
+      }
+      const live = await introspectLiveSnapshot(
+        adapter.getDrizzle(),
+        dialect === "postgresql" ? "postgresql" : dialect,
+        ["dc_posts"]
+      );
+      expect(
+        live.tables[0]?.foreignKeys?.map(fk => fk.referencesTable)
+      ).toEqual(["dc_editors"]);
     });
 
     it("writes a many-to-many field's join table into the file: made here, replayed on an empty database, dropped with the collection", async () => {

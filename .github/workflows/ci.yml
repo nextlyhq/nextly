@@ -391,10 +391,17 @@ jobs:
         run: pnpm check:instance-boot-lane
 
       # The About line and topic list are repository settings, not files, so every
-      # check that reads git's index is blind to them. Reports unverifiable rather
-      # than failing when the API cannot be reached.
+      # check that reads git's index is blind to them. On a pull request or a push
+      # it reports unverifiable rather than failing when the API cannot be reached;
+      # a dispatched run must verify, so there an unreadable API fails the job.
       - name: Repository metadata
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          # Read with the job's own read-only token. Unauthenticated, the call
+          # shares 60 requests an hour with everything else on the runner's IP,
+          # and a dispatched run that GitHub answered 403 failed having read
+          # nothing.
+          GITHUB_TOKEN: ${{ github.token }}
         run: pnpm check:repo-metadata
 
   ci:

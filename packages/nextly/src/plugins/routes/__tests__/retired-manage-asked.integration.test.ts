@@ -68,6 +68,7 @@ const canAsker = definePlugin({
   contributes: {
     routes: RETIRED.map(
       (resource): PluginRoute => ({
+        siteWide: false,
         method: "POST",
         path: `/${resource}`,
         handler: async (_req, ctx) =>

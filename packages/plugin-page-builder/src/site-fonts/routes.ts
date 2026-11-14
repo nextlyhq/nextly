@@ -122,6 +122,7 @@ export interface SiteFontsRouteSetup {
 
 type Route = {
   method: "GET" | "POST";
+  checksAccess?: true;
   path: string;
   handler: (req: Request, ctx: SiteFontsRouteContext) => Promise<Response>;
 };
@@ -446,6 +447,7 @@ export function siteFontRoutes(setup: SiteFontsRouteSetup): Route[] {
     {
       method: "GET",
       path: SITE_FONTS_CATALOGUE_ROUTE_PATH,
+      checksAccess: true, // The handler judges each caller.
       handler: async (_req, ctx) => {
         await assertMayChangeFonts(ctx);
         const read = await readCatalogue(ctx);
@@ -469,7 +471,12 @@ export function siteFontRoutes(setup: SiteFontsRouteSetup): Route[] {
         });
       },
     },
-    { method: "POST", path: SITE_FONTS_ROUTE_PATH, handler: addFont },
+    {
+      method: "POST",
+      path: SITE_FONTS_ROUTE_PATH,
+      checksAccess: true, // The handler judges each caller.
+      handler: addFont,
+    },
   ];
 }
 

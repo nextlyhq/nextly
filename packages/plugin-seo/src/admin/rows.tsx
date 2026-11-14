@@ -5,7 +5,7 @@
  * @module admin/rows
  */
 import { Button } from "@nextlyhq/plugin-sdk/admin";
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 /** One row of the section: its label and sentence, a control, and below. */
 export function Row({
@@ -73,3 +73,30 @@ export function RowButton({
     </Button>
   );
 }
+
+/**
+ * Calls `reset` when the stored values (`stored`, as one key) change by
+ * anything but the row's own writes, such as the document being read again
+ * or switched to another language, so the row shows what the document holds.
+ * Returns the function the row tells the key its own write leaves.
+ */
+export function useOutsideChange(
+  stored: string,
+  reset: () => void
+): (written: string) => void {
+  const expected = useRef(stored);
+  const latestReset = useRef(reset);
+  latestReset.current = reset;
+  useEffect(() => {
+    if (stored === expected.current) return;
+    expected.current = stored;
+    latestReset.current();
+  }, [stored]);
+  return written => {
+    expected.current = written;
+  };
+}
+
+/** Stored values as one key, an absent value read as none. */
+export const keyOf = (...stored: unknown[]): string =>
+  JSON.stringify(stored.map(value => value ?? null));

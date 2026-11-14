@@ -17,6 +17,7 @@ import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { hashPassword } from "../../auth/password";
+import type { PasswordHasher } from "../../auth/password";
 import { getDialectTables } from "../../database/index";
 import { generateSqliteCoreTableStatements } from "../../database/sqlite-core-tables";
 import { UserMutationService } from "../../domains/users/services/user-mutation-service";
@@ -98,7 +99,10 @@ interface TestDb {
 }
 
 /** Boot with a plugin that declares nothing, and return its user service. */
-async function boot(dialect: TestDialect): Promise<{
+async function boot(
+  dialect: TestDialect,
+  passwordHasher?: PasswordHasher
+): Promise<{
   t: TestNextly;
   pluginUsers: PluginUserService;
   coreUsers: UserService;
@@ -114,6 +118,7 @@ async function boot(dialect: TestDialect): Promise<{
   });
   current = await createTestNextly({
     plugins: [plugin],
+    passwordHasher,
     ...(dialect === "sqlite" ? {} : { dialect }),
   });
   if (dialect === "sqlite") {
@@ -889,7 +894,12 @@ describe.each(getConfiguredTestDialects())(
 
     it("counts any stored value as a password where the app configures its own hasher", async () => {
       // That hasher's hashes can take any form, and its sign-in takes them.
-      const { t, coreUsers } = await boot(dialect);
+      const { t, coreUsers } = await boot(dialect, {
+        hash: password => Promise.resolve(`custom-hasher:${password}`),
+        verify: (password, stored) =>
+          Promise.resolve(stored === `custom-hasher:${password}`),
+        reach: "unbounded",
+      });
       await seedFounder(coreUsers);
       const id = await adminInvite(t, true);
       const { users } = getDialectTables();
@@ -901,8 +911,7 @@ describe.each(getConfiguredTestDialects())(
       await new UserMutationService(t.adapter, consoleLogger).updateUser(
         id,
         { emailVerified: new Date() },
-        "plugin",
-        { customPasswordHasher: true }
+        "plugin"
       );
 
       // The control is "counts a stored value that is not a hash as no

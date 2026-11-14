@@ -25,8 +25,8 @@ import { runDeclaredAction } from "@admin/components/features/entries/EntryList/
 import { resolveIconName } from "@admin/components/features/widgets/archetypes/icon";
 import { ExternalLink, Puzzle } from "@admin/components/icons";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
-import { toast } from "@admin/components/ui";
 import { isExternalHref, Link } from "@admin/components/ui/link";
+import { toast } from "@admin/components/ui/toaster";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 
 import type { PluginUserMenuEntry } from "../header/header-visibility";

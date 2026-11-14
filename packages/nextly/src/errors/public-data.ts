@@ -14,6 +14,8 @@ export type ValidationPublicData = {
     code: string;
     /** Complete sentence, ends with a period: "Must be a valid email address." */
     message: string;
+    /** The language the issue is in, where it is about one language's own value. */
+    locale?: string;
   }>;
 };
 

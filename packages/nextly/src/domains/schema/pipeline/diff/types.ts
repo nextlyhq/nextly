@@ -421,6 +421,12 @@ export interface DropForeignKeyOp {
    * break, so it runs in the pre-resolution pass ahead of it (`isPreResolutionOp`).
    */
   beforeConversion?: true;
+  /**
+   * `true` when a key on the same columns, under another name, replaces this one in the same plan:
+   * the replacement is added first and this one dropped after it, so the columns are never left
+   * without a key, even where each schema statement commits on its own (MySQL).
+   */
+  afterReplacement?: true;
 }
 
 /**

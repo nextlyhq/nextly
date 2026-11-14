@@ -192,6 +192,11 @@ import {
   NOBODY,
 } from "./plugins/contribution-audience";
 import { assertDocumentSurfaces } from "./plugins/document-surfaces";
+import {
+  extensionFieldsOf,
+  switchedOffExtensions,
+  withheldFieldsOf,
+} from "./plugins/extension-switch";
 import { assertNoRemovedWidgetKeys } from "./plugins/removed-widget-keys";
 import {
   pluginRouteAuthRequired,
@@ -239,6 +244,7 @@ import {
   isBuilderEnabled,
   isBuilderRoute,
 } from "./shared/builder-access";
+import { datesFormatted } from "./shared/lib/dates-formatted";
 import { consoleLogger } from "./shared/types";
 import {
   hexToCssColor,
@@ -330,7 +336,13 @@ function withoutInternalMarkers(response: Response): Response {
 
 async function applyGlobalDateFormatting(
   response: Response,
-  req?: Request
+  req?: Request,
+  /**
+   * Whether the handler answered with a response it formatted itself
+   * (`datesFormatted`, asked of its own response, before the request id was
+   * added to it): its dates already read in the configured timezone.
+   */
+  formattedByHandler = false
 ): Promise<Response> {
   // READ the markers, then remove them, then act on what they said.
   //
@@ -353,7 +365,7 @@ async function applyGlobalDateFormatting(
     return clean;
   }
 
-  if (optedOut) {
+  if (optedOut || formattedByHandler) {
     return clean;
   }
 
@@ -725,6 +737,8 @@ export const COLLECTION_ENTRY_METHODS = new Set([
   "duplicateEntry",
   "publishAllLocales",
   "unpublishAllLocales",
+  "publishParts",
+  "unpublishParts",
   // What publishing every language would do. A read, but admitted on the
   // publish grant as the publish is (LIFECYCLE_ROUTE_ACTIONS).
   "previewPublishAllLocales",
@@ -975,6 +989,8 @@ const LIFECYCLE_ROUTE_ACTIONS: Readonly<
 > = {
   publishAllLocales: "publish",
   unpublishAllLocales: "unpublish",
+  publishParts: "publish",
+  unpublishParts: "unpublish",
   publishAllSingleLocales: "publish",
   previewPublishAllSingleLocales: "publish",
   previewPublishAllLocales: "publish",
@@ -2201,13 +2217,31 @@ async function buildAdminMeta(
   }
   // Every place's contributions, in order, less what this reader may not
   // see; the login page's go to the public half alone.
+  // What each plugin's extension switch has off now, read once: its
+  // contributions that follow those fields are withheld there, and the
+  // fields themselves are drawn nowhere in those types' editors.
+  // Asked for a signed-in reader only: the public branding route offers
+  // nothing a switch narrows, and is never kept waiting on one.
+  const switchedOff =
+    offerTo === NOBODY
+      ? new Map()
+      : await switchedOffExtensions(
+          config?.plugins ?? [],
+          extensionFieldsOf(config?.plugins ?? [], "switchable"),
+          consoleLogger
+        );
   const contributions = await contributionsForReader(
     config?.plugins ?? [],
     offerTo,
-    "workspace"
+    "workspace",
+    switchedOff
   );
   if (Object.keys(contributions).length > 0) {
     workspace.contributions = contributions;
+  }
+  const withheldFields = withheldFieldsOf(switchedOff);
+  if (Object.keys(withheldFields).length > 0) {
+    workspace.withheldFields = withheldFields;
   }
   const loginContributions = await contributionsForReader(
     config?.plugins ?? [],
@@ -2948,7 +2982,8 @@ export function createDynamicHandlers(options?: {
     }
     const formattedResponse = await applyGlobalDateFormatting(
       identifiedResponse,
-      req
+      req,
+      datesFormatted(response)
     );
     // Tagged once the body is final, after the formatting above, so the tag
     // is of the bytes the caller receives.

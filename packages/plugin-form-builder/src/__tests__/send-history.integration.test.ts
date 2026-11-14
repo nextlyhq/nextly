@@ -440,6 +440,27 @@ describe.each(getConfiguredTestDialects())(
       expect(JSON.stringify(group)).not.toContain(OPS);
     });
 
+    it("lists a notification's recent sends, and none, without an error, before anything is sent", async () => {
+      const { t, formId, owner, submit } = await boot(dialect);
+      const cookie = await sessionOf(t, owner);
+      const recent = () =>
+        route(`notification-sends?form=${formId}&notification=team`, cookie);
+
+      // A form no submission has reached yet: a new notification's page
+      // reads this, and an empty list is the answer, not a refusal.
+      const before = await recent();
+      expect(before.status, await before.clone().text()).toBe(200);
+      expect(((await before.json()) as { items: unknown[] }).items).toEqual([]);
+
+      // CONTROL: once a submission is sent, its send is listed.
+      await submit();
+      const after = await recent();
+      expect(after.status, await after.clone().text()).toBe(200);
+      expect(((await after.json()) as { items: unknown[] }).items).toHaveLength(
+        1
+      );
+    });
+
     it("reads a recipient accepted beside one refused as Partly sent", async () => {
       const { t, owner, submit } = await boot(dialect);
       const cookie = await sessionOf(t, owner);

@@ -35,6 +35,32 @@ type Tables = Pick<
 >;
 
 /**
+ * Store a proven password again, hashed with the app's hasher, in place of
+ * the bcrypt value core stored before the app configured it.
+ *
+ * Not a new password: only the hash is written, so when the password was set
+ * and the sessions it signed stand. Conditional on the stored value still
+ * being `from`, the one just proven, so a password another request set
+ * meanwhile is never replaced by this older one. Core sign-in and the users
+ * service's `authenticate` both write it here.
+ */
+export async function storeRehashedPassword(
+  db: PasswordWriteTx,
+  tables: Pick<Tables, "users">,
+  change: { userId: string; from: string; to: string }
+): Promise<void> {
+  await db
+    .update(tables.users)
+    .set({ passwordHash: change.to })
+    .where(
+      and(
+        eq(tables.users.id, change.userId),
+        eq(tables.users.passwordHash, change.from)
+      )
+    );
+}
+
+/**
  * The columns every password write sets, whoever chose the password.
  *
  * A new password satisfies any admin-set must-change requirement, so the
@@ -83,7 +109,8 @@ export interface PasswordRemoval {
  * at, and every place a session is read refuses one signed before this write
  * (`auth/session/session-standing`). Deleting the refresh rows alone stops a
  * session from renewing, and leaves each access token working until it
- * expires, which for the Direct API's is thirty days.
+ * expires, which for the Direct API's is a day (thirty for one signed before
+ * that lifetime was shortened).
  *
  * Returns the number of user rows the update changed. With `unlessDeactivated`
  * the update is conditional on the account not being deactivated, and `when`

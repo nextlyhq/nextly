@@ -1,6 +1,6 @@
 /**
- * Who or what did something in a history: a person, an API key, a release,
- * the system or an agent, named with an icon for the kind.
+ * Who or what did something in a history: a person, an API key, a plugin, a
+ * release, the system or an agent, named with an icon for the kind.
  *
  * A module of its own so a history outside the versions screen (a release's
  * page) can name its actors without loading the version rows beside it.
@@ -8,7 +8,15 @@
  * @module components/features/versions/StoryActorName
  */
 
-import { Bot, Cog, KeyRound, Rocket, User, UserRound } from "lucide-react";
+import {
+  Bot,
+  Cog,
+  KeyRound,
+  Puzzle,
+  Rocket,
+  User,
+  UserRound,
+} from "lucide-react";
 import type { JSX } from "react";
 
 import type { HistoryActorKind } from "@admin/services/versionApi";
@@ -20,6 +28,8 @@ const ACTOR_ICONS: Record<HistoryActorKind, typeof User> = {
   person: User,
   apiKey: KeyRound,
   principal: UserRound,
+  // A plugin acting on its own behalf: the icon the admin uses for plugins.
+  plugin: Puzzle,
   release: Rocket,
   system: Cog,
   agent: Bot,

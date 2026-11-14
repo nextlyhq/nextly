@@ -1,0 +1,2 @@
+# Each run's copy of the fixture: its database, its build and its logs.
+.run/

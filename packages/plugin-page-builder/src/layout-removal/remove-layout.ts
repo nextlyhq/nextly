@@ -115,8 +115,9 @@ export interface RemovalCheck {
   readonly pagesCollection: string;
   /**
    * How many of those pages, named or only counted, have a LIVE row naming
-   * the Layout: the published pages that switch to the site default once it
-   * is gone, rather than being moved.
+   * the Layout: the published pages that switch to the site default right
+   * away, their live copy moved where the person may publish them, and
+   * otherwise drawing the default once the Layout is gone.
    */
   readonly liveRows: number;
   /**
@@ -173,21 +174,25 @@ export function conflict(
  * that hides this Layout from them is judged before anything is read past it:
  * a hidden Layout answers as missing, and nothing about its default status or
  * its pages is looked up for them. The write itself is judged by its own gate.
+ * Answers the Layout's title as that read gives it, which a move names in the
+ * history of each page it moves.
  */
 export async function requireRemovable(
   deps: RemoveLayoutDeps,
   request: Pick<RemoveRequest, "layoutId" | "action">
-): Promise<void> {
+): Promise<{ readonly title: string }> {
   const found = await deps.nextly.find({
     collection: deps.slugs.layouts,
     where: { id: { equals: request.layoutId } },
     status: "all",
     limit: 1,
     depth: 0,
-    select: { status: true },
+    select: { status: true, title: true },
     ...deps.person.as,
   });
-  const row = found.items[0] as { status?: unknown } | undefined;
+  const row = found.items[0] as
+    | { status?: unknown; title?: unknown }
+    | undefined;
   if (row === undefined) throw NextlyError.notFound();
   if (request.action === "unpublish" && row.status !== "published") {
     throw conflict(
@@ -196,6 +201,7 @@ export async function requireRemovable(
       request.layoutId
     );
   }
+  return { title: typeof row.title === "string" ? row.title : "" };
 }
 
 /** How the dialog tags a page, from where it names the Layout. */
@@ -556,8 +562,9 @@ async function undoIfPagesNameIt(
 }
 
 /**
- * The pages still naming a deleted Layout on their live row, as the person
- * may see them, and the sentence that says so; null when there are none.
+ * The pages still naming a removed Layout on their live row, as the person
+ * may see them, and the sentence a plain delete says it with; null when there
+ * are none.
  */
 async function stillUsedAfterTheDelete(
   deps: RemoveLayoutDeps,
@@ -575,7 +582,7 @@ async function stillUsedAfterTheDelete(
     asPerson: deps.person.as,
   });
   deps.warn(
-    "[page-builder] a deleted Layout is still named by published pages; they show the site default until published with another Layout",
+    "[page-builder] a removed Layout is still named by published pages; they show the site default until published with another Layout",
     { layoutId, pages: live.map(page => page.id) }
   );
   return {
@@ -588,9 +595,10 @@ async function stillUsedAfterTheDelete(
 }
 
 /**
- * Step 7: the check after the write. After a move, the pages whose live row
- * still names a deleted Layout are the ones the person was told switch to the
- * site default, so they are not reported again.
+ * Step 7: the check after the write. The pages whose live row still names the
+ * Layout are answered in `stillUsedBy`: after a plain delete, ones a publish
+ * made while it ran; after a move, ones whose live copy the person may not
+ * publish, which the move names in its own words.
  */
 async function settle(
   deps: RemoveLayoutDeps,
@@ -624,22 +632,18 @@ async function settle(
   if (settled.outcome === "restored") {
     throw conflict(KEPT_AS_DEFAULT, "layout-removal-raced-promotion", layoutId);
   }
-  const still = movedPages
-    ? null
-    : await stillUsedAfterTheDelete(deps, layoutId, settled.live);
+  const still = await stillUsedAfterTheDelete(deps, layoutId, settled.live);
+  const done =
+    request.action === "delete"
+      ? "The Layout was deleted."
+      : "The Layout was unpublished.";
   if (still !== null) {
     return {
-      message: still.message,
+      message: movedPages ? done : still.message,
       item: { ...request, stillUsedBy: still.stillUsedBy },
     };
   }
-  return {
-    message:
-      request.action === "delete"
-        ? "The Layout was deleted."
-        : "The Layout was unpublished.",
-    item: { ...request },
-  };
+  return { message: done, item: { ...request } };
 }
 
 /**

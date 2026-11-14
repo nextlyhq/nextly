@@ -109,6 +109,22 @@ export function PreviewCard({
   );
 }
 
+/**
+ * The text under the result's link: none where the page asks for none, else
+ * its description cut where Google cuts it, or sooner where the page set a
+ * shorter limit.
+ */
+function resultText(answer: SeoAnswer): string {
+  if (answer.display?.nosnippet) return "No text under the link";
+  if (answer.description === undefined) {
+    return "Google will pick text from the page, since nothing is set.";
+  }
+  return cutAt(
+    answer.description.value,
+    Math.min(answer.display?.maxSnippet ?? DESCRIPTION_LIMIT, DESCRIPTION_LIMIT)
+  );
+}
+
 /** The page as one result on Google, with the overlay when it is hidden. */
 function SearchResult({
   answer,
@@ -142,11 +158,12 @@ function SearchResult({
       </div>
       <div
         data-testid="seo-search-description"
-        className="mt-1 text-[13px] leading-normal [overflow-wrap:anywhere] text-muted-foreground"
+        className={cx(
+          "mt-1 text-[13px] leading-normal [overflow-wrap:anywhere] text-muted-foreground",
+          answer.display?.nosnippet && "italic"
+        )}
       >
-        {answer.description === undefined
-          ? "Google will pick text from the page, since nothing is set."
-          : cutAt(answer.description.value, DESCRIPTION_LIMIT)}
+        {resultText(answer)}
       </div>
     </div>
   );

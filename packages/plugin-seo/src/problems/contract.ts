@@ -31,8 +31,11 @@ export type ProblemKind =
   | "connection"
   | "noAddress"
   | "redirectChain"
+  | "datesToday"
   | "languageCode"
   | "notListed"
+  | "robotsBlocked"
+  | "dropDatePassed"
   | "noTitle"
   | "noDescription"
   | "sharedTitle"
@@ -76,6 +79,12 @@ export const KIND_TEXT: Readonly<
       "Each extra hop slows the visit, and search engines may stop following before the end.",
     siteWide: true,
   },
+  datesToday: {
+    title: "Sitemap dates that keep matching the day they're checked",
+    explain:
+      "Search engines may stop trusting the site's dates when most pages say they changed on the day they're read.",
+    siteWide: true,
+  },
   languageCode: {
     title: "Language search engines can't name",
     explain:
@@ -86,6 +95,18 @@ export const KIND_TEXT: Readonly<
     title: "Page left out of the sitemap",
     explain:
       "The page has no official address, so search engines aren't told about it.",
+    siteWide: false,
+  },
+  robotsBlocked: {
+    title: "Page in the sitemap that robots.txt blocks",
+    explain:
+      "The sitemap lists the page for search engines, but robots.txt asks them not to read it, so what was set for it doesn't reach search. To keep a page out of search, use Hide from search; robots.txt only stops crawling.",
+    siteWide: false,
+  },
+  dropDatePassed: {
+    title: "Page past its date to drop from search",
+    explain:
+      "The page is still published, but it is now hidden from search, and Google may already have dropped it. Remove the date to bring it back.",
     siteWide: false,
   },
   noAddress: {
@@ -179,12 +200,15 @@ export const KIND_SEVERITY: Readonly<Record<ProblemKind, ProblemSeverity>> = {
   productionAddress: "error",
   noAddress: "error",
   proxyNotWired: "error",
+  robotsBlocked: "error",
   noTitle: "error",
   canonical: "error",
   connection: "warning",
   redirectChain: "warning",
+  datesToday: "warning",
   languageCode: "warning",
   notListed: "warning",
+  dropDatePassed: "warning",
   brokenLink: "warning",
   noDescription: "warning",
   sharedTitle: "warning",
@@ -245,8 +269,11 @@ export const KIND_ORDER: readonly ProblemKind[] = [
   "proxyNotWired",
   "connection",
   "redirectChain",
+  "datesToday",
   "languageCode",
   "notListed",
+  "robotsBlocked",
+  "dropDatePassed",
   "noTitle",
   "sharedTitle",
   "canonical",
@@ -340,7 +367,12 @@ export function seoTabIdOf(kind: "collection" | "single"): string {
 export const WHOLE_SITE: ProblemSubject = { label: "Whole site" };
 
 /** The SEO settings' tabs a fix can land on. */
-export type SettingsTab = "general" | "types" | "brand" | "connections";
+export type SettingsTab =
+  | "general"
+  | "types"
+  | "brand"
+  | "crawlers"
+  | "connections";
 
 /**
  * Where a problem is fixed:

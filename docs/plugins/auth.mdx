@@ -3,9 +3,9 @@ title: Auth extensibility
 description: Extend authentication from a plugin — custom strategies, external sign-in (OAuth), auth-flow hooks, and first-class multi-step challenges (2FA) — without forking core.
 ---
 
-> **Alpha (`0.x`) — `@experimental`.** The auth-extensibility surface (D71/D57) is
+> **Alpha (`0.x`) — `@experimental`.** The auth-extensibility surface is
 > new and ships `@experimental`: it works and is integration-tested, but stays
-> experimental until a first-party plugin exercises it in production (D55). Pin
+> experimental until a first-party plugin exercises it in production. Pin
 > your versions.
 
 Nextly's auth is pluggable through four surfaces, modeled on what Payload, Strapi,
@@ -394,10 +394,10 @@ WordPress draw the line.
   app lists it in `auth.loginPlugins` — until then the boot refuses to start
   it. Check the declaration with `nextly plugins info` before installing, and
   keep the listing to providers you chose.
-- An enabled strategy/hook runs with **full trust** (D34, no sandbox in v1) — vet auth
+- An enabled strategy/hook runs with **full trust** (there is no sandbox in v1) — vet auth
   plugins like any dependency.
 - Multi-step uses a **single-purpose pending token** (short TTL, attempt-capped) that
   can't be used as a session.
-- The whole surface is **`@experimental`** until a first-party plugin graduates it (D55).
+- The whole surface is **`@experimental`** until a first-party plugin graduates it.
 
 See also: [Permissions](/docs/plugins/permissions) · [Data access](/docs/plugins/services) · [API reference](/docs/plugins/api-reference).

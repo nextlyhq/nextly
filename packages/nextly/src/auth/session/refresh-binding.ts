@@ -1,38 +1,47 @@
 /**
- * Refresh-token session binding policy.
+ * What changed about the client between a refresh token's issue and its
+ * rotation.
  *
- * Compares the User-Agent and trusted client IP captured at refresh-token
- * mint time against the same values on the rotation request. Returns one of:
+ * Compares the User-Agent and trusted client IP captured when the refresh
+ * token was minted against the same values on the rotation request. Returns
+ * one of:
  *
- *   - `{ kind: "ok" }`            values match (or comparison is impossible
- *                                 because one side is null / unparseable).
- *   - `{ kind: "soft", reason }`  UA mismatch only. Browsers update User-
- *                                 Agent strings via auto-update, so this is
- *                                 logged but not enforced.
- *   - `{ kind: "hard", reason }`  IP family flip (v4 to v6) or network-prefix
- *                                 change (different /24 for IPv4, /48 for
- *                                 IPv6). Caller must revoke the user's
- *                                 refresh tokens and force re-auth.
+ *   - `{ kind: "ok" }`                  the same browser on the same network,
+ *                                       or nothing to compare (a side is null
+ *                                       or unparseable).
+ *   - `{ kind: "changed", reasons }`    the network (another IP family, another
+ *                                       /24 for IPv4 or /48 for IPv6) or the
+ *                                       User-Agent changed.
  *
- * The /24 (v4) and /48 (v6) tolerances accept benign mobile-carrier and ISP
- * rotations while still catching cross-network theft. They are conservative
- * by design; a hard-fail forces a fresh login, not data loss, so a slightly
- * higher false-positive rate is acceptable.
+ * A change is reported, never refused. One browser's own requests reach a
+ * site from more than one address as a matter of course: a carrier-grade NAT
+ * or a connection with several uplinks sends each new connection out through
+ * whichever public address it picks, often in another /24, and a dual-stack
+ * browser connects over whichever IP family answers first. A refresh comes
+ * after the tab has sat idle for the access token's lifetime, on a new
+ * connection, so it is the request most likely to arrive from a new address.
+ * Refusing it ended editors' sessions, on every device, within half an hour of
+ * signing in, while a thief on the victim's own network, or behind the same
+ * kind of NAT, passed it anyway. Browsers also change their User-Agent on
+ * every update. The caller logs a change for an operator to watch.
  *
- * Safety note: this policy assumes IP values come from `getTrustedClientIp`,
- * which only honors `X-Forwarded-For` when `trustProxy` is on and the
- * immediate proxy is in the trusted CIDR list. Without that guarantee, a
- * direct attacker could spoof the IP and either bypass the binding (by
- * matching the stored IP) or weaponise the hard-fail to forcibly log other
- * users out.
+ * The addresses come from `getTrustedClientIp`, which only honors
+ * `X-Forwarded-For` when `trustProxy` is on and the immediate proxy is in the
+ * trusted CIDR list; without it both sides are null and nothing is compared.
  */
 
 import { ipv4ToInt } from "../../utils/get-trusted-client-ip";
 
+/** Why a rotation's client differs from the one its refresh token was issued to. */
+export type RefreshBindingChange =
+  | "ip-family-changed"
+  | "ipv4-prefix-changed"
+  | "ipv6-prefix-changed"
+  | "user-agent-changed";
+
 export type RefreshBindingResult =
   | { kind: "ok" }
-  | { kind: "soft"; reason: string }
-  | { kind: "hard"; reason: string };
+  | { kind: "changed"; reasons: RefreshBindingChange[] };
 
 export interface RefreshBindingInput {
   storedUserAgent: string | null;
@@ -123,37 +132,54 @@ function sameIpv6Prefix(a: string, b: string, prefix: number): boolean {
 export function evaluateRefreshBinding(
   input: RefreshBindingInput
 ): RefreshBindingResult {
-  const ipResult = compareIps(input.storedIp, input.currentIp);
-  if (ipResult !== null) {
-    return { kind: "hard", reason: ipResult };
-  }
-
+  const reasons: RefreshBindingChange[] = [];
+  const network = compareIps(input.storedIp, input.currentIp);
+  if (network !== null) reasons.push(network);
   if (
     input.storedUserAgent !== null &&
     input.currentUserAgent !== null &&
     input.storedUserAgent !== input.currentUserAgent
   ) {
-    return { kind: "soft", reason: "ua-mismatch" };
+    reasons.push("user-agent-changed");
   }
-
-  return { kind: "ok" };
+  return reasons.length === 0 ? { kind: "ok" } : { kind: "changed", reasons };
 }
 
-/** Returns a hard-fail reason or `null` if the IP comparison is acceptable. */
+/** The first 96 bits of every IPv4-mapped IPv6 address, as 24 hex digits. */
+const IPV4_MAPPED_PREFIX = `${"0".repeat(20)}ffff`;
+
+/**
+ * An IPv4 address written in its IPv6-mapped form, in any spelling
+ * (`::ffff:198.51.100.7`, `::ffff:c633:6407`, `0:0:0:0:0:ffff:…`), as the
+ * plain IPv4 address it names; any other address as it is. Read through the
+ * one IPv6 expansion, so every spelling a dual-stack socket or proxy writes is
+ * recognised, and the same address in two spellings is one address.
+ */
+function unmapIpv4(addr: string): string {
+  if (!addr.includes(":")) return addr;
+  const hex = ipv6PrefixHex(addr, 128);
+  if (hex === null || !hex.startsWith(IPV4_MAPPED_PREFIX)) return addr;
+  const v4 = Number.parseInt(hex.slice(IPV4_MAPPED_PREFIX.length), 16);
+  return [24, 16, 8, 0].map(shift => (v4 >>> shift) & 0xff).join(".");
+}
+
+/** How the network changed, or `null` when it did not or cannot be told. */
 function compareIps(
-  stored: string | null,
-  current: string | null
-): string | null {
-  if (stored === null || current === null) return null;
+  storedIp: string | null,
+  currentIp: string | null
+): RefreshBindingChange | null {
+  if (storedIp === null || currentIp === null) return null;
+  const stored = unmapIpv4(storedIp);
+  const current = unmapIpv4(currentIp);
   if (stored === current) return null;
 
   const sf = classifyIp(stored);
   const cf = classifyIp(current);
-  if (sf === 0 || cf === 0) return null; // unparseable; don't enforce
-  if (sf !== cf) return "ip-family-mismatch";
+  if (sf === 0 || cf === 0) return null; // unparseable: nothing to compare
+  if (sf !== cf) return "ip-family-changed";
 
   if (sf === 4) {
-    return sameIpv4Prefix(stored, current, 24) ? null : "ipv4-prefix-mismatch";
+    return sameIpv4Prefix(stored, current, 24) ? null : "ipv4-prefix-changed";
   }
-  return sameIpv6Prefix(stored, current, 48) ? null : "ipv6-prefix-mismatch";
+  return sameIpv6Prefix(stored, current, 48) ? null : "ipv6-prefix-changed";
 }

@@ -16,6 +16,7 @@ import { CANVAS_FRAME, canvasFrame } from "./support/canvas-frame";
 import { signInAsLimitedUser } from "./support/limited-user";
 import { LOCK } from "./support/locks";
 import { test } from "./support/test";
+import { countEveryPage, writeHeaders } from "./support/usage-count";
 
 // The homepage Single is reseeded and the site's variables are changed and
 // restored, as the other builder files do.
@@ -258,6 +259,8 @@ test("a new variable with a dark value is kept, and the sheet applies it on a da
       await markAbove([]);
     }
   } finally {
+    // Dropping a variable is refused until every page is counted.
+    await countEveryPage(page.request);
     const restored = await page.request.patch(SITE_STYLE, {
       data: { tokens: before, _overwrite: true },
     });
@@ -306,6 +309,8 @@ test("a mode picked in the Design panel draws the canvas in it, on a device that
   test.setTimeout(120_000);
   const before = await storedTokens(page);
   try {
+    // Dropping a variable is refused until every page is counted.
+    await countEveryPage(page.request);
     const seeded = await page.request.patch(SITE_STYLE, {
       data: {
         tokens: {
@@ -385,6 +390,8 @@ test("a mode picked in the Design panel draws the canvas in it, on a device that
     await expect(page.getByText("Dark preview")).toBeVisible();
     expect(await adminChrome(page)).toEqual(lightChrome);
   } finally {
+    // Dropping a variable is refused until every page is counted.
+    await countEveryPage(page.request);
     const restored = await page.request.patch(SITE_STYLE, {
       data: { tokens: before, _overwrite: true },
     });
@@ -458,17 +465,6 @@ async function seedVariables(
   ).toBe(true);
 }
 
-/** The CSRF token and origin a cookie-signed write to a plugin route needs. */
-async function writeHeaders(
-  api: APIRequestContext
-): Promise<Record<string, string>> {
-  const csrf = await api.get("/admin/api/auth/csrf");
-  const { token } = (await csrf.json()) as { token: string };
-  // A plugin route checks a cookie-authenticated write's origin, which a
-  // browser sends and an API request does not: named here as the site's own.
-  return { "x-csrf-token": token, origin: new URL(csrf.url()).origin };
-}
-
 /** A draft page holding these nodes, made by the super-admin; answers its id. */
 async function seedPage(
   api: APIRequestContext,
@@ -521,29 +517,6 @@ function watchVariableWrites(page: Page): string[] {
     }
   });
   return writes;
-}
-
-/**
- * Count every page into the usage index, so Remove answers on whole counts:
- * "free" or "in use", never "not counted yet". A count stops at its time
- * budget, so it is asked again until the index says it is whole.
- */
-async function countEveryPage(api: APIRequestContext): Promise<void> {
-  const headers = await writeHeaders(api);
-  await expect
-    .poll(
-      async () => {
-        const counted = await api.post(`${PLUGIN}/shared-styles/count`, {
-          headers,
-          data: {},
-        });
-        expect(counted.ok(), await counted.text()).toBe(true);
-        const body = (await counted.json()) as { item: { whole: boolean } };
-        return body.item.whole;
-      },
-      { timeout: 60_000 }
-    )
-    .toBe(true);
 }
 
 /** The value a site variable's custom property resolves to on the canvas root. */
@@ -682,6 +655,8 @@ test("a role that may read Design but not change it sees the variables read-only
       const deleted = await page.request.delete(`${PAGES}/${pageId}`);
       expect(deleted.ok(), `deleting the page: ${deleted.status()}`).toBe(true);
     }
+    // Dropping a variable is refused until every page is counted.
+    await countEveryPage(page.request);
     const restored = await page.request.patch(SITE_STYLE, {
       data: { tokens: before, _overwrite: true },
     });
@@ -881,6 +856,8 @@ test("each variable action is kept across a reload: rename, value, dark value, r
       });
       expect(freed.ok(), `freeing the page: ${freed.status()}`).toBe(true);
     }
+    // Dropping a variable is refused until every page is counted.
+    await countEveryPage(page.request);
     const restored = await page.request.patch(SITE_STYLE, {
       data: { tokens: before, _overwrite: true },
     });

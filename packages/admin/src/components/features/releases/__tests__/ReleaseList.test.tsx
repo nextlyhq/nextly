@@ -624,6 +624,127 @@ describe("paging when a tab shrinks", () => {
   });
 });
 
+describe("the search while the counts read again", () => {
+  it("keeps the search box, its focus and its text while a search recounts", async () => {
+    const user = userEvent.setup();
+    const recounting = {
+      counts: {
+        upcoming: undefined,
+        attention: undefined,
+        drafts: undefined,
+        done: undefined,
+      },
+      isPending: true,
+      isError: false,
+    };
+    const answered = counts({ upcoming: 3, attention: 1, drafts: 2, done: 12 });
+    mocks.tabCounts.mockImplementation(({ search }: { search: string }) =>
+      search ? recounting : answered
+    );
+    render(<ReleaseList />);
+    const box = screen.getByPlaceholderText("Search by title or description");
+    await user.click(box);
+    await user.type(box, "spring");
+    await waitFor(() =>
+      expect(mocks.tabCounts).toHaveBeenLastCalledWith(
+        expect.objectContaining({ search: "spring" })
+      )
+    );
+    const still = screen.getByPlaceholderText("Search by title or description");
+    expect(still).toBe(box);
+    expect(document.activeElement).toBe(box);
+    expect((box as HTMLInputElement).value).toBe("spring");
+    // The counts being read again show as empty pills, not as stale numbers.
+    expect(screen.queryByText("12")).toBeNull();
+  });
+});
+
+describe("the counts' first read", () => {
+  it("holds the toolbar back until the counts first answer, then draws it", () => {
+    mocks.tabCounts.mockReturnValue({
+      counts: {
+        upcoming: undefined,
+        attention: undefined,
+        drafts: undefined,
+        done: undefined,
+      },
+      isPending: true,
+      isError: false,
+    });
+    const { rerender } = render(<ReleaseList />);
+    expect(
+      screen.queryByPlaceholderText("Search by title or description")
+    ).toBeNull();
+    mocks.tabCounts.mockReturnValue(
+      counts({ upcoming: 3, attention: 1, drafts: 2, done: 12 })
+    );
+    rerender(<ReleaseList />);
+    expect(
+      screen.getByPlaceholderText("Search by title or description")
+    ).toBeTruthy();
+  });
+});
+
+describe("the list's outline while its reads answer", () => {
+  const unanswered = {
+    counts: {
+      upcoming: undefined,
+      attention: undefined,
+      drafts: undefined,
+      done: undefined,
+    },
+    isPending: true,
+    isError: false,
+  };
+  const pendingPage = {
+    ...page([]),
+    data: undefined,
+    isPending: true,
+  };
+  const toolbarOutlines = () =>
+    document.querySelectorAll('[data-slot="list-toolbar-outline"]').length;
+
+  it("keeps the toolbar's outline it drew when the counts answer before the page", () => {
+    mocks.tabCounts.mockReturnValue(unanswered);
+    mocks.listPage.mockReturnValue(pendingPage);
+    const { rerender } = render(<ReleaseList />);
+    expect(toolbarOutlines()).toBe(1);
+    // The counts say no release exists while the page is still on its way:
+    // the outline the reader sees stays as it was until the list replaces
+    // it whole.
+    mocks.tabCounts.mockReturnValue(counts({}));
+    rerender(<ReleaseList />);
+    expect(toolbarOutlines()).toBe(1);
+  });
+
+  it("never draws a toolbar for a failed count and then takes it away", () => {
+    const toolbars = () =>
+      document.querySelectorAll('[data-slot="list-toolbar"]').length;
+    mocks.tabCounts.mockReturnValue(unanswered);
+    mocks.listPage.mockReturnValue(pendingPage);
+    const { rerender } = render(<ReleaseList />);
+    // The counts fail before the page answers, and the page then answers
+    // empty: the failure stands in the list's place, with no toolbar.
+    mocks.tabCounts.mockReturnValue({
+      ...unanswered,
+      isPending: false,
+      isError: true,
+    });
+    rerender(<ReleaseList />);
+    mocks.listPage.mockReturnValue(page([]));
+    rerender(<ReleaseList />);
+    expect(
+      screen.getByText(/The number of releases in each tab is unknown/)
+    ).toBeTruthy();
+    expect(toolbars()).toBe(0);
+    // The retry answers that no release exists: still no toolbar.
+    mocks.tabCounts.mockReturnValue(counts({}));
+    rerender(<ReleaseList />);
+    expect(toolbars()).toBe(0);
+    expect(toolbarOutlines()).toBe(0);
+  });
+});
+
 describe("the single-document filter", () => {
   it("hides single-document releases from the list and from the counts", async () => {
     const user = userEvent.setup();

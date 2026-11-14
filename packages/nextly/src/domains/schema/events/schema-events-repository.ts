@@ -361,6 +361,26 @@ export class SchemaEventsRepository {
   }
 
   /**
+   * Transition an attempt to `nothing_applied`: it ended knowing nothing of its unit took effect
+   * (a busy table waited out before anything was made durable), which resolves it, so the next run
+   * applies the unit as usual. The reason is kept as a failure's is.
+   */
+  async markNothingApplied(id: string, input: MarkFailedInput): Promise<void> {
+    // A run that lost the schema lock records nothing further (`assertSchemaLockHeld`).
+    await assertSchemaLockHeld();
+    await this.db
+      .update(this.table)
+      .set({
+        status: "nothing_applied",
+        endedAt: new Date(),
+        errorCode: input.errorCode ?? null,
+        errorMessage: input.errorMessage ?? null,
+        errorJson: input.errorJson ?? null,
+      })
+      .where(sql`id = ${id}`);
+  }
+
+  /**
    * Whether the migration is applied: for an app migration, its latest
    * outcome says so, and a record that is not an outcome (an attempt failed or
    * stopped) leaves it as it was; a later `rolled_back` outcome un-applies it

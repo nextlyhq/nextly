@@ -1,6 +1,7 @@
+import { appPasswordDigester } from "../../di/password-digester";
 import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
-import { isPasswordHash, verifyPassword } from "../password/index";
+import type { PasswordDigester, PasswordVerdict } from "../password/digester";
 import { assertAccountUsable } from "../session/account-state";
 
 export interface CredentialVerifyInput {
@@ -40,7 +41,7 @@ export interface CredentialUserRow {
   /**
    * NULLABLE, because an account can exist without one: a user created
    * through an external identity provider is stored with no password at all.
-   * Typed non-null, the passwordless case reaches `verifyPassword` unexamined.
+   * Typed non-null, the passwordless case reaches the comparison unexamined.
    */
   passwordHash: string | null;
   emailVerified: Date | null;
@@ -98,25 +99,69 @@ export interface CredentialDeps {
   maxLoginAttempts: number;
   lockoutDurationSeconds: number;
   requireEmailVerification: boolean;
+  /**
+   * The digester the password is checked with. The app's (its
+   * `passwordHasher`, or core's bcrypt) where none is given.
+   */
+  passwordDigester?: PasswordDigester;
+  /**
+   * Store a proven password again with the app's hasher, in place of the
+   * bcrypt value core stored before the hasher was configured. Only where the
+   * stored value is still `from`, so a password set meanwhile stands.
+   */
+  storeRehashedPassword?: (
+    userId: string,
+    from: string,
+    to: string
+  ) => Promise<void>;
 }
 
 /**
- * Stable decoy bcrypt hash used to keep timing constant when the lookup
- * misses. Generated once locally with bcryptjs at cost 12 and baked in —
- * MUST NOT be rotated. Rotating it would change the time bcrypt.compare
- * spends on the miss path (different cost or salt re-tuning) and re-open
- * the timing side-channel this constant exists to close.
+ * Count a wrong password against the account, and lock it once the threshold
+ * trips. Independent of the public response: locking still happens though the
+ * wire shape is identical to a wrong-password reply.
  */
-const DUMMY_HASH =
-  "$2b$12$ML1pr5W9k0ODLs2GFo9gruB/VcQfuby0nAeFo959eFXl0u1ZUmbb6";
+async function recordFailedAttempt(
+  user: CredentialUserRow,
+  deps: CredentialDeps
+): Promise<void> {
+  const newAttempts = user.failedLoginAttempts + 1;
+  if (newAttempts >= deps.maxLoginAttempts) {
+    const lockedUntil = new Date(
+      Date.now() + deps.lockoutDurationSeconds * 1000
+    );
+    await deps.lockAccount(user.id, lockedUntil);
+  } else {
+    await deps.incrementFailedAttempts(user.id);
+  }
+}
+
+/**
+ * Store a proven password again with the app's hasher, in place of the bcrypt
+ * value core stored before the app configured it. Not a new password: the
+ * sessions it signed and when it was set stay as they are.
+ */
+async function storeAgainWithAppHasher(
+  userId: string,
+  stored: string,
+  password: string,
+  context: { digester: PasswordDigester; deps: CredentialDeps }
+): Promise<void> {
+  if (!context.deps.storeRehashedPassword) return;
+  await context.deps.storeRehashedPassword(
+    userId,
+    stored,
+    await context.digester.hash(password)
+  );
+}
 
 /**
  * Verify email + password credentials.
  *
  * Behaviour (per spec §13.1):
- *   - Always runs `bcrypt.compare` exactly once, even when the user is
- *     missing, so the response time does not depend on whether the email
- *     is registered.
+ *   - Always runs exactly one comparison of the app's scheme, even when the
+ *     user is missing, so the response time does not depend on whether the
+ *     email is registered.
  *   - Throws `NextlyError.invalidCredentials()` for every failure leg
  *     (missing user, wrong password, locked, unverified, inactive). The
  *     wire response is identical; logContext records the real cause.
@@ -132,49 +177,30 @@ export async function verifyCredentials(
 ): Promise<VerifiedUser> {
   const user = await deps.findUserByEmail(input.email);
 
-  // Timing equalisation: always run bcrypt compare exactly once, against a
-  // REAL cost-12 hash. Without it the miss path returns immediately and an
-  // attacker can enumerate registered emails via timing.
+  // Timing equalisation: always run exactly one comparison of the app's
+  // scheme. Without it the miss path returns immediately and an attacker can
+  // enumerate registered emails via timing.
   //
   // The decoy stands in for an account that HAS no password as well as for
-  // one that does not exist. `verifyPassword` returns on the spot when the
-  // stored hash is empty, so an externally-authenticated account — created
-  // with a null hash — answered a password attempt faster than an unknown
-  // address did. That is the enumeration oracle again, and a sharper one:
-  // it does not merely say an address is registered, it says the address
-  // signs in through the identity provider, which is the account whose
+  // one that does not exist. An externally-authenticated account, created
+  // with a null hash, would otherwise answer a password attempt faster than
+  // an unknown address did. That is the enumeration oracle again, and a
+  // sharper one: it does not merely say an address is registered, it says the
+  // address signs in through the identity provider, which is the account whose
   // password can never be the thing that stops an attacker.
   //
-  // A stored value that is not a password hash takes the decoy's place too:
-  // it can only be a password stored as given, which must never be a working
-  // credential, and comparing against the decoy keeps the refusal as slow as
-  // any other.
+  // A stored value that is not a password hash of the app's scheme takes the
+  // decoy's place too (`verify` compares the decoy for it): it can only be a
+  // password stored as given, which must never be a working credential.
+  const digester = deps.passwordDigester ?? appPasswordDigester();
   const storedHash = user?.passwordHash;
-  const usableHash = isPasswordHash(storedHash);
-  const compared = await verifyPassword(
-    input.password,
-    usableHash ? storedHash : DUMMY_HASH
-  );
-  // A passwordless account, or one whose stored value is not a hash, can
-  // never be admitted BY a password, whatever the comparison against the
-  // decoy answered.
-  const passwordOk = usableHash && compared;
+  let verdict: PasswordVerdict = { ok: false };
+  if (user) verdict = await digester.verify(input.password, storedHash);
+  else await digester.decoy(input.password);
+  const passwordOk = verdict.ok;
 
   if (!user || !passwordOk) {
-    if (user) {
-      // Track failed attempts and lock the account once the threshold trips.
-      // This is independent of the public response — locking still happens
-      // even though the wire shape is identical to a wrong-password reply.
-      const newAttempts = user.failedLoginAttempts + 1;
-      if (newAttempts >= deps.maxLoginAttempts) {
-        const lockedUntil = new Date(
-          Date.now() + deps.lockoutDurationSeconds * 1000
-        );
-        await deps.lockAccount(user.id, lockedUntil);
-      } else {
-        await deps.incrementFailedAttempts(user.id);
-      }
-    }
+    if (user) await recordFailedAttempt(user, deps);
     throw NextlyError.invalidCredentials({
       logContext: {
         email: input.email,
@@ -209,6 +235,13 @@ export async function verifyCredentials(
 
   if (user.failedLoginAttempts > 0) {
     await deps.resetFailedAttempts(user.id);
+  }
+
+  if (verdict.ok && verdict.rehash && storedHash) {
+    await storeAgainWithAppHasher(user.id, storedHash, input.password, {
+      digester,
+      deps,
+    });
   }
 
   return {

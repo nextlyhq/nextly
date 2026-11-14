@@ -342,18 +342,24 @@ async function sendOne(
 /**
  * Take note of every change IndexNow tells search engines about: each page
  * whose addresses a save records (published, moved, taken down, deleted),
- * and each saved page of `targets` whose words changed while its addresses
+ * and each saved page of a collection with SEO whose words changed while its addresses
  * did not. A working draft's save is not noted: nothing a visitor sees has
  * changed. Answers the call that stops taking note, sending what was noted.
  */
 export function watchForIndexNow(
   ctx: PluginContext,
   setup: IndexNowSetup,
-  targets: readonly string[]
+  types: { readonly collections: readonly string[] }
 ): () => Promise<void> {
   const queue = indexNowQueue(ctx, setup);
-  for (const slug of targets) {
-    ctx.hooks.on("afterUpdate", slug, (context: { data?: unknown }) => {
+  // Heard on every type and kept to the collections with SEO as each save is
+  // made, so a type that gets SEO after the plugin started is noted too.
+  ctx.hooks.on(
+    "afterUpdate",
+    "*",
+    (context: { collection?: string; data?: unknown }) => {
+      const slug = context.collection;
+      if (slug === undefined || !types.collections.includes(slug)) return;
       const id = idOf(context);
       // A draft, or a working draft of a published page (which keeps the
       // live page's status), changes nothing a visitor sees.
@@ -362,8 +368,8 @@ export function watchForIndexNow(
         (context.data.status === "draft" ||
           context.data._isWorkingDraft === true);
       if (id !== undefined && !draft) queue.notePage(slug, id);
-    });
-  }
+    }
+  );
   // Announced once each save commits, so a save undone is never noted.
   ctx.events.on(ADDRESSES_MOVED, event => {
     const { moves } = (event.payload ?? {}) as Partial<AddressesMoved>;

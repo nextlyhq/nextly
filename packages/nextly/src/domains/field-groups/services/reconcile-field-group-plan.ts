@@ -44,22 +44,12 @@ import type {
 import {
   getColumnDescriptor,
   toSnakeCase,
+  type ColumnOrigin,
   type SupportedDialect,
 } from "../../schema/services/field-column-descriptor";
 
 /** Which of a field group's two tables a column lives in. */
 export type ReconcileTable = "main" | "companion";
-
-/**
- * What the table builder would write as a column's DEFAULT, with "no expectation" kept distinct
- * from "expected to have none".
- */
-export interface ExpectedColumnDefault {
-  /** False when no expectation could be derived at all; the comparison is then skipped. */
-  known: boolean;
-  /** The default expression, or `undefined` when the builder writes none. Read only when `known`. */
-  value?: string;
-}
 
 /**
  * What a field name may be, mirroring the payload validator every other write path enforces.
@@ -119,6 +109,9 @@ export interface ReconcileBlocker {
     // it needs DDL, which this operation deliberately never issues.
     | "structural-column-missing"
     | "system-index-missing"
+    // A field's column has or lacks an index against what the definition implies, and no value of
+    // its `index` flag would describe the live table (a single reference is indexed regardless).
+    | "field-index-changed"
     // The column's DEFAULT no longer matches the authored one. Physical, and not recoverable from
     // the column alone: which side is intended is a question only the operator can answer.
     | "column-default-changed"
@@ -190,16 +183,15 @@ export interface ReconcileInput<F extends ReconcilableField> {
    *
    * 🔴 Asked per (field, table) rather than supplied as a finished map, because the answer depends
    * on BOTH and only this module knows the second one. The two tables are built by different code —
-   * the main table by `FieldGroupSchemaService`, the companion by the localization renderer — and
-   * they spell the same field differently: a PostgreSQL `email` is `VARCHAR(255)` on the main table
-   * and `TEXT` in the companion. A map keyed by column name alone has to pick one of those before
+   * the main table by a Builder save's migration (the column descriptor), the companion by the
+   * localization renderer — and they can spell the same field differently: a MySQL `date` is
+   * `timestamp` on the main table and `DATETIME(3)` in the companion. A map keyed by column name alone has to pick one of those before
    * placement is known, and the placement it would have to guess from is the stored flag, which is
    * exactly the value this operation exists to correct. Guessing it wrong reports drift on the
    * PRIMARY divergence being repaired.
    *
-   * Also the reason this takes the type rather than the rendered DDL: `getColumnDescriptor` answers
-   * differently again (a MySQL `date` is `DATETIME` here and `timestamp` there), and reading a type
-   * back out of printed SQL silently truncates any type spelled with more than one word.
+   * Also the reason this takes the type rather than the rendered DDL: reading a type back out of
+   * printed SQL silently truncates any type spelled with more than one word.
    *
    * Returns the type as that code spells it; this module normalises both sides before comparing.
    * `undefined` means no expectation could be derived, which is NOT evidence of drift — those
@@ -211,26 +203,42 @@ export interface ReconcileInput<F extends ReconcilableField> {
    */
   expectedColumnType?: (field: F, table: ReconcileTable) => string | undefined;
   /**
-   * The DEFAULT the code that builds `table` would give `field`.
+   * The type the main table's creator gave `field` before a Builder save wrote its migration: the
+   * one spelling accepted beside `expectedColumnType`, because tables built that way still exist.
    *
-   * 🔴 Three-valued on purpose, and the third state is what makes the check correct rather than
-   * merely present. "I could not derive an expectation" and "the builder writes no default" are
-   * different claims that a bare `string | undefined` collapses into one value — and collapsing
-   * them costs the case most worth catching, where an authored default was REMOVED from the
-   * definition while the live column still carries it. Under the collapsed shape that reads as
-   * nothing to compare, so the drift the check exists for is exactly what it cannot see.
-   *
-   * `known: false` is skipped, matching `expectedColumnType`: an underivable expectation is not
-   * evidence of drift.
+   * A Builder create now builds its table through the save writer's migration, whose columns are
+   * the column descriptor's; the creator before it spelled some of them its own way (`VARCHAR(255)`
+   * for a PostgreSQL `email`, `DATETIME` for a MySQL `date`). A live column matching either is the
+   * field's column; one matching neither is still refused as drift. `undefined` where there is no
+   * earlier spelling, so only the current one is accepted.
    */
-  expectedColumnDefault?: (
+  preBuilderSaveColumnType?: (
     field: F,
     table: ReconcileTable
-  ) => ExpectedColumnDefault;
+  ) => string | undefined;
+  /**
+   * The DEFAULT the field group's creator (`FieldGroupSchemaService`) writes for `field`'s main
+   * column, or `undefined` where it writes none. The one default accepted beside the one a table
+   * built from the definition carries, which this module asks of the desired-table builder itself.
+   *
+   * Two writers build a field group's main table and they disagree here: a Builder save's
+   * migration builds it from the desired table, which declares no DEFAULT for a user column (the
+   * default is filled when an instance is saved), while the creator, which `nextly db:sync` and a
+   * create without a save writer run, writes a checkbox's `DEFAULT`. Tables of both kinds exist, so
+   * a live default matching either is the field's; one matching neither is refused as drift.
+   */
+  creatorColumnDefault?: (field: F) => string | undefined;
+  /**
+   * Whose column rules built the main table (`builtByFor`): a field group the Builder owns, or one
+   * code owns. The indexes a field implies depend on it, because whether a column can be indexed
+   * depends on its type, and a text field that states no width is unbounded under one and 255
+   * characters under the other. Defaults to the Builder's.
+   */
+  builtBy?: ColumnOrigin;
   /**
    * The DEFAULT each SYSTEM column is created with, by column name.
    *
-   * Separate from `expectedColumnDefault` because these belong to no FIELD: nothing derived from
+   * Separate from `creatorColumnDefault` because these belong to no FIELD: nothing derived from
    * the field list describes `_order` or the timestamps, and the desired-state skeleton records
    * `undefined` for every one of them — so comparing the skeleton against a live table would report
    * drift on every healthy database. The creator is the only side that knows.
@@ -646,6 +654,20 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
   // structural columns and indexes the table is required to already have.
   const skeleton = mainSkeleton(input);
 
+  /**
+   * The main table built from `field` alone: its column and the indexes it implies, as the
+   * desired-table builder declares them. That builder is what a Builder save's migration creates
+   * the table from and what every later save compares it against, and the creator indexes by the
+   * same rules, so the expected index and DEFAULT are asked of it rather than of the field's flags.
+   */
+  const builtFrom = (field: F): TableSpec =>
+    buildDesiredTableFromComponentFields(input.tableName, [field], dialect, {
+      builtBy: input.builtBy ?? "fieldGroup",
+      ...(input.typeColumn !== undefined
+        ? { typeColumn: input.typeColumn }
+        : {}),
+    });
+
   // Structural integrity first: these describe a table that cannot do its job, and no amount of
   // definition repair changes that. Collected before any field is examined so a refusal names the
   // real problem rather than the field-level symptoms a broken table produces downstream.
@@ -764,28 +786,43 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
     // the tables spell the same field differently, so asking about the wrong one manufactures a
     // mismatch on the case this operation exists to repair.
     const expectedSpelling = input.expectedColumnType?.(field, table);
-    const expectedType = normalizeType(expectedSpelling);
     const liveType = normalizeType(live.type);
-    // The width is part of the physical type wherever the database reports one. Both must carry a
-    // modifier for the comparison to mean anything: where the introspector drops it, an absent
-    // modifier says nothing about the column and treating that as a mismatch would refuse every
-    // healthy group on that dialect.
-    const expectedWidth = typeModifier(expectedSpelling);
     // 🔴 From what introspection REPORTED, not from the live type string. On PostgreSQL that
     // string is `udt_name`, which never carries a modifier — so parsing it made this comparison
     // permanently inert on the dialect where a varchar length or numeric precision change is most
     // likely to be the whole edit. The snapshot records the modifier separately, gated per dialect
     // to what was actually declared.
     const liveWidth = live.typeModifier;
-    const widthDiffers =
-      expectedWidth !== undefined &&
-      liveWidth !== undefined &&
-      expectedWidth !== liveWidth;
+    /**
+     * Whether the live column differs from `spelling`. The width is part of the physical type
+     * wherever the database reports one. Both must carry a modifier for the comparison to mean
+     * anything: where the introspector drops it, an absent modifier says nothing about the column
+     * and treating that as a mismatch would refuse every healthy group on that dialect.
+     */
+    const differsFrom = (spelling: string | undefined): boolean => {
+      const expectedType = normalizeType(spelling);
+      const expectedWidth = typeModifier(spelling);
+      const widthDiffers =
+        expectedWidth !== undefined &&
+        liveWidth !== undefined &&
+        expectedWidth !== liveWidth;
+      return (
+        (expectedType !== undefined &&
+          liveType !== undefined &&
+          expectedType !== liveType) ||
+        widthDiffers
+      );
+    };
+    // A table built before the Builder's save writer spells some columns the earlier creator's
+    // way; a column matching that spelling is as healthy as one matching today's.
+    const preBuilderSaveSpelling = input.preBuilderSaveColumnType?.(
+      field,
+      table
+    );
     if (
-      (expectedType !== undefined &&
-        liveType !== undefined &&
-        expectedType !== liveType) ||
-      widthDiffers
+      differsFrom(expectedSpelling) &&
+      (preBuilderSaveSpelling === undefined ||
+        differsFrom(preBuilderSaveSpelling))
     ) {
       blockers.push({
         fieldName: field.name,
@@ -807,16 +844,39 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
     // Refuses rather than repairs, for the same reason the type does: the column cannot say whether
     // the authored default or the live one is the intended survivor. Both sides go through the
     // diff engine's normaliser so `true`, `'true'::boolean` and `1` are one answer per dialect.
-    const expectedDefault = input.expectedColumnDefault?.(field, table);
-    if (expectedDefault?.known === true) {
-      const want = normalizeDefault(expectedDefault.value, live.type);
+    //
+    // The expectation is the table built from the definition (`builtFrom`), which is what a
+    // Builder save writes and what every later save compares the table against, so a Builder-made
+    // table with no checkbox DEFAULT is healthy. The creator's DEFAULT is accepted beside it, as
+    // `creatorColumnDefault` explains. Main table only: the companion's columns are rendered by the
+    // localization path, which models no defaults, so nothing here can say what one should carry.
+    if (!inCompanion) {
       const have = normalizeDefault(live.default, live.type);
-      if (want !== have) {
+      // Each default a writer of this table gives the field, normalised as the live one is. The
+      // creator's is added only when the caller can say what it is, so an unasked creator never
+      // reads as one that writes no default.
+      const accepted = new Set([
+        normalizeDefault(
+          builtFrom(field).columns.find(
+            column => column.name === descriptor.name
+          )?.default,
+          live.type
+        ),
+      ]);
+      if (input.creatorColumnDefault) {
+        accepted.add(
+          normalizeDefault(input.creatorColumnDefault(field), live.type)
+        );
+      }
+      if (!accepted.has(have)) {
+        const described = [...accepted].map(value =>
+          value === undefined ? "no default" : `the default ${value}`
+        );
         blockers.push({
           fieldName: field.name,
           columnName: descriptor.name,
           kind: "column-default-changed",
-          detail: `"${field.name}" declares ${want === undefined ? "no default" : `the default ${want}`}, but the live column ${have === undefined ? "has none" : `defaults to ${have}`}; rows inserted without this field would not get the value the definition specifies.`,
+          detail: `"${field.name}"'s live column ${have === undefined ? "has no default" : `defaults to ${have}`}, where a table built from its definition has ${described.join(" or ")}; rows inserted without this field would not get the value the definition specifies.`,
         });
       }
     }
@@ -860,19 +920,38 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
           });
           repairedField = withOverride(repairedField, "unique", unique);
         }
-        // A unique index satisfies a declared `index` as well, so only a field claiming an index
-        // that no object of either kind provides is corrected.
-        const indexed = present;
-        if ((field.index === true) !== indexed && !unique) {
-          repaired.push({
-            fieldName: field.name,
-            columnName: descriptor.name,
-            table,
-            attribute: "index",
-            from: field.index === true,
-            to: indexed,
-          });
-          repairedField = withOverride(repairedField, "index", indexed);
+        // A unique index satisfies a plain one as well, so a live unique index leaves the `index`
+        // flag alone. Otherwise the index a table built from the definition carries on this column
+        // is compared with the live one: the generators index more than the flag asks for (every
+        // single reference, `componentRelationIsSingleReference`) and less where the column type
+        // cannot be indexed, so reading the flag alone reported a repair on healthy tables.
+        if (!unique) {
+          const builtIndexed = (candidate: F): boolean =>
+            indexOver(builtFrom(candidate).indexes, descriptor.name).present;
+          if (builtIndexed(repairedField) !== present) {
+            const flagged = withOverride(repairedField, "index", present);
+            if (builtIndexed(flagged) === present) {
+              // The flag is what decides this column's index, so correcting it describes the table.
+              repaired.push({
+                fieldName: field.name,
+                columnName: descriptor.name,
+                table,
+                attribute: "index",
+                from: repairedField.index === true,
+                to: present,
+              });
+              repairedField = flagged;
+            } else {
+              // No value of the flag gives the live table: a single reference whose index is gone.
+              // Restoring it needs DDL, which this operation never issues.
+              blockers.push({
+                fieldName: field.name,
+                columnName: descriptor.name,
+                kind: "field-index-changed",
+                detail: `"${field.name}"'s column ${present ? "carries an index" : "has no index"}, where a table built from its definition ${present ? "has none" : "has one"} whatever its \`index\` setting; this operation issues no DDL to change it.`,
+              });
+            }
+          }
         }
       }
     }

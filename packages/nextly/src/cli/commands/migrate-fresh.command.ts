@@ -4,6 +4,7 @@
  */
 import { Option, type Command } from "commander";
 
+import { withBusyTableBounds } from "../busy-table-options";
 import { withDryRun } from "../dry-run";
 import { lazyAction } from "../lazy-action";
 
@@ -13,11 +14,14 @@ import { lazyAction } from "../lazy-action";
  * @param program - Commander program instance
  */
 export function registerMigrateFreshCommand(program: Command): void {
-  // `--dry-run` carries the one meaning and help line it has everywhere.
-  withDryRun(
-    program
-      .command("migrate:fresh")
-      .description("Drop all tables and re-run all migrations")
+  // `--dry-run` and the busy-table bounds carry the one meaning and help they have everywhere:
+  // the bounds cover the drops and the re-applied migrations alike.
+  withBusyTableBounds(
+    withDryRun(
+      program
+        .command("migrate:fresh")
+        .description("Drop all tables and re-run all migrations")
+    )
   )
     .option(
       "--accept-data-loss [targets]",

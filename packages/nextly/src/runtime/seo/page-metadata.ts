@@ -140,6 +140,61 @@ function directivesOf(value: unknown): RobotsDirectives | undefined {
   return directives;
 }
 
+/** Google's image preview sizes, smallest first. */
+const IMAGE_PREVIEWS = ["none", "standard", "large"];
+
+/** A snippet length as a limit to compare: no limit (`-1`) is the largest. */
+const snippetLimit = (value: unknown): number | undefined =>
+  typeof value !== "number" ? undefined : value < 0 ? Infinity : value;
+
+/** A date directive's moment, where it names one. */
+const momentOf = (value: unknown): number | undefined => {
+  if (typeof value !== "string") return undefined;
+  const at = Date.parse(value);
+  return Number.isNaN(at) ? undefined : at;
+};
+
+/**
+ * Where both the route and the answer limit how the page is shown, the
+ * stricter of the two: the smaller image preview and snippet, the earlier
+ * date to leave results. Each side may only narrow what the other allows, as
+ * with visibility, so a route's own limit stands against a looser site
+ * default and a page's own stricter choice stands against a looser route.
+ */
+function stricterLimits(
+  code: RobotsDirectives,
+  answer: RobotsDirectives
+): RobotsDirectives {
+  const stricter: RobotsDirectives = {};
+  const preview = [code["max-image-preview"], answer["max-image-preview"]]
+    .map(value => (typeof value === "string" ? value.toLowerCase() : value))
+    .filter(
+      value => typeof value === "string" && IMAGE_PREVIEWS.includes(value)
+    )
+    .sort(
+      (a, b) =>
+        IMAGE_PREVIEWS.indexOf(String(a)) - IMAGE_PREVIEWS.indexOf(String(b))
+    )[0];
+  if (preview !== undefined) stricter["max-image-preview"] = preview;
+  const snippets = [code["max-snippet"], answer["max-snippet"]].filter(
+    value => snippetLimit(value) !== undefined
+  );
+  if (snippets.length > 0) {
+    stricter["max-snippet"] = snippets.reduce((a, b) =>
+      (snippetLimit(a) ?? Infinity) <= (snippetLimit(b) ?? Infinity) ? a : b
+    );
+  }
+  const dates = [code.unavailable_after, answer.unavailable_after].filter(
+    value => momentOf(value) !== undefined
+  );
+  if (dates.length > 0) {
+    stricter.unavailable_after = dates.reduce((a, b) =>
+      (momentOf(a) ?? Infinity) <= (momentOf(b) ?? Infinity) ? a : b
+    );
+  }
+  return stricter;
+}
+
 /**
  * The robots a page is served: the answer's visibility, with the route's own
  * as a floor, and every other directive the route gave, such as Google's
@@ -157,7 +212,13 @@ function robotsOver(
   const code = directivesOf(own) ?? {};
   const index = answer.index !== false && code.index !== false;
   const follow = answer.follow !== false && code.follow !== false;
-  const robots: Record<string, unknown> = { ...code, ...answer, index, follow };
+  const robots: Record<string, unknown> = {
+    ...code,
+    ...answer,
+    ...stricterLimits(code, answer),
+    index,
+    follow,
+  };
   const googleBot = isRecord(own) ? own.googleBot : undefined;
   if (googleBot !== undefined) {
     const bot = directivesOf(googleBot) ?? {};
@@ -255,6 +316,64 @@ function cardOver(
   return Object.keys(card).length > 0 ? card : undefined;
 }
 
+type Verification = NonNullable<Metadata["verification"]>;
+type VerificationValue = NonNullable<Verification["other"]>[string];
+
+/** A tag's values as a list, however the route gave them. */
+function valuesOf(value: VerificationValue | undefined): (string | number)[] {
+  if (value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+/**
+ * The route's own verification tags joined by the answer's. A name both set
+ * keeps both values, since a service reads every tag of its name and two
+ * owners may each have one; a value both set is written once.
+ */
+function verificationOver(
+  own: Metadata["verification"],
+  answered: Metadata["verification"]
+): Metadata["verification"] {
+  const added = answered?.other;
+  if (added === undefined) return own;
+  const other: Record<string, VerificationValue> = { ...own?.other };
+  for (const [name, value] of Object.entries(added)) {
+    const values = [...valuesOf(other[name])];
+    for (const each of valuesOf(value)) {
+      if (!values.includes(each)) values.push(each);
+    }
+    other[name] = values.length === 1 ? (values[0] ?? "") : values;
+  }
+  return { ...own, other };
+}
+
+/** `merged`, the route's own metadata, with the answer's verification tags joined to its own. */
+function joinVerification(
+  merged: Metadata,
+  answered: Metadata["verification"]
+): void {
+  const joined = verificationOver(merged.verification, answered);
+  if (joined !== undefined) merged.verification = joined;
+}
+
+type Alternates = NonNullable<Metadata["alternates"]>;
+
+/**
+ * The route's alternates with the answer's laid over them: each the
+ * answer names replaces the route's, and the other forms of the page are
+ * joined by media type, so the answer's link for one type keeps the route's
+ * links for every other, such as its feed.
+ */
+function alternatesOver(
+  kept: Alternates,
+  answered: Metadata["alternates"]
+): Alternates {
+  const merged: Alternates = { ...kept, ...answered };
+  const types = { ...kept.types, ...answered?.types };
+  if (Object.keys(types).length > 0) merged.types = types;
+  return merged;
+}
+
 /**
  * The route's own metadata with the answer laid over it.
  *
@@ -296,10 +415,12 @@ function overCode(code: Metadata | undefined, answered: Metadata): Metadata {
       ? without(alternates, ["canonical"])
       : alternates
     : {};
-  const mergedAlternates = { ...keptAlternates, ...answered.alternates };
+  const mergedAlternates = alternatesOver(keptAlternates, answered.alternates);
   if (Object.keys(mergedAlternates).length > 0) {
     merged.alternates = mergedAlternates;
   }
+
+  joinVerification(merged, answered.verification);
 
   const card = cardOver(openGraph, answered.openGraph, answersAddress);
   if (card !== undefined) merged.openGraph = card as Metadata["openGraph"];
@@ -470,7 +591,22 @@ const pageMetadataAnswerSchema = z.object({
   title: z.string().optional(),
   description: z.string().optional(),
   canonical: z.string().optional(),
-  robots: z.object({ index: z.boolean(), follow: z.boolean() }).optional(),
+  // Google's display controls are optional, each in the form Google reads
+  // it: a size Google has no name for, or a fractional snippet length, is
+  // refused rather than served as a directive Google ignores.
+  robots: z
+    .object({
+      index: z.boolean(),
+      follow: z.boolean(),
+      maxImagePreview: z.enum(["none", "standard", "large"]).optional(),
+      maxSnippet: z.number().int().min(-1).optional(),
+      nosnippet: z.boolean().optional(),
+      noimageindex: z.boolean().optional(),
+      unavailableAfter: z.string().optional(),
+      noarchive: z.boolean().optional(),
+      nocache: z.boolean().optional(),
+    })
+    .optional(),
   social: z
     .object({
       title: z.string().optional(),
@@ -482,10 +618,78 @@ const pageMetadataAnswerSchema = z.object({
     })
     .optional(),
   languages: z.record(z.string(), z.string()).optional(),
+  // Each key is a media type, as a link's `type` names one.
+  formats: z
+    .record(z.string().regex(/^[a-z]+\/[a-z0-9.+-]+$/i), z.string())
+    .optional(),
   // JSON only, the one form a cached answer and a script element both hold:
   // a node holding anything else refuses the answer.
   structuredData: z.array(z.record(z.string(), z.json())).optional(),
+  // Each name is one a meta tag can carry, so no name can reach the head as
+  // anything but the name of one tag.
+  verification: z
+    .record(z.string().regex(/^[A-Za-z][A-Za-z0-9._:-]{0,99}$/), z.string())
+    .optional(),
 });
+
+/**
+ * An ISO 8601 date and time with its zone, as `unavailable_after` is written:
+ * `2026-12-31T23:59:00Z` or `2026-12-31T23:59:00+05:00`, seconds and a
+ * fraction optional.
+ */
+const ISO_DATE_TIME =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(Z|[+-](\d{2}):(\d{2}))$/;
+
+/**
+ * Whether `value` is a date and time Google can read: the form above, on a
+ * day the calendar has and at a time the clock has. `Date.parse` alone
+ * accepts other forms and rolls an impossible day, such as 30 February, into
+ * the next month.
+ */
+function isReadableDateTime(value: string): boolean {
+  const parts = ISO_DATE_TIME.exec(value);
+  if (parts === null) return false;
+  const [year, month, day, hour, minute, second] = parts
+    .slice(1, 7)
+    .map(part => (part === undefined ? 0 : Number(part)));
+  const zoneHours = parts[8] === undefined ? 0 : Number(parts[8]);
+  const zoneMinutes = parts[9] === undefined ? 0 : Number(parts[9]);
+  const onCalendar = new Date(Date.UTC(year, month - 1, day));
+  return (
+    onCalendar.getUTCFullYear() === year &&
+    onCalendar.getUTCMonth() === month - 1 &&
+    onCalendar.getUTCDate() === day &&
+    hour < 24 &&
+    minute < 60 &&
+    second < 60 &&
+    zoneHours < 24 &&
+    zoneMinutes < 60
+  );
+}
+
+/** The dates already said to be unreadable, each said once. */
+const toldUnreadableDates = new Set<string>();
+
+/**
+ * The answer with a date to leave results Google could not read left out,
+ * and said once in the log: the rest of the answer is still served, and a
+ * directive search engines would misread or ignore never reaches the head.
+ */
+function withReadableDate(answer: PageMetadataAnswer): PageMetadataAnswer {
+  const robots = answer.robots;
+  const date = robots?.unavailableAfter;
+  if (robots === undefined || date === undefined || isReadableDateTime(date)) {
+    return answer;
+  }
+  if (!toldUnreadableDates.has(date)) {
+    toldUnreadableDates.add(date);
+    consoleLogger.warn(
+      `The page-metadata provider gave "${date}" as the date a page leaves search results, which is not an ISO 8601 date and time with its zone; it is left out of the page's robots.`
+    );
+  }
+  const { unavailableAfter: _unreadable, ...readable } = robots;
+  return { ...answer, robots: readable };
+}
 
 /**
  * The provider's answer for one page, cached; undefined when no provider is
@@ -518,7 +722,10 @@ async function pageAnswerFor(
   // Parsed inside the cached read, so an answer that is not one is refused
   // there and never stored: the next request asks the provider again.
   return cachedFind(
-    async () => pageMetadataAnswerSchema.parse(await resolver.resolve(input)),
+    async () =>
+      withReadableDate(
+        pageMetadataAnswerSchema.parse(await resolver.resolve(input))
+      ),
     {
       // The provider and its version too, so a replaced or upgraded provider
       // never reads an answer another one cached for the same page.

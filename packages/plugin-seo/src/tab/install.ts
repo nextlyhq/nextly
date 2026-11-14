@@ -9,6 +9,7 @@
 import type { FieldConfig, PluginContributions } from "@nextlyhq/plugin-sdk";
 
 import type { ReadRules } from "../resolver/provider";
+import type { SeoTypes } from "../seo-types";
 import type { ReadSocialCardRules } from "../social/card";
 import type { ReadStructuredDataRules } from "../structured-data/rules";
 
@@ -17,8 +18,8 @@ import { seoTabRoute } from "./route";
 
 /** The tab and its route, for the collections and Singles with the group. */
 export function seoTabParts(setup: {
-  collections: readonly string[];
-  singles: readonly string[];
+  /** The types with the group, read when asked. */
+  types: SeoTypes;
   /** The fields in the group; a group the tab cannot edit gets no tab. */
   fields: readonly FieldConfig[];
   /** The origin the plugin was configured with, where it was. */
@@ -35,27 +36,37 @@ export function seoTabParts(setup: {
   routes: NonNullable<PluginContributions["routes"]>;
   /** The collections whose pages the tab edits: none where it edits no group. */
   tabCollections: string[];
+  /** Whether the tab edits the group on every type that has it. */
+  tabEveryType: boolean;
 } {
-  const { collections, singles, fields, baseUrl } = setup;
+  const { types, fields, baseUrl } = setup;
   const names = fields.flatMap(field =>
     typeof field.name === "string" ? [field.name] : []
   );
   const edits = tabEditsGroup(fields);
   return {
-    tabCollections: edits ? [...collections] : [],
+    // Named only where the site names its types; where SEO is on every
+    // type, the Page Builder's tab is told so instead (`tabEveryType`).
+    tabCollections: edits && types.named ? [...types.collections] : [],
+    tabEveryType: edits && !types.named,
     // A group of fields the tab does not edit stays among the page's own
     // fields instead.
     ...(edits
       ? {
           admin: {
-            contributions: seoTabContributions({ collections, singles }),
+            contributions: seoTabContributions(types.named ? types : "every"),
           },
         }
       : {}),
     routes: [
       seoTabRoute({
-        collections,
-        singles,
+        // Read on each request, as the types are.
+        get collections() {
+          return types.collections;
+        },
+        get singles() {
+          return types.singles;
+        },
         fields: names,
         readRules: setup.readRules,
         readStructuredDataRules: setup.readStructuredDataRules,

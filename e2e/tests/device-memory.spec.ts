@@ -268,7 +268,7 @@ test.describe("the admin's memory on this device", () => {
     for (const [key, value] of Object.entries(stored)) {
       // Only the admin's metadata, interface preferences and the record.
       expect(key, `an unexpected key, ${key}`).toMatch(
-        /^(nextly:admin:memory:(menu|branding|schema:\/(collections(\/schema)?|singles|field-groups)\/[^/]+(\/schema)?)|nextly:admin:signed-in-here|nextly:(admin|panel-open|sidebar|journal)[:\w-]*|nextly-[\w-]+|builder\.showSystemInternals)$/
+        /^(nextly:admin:memory:(menu|branding|layout|schema:\/(collections(\/schema)?|singles|field-groups)\/[^/]+(\/schema)?)|nextly:admin:signed-in-here|nextly:(admin|panel-open|sidebar|journal)[:\w-]*|nextly-[\w-]+|builder\.showSystemInternals)$/
       );
       expect(value.toLowerCase(), `${key} holds a token`).not.toMatch(
         /token|password|"permissions"|read-posts/

@@ -47,6 +47,7 @@ export {
   type PluginVersionsService,
   type PluginInsert,
   type PluginTransaction,
+  type PluginTransactionBounds,
   type PluginFilterRegistry,
   type PluginHookRegistry,
   // `ctx.hooks.onInTransaction`'s handler and what it is handed.

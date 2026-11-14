@@ -24,7 +24,9 @@ import {
 import { addressHolders } from "../address-record/participant";
 import { codePagesSlug } from "../code-pages/collection";
 import { nameOfAddress, readCodePage } from "../code-pages/store";
+import { contentDateOf } from "../content-dates/last-changed";
 import { originOf } from "../origin";
+import { singleKey } from "../problems/page-types";
 import { TITLE_FIELDS } from "../settings/patterns";
 
 import {
@@ -305,6 +307,12 @@ interface PageFacts {
   rules: StructuredDataRules;
   /** What the route says about the page, where it says anything. */
   hints: PageStructuredDataHints;
+  /**
+   * When the page's published content last changed in its language, where a
+   * date is kept (`content-dates/last-changed`): read once, and only where a
+   * date would be described from the row's own save stamp.
+   */
+  contentDate: () => Promise<string | undefined>;
 }
 
 /** A detail's value as the fact it is, or nothing where the page lacks it. */
@@ -446,7 +454,7 @@ const DETAIL_READERS: Readonly<Record<StructuredDataDetail, DetailReader>> = {
       facts.origin
     ),
   datePublished: valueRead(dateOf),
-  dateModified: valueRead(dateOf),
+  dateModified: (facts, read) => modifiedOf(facts, read),
   startDate: valueRead(dateOf),
   uploadDate: valueRead(dateOf),
   price: valueRead(numberOf),
@@ -520,12 +528,41 @@ async function detailsOf(
   return { values, missing };
 }
 
+/**
+ * Whether `field` is the row's own save stamp, which every save moves, an
+ * SEO-only one included: not a date a page's content changed.
+ */
+function isSaveStamp(field: string): boolean {
+  return field.toLowerCase().replace(/[^a-z0-9]/g, "") === "updatedat";
+}
+
+/**
+ * The date a page is described as last changed: a field that says so (a
+ * correction or review date, or the one the content type maps), else when
+ * the page's content last changed, by the rule its sitemap entry is dated
+ * by (`lastChangedOf`): its kept content date, else its own last save. So an
+ * SEO-only save, which moves the row's save stamp, moves neither.
+ */
+async function modifiedOf(
+  facts: PageFacts,
+  read: DetailRead
+): Promise<string | undefined> {
+  const stamp =
+    read.field === undefined
+      ? read.value === undefined
+      : isSaveStamp(read.field);
+  if (!stamp) return dateOf(read.value);
+  return dateOf((await facts.contentDate()) ?? read.value);
+}
+
 /** The page's own dates: when it was published, and last changed. */
-function datesOf(facts: PageFacts): { published?: string; modified?: string } {
-  const at = (detail: "datePublished" | "dateModified") =>
-    dateOf(readDetail(facts.document, detail, facts.mapping[detail]).value);
-  const published = at("datePublished");
-  const modified = at("dateModified");
+async function datesOf(
+  facts: PageFacts
+): Promise<{ published?: string; modified?: string }> {
+  const read = (detail: "datePublished" | "dateModified") =>
+    readDetail(facts.document, detail, facts.mapping[detail]);
+  const published = dateOf(read("datePublished").value);
+  const modified = await modifiedOf(facts, read("dateModified"));
   return {
     ...(published === undefined ? {} : { published }),
     ...(modified === undefined ? {} : { modified }),
@@ -1080,23 +1117,6 @@ const ABOUT_THE_BRAND: readonly StructuredDataTypeKey[] = [
   "contactPage",
 ];
 
-/**
- * The questions a page of another kind shows, described beside it; nothing
- * on a questions page, whose questions are its own main subject.
- */
-function questionsBeside(
-  facts: PageFacts,
-  page: DescribedPage,
-  type: StructuredDataTypeKey
-): StructuredDataNode | undefined {
-  if (type === "faqPage") return undefined;
-  const read = readDetail(facts.document, "questions", facts.mapping.questions);
-  const questions = questionsValue(facts, read);
-  return questions === undefined
-    ? undefined
-    : { "@type": "FAQPage", "@id": `${page.url}#faq`, mainEntity: questions };
-}
-
 /** The `@id` reference to a node, where there is one. */
 const refTo = (target: StructuredDataNode | undefined) =>
   ref(target?.["@id"] as string | undefined);
@@ -1125,8 +1145,11 @@ function mainEntityOf(
 /**
  * The page's nodes: the page, as its own kind where it is described as one
  * and has what it needs, else a web page; its trail; the entries it lists;
- * its questions; and its subject, where it is described as a thing and has
- * what that needs.
+ * and its subject, where it is described as a thing and has what that needs.
+ * Questions and answers are described only as the main subject of a page
+ * whose kind someone chose as Questions and answers: a page of another kind
+ * gets no `FAQPage` beside it, whatever questions its route or fields hold,
+ * since markup nobody chose is markup the plugin made up.
  */
 async function pageNodesOf(
   facts: PageFacts,
@@ -1161,14 +1184,9 @@ async function pageNodesOf(
   });
   // The brand's founders are described where the site says who it is: the
   // founders are given only for a described About page.
-  return [
-    pageNode,
-    breadcrumb,
-    itemList,
-    questionsBeside(facts, page, type),
-    subject,
-    ...founders,
-  ].filter(each => each !== undefined);
+  return [pageNode, breadcrumb, itemList, subject, ...founders].filter(
+    each => each !== undefined
+  );
 }
 
 /** The details a type is missing, the name a described thing needs first. */
@@ -1295,6 +1313,34 @@ function present<T extends object>(value: T): T {
   ) as T;
 }
 
+/**
+ * The image a listed page's structured data reads from a field its content
+ * type maps, such as a post's cover under a name no share-image guess reads;
+ * none where the type maps no image field. The field mapped for the type the
+ * page is described as, where the page or its content type chooses one; a
+ * route's own choice (`structuredDataHints.type`) reaches the plugin only
+ * while the route renders, so where the decided type maps no image, the
+ * field the content type maps an image from for any of its types is read.
+ */
+export async function mappedImageOf(
+  ctx: PluginContext,
+  key: string,
+  document: Readonly<Record<string, unknown>>,
+  rules: StructuredDataRules
+): Promise<PageMetadataImage | undefined> {
+  const rule = rules.types[key];
+  if (rule?.details === undefined) return undefined;
+  const offered = structuredDataTypesFor({ hidden: false });
+  const automatic = automaticType(document, {}, offered);
+  const { type } = chosenType({ document }, rule, offered, automatic);
+  const source =
+    rule.details[type]?.image ??
+    Object.values(rule.details).find(mapping => mapping?.image !== undefined)
+      ?.image;
+  if (source === undefined) return undefined;
+  return pictureOf(ctx, readDetail(document, "image", source));
+}
+
 /** The type a page is described as, how that was decided, and what is offered. */
 function decidedType(
   document: Readonly<Record<string, unknown>>,
@@ -1359,7 +1405,7 @@ async function graphOf(
   if (url === undefined) {
     return { ...decided, nodes: site.nodes, problems: [] };
   }
-  const { published, modified } = datesOf(facts);
+  const { published, modified } = await datesOf(facts);
   const page: DescribedPage = present({
     url,
     id: `${url}#webpage`,
@@ -1378,8 +1424,8 @@ async function graphOf(
  * The page's structured data, worked out from its answer, its fields and
  * what its route says about it: the organisation and website from the brand
  * facts, the page, a breadcrumb trail from the site's home, the entries it
- * lists and the questions it answers, and the page's subject as its chosen
- * type describes it. A type missing a detail it needs is left out, and
+ * lists, and the page's subject as its chosen type describes it, the
+ * questions it answers where that type is Questions and answers. A type missing a detail it needs is left out, and
  * listed as a problem.
  */
 export async function buildStructuredData(
@@ -1408,7 +1454,42 @@ export async function buildStructuredData(
       mapping: rule?.details?.[decided.type] ?? {},
       rules,
       hints,
+      contentDate: once(() => contentDateOfPage(ctx, input, document)),
     },
     decided
   );
+}
+
+/** `read`, asked once, its answer kept for every later ask. */
+function once<T>(read: () => Promise<T>): () => Promise<T> {
+  let answer: Promise<T> | undefined;
+  return () => (answer ??= read());
+}
+
+/**
+ * The content date of the page `input` resolved to, in its language
+ * (`contentDateOf`): an entry held under its collection, a Single under its
+ * key, as the save hooks keep their dates. None where none is kept, or the
+ * read fails: the page's head is served whatever the date read does.
+ */
+async function contentDateOfPage(
+  ctx: PluginContext,
+  input: PageMetadataInput,
+  document: Readonly<Record<string, unknown>>
+): Promise<string | undefined> {
+  const id = document.id;
+  if (typeof id !== "string" && typeof id !== "number") return undefined;
+  const { source } = input;
+  const holder = {
+    collection:
+      source.kind === "entry" ? source.collection : singleKey(source.slug),
+    id: String(id),
+  };
+  try {
+    const language =
+      input.locale ?? (await ctx.publicAddresses.defaultLanguage());
+    return await contentDateOf(ctx, holder, language);
+  } catch {
+    return undefined;
+  }
 }

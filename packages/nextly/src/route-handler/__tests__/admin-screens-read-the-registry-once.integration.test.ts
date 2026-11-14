@@ -14,9 +14,9 @@
  *   this process reads the count again, and not before;
  * - a registry write made in this process is seen at once.
  *
- * The startup request is sent without its two paged lists (`/collections`
- * and `/singles` with a page and a size): those page, sort and count in the
- * database, as a list endpoint does, and are read on every request by design.
+ * The startup request is sent whole, with its two paged lists (`/collections`
+ * and `/singles` with a page and a size): their pages, totals and order are
+ * derived from the same cached listing (`shared/lib/registry-listing-page`).
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -60,7 +60,7 @@ const silent = {
   error: () => {},
 } as unknown as Logger;
 
-/** Every part of the admin's startup request but its two paged lists. */
+/** Every part of the admin's startup request. */
 const STARTUP = `/startup?${[
   "/auth/setup-status",
   "/auth/session",
@@ -70,6 +70,8 @@ const STARTUP = `/startup?${[
   "/me/permissions",
   "/me/capabilities",
   "/general-settings",
+  "/collections?limit=100&page=1&sortBy=name&sortOrder=asc",
+  "/singles?limit=100&page=1",
 ]
   .map(path => `path=${encodeURIComponent(path)}`)
   .join("&")}`;

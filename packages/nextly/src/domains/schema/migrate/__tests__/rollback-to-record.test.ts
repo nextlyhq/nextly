@@ -167,7 +167,10 @@ describe("orphanMarksUndone", () => {
     return Object.fromEntries(
       orphanMarksUndone({
         rows,
-        baseline: ["read-users", "archive-reports", "send-second"],
+        point: {
+          kind: "baseline",
+          slugs: ["read-users", "archive-reports", "send-second"],
+        },
         rolledBack,
         installed: [{ action: "sync", resource: "first" }],
         pluginDeclared: [
@@ -214,5 +217,107 @@ describe("orphanMarksUndone", () => {
     expect(
       marks([row("read-users", null, MARKED), row("read-pages", null, MARKED)])
     ).toEqual({ "id-read-users": false });
+  });
+});
+
+describe("orphanMarksUndone, for a plugin the point speaks for", () => {
+  /** M1 records `@x/seo` declaring `read-seo`; the rolled-back M2 adds `audit-seo`, which v2 still declares. */
+  const rolledBack: RolledBackMigration[] = [
+    {
+      snapshot: snapshot([["publish", "reports"]], {
+        "@x/seo": [
+          ["read", "seo"],
+          ["audit", "seo"],
+        ],
+        "@x/late": [["sync", "late"]],
+      }),
+    },
+  ];
+  const installed = [
+    { action: "read", resource: "seo" },
+    { action: "audit", resource: "seo" },
+    { action: "sync", resource: "late" },
+  ];
+  const pluginDeclared = installed.map(p => ({
+    ...p,
+    owner: p.resource === "seo" ? "@x/seo" : "@x/late",
+  }));
+
+  function marksAt(
+    point: Parameters<typeof orphanMarksUndone>[0]["point"],
+    rows: OrphanPassRow[]
+  ) {
+    return Object.fromEntries(
+      orphanMarksUndone({ rows, point, rolledBack, installed, pluginDeclared })
+    );
+  }
+
+  const atSnapshot = {
+    kind: "snapshot" as const,
+    declared: {
+      declared: [
+        { action: "read", resource: "users" },
+        { action: "read", resource: "seo" },
+      ],
+      plugins: new Set(["@x/seo"]),
+    },
+  };
+
+  it("orphans a plugin permission the point's snapshot does not declare, though its configured release does", () => {
+    expect(
+      marksAt(atSnapshot, [
+        row("read-seo", "@x/seo"),
+        row("audit-seo", "@x/seo"),
+        row("publish-reports", "app"),
+      ])
+    ).toEqual({ "id-audit-seo": true, "id-publish-reports": true });
+  });
+
+  it("keeps the permissions of a plugin the point does not know, installed after it", () => {
+    expect(marksAt(atSnapshot, [row("sync-late", "@x/late")])).toEqual({});
+  });
+
+  it("clears the marks the point's snapshot declares, an installed plugin's only where its release declares it too", () => {
+    expect(
+      marksAt(atSnapshot, [
+        row("read-users", null, MARKED),
+        row("read-seo", "@x/seo", MARKED),
+        row("drop-seo", "@x/seo", MARKED),
+        row("read-pages", null, MARKED),
+      ])
+    ).toEqual({ "id-read-users": false, "id-read-seo": false });
+  });
+
+  it("never clears a core permission's mark at a snapshot point, which declares no core permission", () => {
+    expect(marksAt(atSnapshot, [row("delete-users", null, MARKED)])).toEqual(
+      {}
+    );
+  });
+
+  it("speaks, at the baseline, for each plugin one of whose permissions it holds", () => {
+    expect(
+      marksAt({ kind: "baseline", slugs: ["read-seo"] }, [
+        row("read-seo", "@x/seo"),
+        row("audit-seo", "@x/seo"),
+        row("sync-late", "@x/late"),
+      ])
+    ).toEqual({ "id-audit-seo": true });
+  });
+
+  it("takes a permission the point declares under any owner as declared, as a plugin's action on a Builder collection", () => {
+    const point = {
+      kind: "snapshot" as const,
+      declared: {
+        declared: [
+          { action: "read", resource: "seo" },
+          { action: "audit", resource: "seo" },
+        ],
+        plugins: new Set(["@x/seo"]),
+      },
+    };
+    expect(marksAt(point, [row("audit-seo", "@x/seo")])).toEqual({});
+    expect(marksAt(point, [row("audit-seo", "@x/seo", MARKED)])).toEqual({
+      "id-audit-seo": false,
+    });
   });
 });
