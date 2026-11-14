@@ -298,8 +298,9 @@ export interface UpdateSingleOptions {
  * Options for publishing every language of a Single at once.
  *
  * A deliberate subset of {@link UpdateSingleOptions}: this write persists no
- * caller content and names no locale, so the write-locale, hook-context and
- * version-lineage options an update carries have nothing to act on here.
+ * caller content and names no locale, so the write-locale and
+ * version-lineage options an update carries have nothing to act on here. The
+ * hook context and request do: the publish runs the update hooks a save runs.
  */
 export interface PublishAllSingleLocalesOptions {
   /** User context for access control. */
@@ -333,6 +334,11 @@ export interface PublishAllSingleLocalesOptions {
    * by callers that own their cache strategy — a CLI, seed, or bulk import.
    */
   disableRevalidate?: boolean;
+
+  /** Arbitrary data passed to the update hooks the publish runs. */
+  context?: Record<string, unknown>;
+  /** The HTTP request behind this publish, which its hooks are told about. */
+  request?: Request;
 
   /**
    * The request's data: only the version it was made from (`_rev`) and the

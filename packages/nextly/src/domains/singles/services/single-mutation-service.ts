@@ -323,6 +323,7 @@ import {
   readsSingleInEveryLanguage,
   type PromoteGateContext,
 } from "./promote-gate";
+import { runSingleAfterUpdateHooks } from "./single-after-update";
 import { readSingleForCreation } from "./single-first-row";
 import type { SingleMediaUsageDeps } from "./single-media-usage";
 import {
@@ -5823,24 +5824,23 @@ export class SingleMutationService extends BaseService {
       // 11. Execute afterChange hooks (afterUpdate equivalent for Singles)
       // Held like the field hooks above. What a hook returns reshapes the
       // response only when it ran before the call returns.
+      // The same run a publish of every language makes once it is durable.
       if (this.hookRegistry.hasHooks("afterUpdate", hookCollection)) {
         const transformed: { data?: typeof updatedDoc } = {};
         await this.afterCommitOver(updatedDoc, async committed => {
-          const afterContext = buildSingleHookContext({
-            collection: hookCollection,
-            operation: "update",
-            data: committed,
-            originalData: existingDeserialized,
-            user: options.user ?? undefined,
-            context: sharedContext,
-            req: requestFacts,
-          });
-          const transformedData = await this.hookRegistry.execute(
-            "afterUpdate",
-            afterContext
+          const transformedData = await runSingleAfterUpdateHooks(
+            this.hookRegistry,
+            {
+              slug,
+              data: committed,
+              originalData: existingDeserialized,
+              user: options.user ?? undefined,
+              context: sharedContext,
+              req: requestFacts,
+            }
           );
           if (transformedData !== undefined) {
-            transformed.data = transformedData;
+            transformed.data = transformedData as typeof updatedDoc;
           }
         });
         if (transformed.data !== undefined) {

@@ -812,6 +812,86 @@ describe.each(getConfiguredTestDialects())(
         false
       );
     });
+
+    it("checks a Single again when every language of it is published at once", async () => {
+      const seen: { ctx?: PluginContext } = {};
+      const plugin = seoPlugin({ collections: ["posts"], singles: ["home"] });
+      current = await createTestNextly({
+        dialect,
+        plugins: [
+          {
+            ...plugin,
+            init(ctx) {
+              seen.ctx = ctx;
+              return plugin.init?.(ctx);
+            },
+          },
+        ],
+        collections: [
+          defineCollection({
+            slug: "posts",
+            access: { read: () => true },
+            fields: [text({ name: "title" }), text({ name: "slug" })],
+            publicAddress: "/blog/{slug}",
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: "home",
+            localized: true,
+            status: true,
+            fields: [text({ name: "title", localized: true })],
+            publicAddress: "/",
+          }),
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const t = current;
+      const ctx = seen.ctx;
+      if (!ctx) throw new Error("the SEO plugin never started");
+      seoContext = ctx;
+      await lastCatchUp();
+      const checks = { ...CHECKS, targets: ["posts"], singles: ["home"] };
+      const homeRows = (found: Record<string, unknown>[]) =>
+        found.filter(row => row.holderCollection === "single:home");
+
+      // Both languages saved as drafts, with a title longer than Google
+      // shows: a draft is not a public page, so nothing is kept of it.
+      for (const locale of ["en", "de"]) {
+        await t.nextly.updateSingle({
+          slug: "home",
+          locale,
+          data: { title: "t".repeat(70), status: "draft", _overwrite: true },
+        });
+      }
+      const draftList = await problemList(ctx, checks, everything);
+      expect(
+        draftList.problems.some(p => p.subject.type === "single:home")
+      ).toBe(false);
+      expect(homeRows(await rows(t))).toEqual([]);
+
+      // Every language published in one go is a save of the Single, so it is
+      // checked again, as a publish of one language through a save is.
+      const published = await t
+        .getService<{
+          publishAllLocales: (
+            slug: string,
+            options: Record<string, unknown>
+          ) => Promise<{ success: boolean }>;
+        }>("singleEntryService")
+        .publishAllLocales("home", {
+          overrideAccess: true,
+          data: { _overwrite: true },
+        });
+      expect(published.success).toBe(true);
+      await until(t, found => homeRows(found).length > 0);
+      const list = await problemList(ctx, checks, everything);
+      expect(
+        list.problems
+          .filter(p => p.subject.type === "single:home")
+          .map(p => p.kind)
+      ).toContain("longTitle");
+    });
   }
 );
 
