@@ -776,7 +776,7 @@ describe.each(getConfiguredTestDialects())(
       // Saved with a title longer than Google shows: its save checks it.
       await t.nextly.updateSingle({
         slug: "home",
-        data: { title: "t".repeat(70), _overwrite: true },
+        data: { title: "W".repeat(40), _overwrite: true },
       });
       const [saved] = await until(t, found => homeRow(found) !== undefined);
       expect(saved).toBeDefined();
@@ -861,7 +861,7 @@ describe.each(getConfiguredTestDialects())(
         await t.nextly.updateSingle({
           slug: "home",
           locale,
-          data: { title: "t".repeat(70), status: "draft", _overwrite: true },
+          data: { title: "W".repeat(40), status: "draft", _overwrite: true },
         });
       }
       const draftList = await problemList(ctx, checks, everything);

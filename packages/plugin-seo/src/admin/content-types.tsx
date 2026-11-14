@@ -46,7 +46,7 @@ import {
   type StructuredDataTypeKey,
 } from "../structured-data/catalog";
 import type { DetailSource } from "../structured-data/rules";
-import { characters, TITLE_LIMIT } from "../tab/problems";
+import { fitSummary, textFit } from "../tab/problems";
 
 import { AdminLink } from "./section";
 import {
@@ -155,7 +155,7 @@ function PatternEditor({
     ...type.fields.map(field => field.token),
     SITE_NAME_TOKEN,
   ];
-  const length = characters(preview.title);
+  const fit = textFit("title", preview.title);
   return (
     <div className="grid gap-2">
       <div className="flex items-baseline justify-between gap-2">
@@ -205,12 +205,11 @@ function PatternEditor({
         className="text-xs text-muted-foreground"
       >
         Example: <b className="font-medium text-foreground">{preview.title}</b>{" "}
+        {/* Measured as the SEO tab and the problem list measure a title. */}
         <span
-          className={
-            length > TITLE_LIMIT ? "font-semibold text-warning-text" : undefined
-          }
+          className={fit.fits ? undefined : "font-semibold text-warning-text"}
         >
-          {length} / {TITLE_LIMIT}
+          {fitSummary(fit)}
         </span>
       </p>
       {preview.gaveWay ? (
