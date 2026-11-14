@@ -132,6 +132,11 @@ export const NEXTLY_ERROR_STATUS = {
   // its bounds, and stopped. 409 like the schema lock's refusal: another
   // session holds what the change needs, and it can run once that ends.
   NEXTLY_TABLE_BUSY: 409,
+  // A write made inside a schema change's own SQLite transaction, on another
+  // connection to the same database, waited for the write lock that
+  // transaction holds. 500, not 409: this process holds the lock, no other
+  // session does, so nothing can end that a retry would wait for.
+  NEXTLY_LOCK_HELD_BY_THIS_PROCESS: 500,
   NEXTLY_BASELINE_LOCK_NOT_HELD: 409,
   NEXTLY_RESOLVE_LOCK_NOT_HELD: 409,
   // Boot refused to serve: the migrate lock stayed held past the wait deadline,

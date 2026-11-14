@@ -168,10 +168,16 @@ async function restoreSessionDefaults(ctx: {
  *
  * PostgreSQL and MySQL enforce foreign keys as the statements run, as their
  * migrations always have.
+ *
+ * On SQLite a busy answer that ends the work is this process waiting for its
+ * own lock, and stops as that (`refusingOwnWriteLockWait`); `change` names
+ * what ran in that stop's message (a migration file), where the caller has a
+ * name for it.
  */
 export async function executeTransaction<T>(
   adapter: DrizzleAdapter,
-  work: (tx: MigrationTransaction) => Promise<T>
+  work: (tx: MigrationTransaction) => Promise<T>,
+  change?: string
 ): Promise<T> {
   // A precondition, on every dialect: a transaction opened inside another
   // joins it, and a migration must not. On MySQL its DDL would commit the
@@ -219,31 +225,93 @@ export async function executeTransaction<T>(
     },
   };
   return withSqliteForeignKeysOff(outside, () =>
-    adapter.transaction(async ctx => {
-      const inside = {
-        read: <R>(statement: string) =>
-          ctx.queryStatement<R>(sql.raw(statement)),
-      };
-      await assertForeignKeysOff(inside);
-      return refusingNewDanglingReferences(
-        inside,
-        () =>
-          work({
-            execute: async statement => {
-              await ctx.execute(statement);
-            },
-            db: ctx.getDrizzle(),
-            // SQLite has no setting a statement can change that reroutes a
-            // table name: ATTACH and DETACH are refused before anything runs.
-            restoreSession: () => Promise.resolve(),
-            // SQLite names no connection: its busy timeout bounds the one write lock.
-            session: () => Promise.resolve(undefined),
-          }),
-        (count, pairs) =>
-          `This migration would leave ${String(count)} row(s) referencing rows that do not exist (${pairs}). It was rolled back, and nothing was applied.`
-      );
-    })
+    adapter.transaction(ctx =>
+      refusingOwnWriteLockWait(change, async () => {
+        const inside = {
+          read: <R>(statement: string) =>
+            ctx.queryStatement<R>(sql.raw(statement)),
+        };
+        await assertForeignKeysOff(inside);
+        return refusingNewDanglingReferences(
+          inside,
+          () =>
+            work({
+              execute: async statement => {
+                await ctx.execute(statement);
+              },
+              db: ctx.getDrizzle(),
+              // SQLite has no setting a statement can change that reroutes a
+              // table name: ATTACH and DETACH are refused before anything runs.
+              restoreSession: () => Promise.resolve(),
+              // SQLite names no connection: its busy timeout bounds the one write lock.
+              session: () => Promise.resolve(undefined),
+            }),
+          (count, pairs) =>
+            `This migration would leave ${String(count)} row(s) referencing rows that do not exist (${pairs}). It was rolled back, and nothing was applied.`
+        );
+      })
+    )
   );
+}
+
+/**
+ * Runs `work`, the whole of a SQLite transaction's work, and stops a busy answer that ends it as
+ * this process waiting for its own write lock (`ownWriteLockError`), never as a table another
+ * party holds.
+ *
+ * Why that reading is exact rather than a guess: the SQLite adapter opens every transaction with
+ * `BEGIN IMMEDIATE`, so by the time `work` runs this connection holds the database's one write
+ * lock, and keeps it until the COMMIT or ROLLBACK after `work` ends. A connection holding that lock
+ * is never answered busy for a statement of its own: in WAL mode nothing it does waits for a reader,
+ * and in rollback-journal mode only its COMMIT does, which runs after `work`, while a page spill
+ * that cannot take its lock is skipped, not failed. So a `SQLITE_BUSY` that ends `work` came from
+ * another connection of this process, called from inside `work`, that waited for the write lock
+ * this transaction holds; and the transaction lets it go only once `work`, which waits for that
+ * call, is done. No wait, and no try after it, could ever end that. Only the plain code is read:
+ * an extended busy code names another wait, and keeps the reading it had.
+ *
+ * A busy answer to the `BEGIN IMMEDIATE` itself, a lock another party holds, ends the transaction
+ * before `work` runs, and reaches the caller as it was.
+ */
+async function refusingOwnWriteLockWait<T>(
+  change: string | undefined,
+  work: () => Promise<T>
+): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    if (!causeChain(error).some(link => link.code === "SQLITE_BUSY")) {
+      throw error;
+    }
+    throw ownWriteLockError(change, error);
+  }
+}
+
+/**
+ * The stop of a schema change whose own SQLite transaction held the write lock that a write inside
+ * it, on another connection to the same database, waited for (`refusingOwnWriteLockWait`). Its
+ * message is three lines, read by the CLI as what happened, why, and what to do: it names this
+ * process as the holder, so it is never read as a table another session holds. `change` names the
+ * change (a migration file), where the caller has a name for it.
+ */
+export function ownWriteLockError(
+  change: string | undefined,
+  cause?: unknown
+): NextlyError {
+  const what =
+    change === undefined
+      ? "The schema change stopped"
+      : `\`${change}\` stopped`;
+  return new NextlyError({
+    code: "NEXTLY_LOCK_HELD_BY_THIS_PROCESS",
+    publicMessage: [
+      `${what}: the database is locked by this process, nothing changed.`,
+      "A write made inside its transaction, on another connection to the same SQLite database, waited for the write lock that transaction holds. The transaction lets the lock go only once that write is done, so no wait could free it: it was not tried again, and the transaction was rolled back.",
+      "Make that write through the transaction's own handle, or after it commits. A second connection to the same SQLite file in one process, such as a second adapter or an instance booted beside a command run in-process, is what makes this happen.",
+    ].join("\n"),
+    logContext: { reason: "own-write-lock" },
+    ...(cause instanceof Error ? { cause } : {}),
+  });
 }
 
 /**
@@ -596,7 +664,9 @@ async function runUnitStatements(
         // Not on MySQL, whose DDL committed as it ran: the file has landed by now, and refusing
         // here would report it as not recorded.
         if (dialect !== "mysql") await assertSchemaLockHeld();
-      })
+      }),
+      // A stop for this process's own write lock names the unit, as the operator knows it.
+      unit.source
     );
     return statements.length;
   }
