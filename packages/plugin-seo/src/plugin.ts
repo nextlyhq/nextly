@@ -125,7 +125,12 @@ import { withSeoOff } from "./resolver/seo-off";
 import { routeValuesCollection } from "./route-values/collection";
 import { withRouteValues } from "./route-values/record";
 import { seoSchema, seoSchemaPlugin } from "./schema/definition";
-import { seoExtendClauses, seoTypesOf, type SeoTypes } from "./seo-types";
+import {
+  seoExtendClauses,
+  seoTypesOf,
+  typesLeftOut,
+  type SeoTypes,
+} from "./seo-types";
 import {
   contentTypesRoute,
   settingsDocumentRoute,
@@ -683,24 +688,6 @@ function goneAnswerOf(page: string | undefined): GoneAnswerOptions {
   return { gonePage: address };
 }
 
-/**
- * The types the site's code leaves out where SEO is on every type, so the
- * tab there says SEO is off for a page of one rather than asking for an SEO
- * answer its type does not have. A type also named in `include` is given the
- * group by that clause, so it is not out. Nothing is out where SEO is on
- * named types only: the tab there edits the types it names.
- */
-function tabExcludedOf(
-  options: Pick<SeoPluginOptions, "include" | "exclude">,
-  everyType: boolean
-): string[] {
-  if (!everyType) return [];
-  const include = options.include ?? [];
-  return [
-    ...new Set((options.exclude ?? []).filter(slug => !include.includes(slug))),
-  ];
-}
-
 export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // Always nest the fields (default or custom) under a single `seo` group so
   // every project exposes SEO consistently at `entry.seo.*`.
@@ -849,9 +836,11 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   // problem list's; all added below.
   const routes: PluginRoute[] = [];
 
+  // Add the SEO group to each named type, or to every type. The admin is
+  // told which types these leave out, read from the same clauses.
+  const extend = seoExtendClauses(options, types, [seoGroup]);
   const contributes: PluginContributions = {
-    // Add the SEO group to each named type, or to every type.
-    extend: seoExtendClauses(options, types, [seoGroup]),
+    extend,
     // Site-wide SEO, the check of what search engines received, and, where
     // the site asks for it, each named content type's page SEO.
     permissions: seoPermissionDeclarations({
@@ -971,8 +960,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // Where SEO is on every type, the tab there edits each page whose
         // type has the group, which only the page's own fields say.
         tabEveryType: tab.tabEveryType,
-        // The types the site's code leaves out where SEO is on every type.
-        tabExcluded: tabExcludedOf(options, tab.tabEveryType),
+        // The types the site's code leaves out where SEO is on every type, so
+        // the tab there says SEO is off for a page of one rather than asking
+        // for an SEO answer its type does not have.
+        tabExcluded: typesLeftOut(extend),
       },
       // The section's menu, in the order the section is used: where it
       // stands, its pages, what to fix, its redirects, its rules. Each

@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { defaultSeoFields } from "../fields";
 import { seoPlugin } from "../plugin";
+import { typesLeftOut } from "../seo-types";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
@@ -680,6 +681,44 @@ describe("the SEO tab in the Page Builder's Settings", () => {
       tabEveryType: true,
       tabExcluded: [],
     });
+  });
+
+  it("is told a type is out exactly where the plugin's extend clauses leave it without the group", () => {
+    // `logs` is excluded from every type and given the group by `include`,
+    // so only `pages` is without it.
+    const plugin = seoPlugin({
+      exclude: ["pages", "logs"],
+      include: ["logs"],
+      sitemap: false,
+    });
+    expect(plugin.contributes?.admin?.clientConfig).toMatchObject({
+      tabExcluded: ["pages"],
+    });
+    // Read from the same clauses the schema is given.
+    expect(typesLeftOut(plugin.contributes?.extend ?? [])).toEqual(["pages"]);
+  });
+});
+
+describe("typesLeftOut", () => {
+  it("names each type the every-type clause leaves out that no named clause gives the group", () => {
+    expect(
+      typesLeftOut([
+        { target: ["logs"], fields: [] },
+        {
+          target: {
+            every: ["collection", "single"],
+            except: ["pages", "logs"],
+          },
+          fields: [],
+        },
+      ])
+    ).toEqual(["pages"]);
+  });
+
+  it("names none where the site names its types", () => {
+    expect(typesLeftOut([{ target: ["posts", "home"], fields: [] }])).toEqual(
+      []
+    );
   });
 });
 
