@@ -127,10 +127,17 @@ function graphemes(text: string): string[] {
   return Array.from(segmenter.segment(text), part => part.segment);
 }
 
-/** One grapheme's width in font units: an emoji, however built, is one em. */
+/**
+ * One grapheme's width in font units: an emoji, however built, is one em.
+ * Composed first (NFC), so text stored decomposed measures as it draws: a
+ * Korean syllable kept as its two or three letters is one syllable, one em.
+ */
 function graphemeUnits(grapheme: string): number {
   if (PICTURE.test(grapheme)) return UNITS_PER_EM;
-  return [...grapheme].reduce((sum, char) => sum + charUnits(char), 0);
+  return [...grapheme.normalize("NFC")].reduce(
+    (sum, char) => sum + charUnits(char),
+    0
+  );
 }
 
 /** How wide `text` draws in Arial at `fontSize` pixels, unrounded. */

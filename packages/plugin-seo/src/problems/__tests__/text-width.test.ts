@@ -37,6 +37,17 @@ describe("textWidth", () => {
     expect(textWidth("é", 20)).toBeCloseTo(textWidth("e", 20), 5);
   });
 
+  it("measures a Korean syllable as one em, whether it is stored composed or as its letters", () => {
+    // "각" stored decomposed is three Hangul letters that draw as one
+    // syllable: one em, as the composed form is.
+    const composed = "각".repeat(15);
+    const decomposed = composed.normalize("NFD");
+    expect(decomposed).not.toBe(composed);
+    expect(textWidth(composed, 20)).toBe(300);
+    expect(textWidth(decomposed, 20)).toBe(300);
+    expect(textFit("title", decomposed).fits).toBe(true);
+  });
+
   it("measures an emoji, however it is joined, and a Chinese character as one em", () => {
     expect(textWidth("😀", 20)).toBe(20);
     // A family emoji is three pictures joined into what draws as one.
