@@ -126,7 +126,6 @@ function renderLayout(
     active: { kind: "none" },
     onActiveChange,
     onDuplicateField: vi.fn(),
-    onRowDragEnd: vi.fn(),
     isSaving: false,
     savingLabel: "Saving collection changes…",
     ...overrides,

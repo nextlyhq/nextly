@@ -11,15 +11,19 @@
  * is and what changes it belong to the page, through `callbacks`.
  *
  * It is a tree to assistive technology, with the tree's keys (`tree-keys`).
+ * A field moves by key, by its menu (Move up, Move down, Move to…) and by
+ * drag, each judged by the one move rule and announced in its live region,
+ * with focus kept on the field.
  */
 import { Button } from "@nextlyhq/ui";
 import type { FocusEvent, JSX, ReactNode } from "react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 
 import { usePersistedStringSet } from "@admin/hooks/usePersistedState";
 import type { BuilderFieldError } from "@admin/lib/builder/field-validators";
 import {
   containerPaths,
+  flattenOutline,
   visibleRows,
   type OutlineNode,
   type VisibleRow,
@@ -29,12 +33,17 @@ import type { BuilderKind } from "../builder-config";
 import { EmptyState } from "../builder-field-list/EmptyState";
 import type { BuilderField } from "../types";
 
+import { MoveToDialog } from "./MoveToDialog";
 import type { OutlineCallbacks } from "./outline-types";
 import { OutlineToolbar } from "./OutlineToolbar";
 import { OutlineTree } from "./OutlineTree";
 import { SystemFieldsContainer } from "./SystemFieldsContainer";
 import { useFieldTypeLabel } from "./useFieldTypeLabel";
-import { useOutlineActions } from "./useOutlineActions";
+import {
+  useOutlineActions,
+  type OutlineActionState,
+} from "./useOutlineActions";
+import { useOutlineDrag } from "./useOutlineDrag";
 import { rowIdOf, useTreeKeyDown } from "./useTreeKeyDown";
 
 export type { OutlineCallbacks } from "./outline-types";
@@ -66,6 +75,51 @@ function tabStopOf(
   return drawn(focusedId) ?? drawn(selectedId) ?? rows[0]?.node.id ?? null;
 }
 
+/** The paths of a row's containers, outermost first. */
+function ancestorPaths(nodes: readonly OutlineNode[], id: string): string[] {
+  const byId = new Map(flattenOutline(nodes).map(node => [node.id, node]));
+  const paths: string[] = [];
+  let at = byId.get(id);
+  while (at?.parentId) {
+    at = byId.get(at.parentId);
+    if (at) paths.unshift(at.path);
+  }
+  return paths;
+}
+
+/**
+ * Focus back on a field a move asked for, once its row is drawn: unfolding
+ * the containers it went into when they are folded, so the field it moved is
+ * never left out of sight; dropped when nothing hides it but a find.
+ */
+function useRefocusAfterMove(
+  state: OutlineActionState,
+  rows: readonly VisibleRow[],
+  nodes: readonly OutlineNode[],
+  folded: ReadonlySet<string>,
+  setFolded: (update: (prev: Set<string>) => Set<string>) => void
+): void {
+  useEffect(() => {
+    const drawn = (id: string) => rows.some(row => row.node.id === id);
+    const id = state.takeRefocus(drawn);
+    if (id === null) return;
+    if (drawn(id)) {
+      state.focusRow(id, true);
+      return;
+    }
+    const closed = ancestorPaths(nodes, id).filter(path => folded.has(path));
+    if (closed.length === 0) {
+      state.takeRefocus(() => true);
+      return;
+    }
+    setFolded(prev => {
+      const next = new Set(prev);
+      for (const path of closed) next.delete(path);
+      return next;
+    });
+  });
+}
+
 /** Folding one container, remembered with the rest of the entity's. */
 function useFolding(foldKey: string) {
   const [folded, setFolded] = usePersistedStringSet(foldKey);
@@ -82,28 +136,26 @@ function useFolding(foldKey: string) {
   return { folded, setFolded, toggle };
 }
 
-export function Outline({
-  kind,
-  nodes,
-  systemFields,
-  errors,
-  foldKey,
-  selectedId,
-  readOnly,
-  callbacks,
-  renderPreview,
-}: Props): JSX.Element {
+/**
+ * What the outline keeps while it is drawn: what is folded and looked for,
+ * whether the preview is on, the rows that shows, and the actions, keys and
+ * focus over those rows.
+ */
+function useOutlineView(
+  nodes: readonly OutlineNode[],
+  callbacks: OutlineCallbacks,
+  foldKey: string
+) {
   const typeLabel = useFieldTypeLabel();
   const { folded, setFolded, toggle } = useFolding(foldKey);
   const [query, setQuery] = useState("");
   const [preview, setPreview] = useState(false);
   const state = useOutlineActions(nodes, callbacks);
-
   const rows = useMemo(
     () => visibleRows(nodes, folded, query, typeLabel),
     [nodes, folded, query, typeLabel]
   );
-  const finding = query.trim() !== "";
+  useRefocusAfterMove(state, rows, nodes, folded, setFolded);
   const onKeyDown = useTreeKeyDown({
     rows,
     actions: state.actions,
@@ -116,23 +168,54 @@ export function Outline({
     const id = rowIdOf(event.target);
     if (id !== null) state.setFocusedId(id);
   };
+  return {
+    typeLabel,
+    setFolded,
+    toggle,
+    query,
+    setQuery,
+    preview,
+    setPreview,
+    state,
+    rows,
+    finding: query.trim() !== "",
+    onKeyDown,
+    onFocus,
+  };
+}
+
+export function Outline({
+  kind,
+  nodes,
+  systemFields,
+  errors,
+  foldKey,
+  selectedId,
+  readOnly,
+  callbacks,
+  renderPreview,
+}: Props): JSX.Element {
+  const view = useOutlineView(nodes, callbacks, foldKey);
+  const { state, rows, finding, setFolded } = view;
+  const movesId = useId();
 
   const tree = (
     <OutlineTree
       rows={rows}
       addable={!readOnly && !finding}
       finding={finding}
-      typeLabel={typeLabel}
+      typeLabel={view.typeLabel}
       errors={errors}
       selectedId={selectedId}
       tabStopId={tabStopOf(rows, state.focusedId, selectedId)}
       menuFor={state.menuFor}
       actions={state.actions}
       registerRow={state.registerRow}
-      onToggle={toggle}
+      onToggle={view.toggle}
       onAddAt={callbacks.addAt}
-      onKeyDown={onKeyDown}
-      onFocus={onFocus}
+      onKeyDown={view.onKeyDown}
+      onFocus={view.onFocus}
+      movesDescribedBy={movesId}
     />
   );
 
@@ -140,29 +223,64 @@ export function Outline({
     <div className="space-y-4 p-4">
       <SystemFieldsContainer systemFields={systemFields} />
       <OutlineToolbar
-        query={query}
-        onQueryChange={setQuery}
+        query={view.query}
+        onQueryChange={view.setQuery}
         onFoldAll={() => setFolded(() => new Set(containerPaths(nodes)))}
         onUnfoldAll={() => setFolded(() => new Set())}
-        preview={preview}
-        onPreviewChange={setPreview}
+        preview={view.preview}
+        onPreviewChange={view.setPreview}
       />
       <OutlineBody
         kind={kind}
-        preview={preview}
+        preview={view.preview}
         renderPreview={renderPreview}
         empty={nodes.length === 0}
-        noMatch={finding && rows.length === 0 ? query.trim() : null}
+        noMatch={finding && rows.length === 0 ? view.query.trim() : null}
         readOnly={readOnly}
         onAddAtEnd={() => callbacks.addAt({})}
         tree={tree}
       />
+      <OutlineMoves state={state} fields={callbacks.fields} keysId={movesId} />
       {/* Mounted from the start, so a screen reader is already watching it
           when a move is announced. */}
       <div aria-live="polite" className="sr-only">
         {state.announcement}
       </div>
     </div>
+  );
+}
+
+/**
+ * What moving a field adds to the outline: why the place a drag is over is
+ * refused, while it is; the keys a row's description names; and Move to….
+ */
+function OutlineMoves({
+  state,
+  fields,
+  keysId,
+}: {
+  state: OutlineActionState;
+  fields: OutlineCallbacks["fields"];
+  keysId: string;
+}): JSX.Element {
+  const refusedHere = useOutlineDrag(state.actions);
+  return (
+    <>
+      {refusedHere && <p className="text-sm text-destructive">{refusedHere}</p>}
+      <p id={keysId} hidden>
+        Alt+Up and Alt+Down move the field; Alt+Left moves it out of its
+        container, Alt+Right into the container above it. Shift+F10 opens its
+        actions, Move to… among them.
+      </p>
+      {state.moveToFor !== null && (
+        <MoveToDialog
+          fieldId={state.moveToFor}
+          fields={fields}
+          actions={state.actions}
+          onClose={state.closeMoveTo}
+        />
+      )}
+    </>
   );
 }
 

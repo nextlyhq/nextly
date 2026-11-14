@@ -14,7 +14,7 @@
  * have to know about plugin slots and about field-group repair, and neither is
  * the layout's business.
  */
-import { DndContext, type DragEndEvent } from "@dnd-kit/core";
+import { DndContext } from "@dnd-kit/core";
 import type { JSX, ReactNode } from "react";
 import { useMemo } from "react";
 
@@ -25,8 +25,9 @@ import type { BuilderPendingChanges } from "@admin/hooks/useBuilderEntityState";
 import { useMediaQuery } from "@admin/hooks/useMediaQuery";
 import { findFieldById } from "@admin/lib/builder";
 import { builderAnnouncements } from "@admin/lib/builder/builder-announcements";
-import { moveWithinContainer } from "@admin/lib/builder/builder-rows";
+import type { DuplicateNaming } from "@admin/lib/builder/duplicate-field";
 import { builderFieldErrors } from "@admin/lib/builder/field-validators";
+import { judgeMove, moveDestinations } from "@admin/lib/builder/move-rule";
 import {
   flattenOutline,
   nodePlacement,
@@ -51,6 +52,7 @@ import { LazyFormPreview } from "./outline/LazyFormPreview";
 import { Outline, type OutlineCallbacks } from "./outline/Outline";
 import { useBuilderOutline } from "./outline/useBuilderOutline";
 import type { BuilderFieldsApi } from "./types";
+import { useMoveContext } from "./useMoveContext";
 
 type Props = {
   config: BuilderConfig;
@@ -76,8 +78,8 @@ type Props = {
   storedHooks?: readonly StoredHookConfig[];
   active: ActiveOverlay;
   onActiveChange: (next: ActiveOverlay) => void;
-  onDuplicateField: (fieldId: string) => void;
-  onRowDragEnd: (event: DragEndEvent) => void;
+  /** Copy a field to right after itself, named clear of what is beside it. */
+  onDuplicateField: (fieldId: string, naming?: DuplicateNaming) => void;
   /** Rendered between the read-only notice and the field list. */
   beforeFieldList?: ReactNode;
   /** True while a save or a schema apply is in flight. */
@@ -177,7 +179,6 @@ function BuilderWorkspace(
     | "active"
     | "onActiveChange"
     | "onDuplicateField"
-    | "onRowDragEnd"
     | "savedFieldIds"
     | "settings"
     | "pending"
@@ -309,7 +310,7 @@ function FieldListRegion({
   active,
   onActiveChange,
   onDuplicateField,
-  onRowDragEnd,
+  pending,
   openFieldGroup,
 }: Pick<
   Props,
@@ -322,7 +323,7 @@ function FieldListRegion({
   | "active"
   | "onActiveChange"
   | "onDuplicateField"
-  | "onRowDragEnd"
+  | "pending"
 > & {
   outline: readonly OutlineNode[];
   fieldGroups: ReadonlyMap<string, LoadedFieldGroup>;
@@ -341,12 +342,31 @@ function FieldListRegion({
     [builder.fields]
   );
 
+  // What the move rule needs beyond the fields, for every way of moving one.
+  const moveContext = useMoveContext({
+    config,
+    locked,
+    fields: builder.fields,
+    saved: pending.saved,
+    outline,
+    fieldGroups,
+  });
+
   const callbacks: OutlineCallbacks = {
     select: fieldId => onActiveChange({ kind: "edit", fieldId }),
     addAt: position => onActiveChange({ kind: "picker", position }),
-    move: (fieldId, delta) =>
-      builder.setFields(prev => moveWithinContainer(prev, fieldId, delta)),
-    duplicate: onDuplicateField,
+    fields: builder.fields,
+    judgeMove: (fieldId, target) =>
+      judgeMove(builder.fields, fieldId, target, moveContext),
+    moveDestinations: fieldId =>
+      moveDestinations(builder.fields, fieldId, moveContext),
+    // One change for undo, as every other edit is.
+    commitMove: fields => builder.setFields(fields),
+    duplicate: fieldId =>
+      onDuplicateField(fieldId, {
+        heldNames: moveContext.heldNames,
+        topLevelReservesNames: moveContext.topLevelReservesNames,
+      }),
     remove: fieldId => {
       builder.handleFieldDelete(fieldId);
       // A field deleted while its settings are open closes them too.
@@ -374,7 +394,6 @@ function FieldListRegion({
       <DndContext
         sensors={builder.sensors}
         onDragStart={builder.handleDragStart}
-        onDragEnd={onRowDragEnd}
         accessibility={{
           announcements: builderAnnouncements(builder.fields),
         }}

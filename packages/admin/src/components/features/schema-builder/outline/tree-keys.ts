@@ -5,9 +5,11 @@
  * Up and Down move; Right unfolds a folded container or enters an open one;
  * Left folds an open container or leaves for the container above; Home and
  * End; Enter and Space open the panel; Shift+F10 and the context-menu key open
- * the row's menu; Alt+Up and Alt+Down move the field; "/" adds a field after
- * it; any other character is type-ahead.
+ * the row's menu; Alt+Up and Alt+Down move the field up and down, Alt+Left
+ * out of its container and Alt+Right into the container above it; "/" adds a
+ * field after it; any other character is type-ahead.
  */
+import type { MoveStep } from "@admin/lib/builder/outline/move-targets";
 import type { VisibleRow } from "@admin/lib/builder/outline/outline-model";
 
 /** What a key asks for. */
@@ -17,7 +19,7 @@ export type TreeCommand =
   | { kind: "focus-parent" }
   | { kind: "select" }
   | { kind: "menu" }
-  | { kind: "move"; delta: -1 | 1 }
+  | { kind: "move"; step: MoveStep }
   | { kind: "add-after" }
   | { kind: "type-ahead"; key: string };
 
@@ -41,6 +43,14 @@ const PLAIN: Readonly<
   Enter: () => ({ kind: "select" }),
   " ": () => ({ kind: "select" }),
   "/": () => ({ kind: "add-after" }),
+};
+
+/** The keys that, with Alt, move the field. */
+const MOVE_KEYS: Readonly<Record<string, MoveStep>> = {
+  ArrowUp: "up",
+  ArrowDown: "down",
+  ArrowLeft: "out",
+  ArrowRight: "in",
 };
 
 /** Right and Left, which depend on whether the row is open. */
@@ -69,9 +79,8 @@ export function treeCommand(
   rowCount: number
 ): TreeCommand | null {
   const { key } = event;
-  if (event.altKey && (key === "ArrowUp" || key === "ArrowDown")) {
-    return { kind: "move", delta: key === "ArrowUp" ? -1 : 1 };
-  }
+  const step = event.altKey ? MOVE_KEYS[key] : undefined;
+  if (step) return { kind: "move", step };
   if ((event.shiftKey && key === "F10") || key === "ContextMenu") {
     return { kind: "menu" };
   }

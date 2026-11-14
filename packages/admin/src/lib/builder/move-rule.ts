@@ -61,13 +61,30 @@ export interface MoveContext {
    */
   fieldGroupFieldHolding?: (rowId: string) => BuilderField | undefined;
   /**
+   * Whether a saved field may change level at all; `CONTAINER_CHANGES_KEEP_VALUES`
+   * when not given. The rule's other answers hold either way.
+   */
+  containerChanges?: boolean;
+  /**
    * The ids of the containers a saved field sits in, outermost first, or null for a field never
    * saved. Leaving repeating rows is refused only where the field's saved rows are: a field added
-   * there, or moved there, in this unsaved draft has no rows of its own to lose. Without it, every
-   * field's rows are taken as saved where it stands.
+   * there, or moved there, in this unsaved draft has no rows of its own to lose. A field never
+   * saved has no values a change of level could lose either. Without it, every field's rows are
+   * taken as saved where it stands.
    */
   savedContainerIdsOf?: (fieldId: string) => readonly string[] | null;
 }
+
+/**
+ * Whether a save keeps a field's values when the field changes container: not
+ * yet, since the save drops the column of a field that leaves the main table
+ * and starts the JSON value of one that enters a group empty. Until it does, a
+ * saved field's move to another level (into or out of a group or repeating
+ * rows) is refused, so no gesture offers a move that would lose values. Reorders
+ * on one level, moves through layout containers and moves of fields never saved
+ * go ahead.
+ */
+const CONTAINER_CHANGES_KEEP_VALUES = false;
 
 /** Why a move is refused. */
 export type MoveRefusalReason =
@@ -83,7 +100,8 @@ export type MoveRefusalReason =
   | "excluded-type"
   | "name-clash"
   | "reserved-name"
-  | "ambiguous-place";
+  | "ambiguous-place"
+  | "not-available-yet";
 
 /** A move's answer: the fields after it, or why it is refused. */
 export type MoveVerdict =
@@ -116,6 +134,36 @@ function chainTo(
   return null;
 }
 
+/**
+ * `MoveContext.savedContainerIdsOf` for the fields as last saved: the ids of the containers a field
+ * sits in there, outermost first, or null for a field the saved definition does not hold. Found by
+ * the same walk a move uses (`chainTo`), on the saved fields; their ids are the editor's own and
+ * stay with a field across edits, so a field moved in this draft still answers where it was saved.
+ */
+export function savedContainerIdsFrom(
+  saved: readonly BuilderField[]
+): (fieldId: string) => readonly string[] | null {
+  return fieldId => {
+    const chain = chainTo(saved, fieldId);
+    return chain ? chain.slice(0, -1).map(each => each.id) : null;
+  };
+}
+
+/**
+ * The storage level a field stands on, and the named fields on it: what a new field placed beside
+ * it is named against. A layout container's fields stand on the level holding it, as a move judges
+ * them (`namingLevel`, `namedFieldsIn`). Null when no field has the id.
+ */
+export function namingSiblingsOf(
+  fields: readonly BuilderField[],
+  fieldId: string
+): { level: BuilderField | null; siblings: BuilderField[] } | null {
+  const chain = chainTo(fields, fieldId);
+  if (!chain) return null;
+  const level = namingLevel(chain.slice(0, -1));
+  return { level, siblings: namedFieldsIn(siblingsIn(fields, level)) };
+}
+
 /** The fields one container holds: the top level for none. */
 function siblingsIn(
   fields: readonly BuilderField[],
@@ -125,7 +173,7 @@ function siblingsIn(
 }
 
 /** A field's name as the save sends it (`convertToFieldDefinition`), which is what a clash is judged on. */
-function sentName(field: BuilderField): string {
+export function sentName(field: BuilderField): string {
   return convertToFieldDefinition(field).name ?? "";
 }
 
@@ -133,7 +181,7 @@ function sentName(field: BuilderField): string {
  * Whether a field is a layout container: it has no name, so it holds no value of its own, and the
  * fields inside it are stored on the level that holds it (the server's sibling rule).
  */
-function isLayoutContainer(field: BuilderField): boolean {
+export function isLayoutContainer(field: BuilderField): boolean {
   return sentName(field) === "" && Array.isArray(field.fields);
 }
 
@@ -227,6 +275,31 @@ function fieldGroupRefusal(
   return refuse(
     "into-field-group",
     `${called(container)} uses the field group ${name}, which is changed only in its own editor, where a change reaches every place that uses it.${usedBy}`
+  );
+}
+
+/**
+ * The refusal of a saved field's change of level while a save would lose its values. Called only
+ * for a move that changes the field's naming level (`arrivalRefusal`), so a move into or out of a
+ * layout container, which keeps the field on the level holding it, is never refused here. A move
+ * carrying nothing ever saved (`savedContainerIdsOf` answers null for the field and for every field
+ * inside it) has no values to lose and goes ahead: an unsaved group may still hold a saved field.
+ */
+function containerChangeRefusal(
+  field: BuilderField,
+  ctx: MoveContext
+): MoveVerdict | null {
+  const allowed = ctx.containerChanges ?? CONTAINER_CHANGES_KEEP_VALUES;
+  const savedContainerIdsOf = ctx.savedContainerIdsOf;
+  const carriesNothingSaved =
+    savedContainerIdsOf !== undefined &&
+    withEverythingInside(field).every(
+      each => savedContainerIdsOf(each.id) === null
+    );
+  if (allowed || carriesNothingSaved) return null;
+  return refuse(
+    "not-available-yet",
+    "Moving a field into or out of a group or repeating rows is not available yet."
   );
 }
 
@@ -374,24 +447,37 @@ function arrivalRefusal(
   container: BuilderField | null,
   ctx: MoveContext
 ): MoveVerdict | null {
+  const into = arrivalLevel(fields, chain, container);
+  if (into === undefined) return null;
   const field = chain[chain.length - 1];
-  // Judged by level, not by container: a layout container is part of the level holding it, so
-  // moving into or out of one takes the field nowhere new.
-  const from = namingLevel(chain.slice(0, -1));
-  const into = container
-    ? namingLevel(chainTo(fields, container.id) ?? [container])
-    : null;
-  if ((from?.id ?? null) === (into?.id ?? null)) return null;
   const siblings = namedFieldsIn(siblingsIn(fields, into));
   // A layout container carries its fields' names onto the level it arrives on, not its own.
   const carried = isLayoutContainer(field) ? namedFieldsIn([field]) : [field];
   return (
+    containerChangeRefusal(field, ctx) ??
     lockedInsideRefusal(field, chain, ctx) ??
     carried.reduce<MoveVerdict | null>(
       (refusal, each) => refusal ?? nameRefusal(each, into, siblings, ctx),
       null
     )
   );
+}
+
+/**
+ * The naming level a move takes the field at the end of `chain` to (null for the top level), or
+ * undefined when it stays on its own. Judged by level, not by container: a layout container is
+ * part of the level holding it, so moving into or out of one takes the field nowhere new.
+ */
+function arrivalLevel(
+  fields: readonly BuilderField[],
+  chain: readonly BuilderField[],
+  container: BuilderField | null
+): BuilderField | null | undefined {
+  const from = namingLevel(chain.slice(0, -1));
+  const into = container
+    ? namingLevel(chainTo(fields, container.id) ?? [container])
+    : null;
+  return (from?.id ?? null) === (into?.id ?? null) ? undefined : into;
 }
 
 /**
@@ -662,4 +748,35 @@ export function moveDestinations(
   };
   walk(fields, []);
   return places;
+}
+
+/**
+ * The saved fields a draft has taken to another storage level, which a save would not yet keep the
+ * values of (`CONTAINER_CHANGES_KEEP_VALUES`). Every way there counts, not only a move the rule
+ * judged: a layout group given a name after a field moved into it, or a group's name taken away,
+ * changes its fields' level as surely as a move does. Judged on the fields as they stand against
+ * where each was last saved, by the same level rule a move uses; a field never saved is not one.
+ */
+export function savedFieldsOffTheirLevel(
+  saved: readonly BuilderField[],
+  current: readonly BuilderField[]
+): BuilderField[] {
+  if (CONTAINER_CHANGES_KEEP_VALUES) return [];
+  const off: BuilderField[] = [];
+  const walk = (
+    list: readonly BuilderField[],
+    chain: readonly BuilderField[]
+  ) => {
+    for (const field of list) {
+      const savedChain = chainTo(saved, field.id);
+      if (savedChain) {
+        const was = namingLevel(savedChain.slice(0, -1));
+        const now = namingLevel(chain);
+        if ((was?.id ?? null) !== (now?.id ?? null)) off.push(field);
+      }
+      if (field.fields) walk(field.fields, [...chain, field]);
+    }
+  };
+  walk(current, []);
+  return off;
 }

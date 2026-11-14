@@ -548,7 +548,15 @@ const SURFACES: readonly Surface[] = [
             callbacks={{
               select: () => {},
               addAt: () => {},
-              move: () => {},
+              // Nothing here moves: the copy is read, not changed.
+              fields: [],
+              judgeMove: () => ({
+                allowed: false,
+                reason: "not-found",
+                message: "",
+              }),
+              moveDestinations: () => [],
+              commitMove: () => {},
               duplicate: () => {},
               remove: () => {},
               setHidden: () => {},

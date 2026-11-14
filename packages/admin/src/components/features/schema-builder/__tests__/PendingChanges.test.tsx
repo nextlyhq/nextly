@@ -15,8 +15,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createTestQueryClient } from "@admin/__tests__/utils";
 import { useBuilderEntityState } from "@admin/hooks/useBuilderEntityState";
 import { useFieldBuilder } from "@admin/hooks/useFieldBuilder";
-import { moveWithinContainer } from "@admin/lib/builder/builder-rows";
 import { copyWithNewIds } from "@admin/lib/builder/copy-field";
+import { judgeMove } from "@admin/lib/builder/move-rule";
 import type { FieldDefinition } from "@admin/types/collection";
 
 import { BuilderPageLayout } from "../BuilderPageLayout";
@@ -175,11 +175,7 @@ describe("pending changes controls", () => {
       // Past two fields in one step. Swapping two neighbours leaves the same
       // fields whichever of them moved, and changes are read from the fields
       // alone, so that would not say which one did.
-      edit: () =>
-        builder.setFields(prev => {
-          const id = field("headline").id;
-          return moveWithinContainer(moveWithinContainer(prev, id, 1), id, 1);
-        }),
+      edit: () => builder.setFields(prev => headlineToEnd(prev)),
       says: "moved Headline",
       check: undone =>
         expect(names()).toEqual(
@@ -392,7 +388,6 @@ function LayoutHarness() {
         activeChanges.push(next);
       }}
       onDuplicateField={() => {}}
-      onRowDragEnd={() => {}}
       isSaving={false}
       savingLabel="Saving"
     />
@@ -401,15 +396,21 @@ function LayoutHarness() {
 
 const row = (name: string) => screen.getByTestId(`field-row-${name}`);
 
+/** The fields with Headline moved past both fields after it, to the end. */
+function headlineToEnd(prev: BuilderField[]): BuilderField[] {
+  const verdict = judgeMove(
+    prev,
+    field("headline").id,
+    {},
+    { entityReadOnly: false, topLevelReservesNames: true }
+  );
+  return verdict.allowed ? verdict.fields : prev;
+}
+
 describe("pending changes in the outline", () => {
   it("the count and the row marks", () => {
     render(<LayoutHarness />, { wrapper: Providers });
-    act(() =>
-      builder.setFields(prev => {
-        const id = field("headline").id;
-        return moveWithinContainer(moveWithinContainer(prev, id, 1), id, 1);
-      })
-    );
+    act(() => builder.setFields(prev => headlineToEnd(prev)));
     act(() =>
       builder.handleFieldUpdate({ ...field("summary"), label: "Excerpt" })
     );
