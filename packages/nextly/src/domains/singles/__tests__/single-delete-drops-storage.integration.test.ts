@@ -14,7 +14,7 @@
  * Self-skips per dialect on the standard rule: SQLite always runs, the servers run when their URL is
  * set, and each dialect gets its own throwaway database.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import {
@@ -25,9 +25,17 @@ import {
 
 let current: TestNextly | undefined;
 
+beforeEach(() => {
+  // A Builder create builds its table in development only; elsewhere it writes the migration for
+  // `nextly migrate` and leaves the Single pending, with no table for a delete to drop.
+  // `vi.stubEnv` rather than assigning: `NODE_ENV` is declared read-only.
+  vi.stubEnv("NODE_ENV", "development");
+});
+
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  vi.unstubAllEnvs();
 });
 
 for (const dialect of getConfiguredTestDialects()) {
