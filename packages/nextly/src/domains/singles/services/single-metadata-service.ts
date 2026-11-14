@@ -48,6 +48,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "@nextly/collections";
 
+import { assertTopLevelFieldsNamed } from "../../../api/fields-payload";
 import { NextlyError } from "../../../errors";
 import type { UiSchemaEntity } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
@@ -58,6 +59,7 @@ import type {
 } from "../../../schemas/dynamic-singles/types";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import { assertAddressAllowed } from "../../../shared/address-rule";
+import { addressableFields } from "../../../shared/addressable-fields";
 import type { Logger } from "../../../shared/types";
 import { collectionTablesBySlug } from "../../dynamic-collections/services/collection-tables";
 import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
@@ -432,6 +434,9 @@ export class SingleMetadataService {
    * table name. Rejecting after this point would leave a `pending` row behind.
    */
   async createSingle(input: CreateSingleInput): Promise<CreateSingleResult> {
+    // Only named fields at the top level, as a collection's API takes them: the request alone
+    // decides it, so it is refused before the lock (`assertTopLevelFieldsNamed`).
+    assertTopLevelFieldsNamed(input.fields ?? []);
     // 🔴 The exclusion wraps ALL THREE phases, not just the apply. A storage migration renaming
     // tables between the plan and the row write would leave this create describing storage that
     // moved underneath it, and the row is as much a part of the schema as the table is.
@@ -796,6 +801,9 @@ export class SingleMetadataService {
   async updateSingleSchema(
     input: UpdateSingleSchemaInput
   ): Promise<UpdateSingleSchemaResult> {
+    // Only named fields at the top level, as a collection's API takes them: a field cannot be
+    // created in, or moved into, a group with no name there (`assertTopLevelFieldsNamed`).
+    if (input.fields !== undefined) assertTopLevelFieldsNamed(input.fields);
     return withSchemaChangeExcluded(
       {
         adapter: this.adapter,
@@ -1823,7 +1831,9 @@ export class SingleMetadataService {
     const registry = new FieldGroupRegistryService(adapter, this.logger);
     const resolved = new Map<string, string>();
     const slugs = new Set<string>();
-    for (const f of [...oldFields, ...newFields]) {
+    // The field groups at this level, those inside a group with no name among them, as the rename
+    // above pairs them (`fieldGroupRenamePairs`): a table left unresolved moves no rows.
+    for (const f of addressableFields([...oldFields, ...newFields])) {
       for (const slug of fieldGroupSlugList(f)) slugs.add(slug);
     }
     await Promise.all(
@@ -1879,7 +1889,7 @@ export class SingleMetadataService {
     const { resolveLocalizedFieldNames } = await import(
       "../../i18n/classify-fields"
     );
-    const { columnsDeclaredBy } = await import(
+    const { columnsDeclaredBy, fieldsStoredOnRow } = await import(
       "../../schema/services/field-column-descriptor"
     );
 
@@ -1897,10 +1907,16 @@ export class SingleMetadataService {
       required: false,
     };
 
+    // The fields whose columns sit on the row (`fieldsStoredOnRow`): those inside a group with no
+    // name are columns of this table, and every check and statement planned from these lists
+    // reads them, so the group itself, which has no name to give a column, is read through here
+    // once. Which are translated is classified from the declared list, as the companion and the
+    // entry write classify it, so a field inside such a group stays on the row.
     const omitLocalized = (fields: FieldDefinition[]): FieldDefinition[] => {
-      if (!omitLocalizedColumns) return fields;
+      const stored = fieldsStoredOnRow(fields);
+      if (!omitLocalizedColumns) return stored;
       const localizedNames = new Set(resolveLocalizedFieldNames(fields, true));
-      return fields.filter(f => !localizedNames.has(f.name));
+      return stored.filter(f => !localizedNames.has(f.name));
     };
 
     const normalize = (fields: FieldDefinition[]): FieldDefinition[] => {

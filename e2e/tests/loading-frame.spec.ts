@@ -36,7 +36,8 @@ import {
 } from "./support/test";
 
 // The screens below are loaded with releases, scheduled and needing
-// attention, which the Releases page draws parts of from reads that answer late.
+// attention, which the Releases page and the dashboard draw parts of from
+// reads that answer late.
 // Releases are shared, so this file holds their lock while it makes and
 // removes its own.
 test.describe.configure({ lock: [LOCK.releases] });
@@ -616,9 +617,10 @@ async function expectStillLoad(
     theme?: "light" | "dark";
     /**
      * The parts held still, by their shift sources' names, where not every
-     * part can be: all of them when absent.
+     * part can be: all of them when absent. Decided from the settled screen
+     * when given as a function, for parts named by where they were drawn.
      */
-    holding?: RegExp;
+    holding?: RegExp | ((page: Page) => Promise<RegExp>);
     /**
      * Whether the outline's named parts are held to the screen's. Not where a
      * plugin draws a block above them, which the outline cannot know of
@@ -663,10 +665,11 @@ async function expectStillLoad(
     description: `${mode} ${path}: ${total.toFixed(4)}`,
   });
   // Nothing moves: not a part of the screen, not the frame around it.
+  const holds = typeof holding === "function" ? await holding(page) : holding;
   const held =
-    holding === undefined
+    holds === undefined
       ? shifts
-      : shifts.filter(shift => shift.sources.some(src => holding.test(src)));
+      : shifts.filter(shift => shift.sources.some(src => holds.test(src)));
   expect(held, JSON.stringify(shifts)).toEqual([]);
 
   if (!parts) return;
@@ -757,6 +760,30 @@ async function ownReleases(
   };
 }
 
+/**
+ * The dashboard's first two rows as this screen drew them, by their cells'
+ * test ids: on a new site the setup card and Needs attention, then Continue
+ * and the content table; with releases, Upcoming releases takes its place in
+ * the second row. Whose cards they are is the dashboard's to decide, so they
+ * are read from the settled screen, by where each cell starts.
+ */
+async function firstDashboardRows(page: Page): Promise<RegExp> {
+  const cells = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('[data-testid^="widget-cell-"]')).map(
+      cell => ({
+        id: cell.getAttribute("data-testid") ?? "",
+        top: Math.round(cell.getBoundingClientRect().top),
+      })
+    )
+  );
+  const tops = [...new Set(cells.map(cell => cell.top))].sort((a, b) => a - b);
+  const first = cells.filter(cell => tops.slice(0, 2).includes(cell.top));
+  // The control: the rows were drawn, two cards or more in them.
+  expect(first.length, JSON.stringify(cells)).toBeGreaterThanOrEqual(2);
+  const ids = first.map(cell => cell.id.replace(/[/.]/g, "\\$&"));
+  return new RegExp(`(${ids.join("|")})\\)`);
+}
+
 /** A form of the test's own, which no other test holds open. */
 async function ownForm(page: Page, made: string[]): Promise<string> {
   const stamp = `${Date.now().toString(36)}-${test.info().repeatEachIndex}-${test.info().workerIndex}`;
@@ -793,13 +820,6 @@ async function visitOnce(page: Page, path: string): Promise<void> {
   await screenSettled(page);
   await page.goto("about:blank");
 }
-
-/**
- * The new site's dashboard's first two rows: the setup card and Needs
- * attention, then Continue where you left off and the content table.
- */
-const FIRST_DASHBOARD_ROWS =
-  /widget-cell-core\/(setup|needs-attention|continue|content-table)\)/;
 
 test.describe("each screen's outline, held to the screen it stands for", () => {
   /** Entries the tests made, deleted after each, so no list counts them. */
@@ -895,6 +915,10 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
         // the screens above spend their own accounts' budgets.
         ownSeat(31 + index);
 
+        // With the file's releases, as a site that uses them has: Upcoming
+        // releases joins the second row, and Needs attention names the
+        // stopped and overdue ones under their rows, from a read of its own
+        // once the card has drawn.
         for (const mode of ["held", "unheld"] as const) {
           test(`moves none of the dashboard's first rows on a first visit, ${mode}`, async ({
             page,
@@ -903,9 +927,10 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
             // A first visit: the setup card loads as its checklist, so its
             // row stands as tall as the row it becomes and the row under it
             // stays. A card's loading state elsewhere is a guess until the
-            // card has been drawn here once (the revisit below).
+            // card has been drawn here once (the revisit below), so a card
+            // in a later row may still move as one above it grows.
             await expectStillLoad(page, "", mode, {
-              holding: FIRST_DASHBOARD_ROWS,
+              holding: firstDashboardRows,
             });
           });
 
