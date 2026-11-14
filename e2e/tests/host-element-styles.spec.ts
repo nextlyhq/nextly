@@ -109,7 +109,15 @@ async function dashboardStyles(page: Page): Promise<Styles> {
   const main = page.locator("#nextly-main-content:visible");
   const styles: Styles = {
     heading: await stylesOf(main.getByRole("heading", { level: 1 })),
-    paragraph: await stylesOf(main.locator("p").first()),
+    // The Content card's summary line: a card on every dashboard, and the
+    // same element in both reads. The first paragraph on the page is not:
+    // another spec finishing a setup step takes the setup card's away.
+    paragraph: await stylesOf(
+      main
+        .getByRole("region", { name: "Content", exact: true })
+        .locator("p")
+        .first()
+    ),
     button: await stylesOf(
       page.getByRole("button", { name: "Customize dashboard" })
     ),
