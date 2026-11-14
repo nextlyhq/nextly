@@ -50,12 +50,16 @@ const paths = () =>
   readCodeRoutes({ appDir }).map(route => `${route.source} ${route.path}`);
 
 describe("seoStaticParams", () => {
-  it("returns the site's own params, the same array in the same order", async () => {
-    const params = [{ topic: "b" }, { topic: "a" }];
+  it("returns the site's own params in the same order, as an array of its own", async () => {
+    const params = [{ topic: "b" }, { topic: "a" }] as const;
     const generate = seoStaticParams("/blog/[topic]", () => params, {
       appDir,
     });
-    expect(await generate()).toBe(params);
+    const returned = await generate();
+    expect(returned).toEqual([{ topic: "b" }, { topic: "a" }]);
+    // Each param as the site made it, in a new array Next.js may hold.
+    expect(returned[0]).toBe(params[0]);
+    expect(returned).not.toBe(params);
     expect(params).toEqual([{ topic: "b" }, { topic: "a" }]);
   });
 
@@ -169,8 +173,8 @@ describe("seoStaticParams", () => {
     const generate = seoStaticParams("/blog/[topic]", () => params, {
       appDir,
     });
-    expect(await generate()).toBe(params);
-    expect(await generate()).toBe(params);
+    expect(await generate()).toEqual(params);
+    expect(await generate()).toEqual(params);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(readdirSync(join(appDir, ".next"))).not.toContain("static-params");
   });
