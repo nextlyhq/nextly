@@ -1593,8 +1593,10 @@ export class CollectionQueryService extends BaseService {
     if (keys.length === 0) return;
     const collection =
       await this.collectionService.getCollection(collectionName);
+    // Through `addressedFieldsFor`, as the filter itself reads the fields: a field group inside a
+    // group with no name is filtered through its table, so its read rules are judged here too.
     await assertFieldGroupPathsFilterable(
-      componentFilterTargets(keys, collectionFieldsFor(collection)),
+      componentFilterTargets(keys, addressedFieldsFor(collection)),
       opts
     );
   }
@@ -1625,9 +1627,11 @@ export class CollectionQueryService extends BaseService {
       hiddenColumnMatcher(collectionTableName(collection, collectionName))
     );
 
+    // Through `addressedFieldsFor`, as the filter itself reads the fields, so a field group inside a
+    // group with no name has its table's hidden columns judged as one beside the group does.
     const targets = componentFilterTargets(
       filterKeys(where),
-      collectionFieldsFor(collection)
+      addressedFieldsFor(collection)
     );
     if (targets.length === 0) return;
     const tables = await this.componentTableNamesFor(

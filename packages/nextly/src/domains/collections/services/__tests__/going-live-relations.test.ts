@@ -318,6 +318,21 @@ describe("required components by language", () => {
     ]).toEqual(["hero"]);
   });
 
+  it("relaxes it for a component inside a group with no name, which the document holds at its own level", () => {
+    const laidOut = {
+      type: "group",
+      label: "Details",
+      fields: [HERO],
+    } as unknown as FieldDefinition;
+    expect([
+      ...componentsRequiredInDefaultLanguage(
+        context(false),
+        [TITLE, laidOut],
+        true
+      ).localizedFieldNames,
+    ]).toContain("hero");
+  });
+
   it("keeps it in the default language", () => {
     const ctx = context(true);
     expect(componentsRequiredInDefaultLanguage(ctx, [TITLE, HERO], true)).toBe(

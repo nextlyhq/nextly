@@ -153,9 +153,10 @@ async function boot(dialect: TestDialect, dir: string): Promise<TestNextly> {
     t = await createTestNextly({ dialect, ...options });
   }
   vi.stubEnv("NODE_ENV", "development");
+  const adapter = t.adapter as unknown as DrizzleAdapter;
   await writeCollectionSave(
     {
-      adapter: t.adapter as unknown as DrizzleAdapter,
+      adapter,
       config: defineConfig({
         collections: [],
         db: { migrationsDir: "./migrations" },
@@ -165,26 +166,28 @@ async function boot(dialect: TestDialect, dir: string): Promise<TestNextly> {
       applies: true,
       logger: { info: () => {}, warn: () => {}, error: () => {} },
     },
-    { slug: "ngposts", previous: null, entity: posts, change: "create" }
+    { slug: posts.slug, previous: null, entity: posts, change: "create" }
   );
-  // The save writer makes the table; the Builder's create then puts it in the running instance's
-  // table resolver and the entry reads' schema cache, as every create path does
+  // The save writer makes the table; the Builder's create then puts it in the running
+  // instance's table resolver and the entry reads' schema cache, as every create path does
   // (`registerRuntimeSchema`), so it is registered here the same way.
-  const adapter = t.adapter as unknown as DrizzleAdapter;
+  const tableName = `dc_${posts.slug}`;
   const { table } = generateRuntimeSchema(
-    "dc_ngposts",
+    tableName,
     posts.fields as unknown as FieldDefinition[],
     adapter.getCapabilities().dialect,
     { status: true }
   );
   (
     adapter as unknown as {
-      tableResolver: { registerDynamicSchema(name: string, t: unknown): void };
+      tableResolver: {
+        registerDynamicSchema(name: string, t: unknown): void;
+      };
     }
-  ).tableResolver.registerDynamicSchema("dc_ngposts", table);
+  ).tableResolver.registerDynamicSchema(tableName, table);
   (
     t.getService("collectionsHandler") as CollectionsHandler
-  ).refreshCollectionSchema("dc_ngposts", table);
+  ).refreshCollectionSchema(tableName, table);
   await userWhoMay(t, READER.id, "read", ["ngposts"]);
   return t;
 }
@@ -271,12 +274,21 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("publishes a draft holding a JSON and a repeater field inside the group, and answers with their values", async () => {
-      const id = await created(t, "ngposts", {
-        title: "lists",
-        status: "draft",
+      const draft = await entriesOf(t).createEntry(
+        { collectionName: "ngposts", overrideAccess: true },
+        {
+          title: "lists",
+          status: "draft",
+          meta: { tone: "warm" },
+          links: [{ label: "Home" }],
+        }
+      );
+      // The create answers with the values too, not the text a dialect stores JSON in.
+      expect(draft.data).toMatchObject({
         meta: { tone: "warm" },
-        links: [{ label: "Home" }],
+        links: [expect.objectContaining({ label: "Home" })],
       });
+      const id = String((draft.data as { id: unknown }).id);
 
       // Judged as the values the reads return, not as the text a dialect stores JSON in.
       const published = await publish(t, id);

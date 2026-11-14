@@ -44,6 +44,7 @@ import {
   resolveTypeColumns,
   type CatalogReadAdapter,
 } from "../../field-groups/storage/resolve-storage-names";
+import { fieldsStoredOnRow } from "../../schema/services/field-column-descriptor";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
   collectionTableName,
@@ -124,7 +125,7 @@ export async function prepareFilterCondition(
   const collection = await sources.getCollection(params.collectionName);
   const { componentFilters, cleanedWhere } = extractComponentFieldConditions(
     params.filter,
-    declaredFields(collection)
+    rowFieldsOf(collection)
   );
   const componentTables =
     params.resolvedComponentTables ??
@@ -143,7 +144,7 @@ export async function prepareFilterCondition(
   // The dialect the condition runs on, which decides how a match that ignores case folds it.
   const { dialect } = sources.adapter;
   // The fields keeping a list of related entries' ids, which a filter matches by membership.
-  const referenceLists = referenceListFields(declaredFields(collection));
+  const referenceLists = referenceListFields(rowFieldsOf(collection));
 
   return {
     componentTables,
@@ -351,10 +352,15 @@ export function localizedFilterContext(
 }
 
 /**
- * A collection's declared top-level fields: under `schemaDefinition.fields`
- * for a Builder collection, `fields` for a code-first one.
+ * The fields an entry of the collection holds at its own level: its declared
+ * fields (under `schemaDefinition.fields` for a Builder collection, `fields`
+ * for a code-first one), with those inside a group with no name in place of
+ * the group (`fieldsStoredOnRow`). Such a group only lays fields out, and its
+ * fields are columns of the entry's row, so a filter names them as it names a
+ * field beside the group: a field group's fields through its table, a list of
+ * references by membership, a JSON field as structured.
  */
-function declaredFields(collection: unknown): Array<{
+function rowFieldsOf(collection: unknown): Array<{
   name: string;
   type: string;
   component?: string;
@@ -366,14 +372,16 @@ function declaredFields(collection: unknown): Array<{
   const definition = record.schemaDefinition as
     | Record<string, unknown>
     | undefined;
-  return (definition?.fields || record.fields || []) as Array<{
-    name: string;
-    type: string;
-    component?: string;
-    components?: string[];
-    hasMany?: boolean;
-    relationTo?: unknown;
-  }>;
+  return fieldsStoredOnRow(
+    (definition?.fields || record.fields || []) as Array<{
+      name: string;
+      type: string;
+      component?: string;
+      components?: string[];
+      hasMany?: boolean;
+      relationTo?: unknown;
+    }>
+  );
 }
 
 /**
@@ -387,7 +395,7 @@ function namesStructuredField(
   collection: unknown
 ): boolean {
   const structured = new Set(
-    declaredFields(collection)
+    rowFieldsOf(collection)
       .filter(field => isJsonFieldType(field.type, field))
       .map(field => field.name)
   );

@@ -1482,7 +1482,9 @@ export async function readStoredComponents(
     language: string | undefined;
   }
 ): Promise<Map<string, Record<string, unknown>>> {
-  const componentFields = args.fields.filter(field =>
+  // Through `fieldsStoredOnRow`: a field group placed inside a group with no name is a field of the
+  // document as one beside the group is, and the read below populates it at that level.
+  const componentFields = fieldsStoredOnRow(args.fields).filter(field =>
     isFieldGroupField(field as unknown as FieldConfig)
   );
   if (componentFields.length === 0) return new Map();
@@ -1589,7 +1591,10 @@ export function componentsRequiredInDefaultLanguage<
   if (context.enforceLocalizedRequired || !perLanguage) {
     return context;
   }
-  const components = fields
+  // Through `fieldsStoredOnRow`: a component inside a group with no name is judged at the
+  // document's own level (its path is its name), so it is relaxed under that name as one beside
+  // the group is.
+  const components = fieldsStoredOnRow(fields)
     .filter(field => isFieldGroupField(field as unknown as FieldConfig))
     .map(field => field.name);
   if (components.length === 0) return context;
@@ -4363,7 +4368,10 @@ export class CollectionMutationService extends BaseService {
     fields: FieldDefinition[]
   ): Record<string, unknown> {
     const out = { ...row };
-    for (const field of fields) {
+    // Every field the row holds, those inside a group with no name among them (`fieldsStoredOnRow`):
+    // their columns are on this row, and a dialect storing JSON as text hands their values back as
+    // text too, which the publish judgement would otherwise read as a string.
+    for (const field of fieldsStoredOnRow(fields)) {
       const value = out[field.name];
       if (
         isJsonFieldType(field.type, field) &&
@@ -4931,8 +4939,10 @@ export class CollectionMutationService extends BaseService {
     promoted: Record<string, unknown>,
     tx: TransactionContext | undefined
   ): Promise<Record<string, unknown>> {
+    // The field groups through `fieldsStoredOnRow`, so one inside a group with no name takes its
+    // stored value too, as `readStoredComponents` reads it.
     const relationFields = [
-      ...args.fields.filter(field =>
+      ...fieldsStoredOnRow(args.fields).filter(field =>
         isFieldGroupField(field as unknown as FieldConfig)
       ),
       ...args.manyToManyFields,
@@ -8070,20 +8080,10 @@ export class CollectionMutationService extends BaseService {
     // returns these as JSON strings, and a read-denied field nested in a
     // still-serialized container would otherwise be echoed. The single
     // create/update paths already deserialize upstream; this makes the
-    // transaction/bulk variants safe too (a second pass is a no-op).
-    for (const field of fields) {
-      if (
-        isJsonFieldType(field.type, field) &&
-        typeof entry[field.name] === "string" &&
-        entry[field.name]
-      ) {
-        try {
-          entry[field.name] = JSON.parse(entry[field.name] as string);
-        } catch {
-          // If parsing fails, keep the raw string.
-        }
-      }
-    }
+    // transaction/bulk variants safe too (a second pass is a no-op). The
+    // snapshot decoder reads every field the row holds, those inside a group
+    // with no name among them.
+    Object.assign(entry, this.deserializeJsonFieldsForSnapshot(entry, fields));
     stripPasswordFieldValues(
       entry,
       fields,
@@ -9447,20 +9447,13 @@ export class CollectionMutationService extends BaseService {
         }
       });
 
-      // Deserialize JSON fields (richtext, blocks, array, group, json) for response
-      fields.forEach(field => {
-        if (
-          isJsonFieldType(field.type, field) &&
-          entry[field.name] &&
-          typeof entry[field.name] === "string"
-        ) {
-          try {
-            entry[field.name] = JSON.parse(entry[field.name] as string);
-          } catch {
-            // If parsing fails, keep as string
-          }
-        }
-      });
+      // Deserialize JSON fields (richtext, blocks, array, group, json) for the
+      // response, through the snapshot decoder: every field the row holds,
+      // those inside a group with no name among them.
+      Object.assign(
+        entry,
+        this.deserializeJsonFieldsForSnapshot(entry, fields)
+      );
 
       // Field-level afterChange hooks observe the PERSISTED values — run
       // before response expansion so hooks see stored IDs, not the
@@ -18230,22 +18223,12 @@ export class CollectionMutationService extends BaseService {
 
       // Deserialize JSON fields (richtext, blocks, array, group, json) for
       // response. A no-op on the draft document, whose JSON fields are already
-      // parsed by the snapshot builder.
-      fields.forEach(field => {
-        if (
-          isJsonFieldType(field.type, field) &&
-          responseSource[field.name] &&
-          typeof responseSource[field.name] === "string"
-        ) {
-          try {
-            responseSource[field.name] = JSON.parse(
-              responseSource[field.name] as string
-            );
-          } catch {
-            // If parsing fails, keep as string
-          }
-        }
-      });
+      // parsed by the snapshot builder. Through the snapshot decoder: every
+      // field the row holds, those inside a group with no name among them.
+      Object.assign(
+        responseSource,
+        this.deserializeJsonFieldsForSnapshot(responseSource, fields)
+      );
 
       // Field-level afterChange hooks observe the PERSISTED values — run
       // before response expansion so hooks see stored IDs, not the

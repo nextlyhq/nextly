@@ -444,9 +444,12 @@ export function getSearchableFields(
   const schemaDef = collection.schemaDefinition as
     | Record<string, unknown>
     | undefined;
-  const fields: FieldDefinition[] = (schemaDef?.fields ||
-    collection.fields ||
-    []) as FieldDefinition[];
+  // Every field the row holds, those inside a group with no name among them (`fieldsStoredOnRow`,
+  // over the same walk): their columns are on the entry's row, so a search matches them as it
+  // matches a field beside the group.
+  const fields = addressableFields(
+    schemaDef?.fields || collection.fields || []
+  ) as unknown as FieldDefinition[];
 
   const defaultSearchableFields = ["slug", "title"];
 
