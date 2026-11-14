@@ -101,6 +101,7 @@ import { plainMysqlEquivalents } from "../pipeline/sql-templates/mysql-live-rest
 import type { ColumnResolution } from "../pipeline/sql-templates/resolution-statements";
 import {
   classifyFieldKind,
+  fieldsStoredOnRow,
   getColumnDescriptor,
   toSnakeCase,
   type ColumnOrigin,
@@ -750,7 +751,14 @@ function refuseUnenforceableUniques(
   const dialect = deps.adapter.getCapabilities().dialect;
   const entity = save.entity;
   if (entity === null) return;
-  for (const field of mainTableFields(entity, entity.fields)) {
+  const onMain = mainTableFields(entity, entity.fields);
+  // A collection's or Single's row holds the fields inside a group with no name as columns
+  // (`fieldsStoredOnRow`), so a unique one among them is judged as one beside the group is. A field
+  // group's creator gives them no column (`buildDesiredTableFromComponentFields`), so there the
+  // group is passed over below, as it was.
+  const judged =
+    kindOf(save).kind === "fieldGroup" ? onMain : fieldsStoredOnRow(onMain);
+  for (const field of judged) {
     // A group with no name only lays fields out and has no column to key.
     const name = field.name;
     if (field.unique !== true || name === undefined) continue;

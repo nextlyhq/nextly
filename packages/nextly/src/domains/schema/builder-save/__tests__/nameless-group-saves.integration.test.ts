@@ -205,6 +205,33 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("judges a unique field inside the group as one beside it is judged", async () => {
+      const t = await boot(dialect);
+      const unique = { name: "code", type: "text", unique: true } as Field;
+      /** How a create of `slug` holding `fields` ends: refused with a code, or made. */
+      const outcome = async (slug: string, fields: Field[]) => {
+        try {
+          await writeCollectionSave(deps(t), {
+            slug,
+            previous: null,
+            entity: collection(slug, fields),
+            change: "create",
+          });
+          return "made";
+        } catch (error) {
+          return `refused ${String((error as { code?: unknown }).code)}`;
+        }
+      };
+
+      // Where the database cannot key the column (an unbounded MySQL TEXT) both are refused, and
+      // where it can both are made: the group does not hide the field from the check.
+      const beside = await outcome("beside", [unique]);
+      const inside = await outcome("inside", [
+        { type: "group", label: "Codes", fields: [unique] } as Field,
+      ]);
+      expect(inside).toBe(beside);
+    });
+
     it("saves another collection while one holding the group is in the definition file, touching only the one saved", async () => {
       const t = await boot(dialect);
       await writeCollectionSave(deps(t), {
