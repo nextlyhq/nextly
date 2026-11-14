@@ -1343,6 +1343,8 @@ async function registerServicesOnce(
       // only publishes what the configuration declares in this process.
       if (structure.productionStart) {
         await publishDeclaredCodeFirstEntities(transformedConfig, workflows);
+        // Rows behind the build, named from the rows the start already read.
+        await reportStartRowsBehindBuild(transformedConfig, resolvedLogger);
       } else {
         await syncCodeFirstEntities(
           adapter,
@@ -2018,7 +2020,7 @@ async function publishStoredRecordingPolicies(
  * entirely for code-first tables - the DB is still the source of
  * truth for UI-created tables via `loadDynamicTables`.
  */
-async function registerConfigTablesQuietly(
+export async function registerConfigTablesQuietly(
   schemaRegistry: SchemaRegistry | undefined,
   transformedConfig: NextlyServiceConfig,
   adapter: DrizzleAdapter,
@@ -2981,15 +2983,23 @@ async function reportStartSchemaVersion(
   logger: Logger
 ): Promise<void> {
   if (process.env.NODE_ENV !== "production") return;
-  const [{ reportSchemaVersionAtStart }, { buildSchemaVersion }] =
-    await Promise.all([
-      import("../domains/schema/schema-version"),
-      import("../domains/schema/build-schema-version"),
-    ]);
+  const [
+    { reportSchemaVersionAtStart },
+    { buildSchemaVersion },
+    { latestStoredSchemaVersion },
+  ] = await Promise.all([
+    import("../domains/schema/schema-version"),
+    import("../domains/schema/build-schema-version"),
+    import("../domains/schema/stored-schema-seq"),
+  ]);
   await reportSchemaVersionAtStart({
     db: adapterDrizzleDb,
     dialect: adapter.dialect,
     build: buildSchemaVersion(),
+    // The start read the version just before it loaded its definitions, and read it again where
+    // boot migrations stored a new one; that newest reading is compared, not a second read of the
+    // same row. A change this process marked since it is not in it, so then the row is read here.
+    stored: latestStoredSchemaVersion(adapter),
     logger: {
       warn: message => logger.warn(message),
       info: message => logger.info(message),
@@ -4402,6 +4412,50 @@ function codeFirstCollectionConfigs(
  * the database was not migrated for is answered as not migrated where a read
  * or write reaches it.
  */
+/**
+ * Log each code-first collection or Single whose registry row a production
+ * start finds missing or lacking a field the build declares
+ * (`registry-rows-behind-build`), from the rows the start read, sending no
+ * statement of its own. Never fails the start.
+ */
+async function reportStartRowsBehindBuild(
+  transformedConfig: NextlyServiceConfig,
+  logger: Logger
+): Promise<void> {
+  const registry = startRegistryNow();
+  if (registry === undefined) return;
+  try {
+    const [{ reportRowsBehindBuild }, { toCodeFirstSingleConfig }] =
+      await Promise.all([
+        import("./registry-rows-behind-build"),
+        import("../domains/singles/services/single-registry-service"),
+      ]);
+    await reportRowsBehindBuild(
+      registry,
+      [
+        ...codeFirstCollectionConfigs(transformedConfig).map(config => ({
+          kind: "collection" as const,
+          slug: config.slug,
+          fields: config.fields,
+        })),
+        ...(transformedConfig.singles ?? []).map(single => {
+          const config = toCodeFirstSingleConfig(single);
+          return {
+            kind: "single" as const,
+            slug: config.slug,
+            fields: config.fields,
+          };
+        }),
+      ],
+      logger
+    );
+  } catch (error) {
+    logger.debug("The registry rows could not be compared with the build", {
+      error,
+    });
+  }
+}
+
 async function publishDeclaredCodeFirstEntities(
   transformedConfig: NextlyServiceConfig,
   workflows: ReadonlyMap<string, RegisteredWorkflow>

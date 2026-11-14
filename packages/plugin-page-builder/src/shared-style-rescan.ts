@@ -41,6 +41,18 @@ import { SHARED_STYLE_IN_USE_CODE } from "./library-contract";
 import { walkPages } from "./paged-walk";
 import type { BuilderDocumentType } from "./site-style-route";
 import { storedValuesAt } from "./stored-blocks-values";
+// The one bounded race, so naming a refused use is held to a time box as
+// every other bounded read is.
+import { TIMED_OUT, within } from "./within-time";
+
+/**
+ * How long a removal may spend counting the pages, where the usage index is
+ * not whole, before it judges: long enough to count a small site in one go,
+ * short enough that the request stays responsive. A site larger than that is
+ * refused as not counted yet, and its Count now, or a scheduler, counts it.
+ * Naming the first use a refusal names is held to a box of the same length.
+ */
+export const REMOVAL_COUNT_MS = 5_000;
 
 /** How many rows one read of a collection asks for. */
 export const RESCAN_PAGE_SIZE = 100;
@@ -282,9 +294,9 @@ export function stillUsedMessage(
 
 /**
  * The refusal's words for references still stored on `count` documents: the
- * first one the caller may open named where the check can ask a caller
- * (`canName`), else the documents only counted, as for a write whose author
- * cannot be asked.
+ * first one the caller may open named where the caller was asked and answered
+ * in time (`canName`), else the documents only counted, as for a write whose
+ * author cannot be asked.
  */
 function stillUsedWords(
   count: number,
@@ -314,11 +326,44 @@ export interface StillUsed {
 }
 
 /**
+ * What asking for the first use the caller may open answered: its title, or
+ * `undefined` where the caller may open none of them; or not answered, where
+ * no one can be asked or the answer did not come in time.
+ */
+export type FirstNamed =
+  | { readonly answered: true; readonly title: string | undefined }
+  | { readonly answered: false };
+
+/**
+ * The first of `uses` the caller may open, asked within `ms`: the one way a
+ * refusal names a use, for both removals. A refusal is decided before its
+ * use is named, so a lookup that stalls (a slow read of the caller's rows)
+ * must not hold the refusal back: once the time is spent it answers
+ * unanswered, and the refusal counts the uses instead. Time already spent
+ * asks nothing. A lookup still running then is left to finish unobserved; it
+ * writes nothing.
+ */
+export async function firstReadableWithin(
+  namer: Pick<StillUsed, "firstReadable">,
+  uses: readonly StoredUse[],
+  ms: number
+): Promise<FirstNamed> {
+  if (namer.firstReadable === undefined || ms <= 0) return { answered: false };
+  const title = await within(namer.firstReadable(uses), ms);
+  return title === TIMED_OUT ? { answered: false } : { answered: true, title };
+}
+
+/**
  * Refuse, with the in-use refusal, when a stored document still references
  * any of the ids: the stored documents' own answer, read past the index,
  * which every removal of a shared style or a variable asks. One
  * implementation for both, so the two refusals cannot drift. `logKey` names
  * what the ids are in the server log (`classIds`, `variableIds`).
+ *
+ * The first use is named within {@link REMOVAL_COUNT_MS}; past it the uses
+ * are counted, as for a write whose author cannot be asked, so the refusal
+ * never waits on its own wording and never says a page cannot be opened
+ * when that was not found out.
  */
 export async function refuseStoredUses(
   ids: readonly string[],
@@ -327,11 +372,12 @@ export async function refuseStoredUses(
 ): Promise<void> {
   const uses = await stillUsed.uses(ids);
   if (uses.length === 0) return;
+  const named = await firstReadableWithin(stillUsed, uses, REMOVAL_COUNT_MS);
   const message = stillUsedWords(
     uses.length,
-    await stillUsed.firstReadable?.(uses),
+    named.answered ? named.title : undefined,
     ids.length,
-    stillUsed.firstReadable !== undefined
+    named.answered
   );
   throw NextlyError.validation({
     errors: [{ path: "", code: SHARED_STYLE_IN_USE_CODE, message }],

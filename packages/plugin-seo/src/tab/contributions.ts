@@ -24,6 +24,16 @@ export const SEO_TAB_COMPONENT = "@nextlyhq/plugin-seo/admin#SeoTab";
 export const SEO_STATUS_COMPONENT =
   "@nextlyhq/plugin-seo/admin#SeoStatusSection";
 
+/**
+ * The side panel's read-only line saying whether the page's search display
+ * is the site's defaults or its own, as the component map names it.
+ */
+export const SEO_DISPLAY_STATUS_COMPONENT =
+  "@nextlyhq/plugin-seo/admin#SeoDisplaySection";
+
+/** The display line's heading. */
+const DISPLAY_STATUS_LABEL = "Search display";
+
 /** The tab's label. */
 const LABEL = "SEO";
 
@@ -149,6 +159,16 @@ export function seoTabContributions(
       after: "details",
       ...onCollections,
     });
+    // Straight under the line above, as its second line.
+    contributions.push({
+      id: "nextlyhq-plugin-seo.display-status",
+      kind: "sidebarSection",
+      place: "collection.edit",
+      label: DISPLAY_STATUS_LABEL,
+      component: SEO_DISPLAY_STATUS_COMPONENT,
+      after: "nextlyhq-plugin-seo.status",
+      ...onCollections,
+    });
   }
   if (every || types.singles.length > 0) {
     contributions.push({
@@ -167,6 +187,15 @@ export function seoTabContributions(
       label: STATUS_LABEL,
       component: SEO_STATUS_COMPONENT,
       after: "details",
+      ...onSingles,
+    });
+    contributions.push({
+      id: "nextlyhq-plugin-seo.single-display-status",
+      kind: "sidebarSection",
+      place: "single.edit",
+      label: DISPLAY_STATUS_LABEL,
+      component: SEO_DISPLAY_STATUS_COMPONENT,
+      after: "nextlyhq-plugin-seo.single-status",
       ...onSingles,
     });
   }

@@ -1297,4 +1297,43 @@ describe("the in-use check, bound to the stored documents", () => {
       check([{ id: "t-other", name: "Other" }], [])
     ).resolves.toBeUndefined();
   });
+
+  it("refuses within the box, counting the page, when naming it stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      const check = variablesInUseCheck({
+        usage: usageOf(WHOLE).source,
+        blocks: NO_BLOCKS,
+        documents: async () => documentsOf([pageNaming("p1", "t-accent")]),
+        limits: DEFAULT_LIMITS,
+        // A lookup of the caller's titles that never answers.
+        firstReadable: () => new Promise<string | undefined>(() => undefined),
+        pathOf: id => id,
+      });
+      const seen: { error?: unknown } = {};
+      void check([{ id: "t-accent", name: "Accent" }], []).catch(
+        (error: unknown) => {
+          seen.error = error;
+        }
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      // Counted, never "you can't open": whether the caller may was not
+      // found out.
+      expect(seen.error).toMatchObject({
+        publicData: {
+          errors: [
+            {
+              path: "",
+              code: "IN_USE",
+              message: "Still used on 1 page. Remove it from that page first.",
+            },
+          ],
+        },
+      });
+      // The naming box's timer is cleared once it answers.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

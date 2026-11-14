@@ -27,9 +27,13 @@ import {
   createPublicContentRoute,
   type ContentEntry,
 } from "nextly/runtime";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
-import { catchUp, lastCatchUp } from "../address-record/catch-up";
+import {
+  RETRY_FAILED_AFTER_MS,
+  catchUp,
+  lastCatchUp,
+} from "../address-record/catch-up";
 import { forgetNote } from "../address-record/__tests__/record-tables";
 import { contentDatesSettled } from "../content-dates/hooks";
 import type { ListedPagesService } from "../outputs/listing";
@@ -709,10 +713,28 @@ describe.each(getConfiguredTestDialects())(
       expect(failed.status).toBe(503);
       expect(failed.cacheControl).toBe("no-store");
 
-      // The request started the catch-up again; once it succeeds, the
-      // sitemap is served.
+      // A request tries a failed catch-up again only once the failure is
+      // `RETRY_FAILED_AFTER_MS` old, so one this soon after it started none:
+      // the sitemap still lists nothing.
       await lastCatchUp();
-      expect(await listed()).toEqual([`${SITE}/blog/hello`]);
+      expect(await listed()).toEqual([]);
+
+      // Only the clock is faked, and only from here: the database drivers'
+      // own timers keep running. Once the failure is old enough, the next
+      // request starts the catch-up again; once it succeeds, the sitemap is
+      // served.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(Date.now() + RETRY_FAILED_AFTER_MS);
+        expect((await rootFile("sitemap.xml")).status).toBe(503);
+        // Twice: the retry waits for the failed run before it becomes the
+        // last one started.
+        await lastCatchUp();
+        await lastCatchUp();
+        expect(await listed()).toEqual([`${SITE}/blog/hello`]);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("names its own files in the index it serves at the plugin's own address", async () => {

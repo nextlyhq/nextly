@@ -62,6 +62,7 @@ import {
 } from "../../domains/schema/migrate/plugin/plugin-migration";
 import {
   findRegistryDisagreements,
+  migrationsToCompare,
   registryDisagreementLines,
   type RegistryDisagreements,
 } from "../../domains/schema/migrate/registry-consistency";
@@ -405,7 +406,8 @@ export async function runMigrateStatus(
       dialect,
       cwd,
       configResult,
-      logger
+      logger,
+      migrationsDir
     );
 
     // F11: include the new status variants in the applied bucket so the
@@ -1129,7 +1131,9 @@ async function compareRegistry(
   dialect: SupportedDialect,
   cwd: string,
   configResult: LoadConfigResult,
-  logger: CommandContext["logger"]
+  logger: CommandContext["logger"],
+  /** The app's migrations, whose newest applied record the rows are compared with. */
+  migrationsDir: string
 ): Promise<{
   registry: RegistryDisagreements | null;
   registryError?: string;
@@ -1147,6 +1151,7 @@ async function compareRegistry(
         dialect,
         declared: entities,
         logger,
+        migrations: migrationsToCompare(adapter, dialect, migrationsDir),
       }),
     };
   } catch (error) {
