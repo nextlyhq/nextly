@@ -105,6 +105,19 @@ function namedMetaTags(head: string): Array<[string, string]> {
   return tags;
 }
 
+/**
+ * Whether a page answered not found: a 404, as the build kept it, or, where
+ * the page was rendered again at request time under Cache Components, a 200
+ * marked `noindex`, as Next.js answers a not-found that late.
+ */
+function answeredNotFound(page: { status: number; body: string }): boolean {
+  return (
+    page.status === 404 ||
+    (page.status === 200 &&
+      /<meta[^>]+name="robots"[^>]+content="noindex/.test(page.body))
+  );
+}
+
 /** Asks for `path` as a visitor does, with no session. */
 async function visit(request: APIRequestContext, path: string) {
   const response = await request.get(`${started().url}${path}`, {
@@ -182,7 +195,7 @@ test.describe("the SEO plugin on a production build of a site", () => {
     request,
   }) => {
     const { url } = started();
-    expect((await visit(request, "/topics/empty")).status).toBe(404);
+    expect(answeredNotFound(await visit(request, "/topics/empty"))).toBe(true);
     expect((await visit(request, "/topics/guides")).status).toBe(200);
 
     const sitemap = await visit(request, "/sitemap.xml");
