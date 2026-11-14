@@ -13,7 +13,7 @@
  */
 import { headers } from "next/headers";
 import { notFound, unstable_rethrow } from "next/navigation";
-import { after } from "next/server";
+import { after, connection } from "next/server";
 
 import type { HeaderReader } from "../not-found/report";
 
@@ -25,33 +25,44 @@ function startedLogger(): ((headers: HeaderReader) => Promise<void>) | null {
   return shared.__nextly_seoLogNotFound ?? null;
 }
 
-/**
- * Log this request's address as not found once the response is sent, where
- * the SEO plugin runs in this process.
- *
- * The request is read first, whether or not the plugin runs here, so the
- * answer is always decided per request: a prerender that reached a miss
- * without reading it would keep the 404 and serve it from then on without
- * rendering, and no later request for the address would be logged. A
- * prerender's read waits for a request, which Next.js's own interrupt says,
- * and that passes on. Anything else (a read inside a cache scope, which has
- * no request) leaves the miss unlogged rather than breaking the answer.
- */
+/** Read the request and hand its headers to the started plugin's logger once the response is sent. */
 async function logAfterResponse(): Promise<void> {
-  let requestHeaders: HeaderReader;
+  const log = startedLogger();
+  if (log === null) return;
+  const requestHeaders: HeaderReader = await headers();
+  after(() => log(requestHeaders));
+}
+
+/**
+ * Log this request's address as not found once the response is sent, but
+ * only from a render made for a request, and without holding the answer up.
+ *
+ * Under Cache Components Next.js also renders a miss with no request at all
+ * (the prerender it keeps and serves later requests from, and the one for a
+ * runtime prefetch), and any read of the request there turns the kept 404
+ * into a 200 streamed for every request. So nothing request-scoped is read
+ * here: `connection()` resolves only where a request is being answered, and
+ * in a prerender waits until the prerender ends and then rejects, so the
+ * request's headers are read, and the log scheduled, from a request's render
+ * alone. A miss Next.js answers from its kept 404 is not rendered, so it is
+ * not logged again. Nothing is awaited, because the answer must not wait for
+ * a request a prerender never gets.
+ *
+ * A `connection()` that throws at once is Next.js's interrupt where a page
+ * without Cache Components is generated statically, which passes on, or a
+ * call inside a cache scope, which has no request and leaves the miss
+ * unlogged rather than breaking the answer. A read that fails once the
+ * request is known leaves the miss unlogged too: the answer is sent already.
+ */
+function logOnceRequested(): void {
+  let requested: Promise<void>;
   try {
-    requestHeaders = await headers();
+    requested = connection();
   } catch (error) {
     unstable_rethrow(error);
     return;
   }
-  const log = startedLogger();
-  if (log === null) return;
-  try {
-    after(() => log(requestHeaders));
-  } catch (error) {
-    unstable_rethrow(error);
-  }
+  requested.then(logAfterResponse).catch(() => undefined);
 }
 
 /**
@@ -65,13 +76,18 @@ async function logAfterResponse(): Promise<void> {
  * A request is counted once, though its page and its `generateMetadata` both
  * answer it; a prefetch, and a request the site's Proxy did not pass on, are
  * not counted. It throws only Next.js's own errors: its not-found, and its
- * interrupts while prerendering.
+ * interrupt where a page is generated statically without Cache Components.
  *
- * It reads the request, so call it where the route answers per request.
- * Without Cache Components, Next.js refuses a read of the request in a page
- * it renders once and keeps (a statically generated page, or one with
- * `generateStaticParams` rendered on its first request); the page builder's
- * public routes leave it out there themselves.
+ * It answers at once and reads nothing of the request where Next.js renders
+ * the miss without one, so under Cache Components a route Next.js keeps (a
+ * public content route, or a page with `generateStaticParams`) keeps a real
+ * 404: the first request is counted, and later requests Next.js answers from
+ * the kept 404 are not, since nothing renders them. Without Cache
+ * Components, Next.js refuses a page it renders once and keeps that waits
+ * for a request (a statically generated page, or one with
+ * `generateStaticParams` rendered on its first request), so call it there
+ * only where the route answers per request; the page builder's public
+ * routes leave it out there themselves.
  *
  * @example
  * ```tsx
@@ -84,6 +100,7 @@ async function logAfterResponse(): Promise<void> {
  * @experimental Its name and shape may change before 1.0.
  */
 export async function notFoundLogged(): Promise<never> {
-  await logAfterResponse();
+  // Not awaited: the log waits for a request, and the answer must not.
+  logOnceRequested();
   notFound();
 }

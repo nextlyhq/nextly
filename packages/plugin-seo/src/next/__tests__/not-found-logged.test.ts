@@ -1,44 +1,59 @@
 /**
- * `notFoundLogged` answers not found every time, and logs the request's
- * address once, after the response, only where the SEO plugin runs and the
- * site's Proxy passed the request on.
+ * `notFoundLogged` answers not found every time, at once, and logs the
+ * address of a request it answers once, after the response, only where the
+ * SEO plugin runs and the site's Proxy passed the request on.
  *
  * What separates it from a plausible broken helper:
  *
+ * - a render made without a request (the prerender Next.js keeps under Cache
+ *   Components) is answered at once and reads nothing of the request, so the
+ *   404 is kept rather than turned into a 200 for every request; a helper
+ *   that read the request first, as it once did, never answers there;
+ * - a render made for a request logs its address, though nothing waited for
+ *   the request before answering;
  * - a request whose page and head both answer not found is logged once, not
  *   twice (both calls schedule a write; the second must find it logged);
  * - nothing is written before the response is finished: the write waits for
  *   `after`;
  * - a request the Proxy did not pass on, or a process where the plugin never
  *   started, logs nothing, and still answers not found;
- * - the request is read before the answer, wherever the plugin runs, so a
- *   prerender never keeps a 404 that later requests would be served unlogged;
- * - a failure to read the request leaves the miss unlogged rather than
- *   turning the 404 into an error, while Next.js's own interrupts pass on.
+ * - a request that cannot be known or read leaves the miss unlogged rather
+ *   than turning the 404 into an error, while Next.js's own interrupts pass
+ *   on.
  *
- * Next.js's request APIs are stood in for: `headers()` answers the request
- * a test sets, `after` holds its callbacks until the test finishes the
- * response, and `notFound()` throws as Next's does, by its digest.
+ * Next.js's request APIs are stood in for: `connection()` resolves where a
+ * test answers a request and waits where it prerenders, `headers()` answers
+ * the request a test sets and counts its reads, `after` holds its callbacks
+ * until the test finishes the response, and `notFound()` throws as Next's
+ * does, by its digest.
  */
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const next = vi.hoisted(() => ({
-  request: new Headers() as Headers | Error | "waits",
+  /** What `connection()` does: a request's render, a prerender, or a throw. */
+  render: "request" as "request" | "prerender" | Error,
+  request: new Headers() as Headers | Error,
+  reads: 0,
   pending: [] as Array<() => unknown>,
 }));
 
 vi.mock("next/headers", () => ({
   headers: async () => {
+    next.reads += 1;
     if (next.request instanceof Error) throw next.request;
-    // A prerender's read, which waits for a request that never comes.
-    if (next.request === "waits") return await new Promise<never>(() => {});
     return next.request;
   },
 }));
 vi.mock("next/server", () => ({
   after: (task: () => unknown) => {
     next.pending.push(task);
+  },
+  connection: () => {
+    if (next.render instanceof Error) throw next.render;
+    // A prerender's, which waits for a request that never comes.
+    if (next.render === "prerender") return new Promise<never>(() => {});
+    return Promise.resolve();
   },
 }));
 vi.mock("next/navigation", () => ({
@@ -88,8 +103,14 @@ function passedOn(path: string, id: string): Headers {
   });
 }
 
+/** Let the render's own work run: what the helper started without awaiting it. */
+async function settle(): Promise<void> {
+  await new Promise(done => setTimeout(done, 0));
+}
+
 /** Finish the response: run what `after` was handed. */
 async function finishResponse(): Promise<void> {
+  await settle();
   const tasks = next.pending.splice(0);
   for (const task of tasks) await task();
 }
@@ -102,7 +123,9 @@ const shared = globalThis as {
 beforeEach(() => {
   recorded.length = 0;
   next.pending.length = 0;
+  next.render = "request";
   next.request = new Headers();
+  next.reads = 0;
   keepSeoContext(ctx);
 });
 
@@ -150,30 +173,42 @@ describe("notFoundLogged", () => {
     delete shared.__nextly_seoLogNotFound;
     next.request = passedOn("/gone", "request-4");
     await expect(notFoundLogged()).rejects.toMatchObject(NOT_FOUND);
+    await settle();
     expect(next.pending).toEqual([]);
   });
 
-  it("reads the request before answering, so a prerender never keeps the answer", async () => {
-    // Where the plugin has not started, as during a build, too.
-    delete shared.__nextly_seoLogNotFound;
-    next.request = "waits";
-    let settled = false;
-    void notFoundLogged().catch(() => {
-      settled = true;
+  it("answers a render made without a request at once, reading nothing of the request", async () => {
+    next.render = "prerender";
+    next.request = passedOn("/kept", "request-5");
+    let answer: unknown = "still waiting";
+    void notFoundLogged().catch((error: unknown) => {
+      answer = error;
     });
-    await new Promise(done => setTimeout(done, 20));
-    expect(settled).toBe(false);
+    await settle();
+    expect(answer).toMatchObject(NOT_FOUND);
+    await finishResponse();
+    expect(next.reads).toBe(0);
+    expect(next.pending).toEqual([]);
+    expect(recorded).toEqual([]);
   });
 
-  it("answers not found when the request cannot be read, and passes Next's interrupts on", async () => {
-    next.request = new Error("headers() inside a cache scope");
+  it("answers not found when the request cannot be known or read, and passes Next's interrupts on", async () => {
+    next.render = new Error("connection() inside a cache scope");
     await expect(notFoundLogged()).rejects.toMatchObject(NOT_FOUND);
+    await finishResponse();
     expect(next.pending).toEqual([]);
 
-    const interrupt = Object.assign(new Error("waiting for a request"), {
-      digest: "HANGING_PROMISE_REJECTION",
+    next.render = "request";
+    next.request = new Error("headers() read too late");
+    await expect(notFoundLogged()).rejects.toMatchObject(NOT_FOUND);
+    await finishResponse();
+    expect(recorded).toEqual([]);
+
+    // A page generated statically without Cache Components.
+    const interrupt = Object.assign(new Error("dynamic usage"), {
+      digest: "DYNAMIC_SERVER_USAGE",
     });
-    next.request = interrupt;
+    next.render = interrupt;
     await expect(notFoundLogged()).rejects.toBe(interrupt);
   });
 });
