@@ -203,11 +203,10 @@ function escaped(text: string): string {
 }
 
 /**
- * The page's main content: the longest outermost `<main>` (a page that
- * streams its content can render an empty one first and the real one
- * later), else its body, whose shared header and footer are then left out.
+ * The longest outermost `<main>` of `html`, or nothing: a page that streams
+ * its content can render an empty one first and the real one later.
  */
-function mainOf(html: string): { source: string; wholeBody: boolean } {
+function longestMain(html: string): string {
   let best = "";
   let depth = 0;
   let start = -1;
@@ -223,9 +222,22 @@ function mainOf(html: string): { source: string; wholeBody: boolean } {
       }
     }
   }
-  if (best !== "") return { source: best, wholeBody: false };
-  const body = /<body[\s>][\s\S]*<\/body>/i.exec(html);
-  return { source: body?.[0] ?? html, wholeBody: true };
+  return best;
+}
+
+/** The page's `<body>`, or all of `html` where it has none. */
+const bodyOf = (html: string): string =>
+  /<body[\s>][\s\S]*<\/body>/i.exec(html)?.[0] ?? html;
+
+/**
+ * The page's main content: its longest `<main>`, else its body, whose
+ * shared header and footer are then left out.
+ */
+function mainOf(html: string): { source: string; wholeBody: boolean } {
+  const main = longestMain(html);
+  return main === ""
+    ? { source: bodyOf(html), wholeBody: true }
+    : { source: main, wholeBody: false };
 }
 
 /** One element still open while the page is read. */
@@ -350,20 +362,25 @@ class CopyWriter {
       this.out === "" || this.out.endsWith("\n") ? kept.trimStart() : kept;
   }
 
-  open(tag: string, attributes: string): void {
-    const skip =
+  /** Whether an element is left out of the copy, with everything in it. */
+  private leftOut(tag: string, attributes: string): boolean {
+    return (
       SKIPPED.has(tag) ||
       hiddenBy(attributes) ||
-      (this.wholeBody && (tag === "header" || tag === "footer"));
-    const inherited = this.skipping();
+      (this.wholeBody && (tag === "header" || tag === "footer"))
+    );
+  }
+
+  open(tag: string, attributes: string): void {
+    const skip = this.leftOut(tag, attributes);
+    // Written unless it, or what holds it, is left out; code holds only text.
+    const writes = !skip && !this.skipping() && !this.inside("pre");
     if (VOID.has(tag)) {
-      if (!inherited && !skip && !this.inside("pre"))
-        this.empty(tag, attributes);
+      if (writes) this.empty(tag, attributes);
       return;
     }
     const open: Open = { tag, skip, start: this.out.length };
-    if (!inherited && !skip && !this.inside("pre"))
-      this.begin(open, attributes);
+    if (writes) this.begin(open, attributes);
     this.stack.push(open);
   }
 
@@ -672,15 +689,21 @@ function withCode(markdown: string, codes: readonly string[]): string {
   });
 }
 
-/** Markdown from the HTML `source`, its addresses made whole against `base`. */
-function markdownOf(source: string, base: string, wholeBody: boolean): string {
+/** Markdown written from HTML: its prose, and the code blocks marked in it. */
+interface Written {
+  prose: string;
+  codes: readonly string[];
+}
+
+/**
+ * Markdown from the HTML `source`, its addresses made whole against
+ * `base`: the prose tidied, its code blocks still kept aside, to be put
+ * back by {@link withCode} once nothing more reads the prose.
+ */
+function writtenOf(source: string, base: string, wholeBody: boolean): Written {
   const writer = new CopyWriter(base, wholeBody);
-  const tokens = new RegExp(TOKEN);
-  for (
-    let token = tokens.exec(source);
-    token !== null;
-    token = tokens.exec(source)
-  ) {
+  // Raw text is already taken out ({@link withoutRawText}).
+  for (const token of source.matchAll(TOKEN)) {
     const [all, closing, name, attributes = ""] = token;
     if (all.startsWith("<!--")) continue;
     if (name === undefined) {
@@ -693,14 +716,7 @@ function markdownOf(source: string, base: string, wholeBody: boolean): string {
       // A self-closed element that is not void holds nothing.
       writer.open(tag, attributes);
       writer.close(tag);
-    } else {
-      writer.open(tag, attributes);
-      if (RAW_TEXT.has(tag)) {
-        // Its raw text is passed over whole, and the element closed.
-        tokens.lastIndex = rawTextEnd(source, tag, tokens.lastIndex);
-        writer.close(tag);
-      }
-    }
+    } else writer.open(tag, attributes);
   }
   const prose = writer.out
     .split("\n")
@@ -710,7 +726,7 @@ function markdownOf(source: string, base: string, wholeBody: boolean): string {
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
-  return withCode(prose, writer.codes);
+  return { prose, codes: writer.codes };
 }
 
 /**
@@ -770,25 +786,80 @@ function boundaryFilled(html: string, id: string, content: string): string {
   return html;
 }
 
+/** The comments React marks a streamed boundary's start and end with. */
+const BOUNDARY_MARK = /^<!--(?:\/?[$&]|\$[?~!])-->$/;
+
 /**
- * `html` as the browser shows it once every streamed boundary has loaded.
- * A page that streams renders each Suspense boundary's fallback first, then
- * its content in a hidden container, and a script (`$RC("B:0","S:0")`)
- * moves the content into the fallback's place. The same moves are made
- * here, in the order the page makes them, so a boundary streamed inside
- * another is filled once its parent is.
+ * `html` with the content of every raw-text element taken out, and every
+ * comment but the marks of streamed boundaries: what is left is markup and
+ * the words a reader reads, so nothing written inside a script's source,
+ * such as `"</main>"`, can be read as the page's own markup by any step
+ * after it.
  */
-function resolvedStreaming(html: string): string {
-  let resolved = html;
-  for (const [, boundary = "", segment = ""] of html.matchAll(
-    /\$R[CR]\("(B:[^"]+)","(S:[^"]+)"/g
-  )) {
-    const found = streamedSegment(resolved, segment);
-    if (found !== undefined) {
-      resolved = boundaryFilled(found.rest, boundary, found.inner);
+function withoutRawText(html: string): string {
+  let kept = "";
+  const tokens = new RegExp(TOKEN);
+  for (
+    let token = tokens.exec(html);
+    token !== null;
+    token = tokens.exec(html)
+  ) {
+    const [all, closing, name, attributes = ""] = token;
+    const tag = name?.toLowerCase();
+    if (all.startsWith("<!--")) {
+      if (BOUNDARY_MARK.test(all)) kept += all;
+      continue;
+    }
+    kept += all;
+    if (
+      tag !== undefined &&
+      closing !== "/" &&
+      RAW_TEXT.has(tag) &&
+      !/\/\s*$/.test(attributes)
+    ) {
+      // Its raw text is passed over whole, and the element closed.
+      tokens.lastIndex = rawTextEnd(html, tag, tokens.lastIndex);
+      kept += `</${tag}>`;
     }
   }
-  return resolved;
+  return kept;
+}
+
+/**
+ * The page as the browser shows it once every streamed boundary has loaded,
+ * its raw text taken out. A page that streams renders each Suspense
+ * boundary's fallback first, then its content in a hidden container, and a
+ * script (`$RC("B:0","S:0")`) moves the content into the fallback's place.
+ * The moves are read from the page's scripts, then made, in the page's
+ * order, so a boundary streamed inside another is filled once its parent is.
+ */
+function readableHtml(rendered: string): string {
+  const moves = [...rendered.matchAll(/\$R[CR]\("(B:[^"]+)","(S:[^"]+)"/g)].map(
+    ([, boundary = "", segment = ""]) => ({ boundary, segment })
+  );
+  let html = withoutRawText(rendered);
+  for (const { boundary, segment } of moves) {
+    const found = streamedSegment(html, segment);
+    if (found !== undefined) {
+      html = boundaryFilled(found.rest, boundary, found.inner);
+    }
+  }
+  return html;
+}
+
+/**
+ * A top-level heading line of Markdown prose: never a line of code, which
+ * is still kept aside, nor one holding a code block's mark.
+ */
+const TOP_HEADING = new RegExp(`^# \\S[^\\n${CODE_MARK}]*$`, "m");
+
+/**
+ * The page's first top-level heading where a reader sees it, read as the
+ * whole body is read, so a heading hidden, or in navigation or a dialog,
+ * is passed over; none where there is no such heading.
+ */
+function shownHeading(html: string, base: string): string | undefined {
+  return TOP_HEADING.exec(writtenOf(bodyOf(html), base, false).prose)?.[0];
 }
 
 /** What a rendered page's copy is made of. */
@@ -806,22 +877,20 @@ export interface RenderedCopy {
  * description, and its main content as Markdown, every address made whole
  * against `base`, the page's own address, read as the page shows once
  * every part it streams has loaded. Where the main content holds no
- * top-level heading, the page's first `<h1>` (which a page may place above
- * its `<main>`) begins it.
+ * top-level heading, the page's first shown `<h1>` (which a page may place
+ * above its `<main>`) begins it.
  */
 export function renderedCopyOf(rendered: string, base: string): RenderedCopy {
-  const html = resolvedStreaming(rendered);
+  const html = readableHtml(rendered);
   const { source, wholeBody } = mainOf(html);
-  let body = markdownOf(source, base, wholeBody);
-  if (!/^# \S/m.test(body)) {
-    const heading = /<h1[\s>][\s\S]*?<\/h1>/i.exec(html)?.[0];
-    const words =
-      heading === undefined
-        ? ""
-        : markdownOf(heading, base, false).replace(/^#\s*/, "").trim();
-    if (words !== "")
-      body = body === "" ? `# ${words}` : `# ${words}\n\n${body}`;
+  const main = writtenOf(source, base, wholeBody);
+  let { prose } = main;
+  if (!TOP_HEADING.test(prose)) {
+    const heading = shownHeading(html, base);
+    if (heading !== undefined)
+      prose = prose === "" ? heading : `${heading}\n\n${prose}`;
   }
+  const body = withCode(prose, main.codes);
   const title = titleOf(html);
   const description = descriptionOf(html);
   return {

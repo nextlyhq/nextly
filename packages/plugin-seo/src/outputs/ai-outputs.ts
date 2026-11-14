@@ -909,6 +909,24 @@ function copyHeaders(copy: FoundCopy, atPage: boolean): Record<string, string> {
 }
 
 /**
+ * The copy `request` asks for: its address, and whether it is asked for at
+ * the page's own address (by `Accept`) rather than at a `.md` address; none
+ * where it asks for no copy.
+ */
+function copyAskedFor(
+  request: Request
+): { url: URL; atPage: boolean } | undefined {
+  if (request.method !== "GET" && request.method !== "HEAD") return undefined;
+  // A page asked for to make a copy from is the page, never a copy.
+  if (request.headers.has(RENDERING_HEADER)) return undefined;
+  const url = new URL(request.url);
+  if (url.pathname.endsWith(".md")) return { url, atPage: false };
+  return prefersMarkdown(request.headers.get("accept"))
+    ? { url, atPage: true }
+    : undefined;
+}
+
+/**
  * The Proxy handler that answers a request for a page's plain-text copy:
  * a GET or HEAD of an address ending in `.md`, or of a page's own address
  * whose `Accept` header asks for Markdown over HTML. Every other request
@@ -921,14 +939,9 @@ export function plainCopyProxyHandler(
   return {
     name: "plain-text-copies",
     async handle(request, ctx) {
-      if (request.method !== "GET" && request.method !== "HEAD") return;
-      // A page asked for to make a copy from is the page, never a copy.
-      if (request.headers.has(RENDERING_HEADER)) return;
-      const url = new URL(request.url);
-      const atPage =
-        !url.pathname.endsWith(".md") &&
-        prefersMarkdown(request.headers.get("accept"));
-      if (!url.pathname.endsWith(".md") && !atPage) return;
+      const asked = copyAskedFor(request);
+      if (asked === undefined) return;
+      const { url, atPage } = asked;
       // While the address record catches up, a page may not hold its address
       // yet: the request passes to the site as if no copy were served, and a
       // catch-up that failed is tried again.

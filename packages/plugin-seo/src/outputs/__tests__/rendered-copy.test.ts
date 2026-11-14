@@ -16,7 +16,10 @@
  *   the fallback's place, as the browser shows it once loaded;
  * - a list item made of paragraphs keeps its marker, and its later blocks
  *   stay inside it;
- * - a script or style is read as raw text: markup inside it closes nothing;
+ * - a script or style is read as raw text: markup inside it closes nothing,
+ *   not even the main content's own closing tag;
+ * - a heading taken from above `<main>` is one a reader sees, and a line of
+ *   code is never taken for one;
  * - code is copied verbatim, never tidied as prose is.
  */
 import { createElement as h, Suspense, type ReactNode } from "react";
@@ -223,6 +226,35 @@ describe("a copy made from the rendered page", () => {
     );
     expect(renderedCopyOf(html, BASE).body).toBe(
       `Example:\n\n\`\`\`\n${code}\n\`\`\`\n\n> \`\`\`\n> a\n>\n> b\n> \`\`\``
+    );
+  });
+
+  it("finds the main content past a script that names its closing tag", () => {
+    const html = page(
+      "",
+      '<main><h1>Title</h1><script>const tag = "</main>";</script><p>Visible.</p></main>'
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe("# Title\n\nVisible.");
+  });
+
+  it("begins with a heading from above the main content only where a reader sees it", () => {
+    const html = page(
+      "",
+      `<div hidden><h1>Hidden promotion</h1></div>
+       <nav><h1>Menu</h1></nav>
+       <header><h1>Shown</h1></header>
+       <main><p>Visible.</p></main>`
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe("# Shown\n\nVisible.");
+  });
+
+  it("never takes a line of code for the page's heading", () => {
+    const html = page(
+      "",
+      "<header><h1>Install</h1></header><main><pre># add it\nnpm i acme</pre></main>"
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe(
+      "# Install\n\n```\n# add it\nnpm i acme\n```"
     );
   });
 });
