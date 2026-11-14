@@ -70,6 +70,7 @@ export type {
 export type {
   TransactionIsolationLevel,
   TransactionOptions,
+  TransactionBounds,
   TransactionContext,
   TransactionInFlow,
   SessionOptions,

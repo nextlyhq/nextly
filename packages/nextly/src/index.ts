@@ -584,6 +584,7 @@ export {
   type PluginPinTransaction,
   type PluginInsert,
   type PluginTransaction,
+  type PluginTransactionBounds,
   type PluginHookPointDeclaration,
   type PluginSettingsApi,
   type PluginCacheApi,
