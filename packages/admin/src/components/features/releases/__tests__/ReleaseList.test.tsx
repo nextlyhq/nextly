@@ -741,6 +741,26 @@ describe("the list's outline while its reads answer", () => {
     expect(toolbarOutlines()).toBe(0);
   });
 
+  // A revisit can keep the counts while the page is read afresh (a tab not
+  // opened before). The toolbar arrives with the table, so the outline must
+  // hold its place whenever the kept counts say a release exists, or the
+  // table lands lower than the outline drew it.
+  it("holds the toolbar's place when kept counts say a release exists and the page is still on its way", () => {
+    mocks.tabCounts.mockReturnValue(
+      counts({ upcoming: 0, attention: 2, drafts: 0, done: 0 })
+    );
+    mocks.listPage.mockReturnValue(pendingPage);
+    render(<ReleaseList />);
+    expect(toolbarOutlines()).toBe(1);
+  });
+
+  it("draws no toolbar's place when kept counts say no release exists", () => {
+    mocks.tabCounts.mockReturnValue(counts({}));
+    mocks.listPage.mockReturnValue(pendingPage);
+    render(<ReleaseList />);
+    expect(toolbarOutlines()).toBe(0);
+  });
+
   it("never draws a toolbar for a failed count and then takes it away", () => {
     const toolbars = () =>
       document.querySelectorAll('[data-slot="list-toolbar"]').length;
