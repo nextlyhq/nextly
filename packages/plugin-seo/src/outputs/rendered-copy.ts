@@ -215,9 +215,14 @@ function longestMain(html: string, base: string): string {
   let best = "";
   let depth = 0;
   let start = -1;
+  // Just past the candidate's opening tag, so its own `hidden` is judged.
+  let opened = -1;
   for (const match of html.matchAll(/<(\/?)main(?=[\s>])[^>]*>/gi)) {
     if (match[1] === "") {
-      if (depth === 0) start = match.index;
+      if (depth === 0) {
+        start = match.index;
+        opened = match.index + match[0].length;
+      }
       depth += 1;
     } else if (depth > 0) {
       depth -= 1;
@@ -225,7 +230,7 @@ function longestMain(html: string, base: string): string {
       if (
         depth === 0 &&
         end - start > best.length &&
-        !leftOutAt(html, start, base)
+        !leftOutAt(html, opened, base)
       ) {
         best = html.slice(start, end);
       }
@@ -430,12 +435,18 @@ class CopyWriter {
     if (this.copy.length > 0 && !this.copy.endsWith("\n")) this.copy.add("\n");
   }
 
+  /** Whether what is written now is in a table cell, on its row's line. */
+  private inCell(): boolean {
+    return this.inside("td") || this.inside("th");
+  }
+
   /** Starts a block: a blank line between it and what came before. */
   newBlock(): void {
     if (this.inside("table")) {
       // A table row is one line: blocks in a cell are kept apart by a space.
-      const inCell = this.inside("td") || this.inside("th");
-      if (inCell && !/[\s|]$/.test(this.copy.last(1))) this.copy.add(" ");
+      if (this.inCell() && !/[\s|]$/.test(this.copy.last(1))) {
+        this.copy.add(" ");
+      }
       return;
     }
     this.copy.trimEnd();
@@ -515,7 +526,9 @@ class CopyWriter {
   /** What an element that holds nothing writes: a break, a rule or an image. */
   private empty(tag: string, attributes: string): void {
     if (tag === "br") {
-      this.newLine();
+      // A table row is one line: a break in a cell is a space.
+      if (this.inCell()) this.space();
+      else this.newLine();
     } else if (tag === "hr") {
       this.newBlock();
       this.copy.add("---");

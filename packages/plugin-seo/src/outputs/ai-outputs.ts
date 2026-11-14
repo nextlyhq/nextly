@@ -543,14 +543,14 @@ async function publicHead(
 
 /**
  * The language and kept path of each page of `candidates`, paths on `url`'s
- * host, in their order. A path is kept without its trailing slash, as the
- * record keys it.
+ * host, in their order, with the path as the site serves it. A path is kept
+ * without its trailing slash, as the record keys it.
  */
 async function pageAddressesAsked(
   url: URL,
   candidates: readonly string[]
-): Promise<{ locale: string; path: string }[]> {
-  const asked: { locale: string; path: string }[] = [];
+): Promise<{ locale: string; path: string; served: string }[]> {
+  const asked: { locale: string; path: string; served: string }[] = [];
   for (const candidate of candidates) {
     const pageUrl = new URL(url.href);
     pageUrl.pathname = candidate;
@@ -561,6 +561,8 @@ async function pageAddressesAsked(
     asked.push({
       locale,
       path: path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path,
+      // As the site serves it, its language prefix kept.
+      served: bare(candidate),
     });
   }
   return asked;
@@ -746,16 +748,21 @@ async function pageAsked(
   const site = (await siteOriginFor(url.origin, ctx, config)) ?? url.origin;
   for (const address of await pageAddressesAsked(url, candidates)) {
     const own = originOf(await servedAt("/", address.locale));
-    const page = await listedPageAt(ctx, address.path, address.locale, {
-      origin: own === url.origin ? url.origin : site,
-      readRules: config.readRules,
-      ...(config.codeRoutes === undefined
-        ? {}
-        : { codeRoutes: config.codeRoutes }),
-      ...(config.collections === undefined
-        ? {}
-        : { collections: config.collections }),
-    });
+    const { path, locale, served } = address;
+    const page = await listedPageAt(
+      ctx,
+      { path, language: locale, served },
+      {
+        origin: own === url.origin ? url.origin : site,
+        readRules: config.readRules,
+        ...(config.codeRoutes === undefined
+          ? {}
+          : { codeRoutes: config.codeRoutes }),
+        ...(config.collections === undefined
+          ? {}
+          : { collections: config.collections }),
+      }
+    );
     if (page !== null && asksFor(page, url, atPage)) return page;
   }
   return null;

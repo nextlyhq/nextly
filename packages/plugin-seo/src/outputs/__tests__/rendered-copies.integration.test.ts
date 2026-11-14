@@ -16,7 +16,9 @@
  *   rendered;
  * - where the site names no address of its own, no page is rendered, and
  *   neither llms.txt nor a page's head links a rendered copy;
- * - a page built in code links its copy from its head.
+ * - a page built in code links its copy from its head;
+ * - on a site whose addresses name their language, a page built in code is
+ *   copied at the address it is served at, in every language.
  */
 process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
@@ -60,6 +62,27 @@ writeFileSync(
   })
 );
 
+/**
+ * A production build of a site whose addresses name their language, with
+ * one page built in code served in each: `/en/pricing` and `/de/pricing`.
+ */
+const LANGUAGE_BUILD = mkdtempSync(join(tmpdir(), "seo-rendered-copies-de-"));
+mkdirSync(join(LANGUAGE_BUILD, "server"), { recursive: true });
+writeFileSync(
+  join(LANGUAGE_BUILD, "server/app-paths-manifest.json"),
+  JSON.stringify({ "/[locale]/pricing/page": "app/[locale]/pricing/page.js" })
+);
+writeFileSync(
+  join(LANGUAGE_BUILD, "prerender-manifest.json"),
+  JSON.stringify({
+    version: 4,
+    routes: {
+      "/en/pricing": { srcRoute: "/[locale]/pricing" },
+      "/de/pricing": { srcRoute: "/[locale]/pricing" },
+    },
+  })
+);
+
 let current: TestNextly | undefined;
 
 afterEach(async () => {
@@ -70,6 +93,7 @@ afterEach(async () => {
 
 afterAll(() => {
   rmSync(BUILD, { recursive: true, force: true });
+  rmSync(LANGUAGE_BUILD, { recursive: true, force: true });
 });
 
 const open = { read: () => true };
@@ -77,17 +101,27 @@ const open = { read: () => true };
 /**
  * The site booted; `named` false, it names no address of its own (no
  * `baseUrl`, no production address), so its listed addresses are the
- * request's host.
+ * request's host; `languages`, it is in English and German, each named in
+ * its addresses, and built as {@link LANGUAGE_BUILD}.
  */
-async function boot(dialect: TestDialect, named = true): Promise<TestNextly> {
+async function boot(
+  dialect: TestDialect,
+  { named = true, languages = false } = {}
+): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
     seedPublic: true,
+    ...(languages
+      ? {
+          localization: { locales: ["en", "de"], defaultLocale: "en" },
+          languageAddresses: { by: "prefix" as const },
+        }
+      : {}),
     plugins: [
       seoPlugin({
         collections: ["landings", "notes"],
         ...(named ? { baseUrl: SITE } : {}),
-        nextBuildDir: BUILD,
+        nextBuildDir: languages ? LANGUAGE_BUILD : BUILD,
       }),
     ],
     collections: [
@@ -211,7 +245,7 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("renders no page, and links no rendered copy, where the site names no address of its own", async () => {
-      await boot(dialect, false);
+      await boot(dialect, { named: false });
       const asked = renderedSite({
         "/pricing": html("Pricing", "<h1>Pricing</h1><p>Words.</p>"),
       });
@@ -295,6 +329,27 @@ describe.each(getConfiguredTestDialects())(
           })
         ).body
       ).toBe("the page");
+    });
+
+    it("copies a page built in code at the address it is served at, whatever language it names", async () => {
+      await boot(dialect, { languages: true });
+      for (const path of ["/en/pricing", "/de/pricing"]) {
+        await seoMetadata(path, { metadata: { title: "Pricing" } });
+      }
+      renderedSite({
+        "/en/pricing": html("Pricing", "<h1>Pricing</h1><p>Starter is $9.</p>"),
+        "/de/pricing": html(
+          "Preise",
+          "<h1>Preise</h1><p>Starter kostet 9 $.</p>"
+        ),
+      });
+
+      expect((await ask("/en/pricing.md")).body).toContain(
+        "# Pricing\n\nStarter is $9.\n"
+      );
+      expect((await ask("/de/pricing.md")).body).toContain(
+        "# Preise\n\nStarter kostet 9 $.\n"
+      );
     });
   }
 );

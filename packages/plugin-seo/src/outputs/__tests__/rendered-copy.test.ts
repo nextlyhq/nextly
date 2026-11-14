@@ -22,7 +22,9 @@
  *   code is never taken for one;
  * - code is copied verbatim, never tidied as prose is, its own blank lines
  *   and trailing spaces kept;
- * - a `<main>` a reader never sees is not the page's main content;
+ * - a `<main>` a reader never sees, hidden itself or by what holds it, is
+ *   not the page's main content;
+ * - a line break in a table cell keeps the cell's row on one line;
  * - prose that Markdown would read again as a block or a character
  *   reference is escaped;
  * - a list nested in a numbered item is indented to that item's content, at
@@ -343,5 +345,21 @@ describe("a copy made from the rendered page", () => {
     const copy = renderedCopyOf(page("", `<main>${words}</main>`), BASE);
     expect(performance.now() - started).toBeLessThan(1000);
     expect(copy.body.split("\n\n")).toHaveLength(8000);
+  });
+
+  it("never takes a main hidden itself for the page's content, however long", () => {
+    const html = page(
+      "",
+      "<main><h1>Shown</h1><p>Visible</p></main><main hidden><h1>Hidden longer title</h1><p>Long hidden words should not win</p></main>"
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe("# Shown\n\nVisible");
+  });
+
+  it("keeps a table row on one line where a cell holds a line break", () => {
+    const html = page(
+      "",
+      "<main><table><tr><td>A<br>B</td><td>C</td></tr></table></main>"
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe("| A B | C |\n| --- | --- |");
   });
 });
