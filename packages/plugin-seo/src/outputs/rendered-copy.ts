@@ -645,6 +645,8 @@ class CopyWriter {
     const open = this.stack[at];
     this.stack.length = at;
     if (open === undefined || open.skip || this.skipping()) return;
+    // Code holds its text as written: no element inside it adds Markdown.
+    if (this.inside("pre") || this.inside("code")) return;
     this.closerFor(tag)(open);
   }
 
@@ -666,14 +668,12 @@ class CopyWriter {
     }
     const mark = EMPHASIS[tag];
     if (mark !== undefined) return open => this.closeEmphasis(mark, open);
-    if (tag === "code" && !this.inside("pre")) {
-      return open => this.closeCode(this.taken(open));
-    }
     if (tag === "th" || (tag === "td" && this.headerRow())) {
       return open => this.closeHeaderCell(this.taken(open));
     }
     const closers: Record<string, (open: Open) => void> = {
       a: open => this.closeLink(open, this.taken(open)),
+      code: open => this.closeCode(this.taken(open)),
       pre: open => this.closePre(this.taken(open)),
       blockquote: open => this.closeQuote(this.taken(open)),
       li: open => this.closeItem(open, this.taken(open)),
@@ -741,7 +741,10 @@ class CopyWriter {
   /** Inline code, fenced in backticks. */
   private closeCode(inner: string): void {
     const code = inner.trim();
-    if (code !== "") this.copy.add(inlineCode(code));
+    if (code === "") return;
+    // In a table a bar ends the cell, inside code too, unless escaped.
+    const span = inlineCode(code);
+    this.copy.add(this.inCell() ? span.replaceAll("|", "\\|") : span);
   }
 
   /** Emphasis, marked where it holds words on one line. */

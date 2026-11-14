@@ -22,6 +22,8 @@
  *   code is never taken for one;
  * - code is copied verbatim, never tidied as prose is, its own blank lines
  *   and trailing spaces kept, and a line break drawn with `<br>` kept;
+ * - markup inside code adds no Markdown to it, and a bar in code in a table
+ *   cell is escaped, so it does not end the cell;
  * - a `<main>` a reader never sees, hidden itself or by what holds it, is
  *   not the page's main content;
  * - a line break in a table cell keeps the cell's row on one line;
@@ -370,6 +372,26 @@ describe("a copy made from the rendered page", () => {
     );
     expect(renderedCopyOf(html, BASE).body).toBe(
       "```\nfirst\nsecond\n\n  third\n```"
+    );
+  });
+
+  it("adds no Markdown to code for the markup inside it", () => {
+    const html = page(
+      "",
+      "<main><pre><code>const <strong>value</strong> = 1;</code></pre><p>Run <code><strong>acme</strong> <em>init</em></code>.</p></main>"
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe(
+      "```\nconst value = 1;\n```\n\nRun `acme init`."
+    );
+  });
+
+  it("escapes a bar in code in a table cell, so the cell holds all of it", () => {
+    const html = page(
+      "",
+      "<main><table><tr><th>Command</th></tr><tr><td><code>echo hello | cat</code></td></tr></table><p><code>a | b</code></p></main>"
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe(
+      "| Command |\n| --- |\n| `echo hello \\| cat` |\n\n`a | b`"
     );
   });
 });
