@@ -15,7 +15,7 @@
  * declared side-effect free by omission.
  */
 import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -46,13 +46,16 @@ function specifiersOf(code: string): string[] {
   return [...code.matchAll(/\bfrom\s*"([^"]+)"/g)].map(match => match[1]);
 }
 
-/** Every built module of the package, relative to it, with `./`. */
+/**
+ * Every built module of the package, relative to it, with `./` and `/` on
+ * every system, as `sideEffects` spells them: Windows joins a path with `\`.
+ */
 function builtModules(dir = DIST): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry =>
     entry.isDirectory()
       ? builtModules(join(dir, entry.name))
       : entry.name.endsWith(".mjs")
-        ? [`./${relative(PACKAGE, join(dir, entry.name))}`]
+        ? [`./${relative(PACKAGE, join(dir, entry.name)).split(sep).join("/")}`]
         : []
   );
 }

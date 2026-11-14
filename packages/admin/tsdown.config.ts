@@ -7,6 +7,7 @@ import { defineConfig, type Rolldown } from "tsdown";
 
 import {
   NOTICES_FILE,
+  packageFileOf,
   thirdPartyNotices,
 } from "./scripts/third-party-notices.mjs";
 
@@ -135,10 +136,12 @@ function recordedModuleName(id: string): string {
   // A module the bundler made itself (its runtime helpers), named apart from
   // a package's file or the admin's own source.
   if (id.startsWith("\0")) return `virtual:${id.slice(1)}`;
-  const packages = id.lastIndexOf("/node_modules/");
-  if (packages !== -1) {
-    return id.slice(packages + "/node_modules/".length);
-  }
+  // Read by the notices' own reading of a module's package, which takes a
+  // Windows path's backslashes as `/`: matched against `/node_modules/` as
+  // written, a Windows build named every package's module by its path from
+  // here (`../../node_modules/...`), and the record held no package.
+  const inPackage = packageFileOf(id);
+  if (inPackage !== null) return inPackage;
   return path.relative(__dirname, id).split(path.sep).join("/");
 }
 
