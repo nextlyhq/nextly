@@ -184,6 +184,23 @@ describeEachDialect("a Builder save's relationship keys", dialect => {
     ]);
   });
 
+  it("plans no key for a relationship the old definition already declared", async () => {
+    // The definition declares the relationship on both sides: a field group made before the fields
+    // inside its groups with no name were stored, whose table has no column for it yet. Like a
+    // relationship the registry already records whose column has no key, it is planned none, so
+    // the save that adds its column adds only the column, as a create of the field group would.
+    const declared = [
+      ...recorded,
+      laidOut([relationship("reviewer", { relationTo: "editors" })]),
+    ];
+    const { keys } = await service.writerRelations(
+      "dc_notes",
+      declared,
+      declared
+    );
+    expect(keys.after.flatMap(key => key.columns)).toEqual(["author"]);
+  });
+
   it("points a key inside a group with no name at the table the registry records", async () => {
     // The editors' table as the registry records it, under a name of its own, as a renamed
     // collection keeps its table: only the registry can say so, and a key guessed from the slug

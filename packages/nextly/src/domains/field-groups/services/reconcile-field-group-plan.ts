@@ -1179,11 +1179,16 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
   const unexplainedRemovals = removed.filter(
     entry => !displacedRemovals.has(entry.fieldName)
   );
-  if (unexplainedRemovals.length > 0 && adopted.length > 0) {
-    const gone = unexplainedRemovals.map(entry => `"${entry.fieldName}"`);
+  // A field inside a group with no name that awaits its column is as much a candidate: the table
+  // may have been made before such fields were stored, or the column may have been renamed to the
+  // unclaimed one, and the schema cannot tell which. Kept or awaited silently, the renamed column
+  // would be adopted under a guessed type beside a field waiting for an empty replacement.
+  const unexplained = [...unexplainedRemovals, ...awaitingColumns];
+  if (unexplained.length > 0 && adopted.length > 0) {
+    const gone = unexplained.map(entry => `"${entry.fieldName}"`);
     const appeared = adopted.map(entry => `"${entry.columnName}"`);
     blockers.push({
-      fieldName: unexplainedRemovals[0]?.fieldName ?? "",
+      fieldName: unexplained[0]?.fieldName ?? "",
       columnName: adopted[0]?.columnName ?? "",
       kind: "ambiguous-rename",
       detail: `${gone.join(", ")} lost ${gone.length === 1 ? "its column" : "their columns"} while ${appeared.join(", ")} ${appeared.length === 1 ? "is" : "are"} described by no field, which is equally a rename and a drop-plus-add; rename the field in the definition to keep its configuration, or delete it to accept the column as new.`,

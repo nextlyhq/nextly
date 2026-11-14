@@ -1336,6 +1336,28 @@ describe("planFieldGroupReconcile — fields inside a group with no name", () =>
     expect(result.fields).toEqual(fields);
   });
 
+  it("refuses a column awaited inside the group beside one no field describes", () => {
+    // `note` may have been renamed to `memo`, or never made: the schema cannot say which, so the
+    // repair refuses rather than adopt `memo` under a guessed type beside a field left waiting.
+    const fields = stored();
+    const result = plan({
+      storedFields: fields,
+      liveMain: liveTableFor([
+        { name: "title", type: "text" },
+        { name: "memo", type: "text" },
+        { name: "count", type: "number", required: true },
+      ]),
+    });
+
+    expect(result.blockers).toEqual([
+      expect.objectContaining({
+        kind: "ambiguous-rename",
+        fieldName: "note",
+        columnName: "memo",
+      }),
+    ]);
+  });
+
   it("repairs a field inside the group in its place", () => {
     const fields = stored();
     // The live `count` column takes nulls, so the field it stores is no longer required.
