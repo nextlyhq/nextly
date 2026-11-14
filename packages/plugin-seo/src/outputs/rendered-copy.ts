@@ -17,6 +17,7 @@
  *
  * @module outputs/rendered-copy
  */
+import { fencedCode, inlineCode } from "./plain-copy";
 
 /** Elements that hold no content of their own and are never closed. */
 const VOID: ReadonlySet<string> = new Set([
@@ -424,24 +425,11 @@ class CopyWriter {
           : label);
     } else if (tag === "pre") {
       const code = inner.replace(/^\n+|\s+$/g, "");
-      const longest = Math.max(
-        0,
-        ...(code.match(/`+/g) ?? []).map(run => run.length)
-      );
-      const fence = "`".repeat(Math.max(3, longest + 1));
-      this.out = `${before}${fence}\n${code}\n${fence}`;
+      this.out = `${before}${fencedCode(code)}`;
       this.newBlock();
     } else if (tag === "code" && !this.inside("pre")) {
       const code = inner.trim();
-      const longest = Math.max(
-        0,
-        ...(code.match(/`+/g) ?? []).map(run => run.length)
-      );
-      const fence = "`".repeat(longest + 1);
-      this.out =
-        code === ""
-          ? before
-          : `${before}${fence}${/^`|`$/.test(code) ? ` ${code} ` : code}${fence}`;
+      this.out = code === "" ? before : `${before}${inlineCode(code)}`;
     } else if (EMPHASIS[tag] !== undefined) {
       const mark = EMPHASIS[tag];
       const words = inner.trim();
