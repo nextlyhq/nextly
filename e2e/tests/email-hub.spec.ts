@@ -172,11 +172,14 @@ test("links a form's notification to its email in the hub", async ({
   await formPage("Settings").click();
   await page.getByRole("textbox", { name: "Name" }).fill("E2E Email Link");
   await formPage("Notifications").click();
+  // Add notification offers presets; the team's opens the new notification
+  // on its own page, with the form still unsaved.
   await page.getByRole("button", { name: "Add notification" }).first().click();
+  await page.getByRole("menuitem", { name: /^Notify your team/ }).click();
+  await expect(page).toHaveURL(/[?&]section=/);
 
-  await page.getByRole("combobox", { name: "Email template" }).click();
-  // The first template after "Select a template".
-  await page.getByRole("option").nth(1).click();
+  await page.getByRole("combobox", { name: "Message" }).click();
+  await page.getByRole("option").first().click();
 
   const link = page.getByRole("link", { name: /in Email/ });
   await expect(link).toBeVisible();
