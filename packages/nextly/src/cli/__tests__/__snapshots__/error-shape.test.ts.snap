@@ -847,6 +847,13 @@ exports[`each code, as a command ends with it > LOCALIZATION_NOT_PROVISIONED 1`]
   Docs: https://nextlyhq.com/docs/cli/errors/localization-not-provisioned  (LOCALIZATION_NOT_PROVISIONED)"
 `;
 
+exports[`each code, as a command ends with it > LOCK_HELD_BY_THIS_PROCESS 1`] = `
+"✗ \`20261020_120000_add_posts.sql\` stopped: the database is locked by this process, nothing changed.
+  Why:  A write made inside its transaction, on another connection to the same SQLite database, waited for the write lock that transaction holds. The transaction lets the lock go only once that write is done, so no wait could free it: it was not tried again, and the transaction was rolled back.
+  Next: Make that write through the transaction's own handle, or after it commits. A second connection to the same SQLite file in one process, such as a second adapter or an instance booted beside a command run in-process, is what makes this happen.
+  Docs: https://nextlyhq.com/docs/cli/errors/lock-held-by-this-process  (LOCK_HELD_BY_THIS_PROCESS)"
+`;
+
 exports[`each code, as a command ends with it > MEDIA_APPLY_OUTSIDE_PROJECT 1`] = `
 "✗ Nothing was changed: --apply was run from outside /home/you/app.
   Why:  The database settings were read before --cwd named /home/you/app, so they may be another project's.

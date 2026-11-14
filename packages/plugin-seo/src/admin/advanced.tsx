@@ -21,7 +21,7 @@ import {
 import { Check, ChevronRight, Lock, TriangleAlert } from "lucide-react";
 import { useEffect, useId, useState, type ReactNode } from "react";
 
-import type { SeoAnswer } from "../resolver/order";
+import type { SeoAnswer, Sourced } from "../resolver/order";
 import {
   isStructuredDataTypeKey,
   structuredDataChoiceText,
@@ -33,10 +33,13 @@ import { thingsToFix } from "../tab/problems";
 
 import { DISPLAY_FIELDS, DisplayRows } from "./display-rows";
 import {
+  AutomaticSource,
   Chip,
   cx,
+  describeSource,
   inSentence,
   Note,
+  type SourcedValue,
   type SourceNames,
   SourceRow,
 } from "./parts";
@@ -45,6 +48,7 @@ import { ShareImageRow } from "./share-image-row";
 import {
   isTyped,
   typedText,
+  unsharedAnswer,
   type ChosenImage,
   type SeoPanelField,
   type SeoPanelValues,
@@ -579,15 +583,87 @@ function AddressCheck({
   );
 }
 
+/**
+ * The source a shared link's text has of its own while none is typed for it,
+ * or `undefined` where a shared link uses the Google one. The one decision the
+ * empty shared fields and the switch's sentence both read.
+ */
+function ownSharedSource(
+  shared: Sourced<string> | undefined,
+  google: Sourced<string> | undefined
+): Sourced<string> | undefined {
+  if (shared === undefined) return undefined;
+  return shared.value === google?.value && shared.from === google.from
+    ? undefined
+    : shared;
+}
+
+/**
+ * The switch's sentence: what shared links use for their title while none is
+ * typed for them, the Google title or the one the route, template or design
+ * sets for them, named as the empty field's source line names it.
+ */
+function sharedTitleHelp(
+  own: Sourced<string> | undefined,
+  names: SourceNames
+): string {
+  const rest =
+    " Turn this on only if you want a different one on LinkedIn, Slack and others.";
+  const source =
+    own === undefined ? undefined : describeSource(own, "socialTitle", names);
+  if (source?.kind === "code") {
+    return `Shared links use the title this page's route sets for them.${rest}`;
+  }
+  if (source?.kind === "template") {
+    const drawer = source.design ? "design" : "template";
+    return `Shared links use the title this page's ${drawer} sets for them.${rest}`;
+  }
+  return `Shared links use the Google title.${rest}`;
+}
+
+/**
+ * Where an empty shared title or description comes from: the Google one,
+ * where a shared link uses the same, and else its own source, named as every
+ * automatic value's is.
+ */
+function SharedSource({
+  shared,
+  google,
+  googleName,
+  value,
+  names,
+}: {
+  shared: Sourced<string> | undefined;
+  google: Sourced<string> | undefined;
+  googleName: string;
+  value: SourcedValue;
+  names: SourceNames;
+}): ReactNode {
+  const own = ownSharedSource(shared, google);
+  if (own === undefined) {
+    return (
+      <>
+        <Chip>Automatic</Chip>
+        <span>same as the {googleName}</span>
+      </>
+    );
+  }
+  return <AutomaticSource sourced={own} value={value} names={names} />;
+}
+
 /** A title for shared links that differs from the Google title. */
 function SharedTitleRow({
   values,
-  answer,
   context,
+  names,
   writable,
   errors,
   onSet,
 }: AdvancedProps): ReactNode {
+  // What a shared link uses while its own text is empty, which the empty
+  // fields show and name: not always the Google title, since the route or the
+  // template may set text for shared links of its own.
+  const unshared = unsharedAnswer(context, values);
   const has = (name: string) =>
     context === undefined || context.fields.includes(name);
   const typedNow = () =>
@@ -612,7 +688,10 @@ function SharedTitleRow({
     <Row
       error={errors.socialTitle ?? errors.socialDescription}
       label={label}
-      help="Shared links use the Google title. Turn this on only if you want a different one on LinkedIn, Slack and others."
+      help={sharedTitleHelp(
+        ownSharedSource(unshared?.socialTitle, unshared?.title),
+        names
+      )}
       control={
         <Switch
           aria-label={label}
@@ -635,7 +714,7 @@ function SharedTitleRow({
               <Input
                 autoFocus
                 aria-label="Title when shared"
-                placeholder={answer?.title?.value ?? ""}
+                placeholder={unshared?.socialTitle?.value ?? ""}
                 value={typed}
                 disabled={!writable}
                 onChange={event => write("socialTitle", event.target.value)}
@@ -644,10 +723,13 @@ function SharedTitleRow({
                 {isTyped(typed) ? (
                   <Chip kind="typed">Typed for this page</Chip>
                 ) : (
-                  <>
-                    <Chip>Automatic</Chip>
-                    <span>same as the Google title</span>
-                  </>
+                  <SharedSource
+                    shared={unshared?.socialTitle}
+                    google={unshared?.title}
+                    googleName="Google title"
+                    value="socialTitle"
+                    names={names}
+                  />
                 )}
               </SourceRow>
             </>
@@ -657,7 +739,7 @@ function SharedTitleRow({
               <Textarea
                 rows={2}
                 aria-label="Description when shared"
-                placeholder={answer?.description?.value ?? ""}
+                placeholder={unshared?.socialDescription?.value ?? ""}
                 value={typedText(values.socialDescription)}
                 disabled={!writable}
                 onChange={event =>
@@ -668,10 +750,13 @@ function SharedTitleRow({
                 {isTyped(values.socialDescription) ? (
                   <Chip kind="typed">Typed for this page</Chip>
                 ) : (
-                  <>
-                    <Chip>Automatic</Chip>
-                    <span>same as the Google description</span>
-                  </>
+                  <SharedSource
+                    shared={unshared?.socialDescription}
+                    google={unshared?.description}
+                    googleName="Google description"
+                    value="description"
+                    names={names}
+                  />
                 )}
               </SourceRow>
             </>

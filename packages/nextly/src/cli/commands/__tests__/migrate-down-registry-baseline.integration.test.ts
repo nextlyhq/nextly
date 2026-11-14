@@ -556,6 +556,7 @@ describe.each(getConfiguredTestDialects())(
       missingTables: [],
       missingColumns: [],
       unregistered: [],
+      behindSnapshot: [],
       unreadable: [],
     };
 

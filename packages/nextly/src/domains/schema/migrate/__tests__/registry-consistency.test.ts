@@ -238,6 +238,7 @@ describe("registryDisagreementLines", () => {
         missingTables: [],
         missingColumns: [],
         unregistered: [],
+        behindSnapshot: [],
         unreadable: [],
       })
     ).toEqual([]);
@@ -257,6 +258,7 @@ describe("registryDisagreementLines", () => {
           },
         ],
         unregistered: [{ kind: "single", slug: "c" }],
+        behindSnapshot: [],
         unreadable: [],
       })
     ).toEqual([
@@ -273,10 +275,49 @@ describe("registryDisagreementLines", () => {
         missingTables: [],
         missingColumns: [],
         unregistered: [{ kind: "collection", slug: "c" }],
+        behindSnapshot: [],
         unreadable: [],
       })
     ).toEqual([
       'collection "c" is declared in the configuration but has no registry row.',
+    ]);
+  });
+
+  it("names each row behind the newest applied migration, saying to run nextly migrate", () => {
+    expect(
+      registryDisagreementLines({
+        missingTables: [],
+        missingColumns: [],
+        unregistered: [],
+        behindSnapshot: [
+          {
+            kind: "collection",
+            slug: "posts",
+            row: "differs",
+            missingFields: ["seo"],
+            extraFields: ["old"],
+          },
+          {
+            kind: "fieldGroup",
+            slug: "meta",
+            row: "differs",
+            missingFields: [],
+            extraFields: [],
+          },
+          {
+            kind: "single",
+            slug: "home",
+            row: "missing",
+            missingFields: [],
+            extraFields: [],
+          },
+        ],
+        unreadable: [],
+      })
+    ).toEqual([
+      'collection "posts": its registry row differs from the newest applied migration\'s record of it (missing field "seo", field "old" not in the record). Run `nextly migrate` to bring it back.',
+      'field group "meta": its registry row differs from the newest applied migration\'s record of it (its settings differ). Run `nextly migrate` to bring it back.',
+      'single "home": it has no registry row, though the newest applied migration records it. Run `nextly migrate` to write it.',
     ]);
   });
 
@@ -286,6 +327,7 @@ describe("registryDisagreementLines", () => {
         missingTables: [],
         missingColumns: [],
         unregistered: [],
+        behindSnapshot: [],
         unreadable: ["fieldGroup"],
       })
     ).toEqual([

@@ -12,6 +12,7 @@
 import { sql, type SQL } from "drizzle-orm";
 
 import type { SupportedDialect } from "../../../database/schema-registry";
+import { NextlyError } from "../../../errors/nextly-error";
 
 /** How deep the `cause` chain is read: past an ORM's and an adapter's wrappers, never forever. */
 const MAX_DEPTH = 6;
@@ -65,15 +66,25 @@ function linkEndedWaiting(
  * or query_canceled where the try's watchdog fired; on MySQL ER_LOCK_WAIT_TIMEOUT, or
  * ER_QUERY_INTERRUPTED where the watchdog fired; on SQLite SQLITE_BUSY and its extended codes.
  * The code is looked for down the `cause` chain, at most six links deep.
+ *
+ * Never for a stop that names this process as the lock's holder (`ownWriteLockError`): it carries
+ * the busy answer as its cause, yet no other party holds what it waited for, so no later try could
+ * get it. It reaches the caller at once, as it is, rather than as a table another party holds.
  */
 export function endedWaiting(
   error: unknown,
   dialect: SupportedDialect,
   watchdogFired: boolean
 ): boolean {
-  return causeChain(error).some(link =>
-    linkEndedWaiting(link, dialect, watchdogFired)
-  );
+  const links = causeChain(error);
+  if (
+    links.some(link =>
+      NextlyError.isCode(link, "NEXTLY_LOCK_HELD_BY_THIS_PROCESS")
+    )
+  ) {
+    return false;
+  }
+  return links.some(link => linkEndedWaiting(link, dialect, watchdogFired));
 }
 
 /** One link of an error's `cause` chain, as the drivers' codes are read from it. */
