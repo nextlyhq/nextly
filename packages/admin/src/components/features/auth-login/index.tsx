@@ -28,7 +28,7 @@ import {
   FormMessage,
 } from "@admin/components/ui/form";
 import { Link } from "@admin/components/ui/link";
-import { PUBLIC_ROUTE_PATHS, ROUTES } from "@admin/constants/routes";
+import { ROUTES } from "@admin/constants/routes";
 import { useAppName } from "@admin/context/providers/BrandingProvider";
 import { useApi } from "@admin/hooks/useApi";
 import { useAuthRefusal } from "@admin/hooks/useAuthRefusal";
@@ -37,6 +37,7 @@ import { useRegistrationOpen } from "@admin/hooks/useSetupStatus";
 import { getCsrfToken } from "@admin/lib/api/csrf";
 import { apiErrorMessage, type ApiError } from "@admin/lib/api/parseApiError";
 import type { ActionResponse } from "@admin/lib/api/response-types";
+import { afterSignInAddress } from "@admin/lib/auth/return-address";
 import { rememberSignedInHere } from "@admin/lib/device-memory/device-memory";
 
 import {
@@ -78,20 +79,6 @@ function hasPreFormUi(authUi: ReturnType<typeof useAuthUi>): boolean {
 }
 
 type SignInValues = z.infer<typeof formSchema>;
-
-/**
- * Where a finished sign-in lands. Drawn at the sign-in page (or another public
- * page), the dashboard; drawn in place of a screen the visitor asked for, that
- * screen, reloaded now that there is a session. Either way an address on this
- * page's own origin, never one taken from the query string.
- */
-function afterSignInAddress(): string {
-  const { pathname, search } = window.location;
-  const onPublicPage = (PUBLIC_ROUTE_PATHS as readonly string[]).includes(
-    pathname.replace(/\/$/, "")
-  );
-  return onPublicPage ? ROUTES.DASHBOARD : `${pathname}${search}`;
-}
 
 /**
  * What the form says while the server has not answered yet: nothing for the

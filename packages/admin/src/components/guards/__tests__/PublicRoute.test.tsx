@@ -27,6 +27,11 @@ vi.mock("@admin/lib/navigation", () => ({
   navigateTo: (path: string) => mockNavigateTo(path),
 }));
 
+const mockReturnWithSession = vi.fn();
+vi.mock("@admin/lib/auth/return-address", () => ({
+  returnWithSession: () => mockReturnWithSession(),
+}));
+
 import { PublicRoute } from "../PublicRoute";
 
 interface Deferred<T> {
@@ -52,6 +57,7 @@ function renderGuard() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockReturnWithSession.mockReset();
 });
 
 describe("PublicRoute", () => {
@@ -110,6 +116,34 @@ describe("PublicRoute", () => {
 
     // The page was drawn before the answer came; the answer moves the visitor.
     expect(mockNavigateTo).toHaveBeenCalledWith(ROUTES.DASHBOARD);
+  });
+
+  it("returns an authenticated visitor to the address the sign-in page was given", async () => {
+    // A page the browser opened, refused for an expired session, sent it here
+    // to refresh it; the session is good again, so the browser goes back.
+    mockCheckSetupStatus.mockResolvedValue(true);
+    mockIsAuthenticated.mockResolvedValue(true);
+    mockReturnWithSession.mockReturnValue(true);
+
+    renderGuard();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockReturnWithSession).toHaveBeenCalledTimes(1);
+    expect(mockNavigateTo).not.toHaveBeenCalled();
+  });
+
+  it("asks for no return without a session", async () => {
+    mockCheckSetupStatus.mockResolvedValue(true);
+    mockIsAuthenticated.mockResolvedValue(false);
+
+    renderGuard();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mockReturnWithSession).not.toHaveBeenCalled();
   });
 
   it("sends an unconfigured installation to setup", async () => {

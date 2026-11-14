@@ -109,6 +109,10 @@
       "types": "./dist/collections/fields/field-label.d.mts",
       "import": "./dist/collections/fields/field-label.mjs"
     },
+    "./admin-path": {
+      "types": "./dist/auth/redirect/sanitize-admin-path.d.mts",
+      "import": "./dist/auth/redirect/sanitize-admin-path.mjs"
+    },
     "./media-categories": {
       "types": "./dist/domains/media/media-categories.d.mts",
       "import": "./dist/domains/media/media-categories.mjs"

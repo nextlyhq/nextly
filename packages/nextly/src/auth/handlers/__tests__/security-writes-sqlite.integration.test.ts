@@ -301,7 +301,7 @@ describe.each(SURFACES)(
       expect(writeResolvedAt).toBeGreaterThanOrEqual(threwAt);
     });
 
-    it("a theft response's revocations survive the plugin's rollback", async () => {
+    it("deleting a session and all of an account's sessions survives the plugin's rollback", async () => {
       const { t, pluginDb, userId, db } = await boot(surface);
       await storeRefreshRow(db, userId, "presented");
       await storeRefreshRow(db, userId, "sibling");
@@ -309,7 +309,8 @@ describe.each(SURFACES)(
         t.getService as unknown as (name: string) => unknown
       );
 
-      // The two deletes the refresh handler makes on a hard binding mismatch.
+      // The two refresh-row deletes the auth deps offer: one session, then
+      // every session the account holds.
       const { writeResolvedAt, threwAt } = await duringPluginTransaction(
         pluginDb,
         150,
