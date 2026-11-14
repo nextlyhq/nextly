@@ -157,6 +157,7 @@ import {
 } from "../../domains/schema/migrate/reconcile-metadata";
 import {
   findRegistryDisagreements,
+  migrationsToCompare,
   registryDisagreementLines,
 } from "../../domains/schema/migrate/registry-consistency";
 import {
@@ -909,6 +910,13 @@ export async function runMigrate(
           dialect,
           declared: resolvedSchema.entities,
           logger,
+          // The rows this run wrote, against the record it wrote them from:
+          // a row still behind it is one the run could not write.
+          migrations: migrationsToCompare(
+            adapter as unknown as DrizzleAdapter,
+            dialect,
+            appMigrationsDir
+          ),
         })
       )) {
         logger.warn(line);
