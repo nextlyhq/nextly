@@ -28,7 +28,6 @@ import { ChevronRight, CircleCheck, Info, Lock, Search } from "lucide-react";
 import { useId, useRef, useState, type JSX, type ReactNode } from "react";
 
 import { IMPORT_PAGE_HREF } from "../overview/contract";
-
 import type {
   ContentTypeSource,
   MappableField,
@@ -49,6 +48,7 @@ import {
 import type { DetailSource } from "../structured-data/rules";
 import { characters, TITLE_LIMIT } from "../tab/problems";
 
+import { AdminLink } from "./section";
 import {
   FROM_THE_PAGE,
   holdsField,
@@ -65,7 +65,6 @@ import {
   withSeoOn,
   withStructuredType,
 } from "./settings-draft";
-import { AdminLink } from "./section";
 import { ControlNote, SettingsCard } from "./settings-parts";
 import type { TabProps } from "./tabs";
 
