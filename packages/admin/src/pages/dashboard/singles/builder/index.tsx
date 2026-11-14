@@ -3,7 +3,7 @@
 /**
  * Single Builder — Create Page
  *
- * Mirrors the Collection create flow: opens BuilderSettingsModal directly,
+ * Mirrors the Collection create flow: opens the new-entity dialog directly,
  * on Continue creates the Single with its system fields plus the starting
  * field its "How is this edited?" answer names, and navigates to [slug].tsx
  * for field editing. Same modal-host pattern preserves
@@ -12,10 +12,8 @@
 
 import { useEffect, useState } from "react";
 
-import {
-  BuilderSettingsModal,
-  type BuilderSettingsValues,
-} from "@admin/components/features/schema-builder";
+import type { BuilderSettingsValues } from "@admin/components/features/schema-builder";
+import { NewEntityDialog } from "@admin/components/features/schema-builder/new-entity/NewEntityDialog";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { toast } from "@admin/components/ui";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
@@ -126,13 +124,13 @@ export default function SingleBuilderPage(): React.ReactElement | null {
 
   return (
     <PageContainer>
-      <BuilderSettingsModal
+      {/* One short dialog; Create still writes the entity at once. */}
+      <NewEntityDialog
         open={open}
-        mode="create"
         config={SINGLE_BUILDER_CONFIG}
-        initialValues={null}
         onCancel={() => setOpen(false)}
-        onSubmit={handleSubmit}
+        onCreate={handleSubmit}
+        creating={isPending}
       />
     </PageContainer>
   );

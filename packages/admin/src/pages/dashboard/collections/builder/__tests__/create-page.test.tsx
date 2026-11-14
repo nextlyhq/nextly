@@ -10,13 +10,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
 
 let submit: ((values: BuilderSettingsValues) => void) | undefined;
+/** What the page last told the dialog about a create on its way. */
+let creatingShown: boolean | undefined;
+/** Whether the create mutation is on its way. */
+let createPending = false;
 vi.mock(
-  "@admin/components/features/schema-builder/BuilderSettingsModal",
+  "@admin/components/features/schema-builder/new-entity/NewEntityDialog",
   () => ({
-    BuilderSettingsModal: (props: {
-      onSubmit: (values: BuilderSettingsValues) => void;
+    NewEntityDialog: (props: {
+      onCreate: (values: BuilderSettingsValues) => void;
+      creating?: boolean;
     }) => {
-      submit = props.onSubmit;
+      submit = props.onCreate;
+      creatingShown = props.creating;
       return null;
     },
   })
@@ -24,7 +30,7 @@ vi.mock(
 
 const mockCreate = vi.fn();
 vi.mock("@admin/hooks/queries", () => ({
-  useCreateCollection: () => ({ mutate: mockCreate, isPending: false }),
+  useCreateCollection: () => ({ mutate: mockCreate, isPending: createPending }),
 }));
 
 const mockWriteCollection = vi.fn();
@@ -115,5 +121,15 @@ describe("Collection create page", () => {
     );
 
     expect(toast.error).toHaveBeenCalledWith(reason);
+  });
+
+  it("tells the dialog while a create is on its way, so Create waits for it", () => {
+    createPending = true;
+    try {
+      render(<CollectionBuilderPage />);
+      expect(creatingShown).toBe(true);
+    } finally {
+      createPending = false;
+    }
   });
 });
