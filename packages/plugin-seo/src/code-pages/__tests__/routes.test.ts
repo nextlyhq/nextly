@@ -168,6 +168,91 @@ describe("reading the build", () => {
     ).toEqual(["/pricing", "/tools/counter"]);
   });
 
+  it("leaves out an address the build answered not found under Cache Components, read from its page's own record", () => {
+    // With Cache Components on, Next.js writes no `initialStatus` to the
+    // prerender manifest: a page that called `notFound()` while the build
+    // rendered it says so only in the `.meta` file beside its HTML.
+    const appDir = app();
+    writeFileSync(
+      join(appDir, "build/server/app-paths-manifest.json"),
+      JSON.stringify({
+        "/(site)/page": "app/(site)/page.js",
+        "/(site)/pricing/page": "app/(site)/pricing/page.js",
+        "/(site)/retired/page": "app/(site)/retired/page.js",
+        "/(site)/tools/[name]/page": "app/(site)/tools/[name]/page.js",
+      })
+    );
+    const partial = { renderingMode: "PARTIALLY_STATIC" };
+    writeFileSync(
+      join(appDir, "build/prerender-manifest.json"),
+      JSON.stringify({
+        version: 4,
+        routes: {
+          "/": { srcRoute: "/", ...partial },
+          "/pricing": { srcRoute: "/pricing", ...partial },
+          "/retired": { srcRoute: "/retired", ...partial },
+          "/tools/counter": { srcRoute: "/tools/[name]", ...partial },
+          "/tools/empty": { srcRoute: "/tools/[name]", ...partial },
+          // No record of its own: listed, as before.
+          "/tools/unrecorded": { srcRoute: "/tools/[name]", ...partial },
+        },
+      })
+    );
+    const meta = (path: string, status: number) => {
+      const file = join(appDir, "build/server/app", `${path}.meta`);
+      mkdirSync(join(file, ".."), { recursive: true });
+      writeFileSync(file, JSON.stringify({ status, headers: {} }));
+    };
+    meta("index", 200);
+    meta("pricing", 200);
+    meta("retired", 404);
+    meta("tools/counter", 200);
+    meta("tools/empty", 404);
+
+    expect(
+      readCodeRoutes({ appDir, buildDir: "build" }).map(route => route.path)
+    ).toEqual(["/", "/pricing", "/tools/counter", "/tools/unrecorded"]);
+  });
+
+  it("reads the record of a page at /index where Next.js keeps it, not the home page's", () => {
+    // Next.js names a page's files from its path made unambiguous with the
+    // home page's `index`: `/index` is kept as `index/index`, `/index/old`
+    // as `index/index/old`.
+    const appDir = app();
+    writeFileSync(
+      join(appDir, "build/server/app-paths-manifest.json"),
+      JSON.stringify({
+        "/(site)/page": "app/(site)/page.js",
+        "/(site)/index/page": "app/(site)/index/page.js",
+        "/(site)/index/old/page": "app/(site)/index/old/page.js",
+      })
+    );
+    const partial = { renderingMode: "PARTIALLY_STATIC" };
+    writeFileSync(
+      join(appDir, "build/prerender-manifest.json"),
+      JSON.stringify({
+        version: 4,
+        routes: {
+          "/": { srcRoute: "/", ...partial },
+          "/index": { srcRoute: "/index", ...partial },
+          "/index/old": { srcRoute: "/index/old", ...partial },
+        },
+      })
+    );
+    const meta = (path: string, status: number) => {
+      const file = join(appDir, "build/server/app", `${path}.meta`);
+      mkdirSync(join(file, ".."), { recursive: true });
+      writeFileSync(file, JSON.stringify({ status, headers: {} }));
+    };
+    meta("index", 404);
+    meta("index/index", 200);
+    meta("index/index/old", 404);
+
+    expect(
+      readCodeRoutes({ appDir, buildDir: "build" }).map(route => route.path)
+    ).toEqual(["/index"]);
+  });
+
   it("reads nothing where there is no build", () => {
     const appDir = app();
 
