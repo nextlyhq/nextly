@@ -313,10 +313,13 @@ export function DesignCell({
   const read = useEntryDesigns(collection);
   const id = rowIdOf(row);
   const settled = read.fetching ? undefined : read.data;
-  // Drawn from the list's own read, which decided the column, until the
-  // cell's read of the same collection lands: the column is then drawn at
-  // its width from the first frame instead of from a placeholder.
-  const data = read.data ?? decidedFrom.get(collection);
+  // Drawn from the cell's read once it has settled. Until then, from the
+  // latest settled answer for the collection (`decidedFrom`, the read that
+  // decided the column or a cell's since): newer than what the cache shows
+  // while it is asked again, and there before the cell's first answer, so
+  // the column is drawn at its width, and true, from the first frame. The
+  // cached answer stands in only where no settled one is known.
+  const data = settled ?? decidedFrom.get(collection) ?? read.data;
   // Where the collection's answer is capped, its absence of a row says
   // nothing, so the row is named for the lookup of the rows on screen.
   const capped = data?.meta.hasNext === true && lookupNames(id);

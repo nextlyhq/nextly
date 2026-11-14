@@ -372,6 +372,18 @@ describe("the Design column", () => {
     expect(container.textContent).toBe("");
   });
 
+  it("draws from the latest settled answer, not the cache, while its own read is asked again", () => {
+    // The latest settled answer: the collection has its template now.
+    cellRead = { data: answer(BLOG_POST), error: null };
+    render(<DesignCell collection="posts" row={{ id: "p1" }} />);
+    cleanup();
+    // The list opened again: the cache still shows an older answer with no
+    // template while the cell's read is asked again.
+    cellRead = { data: answer(null), error: null, fetching: true };
+    render(<DesignCell collection="posts" row={{ id: "p1" }} />);
+    expect(screen.getByText("Template")).toBeTruthy();
+  });
+
   it("draws from the read that gave its list the column while its own read is out", () => {
     // The posts list's latest answer: its template, and no own designs.
     cellRead = { data: answer(BLOG_POST), error: null };
