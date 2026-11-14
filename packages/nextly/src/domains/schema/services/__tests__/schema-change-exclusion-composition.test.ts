@@ -34,7 +34,10 @@ vi.mock("../../schema-version", async importOriginal => ({
   writeRegistryRowsWith: (_adapter: unknown, work: () => unknown) => work(),
 }));
 
-vi.mock("../../../../api/fields-payload", () => ({
+// The plugin judge is made to refuse on demand; every other rule of the payload is the real one,
+// the top-level name rule the Single service asks before its exclusion among them.
+vi.mock("../../../../api/fields-payload", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../../../api/fields-payload")>()),
   assertValidPluginFieldOptions: vi.fn(() => {
     if (pluginOptionRefusal.error !== undefined)
       throw pluginOptionRefusal.error;
