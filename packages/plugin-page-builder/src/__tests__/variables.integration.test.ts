@@ -111,6 +111,9 @@ function backfillTick(plugin: PluginDefinition): () => Promise<unknown> {
     );
 }
 
+/** The context a plugin's `init` is handed, which `onMigrate` is handed too. */
+type PluginContextOf = Parameters<NonNullable<PluginDefinition["init"]>>[0];
+
 /** The slice of the Direct API the remove route's store reads and writes. */
 type VariableApi = Parameters<typeof siteStyleVariableStore>[1];
 
@@ -157,7 +160,17 @@ describe.each(getConfiguredTestDialects())(
 
     /** A site storing three variables and a shared style naming one. */
     async function boot() {
-      const plugin = pageBuilder();
+      const built = pageBuilder();
+      // The plugin's own context, as `nextly migrate` hands its `onMigrate`:
+      // the one `init` is handed, kept as it is.
+      let context: PluginContextOf | undefined;
+      const plugin: PluginDefinition = {
+        ...built,
+        init: ctx => {
+          context = ctx;
+          return built.init?.(ctx);
+        },
+      };
       current = await createTestNextly({
         dialect,
         plugins: [plugin],
@@ -182,7 +195,12 @@ describe.each(getConfiguredTestDialects())(
         },
         overrideAccess: true,
       });
-      return { t, tick: backfillTick(plugin) };
+      const contextOf = (): PluginContextOf => {
+        if (context === undefined)
+          throw new Error("the plugin never initialised");
+        return context;
+      };
+      return { t, tick: backfillTick(plugin), plugin, contextOf };
     }
 
     let people = 0;
@@ -364,6 +382,87 @@ describe.each(getConfiguredTestDialects())(
       expect((await call("GET", usage, outsider)).status).toBe(403);
     });
 
+    it("removes an unused variable on a site no scheduler counted, counting the pages in the request", async () => {
+      const { t } = await boot();
+      await t.nextly.create({
+        collection: "pages",
+        data: { title: "Home", slug: "home", content: pageUsing("t-accent") },
+        overrideAccess: true,
+      });
+      const designer = await holding(t, ...DESIGN);
+      // CONTROL: nothing has counted the page, so the index is not whole and
+      // a removal has to count before it can judge.
+      const before = await call(
+        "GET",
+        `${route("usage")}?id=t-spare`,
+        designer
+      );
+      expect(before.body).toMatchObject({ whole: false });
+
+      const removed = await call("POST", route("remove"), designer, {
+        ids: ["t-spare"],
+      });
+      expect(removed.status).toBe(200);
+      expect(await storedIds(t)).toEqual(["t-accent", "t-styled"]);
+      // The removal's own count left every page counted.
+      const after = await call(
+        "GET",
+        `${route("usage")}?id=t-accent`,
+        designer
+      );
+      expect(after.body).toMatchObject({
+        whole: true,
+        variables: { "t-accent": { documents: 1, complete: true } },
+      });
+    });
+
+    it("refuses a used variable on a site no scheduler counted, once the request has counted the pages", async () => {
+      const { t } = await boot();
+      await t.nextly.create({
+        collection: "pages",
+        data: { title: "Home", slug: "home", content: pageUsing("t-accent") },
+        overrideAccess: true,
+      });
+      const designer = await holding(t, ...DESIGN);
+      const refused = await call("POST", route("remove"), designer, {
+        ids: ["t-accent"],
+      });
+      // Refused as in use, on the count the request made, not as uncounted.
+      expect(refused.status).toBe(400);
+      expect(JSON.stringify(refused.body)).toContain('"code":"IN_USE"');
+      expect(JSON.stringify(refused.body)).toContain(
+        "Accent is used on 1 document."
+      );
+      expect(await storedIds(t)).toEqual(["t-accent", "t-styled", "t-spare"]);
+    });
+
+    it("counts the pages left uncounted after a migrate, and a second count at once stops quietly", async () => {
+      const { t, plugin, contextOf } = await boot();
+      await t.nextly.create({
+        collection: "pages",
+        data: { title: "Home", slug: "home", content: pageUsing("t-accent") },
+        overrideAccess: true,
+      });
+      const designer = await holding(t, ...DESIGN);
+      const usage = () =>
+        call("GET", `${route("usage")}?id=t-accent`, designer);
+      // CONTROL: nothing has counted the page yet.
+      expect((await usage()).body).toMatchObject({ whole: false });
+
+      // Two migrates' hooks at once, as two deploys, or a deploy beside a
+      // running app, can run them: neither fails, and the pages are counted.
+      const onMigrate = plugin.onMigrate;
+      if (onMigrate === undefined) throw new Error("no onMigrate declared");
+      await Promise.all([
+        onMigrate(contextOf(), { applied: 0 }),
+        onMigrate(contextOf(), { applied: 0 }),
+      ]);
+      expect((await usage()).body).toMatchObject({
+        whole: true,
+        variables: { "t-accent": { documents: 1, complete: true } },
+      });
+    });
+
     it("refuses removing a variable in use on every path, and removes it once nothing uses it", async () => {
       const { t, tick } = await boot();
       const created = await t.nextly.create({
@@ -374,12 +473,6 @@ describe.each(getConfiguredTestDialects())(
       const designer = await holding(t, ...DESIGN);
       const remove = (ids: string[]) =>
         call("POST", route("remove"), designer, { ids });
-
-      const early = await remove(["t-spare"]);
-      expect(early.status).toBe(409);
-      expect(JSON.stringify(early.body)).toContain(
-        "Some pages haven't been counted yet, so no variable can be removed."
-      );
 
       await tick();
       // CONTROL: the index now reads as whole, so what follows is the count's

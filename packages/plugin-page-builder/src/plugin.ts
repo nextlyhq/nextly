@@ -307,8 +307,10 @@ import {
   firstReadableTitle,
   sharedStyleRoutes,
   storedDocumentsOf,
+  joinedCount,
   storedSharedStyleUses,
   type SharedStyleUsageSource,
+  type UsageCountJobs,
 } from "./shared-styles-routes";
 import {
   BREAKPOINT_REMOVAL_UNDONE_AUDIT,
@@ -427,7 +429,7 @@ import { tokenUsageIndex } from "./token-usage";
 import { exportRoutes } from "./transfer/export-route";
 import { importRoute } from "./transfer/import-route";
 import { unbindPlanRoute } from "./unbind-plan-route";
-import { usageBackfillJob } from "./usage-backfill-job";
+import { USAGE_BACKFILL_JOB, usageBackfillJob } from "./usage-backfill-job";
 import {
   backfillScopes,
   forgetGoneScopes,
@@ -437,10 +439,15 @@ import {
 import { usageBookkeeping } from "./usage-bookkeeping";
 import { listDocumentsUsingEach } from "./usage-count";
 import {
+  countAfterMigrate,
+  migrateCountMessage,
+} from "./usage-count-after-migrate";
+import {
   USAGE_HEALTH_SERVICE,
   usageHealthService,
 } from "./usage-health-service";
 import type { UsageIndex, UsageSubject } from "./usage-index";
+import { indexIsWhole } from "./usage-index-health";
 import {
   usageIndexStores,
   usageTableOf,
@@ -2310,9 +2317,15 @@ export const pageBuilder = (
    * components, patterns and Layouts; every other collection with a page
    * builder field holds pages, as the editor's page search reads them.
    */
+  // The count a removal makes before it judges an index that is not whole,
+  // shared by every removal in this process so a second joins the first.
+  let usageCountNow: ((maxDurationMs: number) => Promise<void>) | null = null;
   const usageSourceOf = <TRow extends UsageSubject>(
     collections: Readonly<Record<string, string | undefined>>,
-    index: UsageIndex<TRow>
+    index: UsageIndex<TRow>,
+    // The context's jobs, which run the usage backfill now: the count a
+    // removal makes before it judges an index that is not whole.
+    jobs: UsageCountJobs
   ): SharedStyleUsageSource => {
     const kinds = new Map<string, SharedStyleUsageKind>([
       [
@@ -2335,6 +2348,15 @@ export const pageBuilder = (
           health,
         }),
       kindOf: collection => kinds.get(collection) ?? "pages",
+      // One count at a time in this process, which every removal joins
+      // (`joinedCount`): the first context's jobs run it, as any context's
+      // run the sweep on the same instance.
+      countNow: maxDurationMs => {
+        usageCountNow ??= joinedCount(budget =>
+          jobs.runSweepNow(USAGE_BACKFILL_JOB, { maxDurationMs: budget })
+        );
+        return usageCountNow(maxDurationMs);
+      },
     };
   };
   // The in-use check a write of the site style that drops a variable is
@@ -2532,6 +2554,21 @@ export const pageBuilder = (
       // Its own rail item after Forms, opening the overview: see
       // `overview/admin-panel.ts`.
       ...PAGE_BUILDER_PLACEMENT,
+    },
+    // A deploy's `nextly migrate` counts the pages into the usage index, so a
+    // deployed site starts counted rather than refusing every removal until
+    // someone presses Count now (`usage-count-after-migrate`). Bounded, and
+    // safe beside another run, as `onMigrate` must be.
+    onMigrate: async ctx => {
+      const outcome = await countAfterMigrate({
+        sweep: maxDurationMs =>
+          ctx.services.jobs.runSweepNow(USAGE_BACKFILL_JOB, { maxDurationMs }),
+        whole: async () =>
+          indexIsWhole(
+            await usageHealthService(requireInstalled).read(tokenUsageIndex)
+          ),
+      });
+      ctx.logger.info(`[page-builder] ${migrateCountMessage(outcome)}`);
     },
     // Registers what other plugins DECLARED, and resolves the registry service
     // on the way, which is what empties it for the boot. The service is lazy:
@@ -2991,7 +3028,11 @@ export const pageBuilder = (
       // documents. It names no document, since the write's author is not a
       // caller this can ask.
       const variableCheckSetup = {
-        usage: usageSourceOf(ctx.self.collections, tokenUsageIndex),
+        usage: usageSourceOf(
+          ctx.self.collections,
+          tokenUsageIndex,
+          ctx.services.jobs
+        ),
         blocks: allBlocks,
         documents: async () => storedDocumentsOf(ctx, await bootedNextly()),
         limits: opts.limits ?? DEFAULT_LIMITS,
@@ -4399,7 +4440,12 @@ export const pageBuilder = (
         // the class usage index the installed host maintains.
         ...sharedStyleRoutes({
           configClassIds,
-          usage: ctx => usageSourceOf(ctx.self.collections, classUsageIndex),
+          usage: ctx =>
+            usageSourceOf(
+              ctx.self.collections,
+              classUsageIndex,
+              ctx.services.jobs
+            ),
           // The bounds the class index and the renderer read a page under.
           limits: opts.limits ?? DEFAULT_LIMITS,
         }),
@@ -4409,12 +4455,21 @@ export const pageBuilder = (
         // the shared styles' count route: one sweep fills every index.
         ...variableRoutes({
           defaults: configStyle,
-          usage: ctx => usageSourceOf(ctx.self.collections, tokenUsageIndex),
+          usage: ctx =>
+            usageSourceOf(
+              ctx.self.collections,
+              tokenUsageIndex,
+              ctx.services.jobs
+            ),
           // A block type's own default styles are a use, read per request.
           blocks: allBlocks,
           inUse: (ctx, readNamed) =>
             variableRemovalChecks({
-              usage: usageSourceOf(ctx.self.collections, tokenUsageIndex),
+              usage: usageSourceOf(
+                ctx.self.collections,
+                tokenUsageIndex,
+                ctx.services.jobs
+              ),
               blocks: allBlocks,
               documents: async () =>
                 storedDocumentsOf(ctx, await bootedNextly()),
