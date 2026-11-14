@@ -1,7 +1,9 @@
 import path from "path";
 
+import { execa } from "execa";
 import fs from "fs-extra";
 
+import { EXACT_VERSION } from "../lib/exact-version";
 import type { PackageManager } from "../types";
 import { packageManagerFromUserAgent } from "../utils/detect-pm-from-user-agent";
 import { findWorkspaceRoot } from "../utils/workspace";
@@ -12,11 +14,17 @@ import { findWorkspaceRoot } from "../utils/workspace";
  * the version the person chose rather than its own default. Returns the
  * value written, or null when nothing was.
  *
+ * With `selected` (an explicit `--package-manager`), the manager named there
+ * and the exact version it reports in the project are recorded instead of
+ * the launcher's: that is the binary the install runs next, so the pin names
+ * what installed the project even when another manager launched the scaffold.
+ *
  * Nothing is written when:
  * - the project already chooses one, by `packageManager` or by
  *   `devEngines.packageManager`, which Corepack obeys when `packageManager`
  *   is absent;
- * - the user agent names npm or Bun, or no exact version;
+ * - the user agent (or the selected manager) is npm or Bun, or gives no
+ *   exact version;
  * - the manager that will install is not the one the user agent names, as for
  *   a pnpm app reached through `npx`;
  * - the project is a member of a workspace: Corepack reads the closest
@@ -29,11 +37,8 @@ import { findWorkspaceRoot } from "../utils/workspace";
 export async function recordLaunchingPackageManager(
   cwd: string,
   installer: PackageManager,
-  userAgent: string | undefined = process.env.npm_config_user_agent
+  options: { selected?: boolean; userAgent?: string } = {}
 ): Promise<string | null> {
-  const value = packageManagerFromUserAgent(userAgent);
-  if (value === null || !value.startsWith(`${installer}@`)) return null;
-
   const file = path.join(cwd, "package.json");
   let text: string;
   let manifest: Record<string, unknown>;
@@ -49,8 +54,39 @@ export async function recordLaunchingPackageManager(
   if (devEngines?.packageManager !== undefined) return null;
   if (await findWorkspaceRoot(cwd)) return null;
 
+  // Read last, once nothing above rules the field out: the selected
+  // manager's version costs a process.
+  const value = options.selected
+    ? await installerVersion(cwd, installer)
+    : packageManagerFromUserAgent(
+        options.userAgent ?? process.env.npm_config_user_agent
+      );
+  if (value === null || !value.startsWith(`${installer}@`)) return null;
+
   await fs.writeFile(file, withPackageManager(text, value), "utf-8");
   return value;
+}
+
+/**
+ * `<manager>@<version>` for pnpm or Yarn as `<manager> --version` answers in
+ * `cwd`, where Corepack, if it handles the manager, resolves the same binary
+ * the install runs; null for npm and Bun, or when no exact version is read.
+ */
+async function installerVersion(
+  cwd: string,
+  installer: PackageManager
+): Promise<string | null> {
+  if (installer !== "pnpm" && installer !== "yarn") return null;
+  try {
+    const { stdout } = await execa(installer, ["--version"], {
+      cwd,
+      stdin: "ignore",
+    });
+    const version = String(stdout).trim();
+    return EXACT_VERSION.test(version) ? `${installer}@${version}` : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

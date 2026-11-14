@@ -1881,6 +1881,12 @@ export interface CopyTemplateOptions {
    */
   packageManager: PackageManager;
   /**
+   * The person named `packageManager` with `--package-manager`, so the
+   * project's `packageManager` field is pinned to that manager's own version
+   * rather than to the launcher's.
+   */
+  packageManagerSelected?: boolean;
+  /**
    * Suppress the internal "directory already exists" guard. Set by the
    * installer when it has already negotiated a directory conflict with
    * the user (cwd install, or the "remove"/"ignore" choices from the
@@ -1919,6 +1925,7 @@ export async function copyTemplate(
     approach,
     templateSource,
     packageManager,
+    packageManagerSelected = false,
     allowExistingTarget = false,
   } = options;
   const source =
@@ -1966,7 +1973,9 @@ export async function copyTemplate(
       source,
     });
     // As for an app below: before the first install.
-    await recordLaunchingPackageManager(targetDir, packageManager);
+    await recordLaunchingPackageManager(targetDir, packageManager, {
+      selected: packageManagerSelected,
+    });
     return;
   }
 
@@ -2123,7 +2132,9 @@ export async function copyTemplate(
   // Before the first install, which runs once the files are in place: the
   // pnpm or Yarn version that launched the scaffold, so Corepack installs
   // with it rather than its own default.
-  await recordLaunchingPackageManager(targetDir, packageManager);
+  await recordLaunchingPackageManager(targetDir, packageManager, {
+    selected: packageManagerSelected,
+  });
 
   // Step 6b: Write pnpm-workspace.yaml carrying the native-dependency build
   // allowlist. pnpm 10+ blocks dependency build scripts by default and pnpm 11
