@@ -977,6 +977,29 @@ export interface BlockPart {
   };
 }
 
+/**
+ * A reference to the design token `identity`, scaled by `times` when given:
+ * the one way a reference is built, so every writer stores the same shape
+ * and a reader looking for one in stored text ({@link tokenRefText}) looks
+ * for what was written.
+ */
+export function tokenRef(identity: string, times?: number): TokenRef {
+  return times === undefined
+    ? { $token: identity }
+    : { $token: identity, times };
+}
+
+/**
+ * The text a stored document holds for any reference to `identity`, as
+ * `JSON.stringify` writes it: the `$token` member of {@link tokenRef}, which
+ * a scale, when present, follows or precedes as another member. Matched
+ * against a document serialized the same way, it finds a reference wherever
+ * the document holds one, without reading the document as blocks.
+ */
+export function tokenRefText(identity: string): string {
+  return JSON.stringify(tokenRef(identity)).slice(1, -1);
+}
+
 /** True if a style value is a design-token reference. */
 export function isTokenRef(value: unknown): value is TokenRef {
   // A reference must be a plain record, not merely an object carrying the key.

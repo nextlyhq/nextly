@@ -77,6 +77,7 @@ import type {
   ConnectionInspection,
   DatabaseCapabilities,
   PoolStats,
+  TransactionBounds,
   TransactionContext,
   TransactionOptions,
   SessionOptions,
@@ -831,17 +832,29 @@ export class PostgresAdapter extends DrizzleAdapter {
     const pool = this.ensurePool();
     // A checkout, taken from the pool like `executeQuery`'s queries are.
     this.notePoolAccess();
+    // Read before the checkout, in the calling flow (`withTransactionBounds`).
+    const bounds = this.transactionBounds();
     const client = await pool.connect();
     // Set when the ROLLBACK failed. The client may then still be inside the
     // transaction, so it is destroyed rather than pooled: the next request
     // handed it would otherwise write into a transaction nobody commits.
     let discard: Error | true | undefined;
+    // A bounded transaction's session may be ended by the server while no
+    // statement runs on it (`idle_in_transaction_session_timeout`), and
+    // node-postgres reports that as an `error` event on the checked-out
+    // client, which has no listener while checked out: unheard, it would end
+    // the process. Heard here, the transaction's next statement fails, and
+    // the client is destroyed rather than pooled.
+    const sessionEnded = (error: Error) => {
+      discard = error;
+    };
+    if (bounds?.idleMs !== undefined) client.on("error", sessionEnded);
     const settled = await this.settleOutermost(
       {
         context: this.createTransactionContext(client),
         join: this.joinSteps(client),
         openedAt,
-        begin: () => this.beginTransaction(client, options),
+        begin: () => this.beginTransaction(client, options, bounds),
         // A transaction a failed statement aborted is not refused at COMMIT:
         // PostgreSQL rolls it back and answers with the ROLLBACK command tag,
         // raising nothing. A callback that caught its failed statement and
@@ -870,6 +883,9 @@ export class PostgresAdapter extends DrizzleAdapter {
       callback,
       options
     );
+    if (bounds?.idleMs !== undefined) {
+      client.removeListener("error", sessionEnded);
+    }
     // node-postgres destroys a client released with an error or `true`, and
     // pools one released with nothing. Released before anything held runs,
     // so an effect that opens a transaction takes one client, not two.
@@ -1282,7 +1298,8 @@ export class PostgresAdapter extends DrizzleAdapter {
    */
   private async beginTransaction(
     client: PoolClient,
-    options?: TransactionOptions
+    options?: TransactionOptions,
+    bounds?: TransactionBounds
   ): Promise<void> {
     let beginSql = "BEGIN";
 
@@ -1310,6 +1327,18 @@ export class PostgresAdapter extends DrizzleAdapter {
     // Set statement timeout if specified
     if (options?.timeoutMs) {
       await client.query(`SET LOCAL statement_timeout = ${options.timeoutMs}`);
+    }
+
+    // The scope's bounds (`withTransactionBounds`), for this transaction
+    // alone: SET LOCAL ends with it, so the pooled session keeps its own
+    // settings. Whole milliseconds, checked when the scope was entered.
+    if (bounds?.lockWaitMs !== undefined) {
+      await client.query(`SET LOCAL lock_timeout = ${bounds.lockWaitMs}`);
+    }
+    if (bounds?.idleMs !== undefined) {
+      await client.query(
+        `SET LOCAL idle_in_transaction_session_timeout = ${bounds.idleMs}`
+      );
     }
   }
 

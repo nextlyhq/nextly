@@ -792,6 +792,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PluginSystemCheckedWrite (type)",
   "PluginSystemIdentity (type)",
   "PluginTransaction (type)",
+  "PluginTransactionBounds (type)",
   "PluginTranslations (type)",
   "PluginUserMenuAction (type)",
   "PluginUserMenuItem (type)",
