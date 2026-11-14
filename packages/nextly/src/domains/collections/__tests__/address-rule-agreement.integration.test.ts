@@ -212,6 +212,10 @@ for (const dialect of getConfiguredTestDialects()) {
       }
     }, 600_000);
 
+    // A taken field group name is refused naming the group, by the check and the create alike.
+    const TAKEN_SEO =
+      'The field group "seo" could not be created: its name is already taken.';
+
     /** A field group `seo` recorded under a table name of its own, as older ones may be. */
     async function fieldGroupInACustomTable(): Promise<void> {
       const groups = t!.getService("fieldGroupRegistryService") as unknown as {
@@ -232,7 +236,7 @@ for (const dialect of getConfiguredTestDialects()) {
       await fieldGroupInACustomTable();
       expect(await checkVerdict("fieldGroup", "seo")).toEqual({
         code: "DUPLICATE",
-        message: "Resource already exists.",
+        message: TAKEN_SEO,
       });
     });
 
@@ -240,7 +244,7 @@ for (const dialect of getConfiguredTestDialects()) {
       await fieldGroupInACustomTable();
       expect(await createVerdict("fieldGroup", "seo")).toEqual({
         code: "DUPLICATE",
-        message: "Resource already exists.",
+        message: TAKEN_SEO,
       });
       expect(await t!.adapter.tableExists("comp_seo")).toBe(false);
     });
