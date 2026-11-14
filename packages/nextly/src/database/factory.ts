@@ -31,7 +31,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { BaseAdapterConfig } from "@nextlyhq/adapter-drizzle/types";
 
 import { validatePostgresSchema } from "../domains/schema/services/postgres-schema";
-import { env } from "../lib/env";
+import { env, readPoolSettings } from "../lib/env";
 
 import { loadDialectTables } from "./dialect-tables";
 
@@ -89,17 +89,21 @@ function mergedAdapterConfig(
   // own dialect-specific defaults intact (e.g. the Postgres adapter's
   // `min: 0` cold-start-friendly default for Neon).
   const explicit = config ?? {};
+  // Read alone rather than through `env`, which validates the whole environment: a caller that
+  // names its database (`type` and `url`) must not be refused for a database target the
+  // environment states, or leaves out.
+  const settings = readPoolSettings();
   return {
     ...explicit,
     url,
     pool: overEnvDefaults(explicit.pool ?? {}, {
-      max: env.DB_POOL_MAX,
-      min: env.DB_POOL_MIN,
-      idleTimeoutMs: env.DB_POOL_IDLE_TIMEOUT,
+      max: settings.DB_POOL_MAX,
+      min: settings.DB_POOL_MIN,
+      idleTimeoutMs: settings.DB_POOL_IDLE_TIMEOUT,
     }),
     queryTimeout: overEnvDefaults(
       { value: (explicit as { queryTimeout?: number }).queryTimeout },
-      { value: env.DB_QUERY_TIMEOUT }
+      { value: settings.DB_QUERY_TIMEOUT }
     ).value,
   };
 }
