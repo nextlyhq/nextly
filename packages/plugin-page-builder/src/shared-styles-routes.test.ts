@@ -48,9 +48,17 @@ const WHOLE: UsageIndexHealth = {
   coversExistingDocuments: true,
   anyUndetermined: false,
 };
+/** Not whole, with scopes still to walk: a count changes it. */
 const NOT_WHOLE: UsageIndexHealth = {
   ...WHOLE,
   coversExistingDocuments: false,
+  backfillPending: true,
+};
+/** Not whole, every scope walked, a page past its walk bound: no count changes it. */
+const UNDETERMINED: UsageIndexHealth = {
+  ...WHOLE,
+  anyUndetermined: true,
+  backfillPending: false,
 };
 
 /** A store over `classes`, read at version `rev`, recording each write. */
@@ -809,6 +817,61 @@ describe("removing unused shared styles", () => {
     expect(second.write).toHaveBeenCalledTimes(1);
     // One count, joined by the second removal rather than run again.
     expect(sweep).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts once, then refuses saying why, where the count leaves content it cannot read whole", async () => {
+    const { store, write } = storeOf([card, hero]);
+    const { source } = usageOf(WHOLE);
+    let counted = false;
+    const countNow = vi.fn(async () => {
+      counted = true;
+    });
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-card"] }),
+          store,
+          {
+            ...source,
+            health: async () => (counted ? UNDETERMINED : NOT_WHOLE),
+            countNow,
+          },
+          new Set(),
+          NOT_STILL_USED
+        )
+      )
+    ).toMatchObject({
+      code: "CONFLICT",
+      publicMessage:
+        "Nothing was removed. No shared style can be removed while the count of where they are used is incomplete: some pages are too large to read in full, so what they use is not counted.",
+    });
+    expect(countNow).toHaveBeenCalledTimes(1);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("does not count where no work is left to do, and refuses saying why", async () => {
+    const { store, write } = storeOf([card, hero]);
+    const { source } = usageOf(WHOLE);
+    const countNow = vi.fn(async () => undefined);
+    expect(
+      await refusal(
+        removeSharedStyles(
+          post({ ids: ["c-card"] }),
+          store,
+          { ...source, health: async () => UNDETERMINED, countNow },
+          new Set(),
+          NOT_STILL_USED
+        )
+      )
+    ).toMatchObject({
+      code: "CONFLICT",
+      publicMessage: expect.stringContaining(
+        "the count of where they are used is incomplete"
+      ),
+    });
+    // No sweep that could change nothing.
+    expect(countNow).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
   });
 
   it("does not count where the index is already whole", async () => {

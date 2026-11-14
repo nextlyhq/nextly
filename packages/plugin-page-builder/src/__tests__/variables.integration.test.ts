@@ -463,6 +463,30 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("counts the pages left uncounted after an install, as after a migrate", async () => {
+      const { t, plugin, contextOf } = await boot();
+      await t.nextly.create({
+        collection: "pages",
+        data: { title: "Home", slug: "home", content: pageUsing("t-accent") },
+        overrideAccess: true,
+      });
+      const designer = await holding(t, ...DESIGN);
+      const usage = () =>
+        call("GET", `${route("usage")}?id=t-accent`, designer);
+      // CONTROL: nothing has counted the page yet.
+      expect((await usage()).body).toMatchObject({ whole: false });
+
+      // A first deploy migrates before the plugin is installed, which skips
+      // its `onMigrate`: the install counts the pages instead.
+      const onInstall = plugin.onInstall;
+      if (onInstall === undefined) throw new Error("no onInstall declared");
+      await onInstall(contextOf());
+      expect((await usage()).body).toMatchObject({
+        whole: true,
+        variables: { "t-accent": { documents: 1, complete: true } },
+      });
+    });
+
     it("refuses removing a variable in use on every path, and removes it once nothing uses it", async () => {
       const { t, tick } = await boot();
       const created = await t.nextly.create({

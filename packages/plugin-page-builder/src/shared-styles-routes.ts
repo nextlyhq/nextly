@@ -108,10 +108,12 @@ import { retryOnStale } from "./stale-retry";
 import { readStoredJson } from "./stored-json";
 import { USAGE_BACKFILL_JOB } from "./usage-backfill-job";
 import { documentCountOf, type DocumentsUsing } from "./usage-count";
+import { coverageGapWords } from "./usage-count-after-migrate";
 import {
   indexIsWhole,
   indexStillCounting,
   type UsageIndexHealth,
+  usageCoverageGap,
 } from "./usage-index-health";
 
 /** The permission that locks and unlocks shared styles, in its parts. */
@@ -629,14 +631,27 @@ export async function usageRefusals(
   noun: string
 ): Promise<UsageReason[]> {
   let health = await usage.health();
-  const counts = !indexIsWhole(health) && usage.countNow !== undefined;
+  // Counted only while the backfill has work left: an index content keeps
+  // from whole (a page too large to read whole, a field it cannot reach)
+  // stays a floor however often it sweeps, and a count would spend the
+  // request's time on sweeps that change nothing.
+  const counts = indexStillCounting(health) && usage.countNow !== undefined;
   if (counts) {
     await usage.countNow?.(REMOVAL_COUNT_MS);
     health = await usage.health();
   }
   if (!indexIsWhole(health)) {
-    // After a count that ran out of time the pages are being counted, not
-    // found in use: said so, with what to do, rather than as a use.
+    // What keeps it from whole, said as such and never as a use: content no
+    // count can cover, a count that ran out of time, or one not yet run.
+    const gap = usageCoverageGap(health);
+    if (gap !== undefined) {
+      return [
+        {
+          message: `No ${noun} can be removed while the count of where they are used is incomplete: ${coverageGapWords(gap)}.`,
+          used: false,
+        },
+      ];
+    }
     if (counts) {
       return [
         {

@@ -438,16 +438,12 @@ import {
 } from "./usage-backfill-wiring";
 import { usageBookkeeping } from "./usage-bookkeeping";
 import { listDocumentsUsingEach } from "./usage-count";
-import {
-  countAfterMigrate,
-  migrateCountMessage,
-} from "./usage-count-after-migrate";
+import { countThePages } from "./usage-count-after-migrate";
 import {
   USAGE_HEALTH_SERVICE,
   usageHealthService,
 } from "./usage-health-service";
 import type { UsageIndex, UsageSubject } from "./usage-index";
-import { indexIsWhole } from "./usage-index-health";
 import {
   usageIndexStores,
   usageTableOf,
@@ -2317,6 +2313,19 @@ export const pageBuilder = (
    * components, patterns and Layouts; every other collection with a page
    * builder field holds pages, as the editor's page search reads them.
    */
+  /**
+   * What the count after a migrate or an install runs on: the context's own
+   * jobs, the variable index's health, and the context's log.
+   */
+  const pagesCountOf = (ctx: {
+    services: { jobs: UsageCountJobs };
+    logger: { info: (message: string) => void };
+  }) => ({
+    sweep: (maxDurationMs: number) =>
+      ctx.services.jobs.runSweepNow(USAGE_BACKFILL_JOB, { maxDurationMs }),
+    health: () => usageHealthService(requireInstalled).read(tokenUsageIndex),
+    log: (message: string) => ctx.logger.info(`[page-builder] ${message}`),
+  });
   // The count a removal makes before it judges an index that is not whole,
   // shared by every removal in this process so a second joins the first.
   let usageCountNow: ((maxDurationMs: number) => Promise<void>) | null = null;
@@ -2555,20 +2564,17 @@ export const pageBuilder = (
       // `overview/admin-panel.ts`.
       ...PAGE_BUILDER_PLACEMENT,
     },
-    // A deploy's `nextly migrate` counts the pages into the usage index, so a
-    // deployed site starts counted rather than refusing every removal until
-    // someone presses Count now (`usage-count-after-migrate`). Bounded, and
-    // safe beside another run, as `onMigrate` must be.
+    // A deploy's `nextly migrate`, and `nextly plugins install`, count the
+    // pages into the usage index, so a deployed site starts counted rather
+    // than refusing every removal until someone presses Count now
+    // (`usage-count-after-migrate`). The install covers a first deploy that
+    // migrates before the plugin is installed, which skips `onMigrate`.
+    // Bounded, and safe beside another run, as `onMigrate` must be.
     onMigrate: async ctx => {
-      const outcome = await countAfterMigrate({
-        sweep: maxDurationMs =>
-          ctx.services.jobs.runSweepNow(USAGE_BACKFILL_JOB, { maxDurationMs }),
-        whole: async () =>
-          indexIsWhole(
-            await usageHealthService(requireInstalled).read(tokenUsageIndex)
-          ),
-      });
-      ctx.logger.info(`[page-builder] ${migrateCountMessage(outcome)}`);
+      await countThePages(pagesCountOf(ctx));
+    },
+    onInstall: async ctx => {
+      await countThePages(pagesCountOf(ctx));
     },
     // Registers what other plugins DECLARED, and resolves the registry service
     // on the way, which is what empties it for the boot. The service is lazy:
