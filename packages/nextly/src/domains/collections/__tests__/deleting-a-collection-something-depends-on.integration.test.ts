@@ -4,12 +4,13 @@
  *
  * Three kinds of dependent, each on every path: a field of another
  * collection, a Single or a field group pointing at the collection at any
- * depth; a foreign key a plugin declares on its own table, pointing at the
- * collection's table; and a hidden column and index a plugin added to the
- * collection's table. Each refusal names what depends on the collection, and
- * after it the table, its rows, its field-group values, its translations, its
- * registry row and the plugin's key, column, values and index are all still
- * there.
+ * depth; a foreign key the app declares on its own table, pointing at the
+ * collection's table (a plugin's key to it is refused at boot, as a plugin's
+ * migrations run before the app's, which create it); and a hidden column and
+ * index a plugin added to the collection's table. Each refusal names what
+ * depends on the collection, and after it the table, its rows, its
+ * field-group values, its translations, its registry row and the key, column,
+ * values and index are all still there.
  *
  * Every dialect, because the registries store a field list as jsonb, as JSON
  * and as text, and because what a drop does to another owner's key differs
@@ -48,7 +49,7 @@ import type { CollectionRegistryService } from "../services/collection-registry-
 
 import {
   CARDS,
-  LINKS_PLUGIN,
+  LINKS_OWNER,
   LINKS_TABLE,
   MARKER_COLUMN,
   MARKER_PLUGIN,
@@ -59,7 +60,7 @@ import {
   TAGS_TABLE,
   cards,
   columnValues,
-  linksPlugin,
+  linksDb,
   liveForeignKeys,
   liveIndexes,
   markerPlugin,
@@ -193,14 +194,13 @@ async function bootWithFieldsPointing(dialect: TestDialect, translated = true) {
   return current;
 }
 
-/** Boot with TAGS and a plugin whose own table has a key to TAGS's table. */
+/** Boot with TAGS and the app's own table with a key to TAGS's table. */
 async function bootWithDeclaredKey(dialect: TestDialect, contributed = false) {
   current = await createTestNextly({
     dialect,
     collections: contributed ? [] : [plainTags],
     plugins: contributed
       ? [
-          linksPlugin,
           definePlugin({
             name: "@t/dep-tags-owner",
             version: "1.0.0",
@@ -208,7 +208,8 @@ async function bootWithDeclaredKey(dialect: TestDialect, contributed = false) {
             contributes: { collections: [plainTags] },
           }),
         ]
-      : [linksPlugin],
+      : [],
+    db: linksDb,
   });
   await current.nextly.create({ collection: TAGS, data: { label: "kept" } });
   await unlock(current, TAGS);
@@ -265,10 +266,10 @@ async function markerState(t: TestNextly) {
   };
 }
 
-/** The message names the plugin, the key and its table; SQLite keeps no key names. */
+/** The message names the key's owner, the key and its table; SQLite keeps no key names. */
 function expectNamesTheKey(message: string, key: string, dialect: TestDialect) {
   expect(message).toContain(`"${TAGS}"`);
-  expect(message).toContain(`on "${LINKS_TABLE}" (plugin "${LINKS_PLUGIN}")`);
+  expect(message).toContain(`on "${LINKS_TABLE}" (${LINKS_OWNER})`);
   if (dialect !== "sqlite") {
     expect(message).toContain(`"${key.split("->")[0]}"`);
   }
@@ -306,7 +307,7 @@ describeEachDialect("deleting a collection something depends on", dialect => {
     expect(await tagsState(t, true)).toEqual(INTACT_TRANSLATED);
   }, 120_000);
 
-  it("refuses the Builder's delete while a plugin's declared key points at its table, and keeps the key", async () => {
+  it("refuses the Builder's delete while a declared key points at its table, and keeps the key", async () => {
     const t = await bootWithDeclaredKey(dialect);
     const key = await declaredKeyName(t, dialect);
 
@@ -713,7 +714,7 @@ describeEachDialect("deleting a collection something depends on", dialect => {
     expect(await tagsState(t, true)).toEqual(INTACT_TRANSLATED);
   }, 120_000);
 
-  it("refuses the schema route's delete while a plugin's declared key points at its table", async () => {
+  it("refuses the schema route's delete while a declared key points at its table", async () => {
     const t = await bootWithDeclaredKey(dialect);
     const key = await declaredKeyName(t, dialect);
 
@@ -786,7 +787,7 @@ describeEachDialect("deleting a collection something depends on", dialect => {
     expect(await tagsState(current, false)).toEqual(INTACT);
   }, 120_000);
 
-  it("refuses a prune whose orphan a plugin's declared key points at", async () => {
+  it("refuses a prune whose orphan a declared key points at", async () => {
     const t = await bootWithDeclaredKey(dialect, true);
     const key = await declaredKeyName(t, dialect);
 
