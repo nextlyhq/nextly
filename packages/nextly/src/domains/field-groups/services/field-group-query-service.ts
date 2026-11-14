@@ -45,6 +45,7 @@ import {
   resolveCompanionSchemaReadiness,
   type CompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { fieldsStoredOnRow } from "../../schema/services/field-column-descriptor";
 import { directFieldGroupFields } from "../field-group-write-access";
 import { passwordReachOf } from "../password-reach";
 import {
@@ -1874,8 +1875,10 @@ export class FieldGroupQueryService extends BaseService {
     // A row's keys may be the field's name or its snake_case column name, so
     // a field is found under either. Missed, a JSON field such as a to-many
     // relationship named `cardTags` comes back as its stored text.
+    // Through `fieldsStoredOnRow`: a field inside a group with no name is a column of this row,
+    // returned at the instance's level as the write took it.
     const fieldByColumn = new Map<string, FieldConfig>();
-    for (const field of componentFields) {
+    for (const field of fieldsStoredOnRow(componentFields)) {
       if ("name" in field && field.name) {
         fieldByColumn.set(toSnakeCase(field.name), field);
         fieldByColumn.set(field.name, field);
@@ -1959,8 +1962,10 @@ export class FieldGroupQueryService extends BaseService {
       // over as the row-backed list it is on a component, so its related
       // entries are found from the ids on the row rather than a junction table
       // a component does not have.
+      // Through `fieldsStoredOnRow`, so a relationship inside a group with no name, whose value
+      // sits at the instance's level, is expanded as one beside the group is.
       const fields = asRowBackedRelationFields(
-        componentFields
+        fieldsStoredOnRow(componentFields)
       ) as unknown as Parameters<
         typeof this.relationshipService.expandRelationships
       >[2];

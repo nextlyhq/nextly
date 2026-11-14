@@ -6,6 +6,7 @@
 // together; the bodies are byte-identical to the versions the dispatcher carried.
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { getTableColumns, is, Table } from "drizzle-orm";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getSchemaRegistryFromDI } from "../../../dispatcher/helpers/di";
@@ -41,6 +42,36 @@ export interface RuntimeSchemaRegistration {
   reason?: string;
 }
 
+/**
+ * The column names of the runtime table registered for `tableName`, lowercased, or `undefined`
+ * where no table is registered for it.
+ *
+ * The runtime table is what this process addresses the field group's table as. A start leaves out
+ * of it a field inside a group with no name whose column the table does not hold yet
+ * (`RuntimeSchemaOptions.heldColumns`), and the instance write asks this so it leaves out that
+ * field's value too, rather than naming a column the table lacks.
+ */
+export function registeredComponentColumns(
+  adapter: DrizzleAdapter,
+  tableName: string
+): ReadonlySet<string> | undefined {
+  const registry = getSchemaRegistryFromDI();
+  // The same two places registration writes to, read in the same order.
+  const table = registry
+    ? registry.getTable(tableName)
+    : (
+        adapter as unknown as {
+          tableResolver?: { getTable?: (name: string) => unknown };
+        }
+      ).tableResolver?.getTable?.(tableName);
+  if (!is(table, Table)) return undefined;
+  return new Set(
+    Object.values(getTableColumns(table)).map(column =>
+      column.name.toLowerCase()
+    )
+  );
+}
+
 export function registerComponentRuntimeSchema(
   adapter: DrizzleAdapter,
   dialect: string,
@@ -49,7 +80,10 @@ export function registerComponentRuntimeSchema(
   typeColumn: string,
   // i18n: when localized, the main comp_ runtime table omits translatable columns and the
   // companion comp_<slug>_locales runtime table is registered for per-language reads/writes.
-  localized = false
+  localized = false,
+  // The columns the live table holds, where the caller read them; see
+  // `RuntimeSchemaOptions.heldColumns`. Omitted after a create or a save, which leave every column.
+  heldColumns?: readonly string[]
 ): RuntimeSchemaRegistration {
   try {
     const fieldGroupSchemaService = new FieldGroupSchemaService(
@@ -58,7 +92,7 @@ export function registerComponentRuntimeSchema(
     const runtimeTable = fieldGroupSchemaService.generateRuntimeSchema(
       tableName,
       fields,
-      { localized, typeColumn }
+      { localized, typeColumn, heldColumns }
     );
     const companion = localized
       ? buildCompanionRuntimeTable({

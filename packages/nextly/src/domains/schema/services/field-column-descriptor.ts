@@ -40,6 +40,7 @@ import {
 } from "../../../lib/system-columns";
 import { isBuiltInFieldType } from "../../../schemas/_zod/ui-schema";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { isFieldGroupFieldType } from "../../field-groups/storage/field-group-field-type";
 import { toSnakeCase } from "../field-rules";
 import { getFieldType } from "../field-types/field-type-registry";
@@ -169,6 +170,24 @@ export function columnsThatMayHoldNull(
 // The name-to-column rule lives in the browser-safe field rules, which the
 // Builder reaches too; re-exported so this module stays its home for callers.
 export { toSnakeCase } from "../field-rules";
+
+/**
+ * The fields whose columns sit on one row: those at the top of `fields`, and those inside a group
+ * with no name, at any depth.
+ *
+ * A group with no name only lays fields out. It holds no value and has no name to give a column, and
+ * the fields inside it are stored where it sits: on an entry's row for a collection or a Single, and
+ * on the instance's row (`comp_<slug>`) for a field group. The read and write paths already address
+ * those fields at that level through `addressableFields`, so the builders of a row's columns read
+ * the same walk, and the columns and the data paths cannot disagree about which fields a row holds.
+ *
+ * A named group is kept whole: its fields are stored inside its own value, not on the row.
+ */
+export function fieldsStoredOnRow<F>(fields: readonly F[]): F[] {
+  // The walk keeps each element it returns as it was given: the top-level fields and the fields
+  // the groups with no name hold, which are fields of the same list.
+  return addressableFields(fields) as unknown as F[];
+}
 
 /**
  * The physical columns a list of fields occupies.

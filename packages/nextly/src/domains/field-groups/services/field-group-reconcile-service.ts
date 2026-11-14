@@ -34,6 +34,7 @@ import {
   planFieldGroupReconcile,
   type ExpectedColumnDefault,
   type ReconcileAdoption,
+  type ReconcileAwaitingColumn,
   type ReconcileBlocker,
   type ReconcilePlan,
   type ReconcileRemoval,
@@ -53,6 +54,12 @@ export interface ReconcileFieldGroupResult {
   removed: ReconcileRemoval[];
   repaired: ReconcileRepair[];
   adopted: ReconcileAdoption[];
+  /**
+   * Fields inside a group with no name that were kept although the main table has no column for
+   * them yet: a field group made before such fields were stored. Not a repair and not drift; the
+   * next save or `nextly migrate` adds each column named here.
+   */
+  awaitingColumns: ReconcileAwaitingColumn[];
   /** True when the definition already described the tables and nothing was written. */
   unchanged: boolean;
   /** The version after the repair; unchanged repairs report the version they found. */
@@ -90,6 +97,8 @@ export interface ReconcileFieldGroupPreview {
   removed: ReconcileRemoval[];
   repaired: ReconcileRepair[];
   adopted: ReconcileAdoption[];
+  /** See `ReconcileFieldGroupResult.awaitingColumns`. */
+  awaitingColumns: ReconcileAwaitingColumn[];
   /** Non-empty means the repair would REFUSE. Nothing here is applicable until each is resolved. */
   blockers: ReconcileBlocker[];
   /**
@@ -259,6 +268,11 @@ interface ReconcileAssessment {
   plan: ReconcilePlan<FieldDefinition>;
   typeColumn: string;
   dialect: SupportedDialect;
+  /**
+   * The columns the live main table holds, so the runtime table registered after the plan leaves
+   * out a field inside a group with no name whose column is still to come (`awaitingColumns`).
+   */
+  heldColumns: string[];
   /** A standing failure mark over tables the plan found healthy — stale, and itself a repair. */
   markerStandsWrongly: boolean;
   /**
@@ -384,6 +398,7 @@ async function assessFieldGroupReconcile(
     existing,
     plan,
     typeColumn,
+    heldColumns: liveMain.columns.map(column => column.name),
     dialect,
     markerStandsWrongly,
     wouldWrite: !(plan.unchanged && !markerStandsWrongly),
@@ -411,6 +426,7 @@ export async function previewFieldGroupReconcile(
     removed: plan.removed,
     repaired: plan.repaired,
     adopted: plan.adopted,
+    awaitingColumns: plan.awaitingColumns,
     blockers: plan.blockers,
     unchanged: plan.unchanged,
     wouldWrite,
@@ -458,7 +474,7 @@ export async function reconcileFieldGroup(args: {
 }): Promise<ReconcileFieldGroupResult> {
   const { registry, adapter, logger, slug } = args;
 
-  const { existing, plan, typeColumn, dialect, wouldWrite } =
+  const { existing, plan, typeColumn, heldColumns, dialect, wouldWrite } =
     await assessFieldGroupReconcile(args);
 
   // Imported here rather than in the assessment: only the repair points the running process at a
@@ -540,7 +556,8 @@ export async function reconcileFieldGroup(args: {
       existing.tableName,
       plan.fields as unknown as FieldConfig[],
       typeColumn,
-      plan.localized
+      plan.localized,
+      heldColumns
     );
     logger.info("[FieldGroups] Reconcile found nothing to repair", {
       slug,
@@ -552,6 +569,7 @@ export async function reconcileFieldGroup(args: {
       removed: [],
       repaired: [],
       adopted: [],
+      awaitingColumns: plan.awaitingColumns,
       unchanged: true,
       schemaVersion: existing.schemaVersion,
       runtimeRefreshed: unchangedRegistration.registered,
@@ -616,7 +634,8 @@ export async function reconcileFieldGroup(args: {
     // naming the target type keeps the compiler checking this call rather than waving it through.
     plan.fields as unknown as FieldConfig[],
     typeColumn,
-    plan.localized
+    plan.localized,
+    heldColumns
   );
 
   logger.info("[FieldGroups] Reconciled definition against live tables", {
@@ -624,6 +643,7 @@ export async function reconcileFieldGroup(args: {
     removed: plan.removed.map(r => r.fieldName),
     repaired: plan.repaired.map(r => `${r.fieldName}.${r.attribute}`),
     adopted: plan.adopted.map(a => a.fieldName),
+    awaitingColumns: plan.awaitingColumns.map(a => a.columnName),
     localized: plan.localized,
     runtimeRefreshed: registration.registered,
   });
@@ -634,6 +654,7 @@ export async function reconcileFieldGroup(args: {
     removed: plan.removed,
     repaired: plan.repaired,
     adopted: plan.adopted,
+    awaitingColumns: plan.awaitingColumns,
     unchanged: false,
     schemaVersion: outcome.newSchemaVersion,
     runtimeRefreshed: registration.registered,

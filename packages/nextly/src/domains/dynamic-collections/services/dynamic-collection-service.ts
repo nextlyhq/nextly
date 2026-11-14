@@ -69,6 +69,7 @@ import { refuseRenamedFieldOntoTakenColumn } from "../../schema/rename-target";
 import {
   columnsThatMayHoldNull,
   fieldProducesColumn,
+  fieldsStoredOnRow,
   getColumnDescriptor,
   systemColumnsForFields,
   toSnakeCase,
@@ -2186,11 +2187,25 @@ export class DynamicCollectionService extends BaseService {
    */
   private async keysTheTableHolds(
     tableName: string,
-    oldFields: FieldDefinition[],
-    newFields: FieldDefinition[],
+    declaredOldFields: FieldDefinition[],
+    declaredNewFields: FieldDefinition[],
     targetTables: CollectionTables | undefined
   ): Promise<{ before: ForeignKeySpec[]; after: ForeignKeySpec[] }> {
-    const onMainTable = (field: FieldDefinition) => field.localized !== true;
+    // The fields with a column on the table before and after (`fieldsStoredOnRow`): those inside a
+    // group with no name too, whose relationships hold keys here as one beside the group does, on
+    // an entry's row and on a field group's alike. The group itself has no column, nor a name to
+    // spell one from.
+    const oldFields = fieldsStoredOnRow(declaredOldFields);
+    const newFields = fieldsStoredOnRow(declaredNewFields);
+    // Which fields are translated is read from the declared lists, as the creating SQL and the
+    // desired table read it: a field inside a group with no name stays on the row whatever it
+    // says, so its key is this table's.
+    const translated = new Set(
+      [...declaredOldFields, ...declaredNewFields]
+        .filter(field => field.localized === true)
+        .map(field => field.name)
+    );
+    const onMainTable = (field: FieldDefinition) => !translated.has(field.name);
     const described = this.relationshipForeignKeys(
       tableName,
       newFields.filter(onMainTable),

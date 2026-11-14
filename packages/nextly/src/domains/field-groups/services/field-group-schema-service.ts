@@ -78,6 +78,7 @@ import {
   componentRelationIsSingleReference,
   componentRelationshipHoldsReferenceList,
   componentRelationshipStoresJson,
+  fieldsStoredOnRow,
   getComponentRowColumnDescriptor,
   usesJunctionTable,
   type ColumnDescriptor,
@@ -190,6 +191,18 @@ function createdAtIndexName(tableName: string): string {
 export interface RuntimeSchemaOptions {
   localized?: boolean;
   typeColumn: string;
+  /**
+   * The columns the live table holds, where the caller read them (`resolveTableColumns`).
+   *
+   * A field inside a group with no name is stored on the row, and field groups made before that
+   * was so have no column for it until their next save or `nextly migrate` adds one. Given this, the
+   * runtime table leaves out such a field whose column the table does not hold yet, so the field
+   * group's reads and writes keep working, without that field, as they did before, instead of
+   * naming a column the table lacks. A field beside the group is never left out: a definition
+   * ahead of its table there is answered as not migrated, as everywhere else. Omitted, every
+   * column the fields declare is included, which is right for a table just created or altered.
+   */
+  heldColumns?: readonly string[];
 }
 
 /**
@@ -493,10 +506,13 @@ export class FieldGroupSchemaService {
           )
         )
       : new Set<string>();
-    const mainFields = fields.filter(f => {
-      const name = "name" in f ? (f as { name?: string }).name : undefined;
-      return !name || !localizedNames.has(name);
-    });
+    const mainFields = this.heldRowFields(
+      fields.filter(f => {
+        const name = "name" in f ? (f as { name?: string }).name : undefined;
+        return !name || !localizedNames.has(name);
+      }),
+      options.heldColumns
+    );
     const typeColumn = options.typeColumn;
     // Columns a schema hook contributed to this table, read the way every
     // entity runtime table reads them. This table is what drizzle-kit is
@@ -1150,15 +1166,41 @@ export class FieldGroupSchemaService {
   }
 
   /**
+   * `fields` without each field inside a group with no name whose column `heldColumns` does not
+   * list; see `RuntimeSchemaOptions.heldColumns`. Flattened through `fieldsStoredOnRow`, which
+   * `columnFields` reads again unchanged, so the runtime table still lists the row's fields once.
+   */
+  private heldRowFields(
+    fields: FieldConfig[],
+    heldColumns: readonly string[] | undefined
+  ): FieldConfig[] {
+    if (heldColumns === undefined) return fields;
+    const held = new Set(heldColumns.map(column => column.toLowerCase()));
+    const topLevel = new Set<FieldConfig>(fields);
+    return fieldsStoredOnRow(fields).filter(field => {
+      if (topLevel.has(field)) return true;
+      const name = (field as { name?: unknown }).name;
+      return (
+        typeof name === "string" &&
+        held.has(this.toSnakeCase(name).toLowerCase())
+      );
+    });
+  }
+
+  /**
    * The fields that own a column on the component's row: named data fields,
    * less those `componentFieldHasColumn` rules out. Every loop that builds the
    * CREATE, the indexes, the runtime tables or the ALTER plan reads this list,
    * so they cannot disagree about which fields are columns.
+   *
+   * Read through `fieldsStoredOnRow`: a group with no name only lays fields
+   * out, and the data fields inside it are stored on this row as the ones
+   * beside it are, so each gets its column here.
    */
   private columnFields(
     fields: FieldConfig[]
   ): Array<DataFieldConfig & { name: string }> {
-    return fields.filter(
+    return fieldsStoredOnRow(fields).filter(
       (field): field is DataFieldConfig & { name: string } =>
         (isDataField(field) || isPluginDataField(field)) &&
         componentFieldHasColumn(field) &&
