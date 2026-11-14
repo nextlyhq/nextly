@@ -1,11 +1,12 @@
 /**
- * `contains` finds the entries whose hasMany relationship holds an id, on PostgreSQL, MySQL and
+ * `in` finds the entries whose hasMany relationship holds an id, on PostgreSQL, MySQL and
  * SQLite: the filter the blog template's category and tag pages list their posts with.
  *
- * A hasMany relationship is stored as a JSON array of ids, in a `jsonb` column on PostgreSQL. The
- * case-insensitive match `contains` compiles to lowers the column, and PostgreSQL has no
- * `lower()` for `jsonb`, so there the filter failed ("function lower(jsonb) does not exist")
- * while MySQL and SQLite searched the serialized array. Now all three match the serialized text.
+ * The entries and their lists are made through the Direct API, as a site makes them, so the
+ * list the filter reads is the one a create stores (a JSON array of ids, in a `jsonb` column on
+ * PostgreSQL). `has-many-filter-membership` covers every operator on lists written directly,
+ * including the refusal of `contains`, which matched the list's text and is no longer accepted
+ * on such a field.
  */
 import { afterEach, beforeEach, expect, it } from "vitest";
 
@@ -16,7 +17,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 
-describeEachDialect("contains on a hasMany relationship", dialect => {
+describeEachDialect("in on a hasMany relationship", dialect => {
   let current: TestNextly;
   let travel: string;
   let food: string;
@@ -73,7 +74,7 @@ describeEachDialect("contains on a hasMany relationship", dialect => {
   async function titlesWithTopic(id: string): Promise<string[]> {
     const found = await current.nextly.find({
       collection: "articles",
-      where: { topics: { contains: id } },
+      where: { topics: { in: [id] } },
       overrideAccess: true,
     });
     return found.items.map(item => String(item.title)).sort();
