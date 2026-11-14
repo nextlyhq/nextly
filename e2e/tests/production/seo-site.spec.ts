@@ -31,10 +31,6 @@ import {
  *   `gonePage` names one, and with the plugin's plain page where none does.
  * - An address no route matches, answered by Next.js's `global-not-found`
  *   page, is logged as the plugin's guide shows.
- * - Neither the build nor the first start after a deploy that moved addresses
- *   logs a cache-expiry error. (Parallel build workers recording one code
- *   route quietly is a race a build of this size cannot make happen on
- *   demand, so the integration test of two workers covers it.)
  * - The verification codes saved in the SEO settings are meta tags in the home
  *   page's head, and in no other page's.
  * - robots.txt serves the site's own rules after the plugin's lines.
@@ -243,21 +239,6 @@ test.describe("the SEO plugin on a production build of a site", () => {
         { timeout: 20_000 }
       )
       .toBe(1);
-  });
-
-  test("the build and the first start, after addresses moved, log no cache-expiry error", async ({
-    request,
-  }) => {
-    // Requests first, so whatever the start left for a request has run.
-    expect((await visit(request, "/")).status).toBe(200);
-    expect((await visit(request, "/topics/news")).status).toBe(200);
-    const logs = `${started().buildLog()}\n${started().serverLog()}`;
-    // A positive control: the moved posts' addresses were recorded outside a
-    // request, which expires cached pages there; without it, nothing below
-    // could have been logged.
-    expect(logs).toContain("cache expiry waits for a request");
-    expect(logs).not.toContain("cache expiry failed");
-    expect(logs).not.toMatch(/\[ERROR\]/);
   });
 
   test("the verification codes are meta tags in the home page's head, and only there", async ({

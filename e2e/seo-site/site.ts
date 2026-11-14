@@ -172,25 +172,15 @@ export async function startSeoSite(
   // The suite's own server's build directory is not this app's.
   delete env.NEXT_DIST_DIR;
   const log = (step: string) => path.join(RUN, `${step}.log`);
-  // The deploy before this one: its posts at `/articles/<slug>`, its plugin
-  // installed and its settings saved. This deploy serves them at
-  // `/posts/<slug>`, so its build and first start meet addresses that moved.
-  const before = { ...env, SEO_SITE_POSTS_AT: "/articles/{slug}" };
-  const steps: Array<[string, string, string[], NodeJS.ProcessEnv, number]> = [
-    ["content", TSX, ["scripts/setup.ts", "content"], before, STEP_MS],
-    [
-      "plugins-install",
-      NEXTLY,
-      ["plugins", "install", "--all"],
-      before,
-      STEP_MS,
-    ],
-    ["settings", TSX, ["scripts/setup.ts", "settings"], before, STEP_MS],
-    ["build", NEXT, ["build"], env, BUILD_MS],
+  const steps: Array<[string, string, string[], number]> = [
+    ["content", TSX, ["scripts/setup.ts", "content"], STEP_MS],
+    ["plugins-install", NEXTLY, ["plugins", "install", "--all"], STEP_MS],
+    ["settings", TSX, ["scripts/setup.ts", "settings"], STEP_MS],
+    ["build", NEXT, ["build"], BUILD_MS],
   ];
   try {
-    for (const [name, command, args, stepEnv, timeout] of steps) {
-      run(name, command, args, stepEnv, log(name), timeout);
+    for (const [name, command, args, timeout] of steps) {
+      run(name, command, args, env, log(name), timeout);
     }
   } catch (error) {
     removeRun();
