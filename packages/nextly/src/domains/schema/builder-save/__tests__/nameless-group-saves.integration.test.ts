@@ -23,6 +23,8 @@ import { join } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { defineCollection } from "../../../../collections/config/define-collection";
+import { text as textField } from "../../../../collections/fields/helpers";
 import { defineConfig } from "../../../../config";
 import { createAdapter } from "../../../../database/factory";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
@@ -284,6 +286,105 @@ describe.each(getConfiguredTestDialects())(
         subtitle: "Below",
         rank: 3,
       });
+    });
+
+    /** A Single app, run as the Builder runs it, with a collection `people` defined in code. */
+    async function singleApp(): Promise<TestNextly> {
+      const t = await boot(dialect, {
+        db: { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" },
+        basePath: dir,
+        collections: [
+          defineCollection({
+            slug: "people",
+            fields: [textField({ name: "name" })],
+          }),
+        ],
+      });
+      vi.stubEnv("NODE_ENV", "development");
+      return t;
+    }
+
+    it("keys a relationship inside the group on a Single's row, as one beside it is keyed", async () => {
+      const t = await singleApp();
+      const owner = {
+        name: "owner",
+        type: "relationship",
+        options: { target: "people", onDelete: "set null" },
+      } as Field;
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          fields: [
+            text("heading"),
+            { type: "group", label: "Byline", fields: [owner] } as Field,
+          ],
+        }
+      );
+
+      // The key the creating SQL declares for the column: the migration the save wrote builds the
+      // table from the desired schema and the keys handed beside it, which read the group through.
+      const adapter = t.adapter as unknown as DrizzleAdapter;
+      const live = await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
+        "single_notice",
+      ]);
+      const keys = live.tables.find(
+        entry => entry.name === "single_notice"
+      )?.foreignKeys;
+      expect(keys, JSON.stringify(keys)).toEqual([
+        expect.objectContaining({
+          columns: ["owner"],
+          referencesTable: "dc_people",
+        }),
+      ]);
+    });
+
+    it("refuses a Single save that renames a field inside the group to a width its stored value does not fit, and changes nothing", async () => {
+      const t = await singleApp();
+      const short = (name: string, maxLength: number): Field =>
+        ({
+          name,
+          type: "text",
+          options: { variant: "short" },
+          validation: { maxLength },
+        }) as Field;
+      const group = (field: Field): Field =>
+        ({ type: "group", label: "Byline", fields: [field] }) as Field;
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          fields: [text("heading"), group(short("subtitle", 40))],
+        }
+      );
+      const singles = t.getService("singleEntryService");
+      await singles.update(
+        "notice",
+        { subtitle: "a value longer than ten", _overwrite: true },
+        { overrideAccess: true }
+      );
+      const before = await liveColumns(t, dialect, "single_notice");
+
+      // The renamed field is the same column, so its stored value is judged against the new width
+      // before anything runs, as a rename beside the group is.
+      await expect(
+        dispatchSingles(
+          "updateSingleSchema",
+          { slug: "notice" },
+          { fields: [text("heading"), group(short("strap", 10))] }
+        )
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+      expect(await liveColumns(t, dialect, "single_notice")).toEqual(before);
+      expect(
+        (await singles.get("notice", { overrideAccess: true })).data
+      ).toMatchObject({ subtitle: "a value longer than ten" });
     });
   }
 );
