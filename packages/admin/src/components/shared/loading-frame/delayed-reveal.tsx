@@ -179,3 +179,37 @@ export function useEditorRevealHold(
   );
   return forClaim || forReads;
 }
+
+/**
+ * The longest a list waits, once its rows have arrived, for a plugin's column
+ * provider still deciding whether the list has its column
+ * (`ctx.deciding`). The same short wait a part of an editor gets: the
+ * provider's read normally answers with the rows, so the wait holds nothing;
+ * past it the rows are drawn and a late column lands as it would have.
+ */
+export const LIST_COLUMNS_HOLD_MS = EDITOR_REVEAL_HOLD_MS;
+
+/**
+ * Whether a list whose rows are in (`rowsIn`) still draws its outline,
+ * waiting for its plugins' columns (`deciding`): so a column decided by a
+ * read is drawn with the rows, not inserted after them, which would move
+ * every cell beside it. The wait is timed from the rows' arrival, for
+ * {@link LIST_COLUMNS_HOLD_MS} at most, once for each `list`: a list shown
+ * is never taken back, and it starts no wait again while it stays on screen.
+ */
+export function useHoldForDecidingColumns(
+  rowsIn: boolean,
+  deciding: boolean,
+  list: string
+): boolean {
+  // Its own hold for the rows' arrival, so the time runs from then: before
+  // it, the hold is the outline's, never waiting, and marked shown.
+  const [arrived, setArrived] = useState<string | null>(null);
+  if (rowsIn && arrived !== list) setArrived(list);
+  const begun = arrived === list;
+  return useHeldReveal(
+    begun && deciding,
+    LIST_COLUMNS_HOLD_MS,
+    begun ? list : `${list}:before-rows`
+  );
+}
