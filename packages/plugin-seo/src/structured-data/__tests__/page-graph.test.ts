@@ -26,6 +26,7 @@ import { describe, expect, it, vi } from "vitest";
 import { keepRecord } from "../../address-record/__tests__/record-double";
 import { sha256 } from "../../address-record/rows";
 import { buildStructuredData, type StructuredDataNode } from "../graph";
+import { structuredDataRulesOf } from "../../settings/structured-data-rules";
 import { rulesFromOptions, type StructuredDataRules } from "../rules";
 
 vi.mock("@nextlyhq/plugin-sdk", async importOriginal => ({
@@ -450,6 +451,36 @@ describe("the page's trail", () => {
 });
 
 describe("the site's own nodes", () => {
+  it("are the same whether the brand facts are given in code or saved in the settings", async () => {
+    const { founders: _codeOnly, ...saved } = BRAND;
+    const inSettings = structuredDataRulesOf(
+      { origin: ORIGIN, brand: { founders: BRAND.founders }, types: {} },
+      {
+        brand: {
+          ...saved,
+          otherNames: [...(saved.otherNames ?? [])],
+          profiles: (saved.profiles ?? []).map(profile => ({
+            network: "X",
+            url: profile.url,
+          })),
+          contactPoints: [...(saved.contactPoints ?? [])],
+        },
+        types: {},
+      }
+    );
+    const graph = async (from: StructuredDataRules) =>
+      (
+        await buildStructuredData(
+          context(),
+          singleInput("about", { id: "a1" }),
+          answerAt("/about", "About"),
+          from
+        )
+      ).nodes;
+
+    expect(await graph(inSettings)).toEqual(await graph(rules()));
+  });
+
   it("state every brand fact given, at the one spelling of the site's address", async () => {
     const { nodes } = await buildStructuredData(
       context(),
