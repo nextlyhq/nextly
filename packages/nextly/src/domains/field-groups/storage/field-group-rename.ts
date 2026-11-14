@@ -17,6 +17,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { quoteIdent } from "../../schema/pipeline/sql-templates/identifier-quoting";
 import { quoteSqlLiteral } from "../../schema/utils/sql-literal";
 
@@ -88,9 +89,16 @@ export function removedAndAddedFieldGroups<T extends RenamedFieldShape>(
  * renamed to its own name is never a pair, since its old field group shares its groups.
  */
 export function fieldGroupRenamePairs<T extends RenamedFieldShape>(
-  oldFields: readonly T[],
-  newFields: readonly T[]
+  declaredOldFields: readonly T[],
+  declaredNewFields: readonly T[]
 ): Array<{ from: T; to: T }> {
+  // A field-group field inside a group with no name keeps its rows where the group sits, keyed by
+  // its own name, as the write stores them (`directFieldGroupFields`), so a rename there moves
+  // rows too. Paired over the fields at this level through the shared walk; over the declared
+  // lists the unnamed group matched itself and hid the rename, and its rows stayed under the old
+  // name while the definition moved on.
+  const oldFields = addressableFields(declaredOldFields) as unknown as T[];
+  const newFields = addressableFields(declaredNewFields) as unknown as T[];
   const { oldOnly, newOnly } = removedAndAddedFieldGroups(oldFields, newFields);
   const heldGroups = new Map(
     oldFields

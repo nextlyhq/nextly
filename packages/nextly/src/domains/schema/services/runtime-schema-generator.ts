@@ -85,6 +85,7 @@ import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
   ENUM_STORAGE_LENGTH,
+  fieldsStoredOnRow,
   getColumnDescriptor,
   migrateStepColumnDescriptors,
   renderDialectType,
@@ -605,8 +606,11 @@ function buildDrizzleColumnRecord(
   }
 
   // User-defined fields. Layout-only field types and unmapped types
-  // come back as `null` from getColumnDescriptor and are skipped.
-  for (const field of fields) {
+  // come back as `null` from getColumnDescriptor and are skipped. Those inside
+  // a group with no name are columns of this row, read through the walk every
+  // builder of the row's columns shares (`fieldsStoredOnRow`); the group
+  // itself has no name to give a column.
+  for (const field of fieldsStoredOnRow(fields)) {
     if (localizedNames.has(field.name)) continue; // companion-owned
     const desc = getColumnDescriptor(
       field,

@@ -101,6 +101,7 @@ import { plainMysqlEquivalents } from "../pipeline/sql-templates/mysql-live-rest
 import type { ColumnResolution } from "../pipeline/sql-templates/resolution-statements";
 import {
   classifyFieldKind,
+  fieldsStoredOnRow,
   getColumnDescriptor,
   toSnakeCase,
   type ColumnOrigin,
@@ -636,6 +637,19 @@ interface SettledRows {
  * Builder's push path keeps. A field the table does not have yet counts every
  * row. Refused before anything is written.
  */
+/**
+ * The saved field an answer names, found where the answer was matched (`saveOfSchemaChange`):
+ * among the row's fields, those inside a group with no name included.
+ */
+function answeredField(
+  save: CollectionSave,
+  column: string
+): UiSchemaEntity["fields"][number] | undefined {
+  return fieldsStoredOnRow(save.entity?.fields ?? []).find(
+    f => f.name === column
+  );
+}
+
 async function settledRows(
   deps: CollectionSaveDeps,
   save: CollectionSave,
@@ -649,7 +663,7 @@ async function settledRows(
     : undefined;
   const settled: SettledRows[] = [];
   for (const resolution of save.resolutions ?? []) {
-    const field = save.entity?.fields.find(f => f.name === resolution.column);
+    const field = answeredField(save, resolution.column);
     if (field === undefined) {
       throw NextlyError.validation({
         errors: [
@@ -760,7 +774,12 @@ function refuseUnenforceableUniques(
   const dialect = deps.adapter.getCapabilities().dialect;
   const entity = save.entity;
   if (entity === null) return;
-  for (const field of mainTableFields(entity, entity.fields)) {
+  // The row holds the fields inside a group with no name as columns (`fieldsStoredOnRow`), an
+  // entry's and a field group's instance's alike, so a unique one among them is judged as one
+  // beside the group is.
+  for (const field of fieldsStoredOnRow(
+    mainTableFields(entity, entity.fields)
+  )) {
     // A group with no name only lays fields out and has no column to key.
     const name = field.name;
     if (field.unique !== true || name === undefined) continue;

@@ -158,7 +158,9 @@ export type ColumnKind =
 export function columnsThatMayHoldNull(
   fields: readonly { name: string; required?: boolean; type?: string }[]
 ): string[] {
-  return fields
+  // Every column of the row, those of the fields inside a group with no name among them
+  // (`fieldsStoredOnRow`); the group itself has no column to hold anything.
+  return fieldsStoredOnRow(fields)
     .filter(
       field =>
         field.required !== true &&
@@ -210,7 +212,8 @@ export function columnsDeclaredBy(
   >
 ): Set<string> {
   const columns = new Set<string>();
-  for (const field of fields) {
+  // The fields inside a group with no name occupy columns on the row too (`fieldsStoredOnRow`).
+  for (const field of fieldsStoredOnRow([...fields])) {
     if (!field || typeof field.name !== "string") continue;
     if (!fieldProducesColumn(field)) continue;
     columns.add(toSnakeCase(field.name));
@@ -1117,8 +1120,10 @@ export function systemColumnsForFields(
   }
 ): SystemColumnDescriptor[] {
   const { builtBy, ...set } = opts;
+  // A field inside a group with no name is stored on the row, so it replaces a system column as a
+  // field beside the group does, and the group itself, which has no name, replaces none.
   const declaresColumn = (column: string): boolean =>
-    fields.some(
+    fieldsStoredOnRow(fields).some(
       f =>
         toSnakeCase(f.name) === column &&
         getColumnDescriptor(f, dialect, builtBy) !== null

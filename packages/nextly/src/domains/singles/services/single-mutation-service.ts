@@ -2980,7 +2980,13 @@ export class SingleMutationService extends BaseService {
       // tables) AFTER the access/hooks/validation pipeline above has seen
       // the component fields.
       const componentFieldData: Record<string, unknown> = {};
-      fieldConfigs.forEach(field => {
+      // The field groups stored at the top level, those inside a group with no name among them:
+      // such a group stores its fields where it sits, and the field-group save writes their
+      // instances from this level too (`storedFieldGroupFields`). Left in the row's values, one
+      // named a column the row does not have.
+      (
+        addressableFields(fieldConfigs) as unknown as typeof fieldConfigs
+      ).forEach(field => {
         if (isFieldGroupField(field) && currentData[field.name] !== undefined) {
           componentFieldData[field.name] = currentData[field.name];
           delete currentData[field.name];
@@ -4129,9 +4135,12 @@ export class SingleMutationService extends BaseService {
             Object.keys(attemptComponentFields).length > 0
           ) {
             for (const writtenName of Object.keys(attemptComponentFields)) {
-              const fieldConfig = fieldConfigs.find(
-                f => "name" in f && f.name === writtenName
-              );
+              // Found where the split above found it, inside a group with no name included.
+              const fieldConfig = (
+                addressableFields(
+                  fieldConfigs
+                ) as unknown as typeof fieldConfigs
+              ).find(f => "name" in f && f.name === writtenName);
               if (!fieldConfig || !isFieldGroupField(fieldConfig)) continue;
               // The instances this write actually stored: a single-component
               // field yields one; a dynamic-zone field yields each written
@@ -4301,7 +4310,10 @@ export class SingleMutationService extends BaseService {
             preRestoreComponents = {};
             // The named component fields whose current subtrees the snapshot
             // must read before the restore overwrites them.
-            const preComponentFields = fieldConfigs.filter(
+            // Inside a group with no name too, where the write stores them from this level.
+            const preComponentFields = (
+              addressableFields(fieldConfigs) as unknown as typeof fieldConfigs
+            ).filter(
               (f): f is typeof f & { name: string } =>
                 isFieldGroupField(f) && !!f.name
             );
@@ -4727,7 +4739,11 @@ export class SingleMutationService extends BaseService {
             // The fields this save supplies, as opposed to those carried over
             // from the draft or the live document it builds on.
             const suppliedFieldNames = new Set<string>();
-            for (const field of singleMeta.fields) {
+            // Every field of the row, those inside a group with no name among them: their
+            // columns are on this row, so an edit to one is held here like one beside the group.
+            for (const field of addressableFields(
+              singleMeta.fields
+            ) as unknown as typeof singleMeta.fields) {
               if (field.name === undefined) continue;
               const column = toSnakeCase(field.name);
               if (Object.prototype.hasOwnProperty.call(mainPayload, column)) {
