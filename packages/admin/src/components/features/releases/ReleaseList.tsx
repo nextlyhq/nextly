@@ -662,9 +662,9 @@ function useReleaseListData(q: ReturnType<typeof useReleaseListQuestion>) {
 
 /**
  * The list's outline: the table, under the toolbar's outline wherever the
- * list may draw a toolbar. Decided once, when the outline is first drawn:
- * the counts can answer before the page does, and an outline that then
- * dropped its toolbar would draw its table up under the reader.
+ * list will draw a toolbar with the table. Decided once, when the outline is
+ * first drawn: the counts can answer before the page does, and an outline
+ * that then dropped its toolbar would draw its table up under the reader.
  * The list replaces the outline whole, which moves nothing.
  */
 function ReleaseListOutline({
@@ -836,10 +836,13 @@ export function ReleaseList({ onCreate }: ReleaseListProps): JSX.Element {
       )}
       skeleton={
         <ReleaseListOutline
-          // A toolbar is drawn with the table wherever a release may exist:
-          // while the counts are unknown, and once they say one does (a
-          // revisit with the counts kept and the page not yet read, say).
-          toolbar={anyRelease}
+          // The toolbar's place, while the real toolbar is held back to come
+          // with the table and a release may exist: the counts unknown, or
+          // saying one does (a revisit with the counts kept and the page not
+          // yet read, say). Once the list has first answered the real toolbar
+          // stays drawn above a later outline (another tab's first page), so
+          // that outline holds no second one.
+          toolbar={anyRelease && firstAnswer}
           headers={columns.map(column => column.header)}
         />
       }

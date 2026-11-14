@@ -754,6 +754,27 @@ describe("the list's outline while its reads answer", () => {
     expect(toolbarOutlines()).toBe(1);
   });
 
+  // Once the list has first answered, its real toolbar stays drawn while
+  // another tab's first page is read: an outline holding a second toolbar's
+  // place under it would leave a gap that closes when the page lands.
+  it("holds no second toolbar's place under the real toolbar while another tab's page is read", () => {
+    mocks.tabCounts.mockReturnValue(
+      counts({ upcoming: 3, attention: 2, drafts: 1, done: 4 })
+    );
+    mocks.listPage.mockReturnValue(page([release()]));
+    const { rerender } = render(<ReleaseList />);
+    expect(
+      screen.getByPlaceholderText("Search by title or description")
+    ).toBeTruthy();
+    mocks.listPage.mockReturnValue(pendingPage);
+    mocks.searchParams = { tab: "drafts" };
+    rerender(<ReleaseList />);
+    expect(
+      screen.getByPlaceholderText("Search by title or description")
+    ).toBeTruthy();
+    expect(toolbarOutlines()).toBe(0);
+  });
+
   it("draws no toolbar's place when kept counts say no release exists", () => {
     mocks.tabCounts.mockReturnValue(counts({}));
     mocks.listPage.mockReturnValue(pendingPage);
