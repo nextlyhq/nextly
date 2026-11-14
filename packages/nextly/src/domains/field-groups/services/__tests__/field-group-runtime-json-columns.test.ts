@@ -9,11 +9,15 @@
  * is refused, and a kit rebuild converts the JSON list back to a scalar.
  */
 import { getColumns, type Table } from "drizzle-orm";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { FieldConfig } from "../../../../collections/fields/types";
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../../../schemas/storage-format";
+import {
+  clearFieldTypes,
+  registerFieldType,
+} from "../../../schema/field-types/field-type-registry";
 import {
   getComponentRowColumnDescriptor,
   type SupportedDialect,
@@ -58,6 +62,57 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)("%s", dialect => {
       expect(columns.find(c => c.name === name)?.columnType).toBe(
         JSON_COLUMN[dialect]
       );
+    }
+  );
+});
+
+/** The Drizzle column type and the CREATE's type of an integer column, per dialect. */
+const INTEGER_COLUMN: Record<
+  SupportedDialect,
+  { runtime: string; create: string }
+> = {
+  postgresql: { runtime: "PgInteger", create: "int4" },
+  mysql: { runtime: "MySqlInt", create: "int" },
+  sqlite: { runtime: "SQLiteInteger", create: "integer" },
+};
+
+describe("a contributed number type whose field carries hasMany", () => {
+  afterEach(() => {
+    clearFieldTypes();
+  });
+
+  // The option is the plugin type's own, which core does not interpret: the descriptor maps the
+  // declared type to its storage primitive, an integer, for the CREATE. The runtime column is asked
+  // of the same declared field, so it is that integer too, not the JSON column a built-in `hasMany`
+  // number would get.
+  it.each(["postgresql", "mysql", "sqlite"] as const)(
+    "is the integer column the CREATE makes on %s",
+    dialect => {
+      registerFieldType({
+        type: "tally",
+        storage: "number",
+        component: "@acme/tally/admin#Tally",
+        surfaces: ["entries"],
+      });
+      const field = { name: "tally", type: "tally", hasMany: true };
+      const service = new FieldGroupSchemaService(dialect);
+      const table = service.generateRuntimeSchema(
+        "comp_tally",
+        [field] as unknown as FieldConfig[],
+        { typeColumn: STORAGE_FORMAT.columns.type }
+      ) as Table;
+
+      expect(
+        service.columnTypeFor(
+          field as unknown as Parameters<
+            FieldGroupSchemaService["columnTypeFor"]
+          >[0]
+        )
+      ).toBe(INTEGER_COLUMN[dialect].create);
+      expect(
+        Object.values(getColumns(table)).find(c => c.name === "tally")
+          ?.columnType
+      ).toBe(INTEGER_COLUMN[dialect].runtime);
     }
   );
 });

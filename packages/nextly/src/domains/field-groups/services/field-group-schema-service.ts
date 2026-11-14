@@ -874,16 +874,23 @@ export class FieldGroupSchemaService {
    * mappers: they bind the column the CREATE makes, and the descriptor's builders read some of them
    * back differently (a decimal as a number rather than a string).
    */
-  private canonicalColumn(field: DataFieldConfig): ColumnDescriptor | null {
+  private canonicalColumn(
+    field: DataFieldConfig,
+    mapped: DataFieldConfig
+  ): ColumnDescriptor | null {
     if (!field.name) return null;
+    // Asked of the field as declared, exactly as `columnTypeFor` asks for the CREATE, so the runtime
+    // column and the created one are one answer. The storage-mapped field keeps options its plugin
+    // type does not interpret (a `hasMany` on a contributed number type) and would be described as
+    // a different column; it only says which fields the mappers below cannot bind.
     const descriptor = getComponentRowColumnDescriptor(
       field as unknown as Parameters<typeof getComponentRowColumnDescriptor>[0],
       this.dialect,
       this.builtBy
     );
     if (descriptor === null) return null;
-    return isIconField(field) ||
-      isTextField(field) ||
+    return isIconField(mapped) ||
+      isTextField(mapped) ||
       descriptor.kind === "json"
       ? descriptor
       : null;
@@ -919,7 +926,7 @@ export class FieldGroupSchemaService {
     const mappable = asStorageMappedField(field);
     const overridden = this.overriddenColumn(mappable, overrides);
     if (overridden) return buildUserDrizzleColumn(overridden, this.dialect);
-    const canonical = this.canonicalColumn(mappable);
+    const canonical = this.canonicalColumn(field, mappable);
     if (canonical) return buildUserDrizzleColumn(canonical, this.dialect);
     switch (this.dialect) {
       case "postgresql":
