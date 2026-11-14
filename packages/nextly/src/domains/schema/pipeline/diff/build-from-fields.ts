@@ -38,6 +38,7 @@ import {
 import { builderColumnIsUnique } from "../../field-rules";
 import {
   componentRelationshipHoldsReferenceList,
+  fieldsStoredOnRow,
   getColumnDescriptor,
   getComponentRowColumnDescriptor,
   componentRelationIsSingleReference,
@@ -449,17 +450,23 @@ export function buildDesiredTableFromFields(
   // Localized fields live in the companion `_locales` table (migration-owned); omit them
   // from the main table's desired columns/indexes. A localized `title`/`slug` field is thus
   // absent from main: the user field is skipped below, and the system column is not re-injected
-  // because `hasTitleField`/`hasSlugField` see the (localized) user field as present.
+  // because `hasTitleField`/`hasSlugField` see the (localized) user field as present. Classified
+  // from the declared list, as the companion and the entry write classify them, so a field inside
+  // a group with no name stays on the row, where both of those keep it.
   const localizedNames = options.localized
     ? new Set(resolveLocalizedFieldNames(fields, true))
     : new Set<string>();
+  // The fields whose columns sit on the row, those inside a group with no name among them, as the
+  // creating SQL and the runtime table read them (`fieldsStoredOnRow`). Read whole, the group's
+  // missing name stopped the descriptor, and with it every save whose desired schema held one.
+  const stored = fieldsStoredOnRow(fields);
 
   // Reserved system columns first, as the runtime schema injects them: the
   // same helper decides which a user field replaces, so the diff input stays in
   // lockstep with the runtime schema and DDL. status only when Draft/Published
   // is enabled.
   const systemColumns = systemColumnsForFields(
-    fields as unknown as Parameters<typeof systemColumnsForFields>[0],
+    stored as unknown as Parameters<typeof systemColumnsForFields>[0],
     dialect,
     {
       builtBy: options.builtBy,
@@ -486,7 +493,7 @@ export function buildDesiredTableFromFields(
 
   // User-defined fields — descriptor module handles layout-only filtering,
   // hasMany/relationTo promotion to JSON, and per-dialect token rendering.
-  for (const field of fields) {
+  for (const field of stored) {
     if (localizedNames.has(field.name)) continue; // lives in the companion table
     const desc = getColumnDescriptor(
       // The descriptor's input type is FieldDefinition; this util is
@@ -501,7 +508,7 @@ export function buildDesiredTableFromFields(
     columns.push(userColumnSpec(field, desc, dialect));
   }
 
-  const indexes = collectionIndexSpecs(tableName, fields, {
+  const indexes = collectionIndexSpecs(tableName, stored, {
     hasSlugColumn: columns.some(c => c.name === "slug"),
     hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
     hasCreatedByColumn: columns.some(c => c.name === "created_by"),

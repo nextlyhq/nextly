@@ -1,0 +1,289 @@
+/**
+ * A group with no name in a collection's or a Single's fields only lays fields out: the fields it
+ * holds are stored where it sits, as columns of the entity's own row. That is where the entry
+ * reads and writes address them, and every builder of the row's columns has to agree: the SQL
+ * that creates the table, the runtime table, and the desired table each Builder save diffs a
+ * migration from.
+ *
+ * Handed the group itself, each of those read its missing name and stopped, so a Single holding
+ * one could not be created, and a collection holding one in the definition file stopped every
+ * later Builder save. Leaving the group's fields out instead would have planned dropping columns
+ * that hold values, so these cases read what the migrations say, not only that a save returned.
+ */
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { defineConfig } from "../../../../config";
+import { createAdapter } from "../../../../database/factory";
+import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "../../../../plugins/test-nextly";
+import type { UiSchemaEntity } from "../../../../schemas/_zod/ui-schema";
+import { _resetEnvCache } from "../../../../shared/lib/env";
+import { parseSqlSections } from "../../migrate/sql-sections";
+import { splitSqlStatements } from "../../migrate/split-sql";
+import { introspectLiveSnapshot } from "../../pipeline/diff/introspect-live";
+import {
+  writeCollectionSave,
+  type CollectionSaveDeps,
+} from "../collection-save";
+
+type Field = UiSchemaEntity["fields"][number];
+
+const text = (name: string): Field => ({ name, type: "text" }) as Field;
+
+/** A group with no name holding two fields of different kinds, which only lays them out. */
+const laidOut = {
+  type: "group",
+  label: "Byline",
+  fields: [
+    { name: "subtitle", type: "text" },
+    { name: "rank", type: "number" },
+  ],
+} as Field;
+
+/** A collection as the Builder's definition file records it. */
+function collection(slug: string, fields: Field[]): UiSchemaEntity {
+  return {
+    slug,
+    labels: { singular: slug, plural: `${slug}s` },
+    fields,
+  } as UiSchemaEntity;
+}
+
+/**
+ * The schema statements a migration file runs: its UP section, split as `nextly migrate` splits
+ * it, without the registry rows it records (which restate every field, the group's included).
+ */
+function schemaStatementsOf(path: string): string[] {
+  return splitSqlStatements(parseSqlSections(readFileSync(path, "utf-8")).upSql)
+    .map(statement => statement.trim())
+    .filter(statement => /^(ALTER|CREATE|DROP)\b/i.test(statement));
+}
+
+let dir: string;
+let instance: TestNextly | undefined;
+let previousDialect: string | undefined;
+let previousUrl: string | undefined;
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "nextly-nameless-group-"));
+  mkdirSync(join(dir, "migrations"));
+  previousDialect = process.env.DB_DIALECT;
+  previousUrl = process.env.DATABASE_URL;
+});
+
+afterEach(async () => {
+  await instance?.destroy();
+  instance = undefined;
+  vi.unstubAllEnvs();
+  if (previousDialect === undefined) delete process.env.DB_DIALECT;
+  else process.env.DB_DIALECT = previousDialect;
+  if (previousUrl === undefined) delete process.env.DATABASE_URL;
+  else process.env.DATABASE_URL = previousUrl;
+  _resetEnvCache();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+/** An app over a fresh database of `dialect`; SQLite in a file of this case's folder. */
+async function boot(
+  dialect: TestDialect,
+  extra: Partial<Parameters<typeof createTestNextly>[0]> = {}
+): Promise<TestNextly> {
+  if (dialect !== "sqlite") {
+    instance = await createTestNextly({ dialect, ...extra });
+    return instance;
+  }
+  const url = `file:${join(dir, "test.db")}`;
+  process.env.DB_DIALECT = "sqlite";
+  process.env.DATABASE_URL = url;
+  _resetEnvCache();
+  const adapter = await createAdapter({ type: "sqlite", url } as Parameters<
+    typeof createAdapter
+  >[0]);
+  instance = await createTestNextly({ adapter, ...extra });
+  return instance;
+}
+
+/** The columns `table` has in the database, sorted; undefined when it does not exist. */
+async function liveColumns(
+  t: TestNextly,
+  dialect: TestDialect,
+  table: string
+): Promise<string[] | undefined> {
+  const adapter = t.adapter as unknown as DrizzleAdapter;
+  const live = await introspectLiveSnapshot(adapter.getDrizzle(), dialect, [
+    table,
+  ]);
+  return live.tables
+    .find(entry => entry.name === table)
+    ?.columns.map(column => column.name)
+    .sort();
+}
+
+describe.each(getConfiguredTestDialects())(
+  "a Builder save of an entity holding a group with no name (%s)",
+  dialect => {
+    function deps(t: TestNextly): CollectionSaveDeps {
+      return {
+        adapter: t.adapter as unknown as DrizzleAdapter,
+        config: defineConfig({
+          collections: [],
+          db: { migrationsDir: "./migrations" },
+        }),
+        projectRoot: dir,
+        migrationsDir: join(dir, "migrations"),
+        applies: true,
+        logger: { info: () => {}, warn: () => {}, error: () => {} },
+      };
+    }
+
+    const migration = (pattern: RegExp): string[] => {
+      const found = readdirSync(join(dir, "migrations")).filter(f =>
+        pattern.test(f)
+      );
+      expect(found).toHaveLength(1);
+      return schemaStatementsOf(join(dir, "migrations", found[0]!));
+    };
+
+    /** One statement adding the column `extra` to `table`, and nothing else. */
+    const addsExtraAlone = (statements: string[], table: string): void => {
+      expect(statements, statements.join("\n")).toHaveLength(1);
+      expect(statements[0]).toMatch(
+        new RegExp(
+          `^ALTER TABLE [\`"]?${table}[\`"]? ADD (COLUMN )?[\`"]?extra[\`"]?`,
+          "i"
+        )
+      );
+    };
+
+    it("creates a collection with the group's fields as columns of its row, and a later save of it adds only what was added", async () => {
+      const t = await boot(dialect);
+      const before = [text("title"), laidOut];
+
+      await writeCollectionSave(deps(t), {
+        slug: "posts",
+        previous: null,
+        entity: collection("posts", before),
+        change: "create",
+      });
+
+      // The group's fields are columns of the row; the group, which has no name, is none.
+      const created = await liveColumns(t, dialect, "dc_posts");
+      expect(created).toEqual(
+        expect.arrayContaining(["title", "subtitle", "rank"])
+      );
+
+      await writeCollectionSave(deps(t), {
+        slug: "posts",
+        previous: collection("posts", before),
+        entity: collection("posts", [...before, text("extra")]),
+        change: "update",
+      });
+
+      // The update's migration adds the new column and touches none of the group's: a desired
+      // table missing them would have dropped them, and one reading the group itself stopped.
+      addsExtraAlone(migration(/_posts_update\.sql$/), "dc_posts");
+      expect(await liveColumns(t, dialect, "dc_posts")).toEqual(
+        [...created!, "extra"].sort()
+      );
+    });
+
+    it("saves another collection while one holding the group is in the definition file, touching only the one saved", async () => {
+      const t = await boot(dialect);
+      await writeCollectionSave(deps(t), {
+        slug: "posts",
+        previous: null,
+        entity: collection("posts", [text("title"), laidOut]),
+        change: "create",
+      });
+      const posts = await liveColumns(t, dialect, "dc_posts");
+
+      await writeCollectionSave(deps(t), {
+        slug: "pages",
+        previous: null,
+        entity: collection("pages", [text("heading")]),
+        change: "create",
+      });
+
+      const create = migration(/_pages_create\.sql$/);
+      expect(create.join("\n")).toMatch(/dc_pages/);
+      expect(create.join("\n")).not.toMatch(/dc_posts/);
+      expect(await liveColumns(t, dialect, "dc_pages")).toContain("heading");
+      expect(await liveColumns(t, dialect, "dc_posts")).toEqual(posts);
+    });
+
+    it("creates a Single with the group's fields as columns of its row, stores and reads them there, and a later save adds only what was added", async () => {
+      const t = await boot(dialect, {
+        db: { migrationsDir: "./migrations", uiSchemaFile: "./ui-schema.json" },
+        basePath: dir,
+      });
+      // As the Builder runs: each save is applied, and recorded, here.
+      vi.stubEnv("NODE_ENV", "development");
+      const before = [text("heading"), laidOut];
+
+      await dispatchSingles(
+        "createSingle",
+        {},
+        { slug: "notice", label: "Notice", fields: before }
+      );
+
+      const created = await liveColumns(t, dialect, "single_notice");
+      expect(created).toEqual(
+        expect.arrayContaining(["heading", "subtitle", "rank"])
+      );
+
+      // The entry write stores the group's fields on the row, and the read returns them.
+      const singles = t.getService("singleEntryService");
+      const saved = await singles.update(
+        "notice",
+        {
+          heading: "Hello",
+          subtitle: "Below",
+          rank: 3,
+          _overwrite: true,
+        },
+        { overrideAccess: true }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+      const read = await singles.get("notice", { overrideAccess: true });
+      expect(read.data).toMatchObject({
+        heading: "Hello",
+        subtitle: "Below",
+        rank: 3,
+      });
+
+      await dispatchSingles(
+        "updateSingleSchema",
+        { slug: "notice" },
+        { fields: [...before, text("extra")] }
+      );
+
+      addsExtraAlone(migration(/_notice_update\.sql$/), "single_notice");
+      expect(await liveColumns(t, dialect, "single_notice")).toEqual(
+        [...created!, "extra"].sort()
+      );
+      // The values written before the save are where they were.
+      expect(
+        (await singles.get("notice", { overrideAccess: true })).data
+      ).toMatchObject({
+        subtitle: "Below",
+        rank: 3,
+      });
+    });
+  }
+);
