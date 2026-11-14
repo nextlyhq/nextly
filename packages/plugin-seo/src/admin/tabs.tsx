@@ -27,8 +27,11 @@ import {
 } from "../settings/patterns";
 import { productionAddressProblem } from "../settings/production-addresses";
 import { profileAddressProblem } from "../settings/stored-values";
+import type { StructuredDataBrand } from "../structured-data/rules";
 import { characters, DESCRIPTION_LIMIT } from "../tab/problems";
 
+import { BrandDetailRows, CODE_LIST_NOTE, CODE_NOTE } from "./brand-details";
+import { brandDetailsDraftProblem } from "./brand-draft";
 import {
   AI_CHOICES,
   AI_CHOICES_NOTE,
@@ -309,9 +312,17 @@ export function ShareImagesTab({ draft, change }: TabProps): JSX.Element {
   );
 }
 
-/** The brand's social profiles: one address each, its network read from it. */
-function SocialProfiles({ draft, change }: TabProps): JSX.Element {
+/**
+ * The brand's social profiles: one address each, its network read from it;
+ * the site's code's, shown read-only, while the settings hold none.
+ */
+function SocialProfiles({
+  draft,
+  change,
+  codeProfiles = [],
+}: TabProps & { codeProfiles?: readonly { url: string }[] }): JSX.Element {
   const profiles = draft.socialProfiles;
+  const showsCode = profiles.length === 0 && codeProfiles.length > 0;
   const set = (index: number, url: string) =>
     change(current => ({
       ...current,
@@ -324,6 +335,12 @@ function SocialProfiles({ draft, change }: TabProps): JSX.Element {
       label="Social profiles"
       description="Your official accounts, so Google can link them to your company."
     >
+      {showsCode ? (
+        <>
+          <CodeProfiles profiles={codeProfiles} />
+          <ControlNote>{CODE_LIST_NOTE}</ControlNote>
+        </>
+      ) : null}
       <div className="grid gap-2">
         {profiles.map((profile, index) => {
           const network = networkOf(profile.url) || profile.network;
@@ -372,7 +389,7 @@ function SocialProfiles({ draft, change }: TabProps): JSX.Element {
         type="button"
         variant="outline"
         size="sm"
-        className={profiles.length > 0 ? "mt-2" : undefined}
+        className={profiles.length > 0 || showsCode ? "mt-2" : undefined}
         onClick={() =>
           change(current => ({
             ...current,
@@ -389,8 +406,57 @@ function SocialProfiles({ draft, change }: TabProps): JSX.Element {
   );
 }
 
-/** One record of facts about the organization behind the site. */
-export function BrandTab({ draft, change }: TabProps): JSX.Element {
+/**
+ * The brand's social profiles from the site's code, shown read-only while
+ * the settings hold none of their own.
+ */
+function CodeProfiles({
+  profiles,
+}: {
+  profiles: readonly { url: string }[];
+}): JSX.Element {
+  return (
+    <div className="grid gap-2">
+      {profiles.map((profile, index) => {
+        const network = networkOf(profile.url) || "Profile";
+        return (
+          <div key={index} className="flex items-center gap-2">
+            <span className="w-20 shrink-0 truncate text-xs font-medium text-muted-foreground">
+              {network}
+            </span>
+            <Input
+              className="bg-muted font-mono text-[13px]"
+              value={profile.url}
+              readOnly
+              aria-label={`${network} profile, set in the site's code`}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * One record of facts about the organization behind the site. Where the
+ * settings hold no value of their own for a fact, the site's code's is shown
+ * in its place, said to be set there.
+ */
+export function BrandTab({
+  draft,
+  change,
+  codeBrand = {},
+}: TabProps & {
+  /** The brand facts the site's code gives (the plugin's options). */
+  codeBrand?: StructuredDataBrand;
+}): JSX.Element {
+  const codeName = draft.brandName.trim() === "" ? codeBrand.name : undefined;
+  const codeOtherNames =
+    draft.brandOtherNames.trim() === "" &&
+    (codeBrand.otherNames ?? []).length > 0
+      ? (codeBrand.otherNames ?? []).join(", ")
+      : undefined;
+  const codeLogo = draft.logo === null ? codeBrand.logo?.url : undefined;
   return (
     <SettingsCard>
       <SettingsRowGroup
@@ -410,13 +476,17 @@ export function BrandTab({ draft, change }: TabProps): JSX.Element {
         label="Name"
         description="The name Google shows for your company."
         value={draft.brandName}
-        placeholder={draft.siteName}
+        placeholder={codeName ?? draft.siteName}
+        {...(codeName === undefined ? {} : { note: CODE_NOTE })}
         onChange={brandName => change(current => ({ ...current, brandName }))}
       />
       <TextRow
         label="Other names"
         description="Names people also search for. Separate with commas."
         value={draft.brandOtherNames}
+        {...(codeOtherNames === undefined
+          ? {}
+          : { placeholder: codeOtherNames, note: CODE_NOTE })}
         onChange={brandOtherNames =>
           change(current => ({ ...current, brandOtherNames }))
         }
@@ -427,9 +497,18 @@ export function BrandTab({ draft, change }: TabProps): JSX.Element {
         shape="square"
         value={draft.logo}
         onChange={logo => change(current => ({ ...current, logo }))}
-        emptyHelp="Square works best, at least 112 × 112."
+        emptyHelp={
+          codeLogo === undefined
+            ? "Square works best, at least 112 × 112."
+            : `Set in the site's code: ${codeLogo}. Choose one to set it in the admin instead.`
+        }
       />
-      <SocialProfiles draft={draft} change={change} />
+      <SocialProfiles
+        draft={draft}
+        change={change}
+        codeProfiles={codeBrand.profiles ?? []}
+      />
+      <BrandDetailRows draft={draft} change={change} codeBrand={codeBrand} />
     </SettingsCard>
   );
 }
@@ -627,5 +706,8 @@ export function draftProblem(
       return "Fix the social profile address first.";
     }
   }
-  return verificationDraftProblem(draft.verificationCodes);
+  return (
+    brandDetailsDraftProblem(draft.brandDetails) ??
+    verificationDraftProblem(draft.verificationCodes)
+  );
 }
