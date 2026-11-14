@@ -25,6 +25,7 @@ import {
 } from "./support/axe";
 import { leaveReleasesAsTheRunnerWould } from "./support/release-states";
 import {
+  cancel,
   post,
   publishNow,
   release,
@@ -53,9 +54,18 @@ async function openCalendar(page: Page): Promise<void> {
   await expect(page.getByRole("grid")).toBeVisible();
 }
 
-/** The month heading above the grid. */
-function monthHeading(page: Page): Locator {
-  return page.getByRole("heading", { level: 2 });
+/**
+ * The month heading above the grid: the heading the grid is named by. Not
+ * every level-two heading: the page also heads its strip of stopped and
+ * overdue releases with one, drawn whenever the database holds such a
+ * release, which other specs' releases leave in it.
+ */
+async function monthHeading(page: Page): Promise<Locator> {
+  const named = await page.getByRole("grid").getAttribute("aria-labelledby");
+  expect(named, "the grid is named by its month heading").toBeTruthy();
+  return page
+    .getByRole("heading", { level: 2 })
+    .and(page.locator(`[id="${named}"]`));
 }
 
 const DAY_MS = 86_400_000;
@@ -163,7 +173,7 @@ async function showMonth(page: Page, day: string): Promise<void> {
       })
       .click();
   }
-  await expect(monthHeading(page)).toHaveText(monthLabel(day));
+  await expect(await monthHeading(page)).toHaveText(monthLabel(day));
 }
 
 /** The grid cell of one day. */
@@ -268,7 +278,7 @@ test.describe("the Releases calendar", () => {
     await expect(
       page.getByRole("button", { name: /Times in Asia\/Karachi/ })
     ).toBeVisible();
-    await expect(monthHeading(page)).toHaveText(monthLabel(day));
+    await expect(await monthHeading(page)).toHaveText(monthLabel(day));
     const inKarachi = chip(dayCell(page, day), title);
     await expect(inKarachi).toBeVisible();
     await expect(inKarachi).toContainText(new RegExp(`8:30${SPACE}AM`));
@@ -350,42 +360,48 @@ test.describe("the Releases calendar", () => {
     // Last, since Publish now runs a pass of the runner, which would run an
     // overdue release it found.
     const due = await leaveReleasesAsTheRunnerWould(page, attention);
+    try {
+      // Read from each day's full list rather than its chips. The suite shares
+      // one database, and other specs leave releases on today and the hour
+      // before it, so a day here may hold more than its chips draw: the rest
+      // are counted in "+N more", and only the day's list names every one.
+      await openCalendar(page);
+      const today =
+        (await page
+          .getByRole("grid")
+          .locator('[aria-current="date"]')
+          .getAttribute("data-day")) ?? "";
+      expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      await expect(await dayListRow(page, today, published)).toContainText(
+        "Published"
+      );
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog")).toBeHidden();
 
-    // Read from each day's full list rather than its chips. The suite shares
-    // one database, and other specs leave releases on today and the hour
-    // before it, so a day here may hold more than its chips draw: the rest
-    // are counted in "+N more", and only the day's list names every one.
-    await openCalendar(page);
-    const today =
-      (await page
-        .getByRole("grid")
-        .locator('[aria-current="date"]')
-        .getAttribute("data-day")) ?? "";
-    expect(today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    await expect(await dayListRow(page, today, published)).toContainText(
-      "Published"
-    );
-    await page.keyboard.press("Escape");
-    await expect(page.getByRole("dialog")).toBeHidden();
+      // Overdue and stopped were due an hour ago, which near midnight is
+      // yesterday, and on the first of a month is in the month before. Their
+      // day is the one the calendar's own rule places them on.
+      const dueDay = dayKeyIn(due, READER_ZONE);
+      await showMonth(page, dueDay);
+      const overdueRow = await dayListRow(page, dueDay, overdue);
+      await expect(overdueRow).toContainText("Overdue");
+      await expect(overdueRow).not.toContainText("Scheduled");
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog")).toBeHidden();
+      await expect(await dayListRow(page, dueDay, stopped)).toContainText(
+        "Stopped"
+      );
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("dialog")).toBeHidden();
 
-    // Overdue and stopped were due an hour ago, which near midnight is
-    // yesterday, and on the first of a month is in the month before. Their
-    // day is the one the calendar's own rule places them on.
-    const dueDay = dayKeyIn(due, READER_ZONE);
-    await showMonth(page, dueDay);
-    const overdueRow = await dayListRow(page, dueDay, overdue);
-    await expect(overdueRow).toContainText("Overdue");
-    await expect(overdueRow).not.toContainText("Scheduled");
-    await page.keyboard.press("Escape");
-    await expect(page.getByRole("dialog")).toBeHidden();
-    await expect(await dayListRow(page, dueDay, stopped)).toContainText(
-      "Stopped"
-    );
-    await page.keyboard.press("Escape");
-    await expect(page.getByRole("dialog")).toBeHidden();
-
-    await showMonth(page, scheduledFor);
-    await expect(chip(dayCell(page, scheduledFor), published)).toHaveCount(0);
+      await showMonth(page, scheduledFor);
+      await expect(chip(dayCell(page, scheduledFor), published)).toHaveCount(0);
+    } finally {
+      // Cancelled, as `release-attention.spec.ts` leaves its own: a stopped
+      // or overdue release left behind is listed in every later spec's
+      // attention strip and card.
+      for (const { id } of attention) await cancel(page, id);
+    }
   });
 
   test("works by keyboard alone, announces today, and passes axe", async ({
@@ -460,7 +476,7 @@ test.describe("the Releases calendar", () => {
       if ((await shownMonth(page)) === day.slice(0, 7)) break;
       await page.keyboard.press("PageDown");
     }
-    await expect(monthHeading(page)).toHaveText(monthLabel(day));
+    await expect(await monthHeading(page)).toHaveText(monthLabel(day));
     const from = (await focusedDay(page)) ?? "";
     expect(from.slice(0, 7)).toBe(day.slice(0, 7));
     const steps = Number(from.slice(8, 10)) - Number(day.slice(8, 10));
@@ -532,23 +548,29 @@ test.describe("the Releases calendar", () => {
         { id: stoppedId, outcome: "stopped" },
       ]);
 
-      for (const viewport of [
-        { width: 1440, height: 1000 },
-        { width: 390, height: 844 },
-      ]) {
-        await page.setViewportSize(viewport);
-        await gotoAdmin(page, "/releases", theme);
-        await expectBrandColourApplied(page);
-        await page.getByRole("button", { name: "calendar" }).click();
-        await expect(page.getByRole("grid")).toBeVisible();
-        const today = page.locator('[aria-current="date"]');
-        await scanCalendar(page, today);
-        await scanDayList(page, today);
+      try {
+        for (const viewport of [
+          { width: 1440, height: 1000 },
+          { width: 390, height: 844 },
+        ]) {
+          await page.setViewportSize(viewport);
+          await gotoAdmin(page, "/releases", theme);
+          await expectBrandColourApplied(page);
+          await page.getByRole("button", { name: "calendar" }).click();
+          await expect(page.getByRole("grid")).toBeVisible();
+          const today = page.locator('[aria-current="date"]');
+          await scanCalendar(page, today);
+          await scanDayList(page, today);
 
-        await showMonth(page, future);
-        const futureDay = page.locator(`[data-day="${future}"]`);
-        await scanCalendar(page, futureDay);
-        await scanDayList(page, futureDay);
+          await showMonth(page, future);
+          const futureDay = page.locator(`[data-day="${future}"]`);
+          await scanCalendar(page, futureDay);
+          await scanDayList(page, futureDay);
+        }
+      } finally {
+        // Cancelled, so no later spec finds it among the releases that
+        // need attention.
+        await cancel(page, stoppedId);
       }
     });
   }
