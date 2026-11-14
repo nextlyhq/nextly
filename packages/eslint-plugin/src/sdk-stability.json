@@ -211,6 +211,7 @@
       "PluginSystemCheckedWrite",
       "PluginSystemIdentity",
       "PluginTransaction",
+      "PluginTransactionBounds",
       "PluginTranslations",
       "PluginUserMenuAction",
       "PluginUserMenuItem",
