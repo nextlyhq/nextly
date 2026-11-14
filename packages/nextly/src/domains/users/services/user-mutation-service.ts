@@ -3467,65 +3467,74 @@ export class UserMutationService extends BaseService {
     // `withTransaction` yields a raw Drizzle handle rather than the adapter
     // surface this repository is built on, so joining the transaction would
     // mean a second implementation of which rows are autosaves.
-    try {
-      await new VersionsRepository(this.adapter).deleteAutosavesByAuthor(
-        String(userId)
-      );
-    } catch (err) {
-      // Never fail the deletion for this. The account is already gone; a
-      // surviving recovery point is dead weight rather than a live risk, and
-      // reporting the removal as failed would invite a retry that now answers
-      // not-found.
-      this.logger.error("Failed to remove deleted user's recovery points", {
-        userId: String(userId),
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+    //
+    // Both sweeps wait for the outermost commit (`afterCommit`): run as the deletion returns
+    // inside a caller's transaction, they took another connection while that transaction
+    // was still open, destroyed a draft its rollback would have kept, and on MySQL waited for
+    // the rows the in-transaction erasure had just locked, which only the caller's commit
+    // releases. Outside any transaction they run at once, as before. A held sweep that fails
+    // is logged here like one that runs at once, so neither fails a committed deletion.
+    await this.afterCommit(async () => {
+      try {
+        await new VersionsRepository(this.adapter).deleteAutosavesByAuthor(
+          String(userId)
+        );
+      } catch (err) {
+        // Never fail the deletion for this. The account is already gone; a
+        // surviving recovery point is dead weight rather than a live risk, and
+        // reporting the removal as failed would invite a retry that now answers
+        // not-found.
+        this.logger.error("Failed to remove deleted user's recovery points", {
+          userId: String(userId),
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
 
-    // Sweep once more now the removal is visible. The erasure inside the
-    // transaction cannot reach an entry that landed after it ran but before the
-    // commit — an activity write already in flight when the deletion started —
-    // and such an entry carries the identity of an account that no longer
-    // exists. Erasing is idempotent, so a second pass over rows already erased
-    // costs one indexed update and changes nothing.
-    try {
-      if (Object.keys(erasableAuditTables).length > 0) {
-        await eraseActorPersonalData(
-          this.db as Parameters<typeof eraseActorPersonalData>[0],
-          erasableAuditTables,
-          String(userId),
-          new Date(),
-          unstampedAuditTables
+      // Sweep once more now the removal is visible. The erasure inside the
+      // transaction cannot reach an entry that landed after it ran but before the
+      // commit — an activity write already in flight when the deletion started —
+      // and such an entry carries the identity of an account that no longer
+      // exists. Erasing is idempotent, so a second pass over rows already erased
+      // costs one indexed update and changes nothing.
+      try {
+        if (Object.keys(erasableAuditTables).length > 0) {
+          await eraseActorPersonalData(
+            this.db as Parameters<typeof eraseActorPersonalData>[0],
+            erasableAuditTables,
+            String(userId),
+            new Date(),
+            unstampedAuditTables
+          );
+        }
+        // The delivery log needs the same second pass and for the same reason: a
+        // send already in flight when the deletion started can insert its row
+        // after the in-transaction erasure has chosen its matches, leaving a live
+        // digest for an account that no longer exists. Erasing is idempotent —
+        // an already-erased row holds the sentinel, which no address hashes to —
+        // so a second pass over untouched rows costs one indexed update.
+        if (deliveriesExist && deletedAddress !== undefined) {
+          await (
+            personColumnsExist
+              ? eraseUnnamedRecipientDeliveries
+              : eraseRecipientDeliveries
+          )(
+            this.db as Parameters<typeof eraseRecipientDeliveries>[0],
+            deliveriesTableFor(this.dialect),
+            deletedAddress
+          );
+        }
+      } catch (err) {
+        // The account is already gone and the caller has been served; failing
+        // here would report a completed deletion as an error and invite a retry
+        // that finds nothing to delete. Loud enough to act on, quiet enough not
+        // to undo a committed write.
+        this.logger.error(
+          `audit erasure sweep after deleteUser failed for ${Object.keys(
+            erasableAuditTables
+          ).join(", ")}: ${err instanceof Error ? err.message : String(err)}`
         );
       }
-      // The delivery log needs the same second pass and for the same reason: a
-      // send already in flight when the deletion started can insert its row
-      // after the in-transaction erasure has chosen its matches, leaving a live
-      // digest for an account that no longer exists. Erasing is idempotent —
-      // an already-erased row holds the sentinel, which no address hashes to —
-      // so a second pass over untouched rows costs one indexed update.
-      if (deliveriesExist && deletedAddress !== undefined) {
-        await (
-          personColumnsExist
-            ? eraseUnnamedRecipientDeliveries
-            : eraseRecipientDeliveries
-        )(
-          this.db as Parameters<typeof eraseRecipientDeliveries>[0],
-          deliveriesTableFor(this.dialect),
-          deletedAddress
-        );
-      }
-    } catch (err) {
-      // The account is already gone and the caller has been served; failing
-      // here would report a completed deletion as an error and invite a retry
-      // that finds nothing to delete. Loud enough to act on, quiet enough not
-      // to undo a committed write.
-      this.logger.error(
-        `audit erasure sweep after deleteUser failed for ${Object.keys(
-          erasableAuditTables
-        ).join(", ")}: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
+    });
 
     // With the removal and its outbox row committed, offer the same post-commit
     // hooks as createLocalUser: a bounded retention prune (so user churn on a
