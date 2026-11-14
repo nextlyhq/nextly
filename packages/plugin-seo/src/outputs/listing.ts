@@ -180,8 +180,14 @@ async function* collectionPages(
 async function covered(
   type: PublicAddressType,
   options: ListingOptions,
-  language: string
+  language: string,
+  rules: { readonly typesWithSeoOff?: readonly string[] } | undefined
 ): Promise<boolean> {
+  // A type whose SEO is switched off lists none of its pages, in the full
+  // listing and in a lookup of one page (a plain-text copy) alike, though
+  // they keep their addresses.
+  const key = type.kind === "single" ? singleKey(type.slug) : type.slug;
+  if (rules !== undefined && isSeoOff(rules, key)) return false;
   const narrowedAway =
     type.kind === "collection" &&
     options.collections !== undefined &&
@@ -199,14 +205,11 @@ export async function* candidates(
   ctx: PluginContext,
   options: ListingOptions
 ): AsyncGenerator<Candidate[]> {
-  // A type whose SEO is switched off lists none of its pages: no sitemap or
-  // llms.txt entry, though they keep their addresses.
+  // Read once for every type: which types' SEO is switched off.
   const language = await recordLanguage(ctx);
   const rules = await options.readRules?.(ctx, language);
   for (const type of await ctx.publicAddresses.types()) {
-    const key = type.kind === "single" ? singleKey(type.slug) : type.slug;
-    if (rules !== undefined && isSeoOff(rules, key)) continue;
-    if (!(await covered(type, options, language))) continue;
+    if (!(await covered(type, options, language, rules))) continue;
     yield* type.kind === "single"
       ? singlePages(type)
       : collectionPages(ctx, type);
@@ -616,7 +619,11 @@ async function listedVersionOf(
 ): Promise<ListedPage | null> {
   const { path, language } = at;
   const type = await typeOf(ctx, holder);
-  if (type === undefined || !(await covered(type, options, at.recordIn))) {
+  const rules = await options.readRules?.(ctx, at.recordIn);
+  if (
+    type === undefined ||
+    !(await covered(type, options, at.recordIn, rules))
+  ) {
     return null;
   }
   const document = (await documentsIn(ctx, type, [holder.id], language)).get(
