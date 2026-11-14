@@ -628,43 +628,45 @@ async function runUnitStatements(
     .slice(0, from)
     .filter(statement => isConnectionSetting(statement, dialect));
   if (unit.transaction) {
-    await executeTransaction(adapter, tx =>
-      withMysqlTryBackstop(tx, dialect, bound, async () => {
-        await boundTransactionTry(tx, dialect, bound);
-        for (const setting of settingsBefore) await tx.execute(sent(setting));
-        for (const [offset, statement] of statements.slice(from).entries()) {
-          const index = from + offset;
-          // A run that lost the lock starts no further statement (`assertSchemaLockHeld`).
-          await assertSchemaLockHeld();
-          await bound?.beforeStatement?.();
-          // Told before the statement's checkpoint, which belongs to it: a wait the checkpoint
-          // ends on is the statement's, so a try that resumes starts at it, never before it.
-          bound?.onStatement?.(index);
-          await checkpoint?.(tx.db, index);
-          // A cancel the checkpoint's wait drew is settled before the statement is sent.
-          await bound?.beforeStatement?.();
-          await executeTolerated(
-            tx,
-            sent(statement),
-            statement,
-            dialect,
-            bound
-          );
-        }
-        bound?.onStatement?.(statements.length);
-        await bound?.settle?.();
-        // A unit may rewrite registry rows (a schema save's upsert of its own
-        // row): what the transaction read of them before is read again.
-        clearRegistryRowCache();
-        if (after !== undefined) {
-          await tx.restoreSession();
-          await after(tx.db, statements.length);
-        }
-        // The commit is what lands the file: refused, and the transaction undone, as a statement.
-        // Not on MySQL, whose DDL committed as it ran: the file has landed by now, and refusing
-        // here would report it as not recorded.
-        if (dialect !== "mysql") await assertSchemaLockHeld();
-      }),
+    await executeTransaction(
+      adapter,
+      tx =>
+        withMysqlTryBackstop(tx, dialect, bound, async () => {
+          await boundTransactionTry(tx, dialect, bound);
+          for (const setting of settingsBefore) await tx.execute(sent(setting));
+          for (const [offset, statement] of statements.slice(from).entries()) {
+            const index = from + offset;
+            // A run that lost the lock starts no further statement (`assertSchemaLockHeld`).
+            await assertSchemaLockHeld();
+            await bound?.beforeStatement?.();
+            // Told before the statement's checkpoint, which belongs to it: a wait the checkpoint
+            // ends on is the statement's, so a try that resumes starts at it, never before it.
+            bound?.onStatement?.(index);
+            await checkpoint?.(tx.db, index);
+            // A cancel the checkpoint's wait drew is settled before the statement is sent.
+            await bound?.beforeStatement?.();
+            await executeTolerated(
+              tx,
+              sent(statement),
+              statement,
+              dialect,
+              bound
+            );
+          }
+          bound?.onStatement?.(statements.length);
+          await bound?.settle?.();
+          // A unit may rewrite registry rows (a schema save's upsert of its own
+          // row): what the transaction read of them before is read again.
+          clearRegistryRowCache();
+          if (after !== undefined) {
+            await tx.restoreSession();
+            await after(tx.db, statements.length);
+          }
+          // The commit is what lands the file: refused, and the transaction undone, as a statement.
+          // Not on MySQL, whose DDL committed as it ran: the file has landed by now, and refusing
+          // here would report it as not recorded.
+          if (dialect !== "mysql") await assertSchemaLockHeld();
+        }),
       // A stop for this process's own write lock names the unit, as the operator knows it.
       unit.source
     );
