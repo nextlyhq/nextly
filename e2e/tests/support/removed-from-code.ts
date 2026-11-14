@@ -23,12 +23,14 @@
  * @module e2e/tests/support/removed-from-code
  */
 import { randomUUID } from "node:crypto";
-import { mkdir, rm, rmdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 
 import { expect, type APIRequestContext } from "@playwright/test";
+
+import { oweMigrationsOf } from "../../support/owed-migrations.mjs";
 
 import { createEntry, expectOk } from "./runtime-collection";
 
@@ -202,15 +204,26 @@ function copyRegistryRow(
   expect(changes, `copying the ${from} row`).toBe(1);
 }
 
+/** The listing's wait, which a test of the staging's own cleanup stands in for. */
+type ListingWait = (
+  api: APIRequestContext,
+  slugs: { collections: string[]; singles: string[] }
+) => Promise<void>;
+
 /**
  * Stage a collection and a Single removed from code in each state.
  *
  * The collection is a copy of `tags` holding one entry; the Single a copy of
  * `landing-page` holding its document, both with the row source `code`.
+ *
+ * A staging that fails part way, its wait for the listing included, undoes
+ * what it wrote before it throws: its caller never receives the run, so the
+ * caller's own cleanup has nothing to undo.
  */
 export async function stageRemovedEntities(
   api: APIRequestContext,
-  run: string
+  run: string,
+  options: { untilListed?: ListingWait } = {}
 ): Promise<StagedRun> {
   // The documents the copies start from: an entry, and the Single's document,
   // which its first read creates.
@@ -229,6 +242,22 @@ export async function stageRemovedEntities(
     eventIds: [],
     createdDir: await mkdir(MIGRATIONS_DIR, { recursive: true }),
   };
+  try {
+    await writeStaged(staged, run, entryId);
+    await (options.untilListed ?? untilListed)(api, slugsOf(staged));
+  } catch (error) {
+    await unstageRemovedEntities(staged);
+    throw error;
+  }
+  return staged;
+}
+
+/** The rows, tables, files and ledger rows of every state, noted in `staged` as each is made. */
+async function writeStaged(
+  staged: StagedRun,
+  run: string,
+  entryId: string
+): Promise<void> {
   const db = open();
   try {
     const tagsTable = tableOf(db, "dynamic_collections", "tags");
@@ -247,6 +276,10 @@ export async function stageRemovedEntities(
         label: `Removed ${state} ${run} banner`,
         table: `single_rfc_${state}_banner_${run}`,
       };
+      // Noted before anything is written for it, so a failure part way
+      // through still names everything a cleanup must look for.
+      const staging: StagedState = { state, collection, single };
+      staged.states.push(staging);
       copyRegistryRow(db, "dynamic_collections", "tags", {
         id: randomUUID(),
         slug: collection.slug,
@@ -286,6 +319,9 @@ export async function stageRemovedEntities(
         // After every real migration, and unique to this run.
         migration = `29991231_00000${index}_e2e_removed_${state}_${run}.sql`;
         const file = path.join(MIGRATIONS_DIR, migration);
+        // Owed to the run's cleanup before it exists, so a run stopped at any
+        // point leaves it to the next reset rather than to a later start.
+        await oweMigrationsOf(collection.table);
         await writeFile(
           file,
           [
@@ -313,7 +349,7 @@ export async function stageRemovedEntities(
         expect(changes, "recording the drop as applied").toBe(1);
         staged.eventIds.push(id);
       }
-      staged.states.push({ state, collection, single, migration });
+      if (migration !== undefined) staging.migration = migration;
     }
     // Once every row is written, so a server that reads the moved version
     // reads all of them.
@@ -321,8 +357,6 @@ export async function stageRemovedEntities(
   } finally {
     db.close();
   }
-  await untilListed(api, slugsOf(staged));
-  return staged;
 }
 
 /** Remove every row, table and file {@link stageRemovedEntities} made. */
@@ -357,6 +391,42 @@ export async function unstageRemovedEntities(
     // So the server forgets the rows too, rather than listing entities whose
     // tables are gone to the specs that run after this one.
     moveSchemaSeq(db);
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * What a staging named by `run` has left in the database and the migrations
+ * folder: registry rows, tables and migration files carrying its name. Read
+ * by name, as every one of them carries the run's, so a cleanup that missed
+ * something is seen whichever step it missed.
+ */
+export async function leftoversOf(run: string): Promise<{
+  rows: string[];
+  tables: string[];
+  files: string[];
+}> {
+  const db = new DatabaseSync(E2E_DB, { readOnly: true });
+  try {
+    const named = (sql: string): string[] =>
+      (db.prepare(sql).all(`%${run}%`) as Array<{ name: string }>).map(
+        row => row.name
+      );
+    return {
+      rows: [
+        ...named(
+          "SELECT slug AS name FROM dynamic_collections WHERE slug LIKE ?"
+        ),
+        ...named("SELECT slug AS name FROM dynamic_singles WHERE slug LIKE ?"),
+      ],
+      tables: named(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ?"
+      ),
+      files: (await readdir(MIGRATIONS_DIR).catch(() => [])).filter(name =>
+        name.includes(run)
+      ),
+    };
   } finally {
     db.close();
   }
