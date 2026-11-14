@@ -301,17 +301,26 @@ export async function reportSchemaVersionAtStart(args: {
   dialect: SupportedDialect;
   build: string | undefined;
   logger: SchemaVersionLogger;
+  /**
+   * The stored version as the start already read it, where it did: compared rather than read
+   * again. Absent, it is read here.
+   */
+  stored?: StoredSchemaVersion;
 }): Promise<SchemaVersionStanding> {
   const { build, logger } = args;
   // No build version, nothing to compare: not even the read is made.
   if (build === undefined) return { kind: "no-build" };
   let stored: StoredSchemaVersion;
-  try {
-    stored = await readSchemaVersion(args.db, args.dialect);
-  } catch {
-    // A table that cannot be read is a database `nextly migrate` has not
-    // prepared: reported as a version the start does not know.
-    stored = { present: false };
+  if (args.stored !== undefined) {
+    stored = args.stored;
+  } else {
+    try {
+      stored = await readSchemaVersion(args.db, args.dialect);
+    } catch {
+      // A table that cannot be read is a database `nextly migrate` has not
+      // prepared: reported as a version the start does not know.
+      stored = { present: false };
+    }
   }
   const standing = compareSchemaVersion(stored, build);
   if (standing.kind === "unknown") {

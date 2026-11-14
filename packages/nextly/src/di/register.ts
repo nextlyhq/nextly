@@ -2981,15 +2981,23 @@ async function reportStartSchemaVersion(
   logger: Logger
 ): Promise<void> {
   if (process.env.NODE_ENV !== "production") return;
-  const [{ reportSchemaVersionAtStart }, { buildSchemaVersion }] =
-    await Promise.all([
-      import("../domains/schema/schema-version"),
-      import("../domains/schema/build-schema-version"),
-    ]);
+  const [
+    { reportSchemaVersionAtStart },
+    { buildSchemaVersion },
+    { latestStoredSchemaVersion },
+  ] = await Promise.all([
+    import("../domains/schema/schema-version"),
+    import("../domains/schema/build-schema-version"),
+    import("../domains/schema/stored-schema-seq"),
+  ]);
   await reportSchemaVersionAtStart({
     db: adapterDrizzleDb,
     dialect: adapter.dialect,
     build: buildSchemaVersion(),
+    // The start read the version just before it loaded its definitions, and read it again where
+    // boot migrations stored a new one; that newest reading is compared, not a second read of the
+    // same row. A change this process marked since it is not in it, so then the row is read here.
+    stored: latestStoredSchemaVersion(adapter),
     logger: {
       warn: message => logger.warn(message),
       info: message => logger.info(message),
