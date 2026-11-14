@@ -119,6 +119,7 @@ import {
   type PluginDatabase,
   type PluginDatabaseDeps,
   type PluginTransaction,
+  type PluginTransactionBounds,
   type PluginTransactionHandles,
 } from "./database/plugin-database";
 import { linkedTransaction } from "./database/plugin-transaction-link";
@@ -210,6 +211,7 @@ export type {
   PluginDatabase,
   PluginInsert,
   PluginTransaction,
+  PluginTransactionBounds,
 } from "./database/plugin-database";
 
 // ============================================================
@@ -1603,6 +1605,28 @@ export interface PluginDefinition<W extends AnyWidget = AnyWidget> {
   ) => Promise<void> | void;
 
   /**
+   * @experimental Runs after a completed `nextly migrate` (and
+   * `nextly migrate:fresh`): every migrate that leaves nothing pending, after
+   * its schema, access and other post-schema steps. Never at a boot, never in
+   * a dry run, and not when `--step` leaves migrations pending.
+   *
+   * The place for work a deploy owes once the schema is in step and that no
+   * request should wait for, such as filling an index for content that
+   * existed before it. `run.applied` counts the migrations this run applied,
+   * 0 when it found nothing to apply: the hook runs either way.
+   *
+   * It runs after migrate's lock is released, so two migrates (or a migrate
+   * and a running app) can run it at the same time: it must be idempotent and
+   * safe when run twice at once. A throw makes the command exit non-zero once
+   * every plugin's hook has run; the schema it applied stays applied, and
+   * running `nextly migrate` again runs the hook again.
+   */
+  onMigrate?: (
+    context: PluginContext,
+    run: { applied: number }
+  ) => Promise<void> | void;
+
+  /**
    * @public Teardown on shutdown / HMR / test teardown.
    * Invocation is wired.
    */
@@ -1957,6 +1981,14 @@ function buildPluginDatabase(
     // On SQLite it also runs marked as a plugin transaction, as `raw`'s does:
     // a service called inside nests as a savepoint, defers what follows its
     // write until the commit, and refuses what a rollback could not undo.
+    // Through the adapter, which keeps the bounds for the calling flow, so
+    // the transactions the core services open inside `work` take them too.
+    withTransactionBounds: (bounds, work) => {
+      const transactions = adapter();
+      return transactions.withTransactionBounds === undefined
+        ? work()
+        : transactions.withTransactionBounds(bounds, work);
+    },
     transaction: (fn, options) => {
       const run = (tx: AdapterTransactionHandles) => fn(handlesOf(tx));
       const transactions = adapter();
@@ -2018,6 +2050,15 @@ export interface AdapterTransactions
     work: (tx: AdapterTransactionHandles) => Promise<T>,
     /** The isolation and access mode, where the caller asked for one. */
     options?: TransactionOptions
+  ) => Promise<T>;
+  /**
+   * Run work with every outermost transaction it opens bounded by the
+   * database (the adapter's `withTransactionBounds`); absent on an adapter
+   * that offers none, where the work runs as given.
+   */
+  withTransactionBounds?: <T>(
+    bounds: PluginTransactionBounds,
+    work: () => Promise<T>
   ) => Promise<T>;
   /**
    * The pooled Drizzle handle, relations-enabled when given a config. Used

@@ -37,8 +37,14 @@ import { codeAddressOf } from "./store";
 /** The folder of the build directory the declared addresses are kept in. */
 const DECLARED_DIR = join("nextly-seo", "static-params");
 
-/** A route's params, as `generateStaticParams` answers them. */
-export type StaticParams = Record<string, string | string[] | undefined>;
+/**
+ * A route's params, as `generateStaticParams` answers them. A catch-all's
+ * values may be a readonly array, as a site's params kept `as const` are.
+ */
+export type StaticParams = Record<
+  string,
+  string | readonly string[] | undefined
+>;
 
 /** Where the app is, and where `next build` writes. */
 export interface SeoStaticParamsOptions {
@@ -163,8 +169,11 @@ export function declaredAddresses(dir: string): Prerendered[] {
  * whose pages search engines may list: a page it declares is listed during
  * the build as one whose route does, before it has rendered and recorded
  * what its own metadata says. A route that hides its pages has nothing to
- * add to a sitemap, so leave it unwrapped. It returns exactly what
- * `generate` returns, the same array, and records nothing outside the build. A write that fails warns once and changes
+ * add to a sitemap, so leave it unwrapped. It returns the params `generate`
+ * returns, in their order, as an array of its own: Next.js's own type check
+ * of a route, which `next build` runs on a TypeScript site, takes a mutable
+ * array, and a site may keep its params as a readonly one. It records
+ * nothing outside the build. A write that fails warns once and changes
  * nothing the route gets.
  *
  * @example
@@ -186,9 +195,11 @@ export function seoStaticParams<
   route: string,
   generate: (...args: A) => readonly P[] | Promise<readonly P[]>,
   options: SeoStaticParamsOptions = {}
-): (...args: A) => Promise<readonly P[]> {
+): (...args: A) => Promise<P[]> {
   return async (...args: A) => {
-    const params = await generate(...args);
+    // A copy, typed mutable as Next.js's route check asks, whatever `generate`
+    // returned.
+    const params = [...(await generate(...args))];
     if (!isNextBuild()) return params;
     // A nested route is handed its parent's params, which its address needs.
     const first = args[0];

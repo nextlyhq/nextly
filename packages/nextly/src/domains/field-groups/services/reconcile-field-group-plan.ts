@@ -190,16 +190,15 @@ export interface ReconcileInput<F extends ReconcilableField> {
    *
    * 🔴 Asked per (field, table) rather than supplied as a finished map, because the answer depends
    * on BOTH and only this module knows the second one. The two tables are built by different code —
-   * the main table by `FieldGroupSchemaService`, the companion by the localization renderer — and
-   * they spell the same field differently: a PostgreSQL `email` is `VARCHAR(255)` on the main table
-   * and `TEXT` in the companion. A map keyed by column name alone has to pick one of those before
+   * the main table by a Builder save's migration (the column descriptor), the companion by the
+   * localization renderer — and they can spell the same field differently: a MySQL `date` is
+   * `timestamp` on the main table and `DATETIME(3)` in the companion. A map keyed by column name alone has to pick one of those before
    * placement is known, and the placement it would have to guess from is the stored flag, which is
    * exactly the value this operation exists to correct. Guessing it wrong reports drift on the
    * PRIMARY divergence being repaired.
    *
-   * Also the reason this takes the type rather than the rendered DDL: `getColumnDescriptor` answers
-   * differently again (a MySQL `date` is `DATETIME` here and `timestamp` there), and reading a type
-   * back out of printed SQL silently truncates any type spelled with more than one word.
+   * Also the reason this takes the type rather than the rendered DDL: reading a type back out of
+   * printed SQL silently truncates any type spelled with more than one word.
    *
    * Returns the type as that code spells it; this module normalises both sides before comparing.
    * `undefined` means no expectation could be derived, which is NOT evidence of drift — those
@@ -210,6 +209,20 @@ export interface ReconcileInput<F extends ReconcilableField> {
    * imports, and nothing here reaches for either.
    */
   expectedColumnType?: (field: F, table: ReconcileTable) => string | undefined;
+  /**
+   * The type the main table's creator gave `field` before a Builder save wrote its migration: the
+   * one spelling accepted beside `expectedColumnType`, because tables built that way still exist.
+   *
+   * A Builder create now builds its table through the save writer's migration, whose columns are
+   * the column descriptor's; the creator before it spelled some of them its own way (`VARCHAR(255)`
+   * for a PostgreSQL `email`, `DATETIME` for a MySQL `date`). A live column matching either is the
+   * field's column; one matching neither is still refused as drift. `undefined` where there is no
+   * earlier spelling, so only the current one is accepted.
+   */
+  preBuilderSaveColumnType?: (
+    field: F,
+    table: ReconcileTable
+  ) => string | undefined;
   /**
    * The DEFAULT the code that builds `table` would give `field`.
    *
@@ -764,28 +777,43 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
     // the tables spell the same field differently, so asking about the wrong one manufactures a
     // mismatch on the case this operation exists to repair.
     const expectedSpelling = input.expectedColumnType?.(field, table);
-    const expectedType = normalizeType(expectedSpelling);
     const liveType = normalizeType(live.type);
-    // The width is part of the physical type wherever the database reports one. Both must carry a
-    // modifier for the comparison to mean anything: where the introspector drops it, an absent
-    // modifier says nothing about the column and treating that as a mismatch would refuse every
-    // healthy group on that dialect.
-    const expectedWidth = typeModifier(expectedSpelling);
     // 🔴 From what introspection REPORTED, not from the live type string. On PostgreSQL that
     // string is `udt_name`, which never carries a modifier — so parsing it made this comparison
     // permanently inert on the dialect where a varchar length or numeric precision change is most
     // likely to be the whole edit. The snapshot records the modifier separately, gated per dialect
     // to what was actually declared.
     const liveWidth = live.typeModifier;
-    const widthDiffers =
-      expectedWidth !== undefined &&
-      liveWidth !== undefined &&
-      expectedWidth !== liveWidth;
+    /**
+     * Whether the live column differs from `spelling`. The width is part of the physical type
+     * wherever the database reports one. Both must carry a modifier for the comparison to mean
+     * anything: where the introspector drops it, an absent modifier says nothing about the column
+     * and treating that as a mismatch would refuse every healthy group on that dialect.
+     */
+    const differsFrom = (spelling: string | undefined): boolean => {
+      const expectedType = normalizeType(spelling);
+      const expectedWidth = typeModifier(spelling);
+      const widthDiffers =
+        expectedWidth !== undefined &&
+        liveWidth !== undefined &&
+        expectedWidth !== liveWidth;
+      return (
+        (expectedType !== undefined &&
+          liveType !== undefined &&
+          expectedType !== liveType) ||
+        widthDiffers
+      );
+    };
+    // A table built before the Builder's save writer spells some columns the earlier creator's
+    // way; a column matching that spelling is as healthy as one matching today's.
+    const preBuilderSaveSpelling = input.preBuilderSaveColumnType?.(
+      field,
+      table
+    );
     if (
-      (expectedType !== undefined &&
-        liveType !== undefined &&
-        expectedType !== liveType) ||
-      widthDiffers
+      differsFrom(expectedSpelling) &&
+      (preBuilderSaveSpelling === undefined ||
+        differsFrom(preBuilderSaveSpelling))
     ) {
       blockers.push({
         fieldName: field.name,

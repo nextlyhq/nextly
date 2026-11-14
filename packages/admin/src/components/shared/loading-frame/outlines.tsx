@@ -47,6 +47,11 @@ import {
   PANEL_TOGGLE_RULE,
 } from "@admin/components/features/entries/EntryForm/bar-controls";
 import {
+  DOCKED_PANEL_COLUMN,
+  DOCKED_PANEL_ROW,
+} from "@admin/components/features/entries/EntryForm/document-panel-mode";
+import { useRailCollapsed } from "@admin/components/features/entries/EntryForm/useRailCollapsed";
+import {
   HISTORY_FRAME,
   HISTORY_HEAD,
   HISTORY_RAIL,
@@ -58,11 +63,6 @@ import {
   GRID_CLASS,
 } from "@admin/components/features/widgets/sizes";
 import { MoreHorizontal, PanelRight } from "@admin/components/icons";
-import {
-  DOCKED_PANEL_COLUMN,
-  DOCKED_PANEL_ROW,
-} from "@admin/components/features/entries/EntryForm/document-panel-mode";
-import { useRailCollapsed } from "@admin/components/features/entries/EntryForm/useRailCollapsed";
 import { UNFOLDED_BAR_ONLY } from "@admin/components/layout/header/bar-fold";
 import {
   STAND_IN_ATTRIBUTE,

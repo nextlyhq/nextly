@@ -994,21 +994,25 @@ export class CollectionEntryService extends BaseService {
     body: Record<string, unknown>,
     depth?: number
   ) {
+    // The body is read once, here: the value rules below, the write's gate and the write itself
+    // all judge this copy. Read again, a body whose values change between reads (a getter, a
+    // proxy) could be judged by the value rules as one save and gated and stored as another.
+    const sent = { ...body };
     // A save that publishes is judged by the value rules a publish of chosen languages applies,
     // with the save's own values counted in the language it writes: they go live with it.
-    if (body.status === "published") {
+    if (sent.status === "published") {
       const refusal = await this.valueRuleRefusal(
         params,
         params.locale === EVERY_LOCALE
           ? "all"
           : [params.locale ?? this.localization?.defaultLocale ?? ""],
-        params.locale === EVERY_LOCALE ? undefined : body
+        params.locale === EVERY_LOCALE ? undefined : sent
       );
       if (refusal) return refusal;
     }
     const result = await withRuleLanguage(
       writeLanguagesFor(this.localization, params.locale),
-      () => this.mutationService.updateEntry(params, body, depth)
+      () => this.mutationService.updateEntry(params, sent, depth)
     );
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;

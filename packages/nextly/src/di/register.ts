@@ -30,7 +30,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { isNextBuildPhase } from "@nextlyhq/adapter-drizzle/build-phase";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { dequal } from "dequal";
-import type { AnyRelations } from "drizzle-orm";
+import type { AnyRelations, Table } from "drizzle-orm";
 
 import { authUiProblems } from "../auth/handlers/auth-ui";
 import {
@@ -1343,6 +1343,8 @@ async function registerServicesOnce(
       // only publishes what the configuration declares in this process.
       if (structure.productionStart) {
         await publishDeclaredCodeFirstEntities(transformedConfig, workflows);
+        // Rows behind the build, named from the rows the start already read.
+        await reportStartRowsBehindBuild(transformedConfig, resolvedLogger);
       } else {
         await syncCodeFirstEntities(
           adapter,
@@ -4091,19 +4093,19 @@ export async function registerConfigTablesInResolver(
   overrides?: { differed: boolean }
 ): Promise<void> {
   const dialect = adapter.getCapabilities().dialect;
-  const { entityKind, getTableColumns } = await import("drizzle-orm");
+  const { entityKind, getColumns } = await import("drizzle-orm");
   /**
    * A table's columns as it reads and writes them, sorted: each column's
    * Drizzle class, which holds its decoder and encoder (`SQLiteBoolean` and
    * `SQLiteInteger` are both `integer`), its SQL type, and every setting it
    * was built with, the name, nullability and mode among them. A function
    * setting (a mapper, a default) is rebuilt with each column, so it is
-   * described by its source.
+   * described by its source. Read through `getColumns`, Drizzle v1's column
+   * accessor, typed as a `Table` so it returns the column map rather than a
+   * view's selected fields.
    */
   const columnsOf = (table: unknown): string =>
-    Object.values(
-      getTableColumns(table as Parameters<typeof getTableColumns>[0])
-    )
+    Object.values(getColumns(table as Table))
       .map(column =>
         JSON.stringify([
           Reflect.get(column.constructor, entityKind) as unknown,
@@ -4402,6 +4404,50 @@ function codeFirstCollectionConfigs(
  * the database was not migrated for is answered as not migrated where a read
  * or write reaches it.
  */
+/**
+ * Log each code-first collection or Single whose registry row a production
+ * start finds missing or lacking a field the build declares
+ * (`registry-rows-behind-build`), from the rows the start read, sending no
+ * statement of its own. Never fails the start.
+ */
+async function reportStartRowsBehindBuild(
+  transformedConfig: NextlyServiceConfig,
+  logger: Logger
+): Promise<void> {
+  const registry = startRegistryNow();
+  if (registry === undefined) return;
+  try {
+    const [{ reportRowsBehindBuild }, { toCodeFirstSingleConfig }] =
+      await Promise.all([
+        import("./registry-rows-behind-build"),
+        import("../domains/singles/services/single-registry-service"),
+      ]);
+    await reportRowsBehindBuild(
+      registry,
+      [
+        ...codeFirstCollectionConfigs(transformedConfig).map(config => ({
+          kind: "collection" as const,
+          slug: config.slug,
+          fields: config.fields,
+        })),
+        ...(transformedConfig.singles ?? []).map(single => {
+          const config = toCodeFirstSingleConfig(single);
+          return {
+            kind: "single" as const,
+            slug: config.slug,
+            fields: config.fields,
+          };
+        }),
+      ],
+      logger
+    );
+  } catch (error) {
+    logger.debug("The registry rows could not be compared with the build", {
+      error,
+    });
+  }
+}
+
 async function publishDeclaredCodeFirstEntities(
   transformedConfig: NextlyServiceConfig,
   workflows: ReadonlyMap<string, RegisteredWorkflow>

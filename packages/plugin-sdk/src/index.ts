@@ -493,6 +493,8 @@ export type {
  * @experimental `PluginDatabase` — typed, owner-checked access to the tables
  *   the plugin declared (`contributes.schema`) and its dependencies' tables;
  *   `PluginTransaction` — the handle `ctx.db.transaction` passes its work;
+ *   `PluginTransactionBounds` — what `ctx.db.withTransactionBounds` bounds
+ *   each transaction by;
  *   `PluginInsert` — what `ctx.db.insert` takes for a table;
  *   `PluginRawDatabase` — `ctx.db.raw`, the Drizzle fluent builder and a
  *   transaction, with no ownership check, or the live instance for a plugin
@@ -504,6 +506,7 @@ export type {
   PluginInsert,
   PluginRawDatabase,
   PluginTransaction,
+  PluginTransactionBounds,
 } from "nextly";
 
 /**

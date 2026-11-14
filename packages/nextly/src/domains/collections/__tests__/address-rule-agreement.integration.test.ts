@@ -212,15 +212,9 @@ for (const dialect of getConfiguredTestDialects()) {
       }
     }, 600_000);
 
-    /**
-     * The refusal a field-group create under a taken name answers with, naming the name: the
-     * check must give the same one, word for word.
-     */
-    const TAKEN_SEO = {
-      code: "DUPLICATE",
-      message:
-        'The field group "seo" could not be created: its name is already taken.',
-    };
+    // A taken field group name is refused naming the group, by the check and the create alike.
+    const TAKEN_SEO =
+      'The field group "seo" could not be created: its name is already taken.';
 
     /** A field group `seo` recorded under a table name of its own, as older ones may be. */
     async function fieldGroupInACustomTable(): Promise<void> {
@@ -240,12 +234,18 @@ for (const dialect of getConfiguredTestDialects()) {
 
     it("a field group's address held under a custom table name is used, by the check", async () => {
       await fieldGroupInACustomTable();
-      expect(await checkVerdict("fieldGroup", "seo")).toEqual(TAKEN_SEO);
+      expect(await checkVerdict("fieldGroup", "seo")).toEqual({
+        code: "DUPLICATE",
+        message: TAKEN_SEO,
+      });
     });
 
     it("a field group's address held under a custom table name refuses the create, which builds no table", async () => {
       await fieldGroupInACustomTable();
-      expect(await createVerdict("fieldGroup", "seo")).toEqual(TAKEN_SEO);
+      expect(await createVerdict("fieldGroup", "seo")).toEqual({
+        code: "DUPLICATE",
+        message: TAKEN_SEO,
+      });
       expect(await t!.adapter.tableExists("comp_seo")).toBe(false);
     });
 

@@ -15,28 +15,38 @@
  * real creator, introspect the real tables, and require the planner to report NO changes and NO
  * blockers. Anything it reports here is by construction false, because nothing has drifted.
  *
- * 🔴 The types the creator emits are NOT what the column descriptor reports, which is exactly how
- * this class of defect arises. Measured on live databases: a `date` field is `datetime` on MySQL and
- * `timestamp` on PostgreSQL, while the descriptor answers `timestamp` for both; relations are `UUID`
- * on PostgreSQL and `VARCHAR(36)` on MySQL while the descriptor answers `text`. A comparison built
- * against the descriptor therefore reports drift on healthy groups, and only a live database says so.
+ * 🔴 Two creators have built these tables, and they spell some columns differently. A Builder
+ * create now builds its table through the save writer's migration, from the column descriptor; the
+ * creator before it gave a PostgreSQL `email` `VARCHAR(255)` where the descriptor gives `text`, and a
+ * MySQL `date` `DATETIME` where it gives `timestamp`. Tables of both kinds exist, so the planner
+ * accepts either spelling and nothing else: the planted cases below hold each half of that.
  *
  * Self-skips per dialect on the standard rule: SQLite always runs, the servers run when their URL
  * is set, and each dialect gets its own throwaway database.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createTestNextly,
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 
 let current: TestNextly | undefined;
+
+// A field group's Builder create builds its table in development only; anywhere else it writes the
+// migration for the deploy's `nextly migrate` and records the group pending, with no table. These
+// cases judge the table a create leaves, so they run as a development server does. `vi.stubEnv`
+// rather than assigning: `NODE_ENV` is declared read-only.
+beforeEach(() => {
+  vi.stubEnv("NODE_ENV", "development");
+});
 
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  vi.unstubAllEnvs();
 });
 
 /**
@@ -104,5 +114,69 @@ for (const dialect of getConfiguredTestDialects()) {
     // harness does not declare; a fixture that created the row without moving the columns would
     // never reach the mechanism, and would pass while proving nothing. Stated rather than faked,
     // and the expectation map covers the companion so the check itself is wired for it.
+  });
+}
+
+/**
+ * One column per server planted in the spelling the creator before the Builder's save writer gave
+ * it, which reconcile accepts, and in a third spelling, which it still refuses. SQLite is not asked:
+ * both creators spell these columns alike there.
+ */
+const PLANTED = {
+  postgresql: {
+    field: "a_email",
+    earlier: "ALTER TABLE {t} ALTER COLUMN a_email TYPE varchar(255)",
+    third: "ALTER TABLE {t} ALTER COLUMN a_email TYPE integer USING NULL",
+  },
+  mysql: {
+    field: "a_date",
+    earlier: "ALTER TABLE {t} MODIFY a_date DATETIME NULL",
+    third: "ALTER TABLE {t} MODIFY a_date INT NULL",
+  },
+} as const;
+
+for (const dialect of getConfiguredTestDialects()) {
+  if (dialect === "sqlite") continue;
+  const planted = PLANTED[dialect];
+  describe(`a field group's column in another spelling — ${dialect}`, () => {
+    /** A healthy group with one column then altered by `statement`, and the reconcile's answer. */
+    async function reconcileAfter(statement: string) {
+      current = await createTestNextly({ dialect });
+      const slug = `planted_${dialect.slice(0, 2)}`;
+      await current.nextly.fieldGroups.create({
+        slug,
+        label: "Planted",
+        fields: EVERY_SHAPE,
+      });
+      await current.adapter.executeQuery(
+        statement.replace("{t}", resolveComponentTableName(slug))
+      );
+      const { reconcileFieldGroup } = await import(
+        "../services/field-group-reconcile-service"
+      );
+      return reconcileFieldGroup({
+        registry: current.getService("fieldGroupRegistryService"),
+        adapter: current.adapter,
+        logger: current.getService("logger"),
+        slug,
+      });
+    }
+
+    it("accepts the spelling the creator before the Builder's save writer gave", async () => {
+      const report = await reconcileAfter(planted.earlier);
+
+      expect(report.removed.map(r => r.fieldName)).toEqual([]);
+      expect(report.repaired.map(r => `${r.fieldName}.${r.attribute}`)).toEqual(
+        []
+      );
+      expect(report.unchanged).toBe(true);
+    });
+
+    it("refuses a spelling neither creator gives, naming the field", async () => {
+      await expect(reconcileAfter(planted.third)).rejects.toMatchObject({
+        code: "CONFLICT",
+        message: expect.stringContaining(`"${planted.field}" is declared`),
+      });
+    });
   });
 }

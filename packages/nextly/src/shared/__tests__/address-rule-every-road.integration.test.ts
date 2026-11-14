@@ -175,8 +175,9 @@ async function stateOf(
 }
 
 /**
- * A Builder collection create, as a development server runs it: only there does the save apply
- * its DDL before recording the collection.
+ * A Builder create of a collection, Single or field group, as a development server runs it: only
+ * there does the save apply its DDL before recording the entity. Anywhere else it writes the
+ * migration for `nextly migrate` and records the entity pending, with no table.
  */
 async function inDevelopment<T>(run: () => Promise<T>): Promise<T> {
   // Through `vi.stubEnv`, as the rest of the file sets variables: `NODE_ENV` is typed read-only,
@@ -429,14 +430,16 @@ for (const dialect of getConfiguredTestDialects()) {
 
     describe("a Single", () => {
       const create = (slug: string) =>
-        dispatchSingles(
-          "createSingle",
-          {},
-          {
-            slug,
-            label: "Team updates",
-            fields: BODY,
-          }
+        inDevelopment(() =>
+          dispatchSingles(
+            "createSingle",
+            {},
+            {
+              slug,
+              label: "Team updates",
+              fields: BODY,
+            }
+          )
         );
 
       it("is created through a Builder save under a hyphen, and refused a twin or a refused address", async () => {
@@ -527,21 +530,25 @@ for (const dialect of getConfiguredTestDialects()) {
 
       const roads = {
         "a Builder save": (slug: string) =>
-          dispatchComponents(
-            "createComponent",
-            {},
-            {
-              slug,
-              label: "Team updates",
-              fields: BODY,
-            }
+          inDevelopment(() =>
+            dispatchComponents(
+              "createComponent",
+              {},
+              {
+                slug,
+                label: "Team updates",
+                fields: BODY,
+              }
+            )
           ),
         "the Direct API": (slug: string) =>
-          (current as TestNextly).nextly.fieldGroups.create({
-            slug,
-            label: "Team updates",
-            fields: BODY as never,
-          }),
+          inDevelopment(() =>
+            (current as TestNextly).nextly.fieldGroups.create({
+              slug,
+              label: "Team updates",
+              fields: BODY as never,
+            })
+          ),
       };
 
       for (const [road, create] of Object.entries(roads)) {
