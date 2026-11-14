@@ -312,6 +312,41 @@ describe("the count at the end of each row", () => {
   });
 });
 
+describe("a row's count arriving", () => {
+  it("keeps the row, and the keyboard's focus on it, as the count arrives", async () => {
+    // The usage read answers only once released, so the row is focused while
+    // it has no count yet. Wrapping the row in its count's tooltip only once
+    // the count arrived replaced the row's button, and focus fell to the page:
+    // an author who had tabbed to a row pressed Enter on nothing.
+    let release: () => void = () => undefined;
+    const answered = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const inner = host({ reaches: () => ({ "color.brand": reach(3) }) });
+    const usage: Host = {
+      ...inner,
+      usage: async (...asked) => {
+        await answered;
+        return inner.usage(...asked);
+      },
+    };
+    render(<Hosted usage={usage} />);
+    const before = row(/^Brand/);
+    act(() => before.focus());
+    expect(document.activeElement).toBe(before);
+
+    await act(async () => {
+      release();
+      await answered;
+    });
+    const after = await screen.findByRole("button", {
+      name: /^Brand.*Used in 3 places$/,
+    });
+    expect(after).toBe(before);
+    expect(document.activeElement).toBe(before);
+  });
+});
+
 describe("removing a variable nothing uses", () => {
   it("says so beside Remove, and Remove confirms as it always has", async () => {
     const onChange = vi.fn();
