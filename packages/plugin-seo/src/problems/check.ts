@@ -405,6 +405,7 @@ const MAX_REDIRECT_HOPS = 5;
  */
 async function pagesAt(
   ctx: PluginContext,
+  site: readonly string[],
   path: string,
   locale: string,
   holders: readonly { collection: string; id: string }[],
@@ -423,17 +424,43 @@ async function pagesAt(
   const [entry] = data as unknown[];
   if (entry === undefined) return [];
   const redirect = redirectOf(entry);
-  const sent = destinationOf(redirect, path);
-  if (redirect.gone || !sent.startsWith("/")) return [];
-  const language = redirect.locale === "" ? locale : redirect.locale;
-  const next = pathOf(sent);
+  if (redirect.gone) return [];
+  const next = await keptAt(
+    destinationOf(redirect, path),
+    redirect.locale === "" ? locale : redirect.locale,
+    site
+  );
+  if (next === undefined) return [];
   return pagesAt(
     ctx,
-    next,
-    language,
-    await addressHolders(ctx, next, language),
+    site,
+    next.path,
+    next.locale,
+    await addressHolders(ctx, next.path, next.locale),
     hops + 1
   );
+}
+
+/**
+ * Where a redirect's To address is kept: a path from the root in the
+ * redirect's language, or a full address on one of the site's own origins
+ * read by the rule a visitor's request is (its language's domain or prefix
+ * included). None for an address on another site.
+ */
+async function keptAt(
+  sent: string,
+  locale: string,
+  site: readonly string[]
+): Promise<{ locale: string; path: string } | undefined> {
+  if (sent.startsWith("/") && !sent.startsWith("//")) {
+    return { locale, path: pathOf(sent) };
+  }
+  const origin = originOf(sent);
+  if (origin === undefined || !site.includes(origin)) return undefined;
+  const kept = await addressOfRequest(new URL(sent));
+  return kept === undefined
+    ? undefined
+    : { locale: kept.locale, path: pathOf(kept.path) };
 }
 
 /** What the check of one language of a page found, before it is kept. */
@@ -467,7 +494,14 @@ async function examine(
     // Read by the same rule a visitor's request is, as the Proxy reads it.
     keptOf: url => addressOfRequest(url),
     holders: (path, locale) => addressHolders(ctx, path, locale),
-    pagesOf: (holders, locale, path) => pagesAt(ctx, path, locale, holders),
+    pagesOf: (holders, locale, path) =>
+      pagesAt(
+        ctx,
+        productionAddresses.flatMap(each => originOf(each) ?? []),
+        path,
+        locale,
+        holders
+      ),
   });
   const subject = {
     type,
@@ -1151,7 +1185,11 @@ export async function problemList(
   // its pages is kept, so switching it on again shows it at once.
   const on = (page: PageRef | undefined) =>
     page === undefined || !isSeoOff(rules, page.type);
-  const rows = (await readPages(ctx)).filter(row => on(row.subject));
+  // Every kept page stays in the link graph, one of a type whose SEO is off
+  // too: it is still public and its links still lead visitors on. Only the
+  // pages whose problems and counts are returned are filtered.
+  const stored = await readPages(ctx);
+  const rows = stored.filter(row => on(row.subject));
   const allowed = await reader.pages([
     ...rows.map(row => row.subject),
     ...site.problems.flatMap(problem => pageOf(problem) ?? []),
@@ -1180,12 +1218,16 @@ export async function problemList(
     ...sharedValueProblems(pages),
     // Every page's links count, the ones the reader may not open too; only
     // the pages they may read are named.
-    ...orphanProblems(rows, pages, await ctx.publicAddresses.defaultLanguage()),
+    ...orphanProblems(
+      stored,
+      pages,
+      await ctx.publicAddresses.defaultLanguage()
+    ),
   ]).sort(byKind);
   const checkedAt = site.checkedAt;
   const age = checkedAt === undefined ? Infinity : now - Date.parse(checkedAt);
   const defaultLanguage = await ctx.publicAddresses.defaultLanguage();
-  const counts = linkCounts(rows);
+  const counts = linkCounts(stored);
   return {
     problems,
     // Each version of a page the reader may read that a check read, named

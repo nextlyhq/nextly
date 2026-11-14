@@ -46,6 +46,7 @@ import {
   type Reader,
 } from "../check";
 import type { Problem } from "../contract";
+import { linkedPageKey } from "../link-graph";
 import { PROBLEMS_SLUG, savePage } from "../store";
 
 let current: TestNextly | undefined;
@@ -417,6 +418,85 @@ describe.each(getConfiguredTestDialects())(
       // The covering pattern is not the one met, so Fallback gets no link.
       expect(counts(fallback)).toEqual({ inbound: 0, outbound: 0 });
       expect(counts(linking)).toEqual({ inbound: 0, outbound: 1 });
+    });
+
+    it("follows a redirect to a full address on the site's own origin", async () => {
+      const { t, ctx } = await boot(dialect);
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: {
+          _overwrite: true,
+          productionAddresses: ["https://example.com"],
+        },
+        overrideAccess: true,
+      });
+      const boats = await publish(t, {
+        title: "Boats",
+        slug: "boats",
+        excerpt: "Every boat in the harbour.",
+      });
+      await until(t, checkedSince(boats));
+      await ctx.services.collections.withTransaction(tx =>
+        putRedirect(ctx, tx, {
+          locale: "en",
+          origin: "person",
+          source: "/old-boats",
+          target: "https://example.com/blog/boats",
+        })
+      );
+      const harbour = await publish(t, {
+        title: "Harbour",
+        slug: "harbour",
+        excerpt: "A walk along the harbour.",
+        body: body("/old-boats", "A chart of the tides"),
+      });
+      await until(t, checkedSince(harbour));
+
+      const list = await problemList(ctx, CHECKS, everything);
+      expect(list.checked?.find(page => page.id === boats)?.links).toEqual({
+        inbound: 1,
+        outbound: 0,
+      });
+    });
+
+    it("counts a link from a page of a type whose SEO is switched off", async () => {
+      const { t, ctx } = await boot(dialect);
+      const boats = await publish(t, {
+        title: "Boats",
+        slug: "boats",
+        excerpt: "Every boat in the harbour.",
+      });
+      await until(t, checkedSince(boats));
+      // A page of another type, still public, linking to Boats; its type's
+      // SEO is then switched off, which keeps the page and its links.
+      await savePage(ctx, {
+        subject: {
+          type: "guides",
+          id: "g1",
+          label: "Guide",
+          detail: "/guides/g1",
+        },
+        locale: "en",
+        problems: [],
+        links: {
+          to: [linkedPageKey("posts", boats, "en")],
+          listed: true,
+          home: false,
+        },
+        checkedAt: new Date().toISOString(),
+      });
+      await t.nextly.updateSingle({
+        slug: SEO_SETTINGS_SLUG,
+        data: { _overwrite: true, typesWithSeoOff: ["guides"] },
+        overrideAccess: true,
+      });
+
+      const list = await problemList(ctx, CHECKS, everything);
+      expect(list.checked?.find(page => page.id === boats)?.links).toEqual({
+        inbound: 1,
+        outbound: 0,
+      });
+      expect(kindsOf(list.problems, boats)).not.toContain("orphanPage");
     });
 
     it("names no orphan of a page whose canonical names another address", async () => {
