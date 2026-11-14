@@ -371,28 +371,7 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "postgresql",
-    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 delete nextly_versions",
-    witness:
-      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
     key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dc_*",
-    witness:
-      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select email_deliveries",
-    witness:
-      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select email_queue_recipients",
     witness:
       "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
     reason: CALLER,
@@ -455,37 +434,83 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "postgresql",
-    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 update activity_log",
-    witness:
-      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 update audit_log",
-    witness:
-      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 update email_deliveries",
-    witness:
-      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts#<anonymous> (opened the transaction) \u00b7 update nextly_content_events",
-    witness:
-      "packages/nextly/src/plugins/__tests__/plugin-tx-after-commit.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
     key: "packages/nextly/src/shared/lib/__tests__/transaction-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dc_*",
     witness:
       "packages/nextly/src/shared/lib/__tests__/transaction-scope.integration.test.ts",
+    reason: CALLER,
+  },
+  // A user's deletion inside a caller's transaction: the statements of it that run on another
+  // connection, the same ones `plugin-tx-after-commit` witnesses on PostgreSQL, reached on MySQL
+  // too. Its check for relationships still pointing at the account runs inside the transaction
+  // and is none of them.
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select pg_index",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select pg_class",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select unnest",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
+    key: "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select pg_constraint",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/domains/users/services/user-mutation-service.ts#UserMutationService.supportsErasure \u00b7 select tables",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select columns",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select STATISTICS",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select KEY_COLUMN_USAGE",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select TABLE_CONSTRAINTS",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/domains/users/services/user-mutation-service.ts#UserMutationService.tablePresent \u00b7 select tables",
+    witness:
+      "packages/nextly/src/domains/users/__tests__/user-delete-refused-by-relationship.integration.test.ts",
     reason: CALLER,
   },
 ];
