@@ -18,7 +18,9 @@
  *   neither llms.txt nor a page's head links a rendered copy;
  * - a page built in code links its copy from its head;
  * - on a site whose addresses name their language, a page built in code is
- *   copied at the address it is served at, in every language.
+ *   copied at the address it is served at, in every language;
+ * - a page built in code at a copy's address is served there, never
+ *   replaced by another page's copy, and no copy is linked to it.
  */
 process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
@@ -47,18 +49,30 @@ import { RENDERING_HEADER } from "../rendered-fetch";
 
 const SITE = "https://acme.example";
 
-/** A production build of a site with one page built in code, `/pricing`. */
+/**
+ * A production build of a site with pages built in code: `/pricing`, and
+ * `/guide` beside a page of its own at `/guide.md`, the address `/guide`'s
+ * copy would have.
+ */
 const BUILD = mkdtempSync(join(tmpdir(), "seo-rendered-copies-"));
 mkdirSync(join(BUILD, "server"), { recursive: true });
 writeFileSync(
   join(BUILD, "server/app-paths-manifest.json"),
-  JSON.stringify({ "/(site)/pricing/page": "app/(site)/pricing/page.js" })
+  JSON.stringify({
+    "/(site)/pricing/page": "app/(site)/pricing/page.js",
+    "/(site)/guide/page": "app/(site)/guide/page.js",
+    "/(site)/guide.md/page": "app/(site)/guide.md/page.js",
+  })
 );
 writeFileSync(
   join(BUILD, "prerender-manifest.json"),
   JSON.stringify({
     version: 4,
-    routes: { "/pricing": { srcRoute: "/pricing" } },
+    routes: {
+      "/pricing": { srcRoute: "/pricing" },
+      "/guide": { srcRoute: "/guide" },
+      "/guide.md": { srcRoute: "/guide.md" },
+    },
   })
 );
 
@@ -350,6 +364,26 @@ describe.each(getConfiguredTestDialects())(
       expect((await ask("/de/pricing.md")).body).toContain(
         "# Preise\n\nStarter kostet 9 $.\n"
       );
+    });
+
+    it("serves a page built in code at a copy's address itself, never another page's copy", async () => {
+      await boot(dialect);
+      await seoMetadata("/guide", { metadata: { title: "Guide" } });
+      const asked = renderedSite({
+        "/guide": html("Guide", "<h1>Guide</h1><p>Read me.</p>"),
+      });
+
+      // The site's own /guide.md is the site's to answer.
+      expect((await ask("/guide.md")).body).toBe("the page");
+      expect(asked).toEqual([]);
+      // So /guide links no copy at that address, in llms.txt or its head.
+      const llms = await llmsTxt();
+      expect(llms).toContain(`(${SITE}/guide)`);
+      expect(llms).not.toContain(`(${SITE}/guide.md)`);
+      const head = await seoMetadata("/guide", {
+        metadata: { title: "Guide" },
+      });
+      expect(head.alternates?.types?.["text/markdown"]).toBeUndefined();
     });
   }
 );

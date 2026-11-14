@@ -115,11 +115,12 @@ async function sectionsOf(
 async function linkedCopies(
   ctx: PluginContext,
   pages: readonly ListedPage[],
-  rules: SiteRules
+  rules: SiteRules,
+  config: AiOutputsConfig
 ): Promise<(at: number) => string | undefined> {
   if (rules.plainTextCopies !== true) return () => undefined;
   const copies = pages.map(page => copyAddressOf(page.loc));
-  const taken = await copiesTaken(ctx, copies);
+  const taken = await copiesTaken(ctx, copies, config);
   const copySet = new Set(copies);
   const literal = new Set(
     pages.map(page => `${page.loc}.md`).filter(copy => copySet.has(copy))
@@ -236,7 +237,7 @@ export async function llmsTxtOf(
   if (rules.llmsTxt !== true) return null;
   const { pages, readRules } = await llmsPagesOf(ctx, origin, config);
   const sections = await sectionsOf(ctx, pages);
-  const linked = await linkedCopies(ctx, pages, rules);
+  const linked = await linkedCopies(ctx, pages, rules, config);
   const headOf = await listedHeads(ctx, pages, config, readRules);
   const entries: LlmsEntry[] = pages.map((page, at) => {
     const head = headOf(at);
@@ -679,21 +680,29 @@ function copyOfDocument(
 /**
  * Which of `copies`, copy addresses, a page of the site holds itself, such
  * as a page whose address is `/guide.md`: that page is served there, so no
- * copy is, and none is linked. One read of the record per language.
+ * copy is, and none is linked. A page built in code holds the path its
+ * route serves, which the record does not hold, so the site's routes are
+ * read too. One read of the record per language.
  */
 async function copiesTaken(
   ctx: PluginContext,
-  copies: readonly string[]
+  copies: readonly string[],
+  config: Pick<AiOutputsConfig, "codeRoutes">
 ): Promise<Set<string>> {
+  const taken = new Set<string>();
+  const built = new Set(config.codeRoutes?.().map(route => route.path) ?? []);
   const byLanguage = new Map<string, { copy: string; path: string }[]>();
   for (const copy of copies) {
+    if (built.has(new URL(copy).pathname)) {
+      taken.add(copy);
+      continue;
+    }
     const address = await addressOfRequest(new URL(copy));
     if (address === undefined) continue;
     const list = byLanguage.get(address.locale) ?? [];
     list.push({ copy, path: address.path });
     byLanguage.set(address.locale, list);
   }
-  const taken = new Set<string>();
   for (const [language, asked] of byLanguage) {
     const paths = asked.map(each => each.path);
     await withAddressHolders(ctx, language, paths, async () => {
@@ -780,7 +789,7 @@ async function copyServedAt(
   loc: string,
   config: AiOutputsConfig
 ): Promise<ListedPage | null> {
-  if ((await copiesTaken(ctx, [url.href])).size > 0) return null;
+  if ((await copiesTaken(ctx, [url.href], config)).size > 0) return null;
   const page = await pageAsked(
     ctx,
     url,
@@ -833,7 +842,9 @@ async function plainCopyAt(
   const rules = await config.readRules(ctx, undefined);
   if (rules.plainTextCopies !== true) return null;
   // A page of the site's at the copy's address is served there instead.
-  if (!atPage && (await copiesTaken(ctx, [url.href])).size > 0) return null;
+  if (!atPage && (await copiesTaken(ctx, [url.href], config)).size > 0) {
+    return null;
+  }
   const candidates = atPage ? [url.pathname] : pagesOfCopy(url.pathname);
   const page = await pageAsked(ctx, url, config, candidates, atPage);
   if (page === null) return null;

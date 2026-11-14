@@ -21,7 +21,7 @@
  * - a heading taken from above `<main>` is one a reader sees, and a line of
  *   code is never taken for one;
  * - code is copied verbatim, never tidied as prose is, its own blank lines
- *   and trailing spaces kept;
+ *   and trailing spaces kept, and a line break drawn with `<br>` kept;
  * - a `<main>` a reader never sees, hidden itself or by what holds it, is
  *   not the page's main content;
  * - a line break in a table cell keeps the cell's row on one line;
@@ -361,5 +361,15 @@ describe("a copy made from the rendered page", () => {
       "<main><table><tr><td>A<br>B</td><td>C</td></tr></table></main>"
     );
     expect(renderedCopyOf(html, BASE).body).toBe("| A B | C |\n| --- | --- |");
+  });
+
+  it("keeps the line breaks code draws with <br>, each one", () => {
+    const html = page(
+      "",
+      "<main><pre><code>first<br/>second<br><br>  third</code></pre></main>"
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe(
+      "```\nfirst\nsecond\n\n  third\n```"
+    );
   });
 });

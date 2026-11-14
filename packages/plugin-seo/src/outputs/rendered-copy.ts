@@ -512,10 +512,13 @@ class CopyWriter {
 
   open(tag: string, attributes: string): void {
     const skip = this.leftOut(tag, attributes);
-    // Written unless it, or what holds it, is left out; code holds only text.
-    const writes = !skip && !this.skipping() && !this.inside("pre");
+    const shown = !skip && !this.skipping();
+    // Written where shown, but code holds only text.
+    const writes = shown && !this.inside("pre");
     if (VOID.has(tag)) {
       if (writes) this.empty(tag, attributes);
+      // A line break drawn in code is one of the code's own lines.
+      else if (shown && tag === "br") this.copy.add("\n");
       return;
     }
     const open: Open = { tag, skip, start: this.copy.length };
