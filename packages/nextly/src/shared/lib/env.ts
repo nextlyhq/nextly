@@ -61,6 +61,18 @@ const _poolSettingsObject = z.object({
 export type PoolSettings = z.infer<typeof _poolSettingsObject>;
 
 /**
+ * Log each problem the environment validation found, naming its key, and refuse to go on. The one
+ * refusal both the full validation and the pool settings' own read give, so they say the same thing.
+ */
+function refuseInvalidEnv(error: z.ZodError): never {
+  consoleLogger.error("Environment validation failed");
+  error.issues.forEach(issue => {
+    consoleLogger.error(`  ${issue.path.join(".")}: ${issue.message}`);
+  });
+  throw new Error("Invalid environment configuration");
+}
+
+/**
  * The pool and timeout settings in `source`, validated alone. A value out of range is refused as
  * the full validation refuses it, naming the key.
  */
@@ -68,13 +80,7 @@ export function readPoolSettings(
   source: Record<string, unknown> = process.env
 ): PoolSettings {
   const parsed = _poolSettingsObject.safeParse(source);
-  if (!parsed.success) {
-    consoleLogger.error("Environment validation failed");
-    parsed.error.issues.forEach(issue => {
-      consoleLogger.error(`  ${issue.path.join(".")}: ${issue.message}`);
-    });
-    throw new Error("Invalid environment configuration");
-  }
+  if (!parsed.success) refuseInvalidEnv(parsed.error);
   return parsed.data;
 }
 
@@ -279,13 +285,7 @@ export type Env = BaseEnv & {
 
 function validateEnv(): Env {
   const parsed = _envSchema.safeParse(process.env);
-  if (!parsed.success) {
-    consoleLogger.error("Environment validation failed");
-    parsed.error.issues.forEach(issue => {
-      consoleLogger.error(`  ${issue.path.join(".")}: ${issue.message}`);
-    });
-    throw new Error("Invalid environment configuration");
-  }
+  if (!parsed.success) refuseInvalidEnv(parsed.error);
 
   const data = parsed.data;
 
