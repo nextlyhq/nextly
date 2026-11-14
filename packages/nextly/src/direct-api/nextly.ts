@@ -86,6 +86,7 @@ import type { SingleRegistryService } from "../services/singles/single-registry-
 import { UserAccountService } from "../services/users/user-account-service";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 import type { UserService } from "../services/users/user-service";
+import { assertPaginationIsComplete } from "../shared/base-registry-service";
 import { consoleLogger } from "../shared/types";
 
 import { installLegacyFieldGroupsNamespaceGuard } from "./legacy-field-groups-namespace";
@@ -746,7 +747,10 @@ export class Nextly implements NextlyContext {
   }
 
   /** Fetch the content of every registered Single. */
-  findSingles(args: FindSinglesArgs = {}): Promise<SingleListResult> {
+  async findSingles(args: FindSinglesArgs = {}): Promise<SingleListResult> {
+    // Refused before the call's own work, the schema follow included: a call this refuses must not
+    // read the stored version or reload a definition first. A precondition, so it comes first.
+    assertPaginationIsComplete({ limit: args.limit, offset: args.offset });
     return runAsCaller(this.defaultConfig, args, callArgs =>
       singlesNs.findSingles(this, callArgs)
     );
