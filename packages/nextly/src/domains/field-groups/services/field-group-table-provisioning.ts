@@ -6,7 +6,7 @@
 // together; the bodies are byte-identical to the versions the dispatcher carried.
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { getTableColumns, is, Table } from "drizzle-orm";
+import { getColumns, is, Table } from "drizzle-orm";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getSchemaRegistryFromDI } from "../../../dispatcher/helpers/di";
@@ -66,7 +66,7 @@ export function registeredComponentColumns(
       ).tableResolver?.getTable?.(tableName);
   if (!is(table, Table)) return undefined;
   return new Set(
-    Object.values(getTableColumns(table)).map(column =>
+    Object.values(getColumns(table)).map(column =>
       column.name.toLowerCase()
     )
   );

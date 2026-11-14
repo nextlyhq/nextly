@@ -761,7 +761,7 @@ export class FieldGroupMetadataService {
     const { buildDesiredTableFromComponentFields } = await import(
       "../../schema/pipeline/diff/build-from-fields"
     );
-    const { getColumnDescriptor } = await import(
+    const { fieldsStoredOnRow, getColumnDescriptor } = await import(
       "../../schema/services/field-column-descriptor"
     );
     const { isFieldLocalized } = await import("../../i18n/classify-fields");
@@ -794,7 +794,9 @@ export class FieldGroupMetadataService {
      * never appear here.
      */
     const fieldNameByColumn = new Map<string, string>();
-    for (const field of [...oldFields, ...args.fields]) {
+    // Through `fieldsStoredOnRow`, as the desired table reads them: a field inside a group with no
+    // name owns its column on the row, and the group itself has no column, nor a name to spell one.
+    for (const field of fieldsStoredOnRow([...oldFields, ...args.fields])) {
       const column = getColumnDescriptor(field, dialect, "fieldGroup");
       if (column) fieldNameByColumn.set(column.name, field.name);
     }

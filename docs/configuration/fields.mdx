@@ -778,7 +778,7 @@ group({
 });
 ```
 
-**Gotchas:** named groups create real nested objects in your data — keep that in mind for queries and migrations. Presentational groups are pure UI; their fields share the parent's data namespace.
+**Gotchas:** named groups create real nested objects in your data — keep that in mind for queries and migrations. Presentational groups are pure UI; their fields share the parent's data namespace. Each of their fields is stored where the group sits: as a column of the entry's row in a collection or Single, and as a column of the instance's row (`comp_<slug>`) in a [field group](/docs/configuration/field-groups#groups-with-no-name).
 
 ---
 
