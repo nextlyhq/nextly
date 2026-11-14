@@ -1534,22 +1534,30 @@ A site that turns on `experimental.globalNotFound` in `next.config` answers ever
 import { logNotFound } from "@nextlyhq/plugin-seo";
 import { headers } from "next/headers";
 import { after } from "next/server";
+import { Suspense } from "react";
 
-export default async function GlobalNotFound() {
-  // Read now, while the request is in hand; logged once the page is sent.
+// Reads the request, and logs it once the page is sent.
+async function LogNotFound() {
   const requestHeaders = await headers();
   after(() => logNotFound(requestHeaders));
+  return null;
+}
+
+export default function GlobalNotFound() {
   return (
     <html lang="en">
       <body>
         <h1>Page not found</h1>
+        <Suspense fallback={null}>
+          <LogNotFound />
+        </Suspense>
       </body>
     </html>
   );
 }
 ```
 
-Reading the request makes the page answer each request, so each miss is logged. Next.js renders this page only for addresses no route matches. A miss a route decides itself, with `notFound()`, never reaches it, so log those with `notFoundLogged` in the route, as above.
+Only the part inside `<Suspense>` reads the request: with Cache Components on, the page is still made while `next build` runs, and that part runs for each request, so each miss is logged. Read the headers outside it and the build stops on `/_not-found`. Next.js renders this page only for addresses no route matches. A miss a route decides itself, with `notFound()`, never reaches it, so log those with `notFoundLogged` in the route, as above.
 
 A request is counted once, though its page and its `generateMetadata` both answer it. A prefetch is not counted (the visit, if it comes, is), and neither is a request the Proxy did not pass on. `notFoundLogged` throws only Next.js's own errors, and on the Edge runtime, where the plugin does not run, it answers not found and logs nothing. `logNotFound(headers)`, from the package root, is what it calls once the response is sent.
 
@@ -1986,7 +1994,9 @@ route, which Next.js hands its parent's params, are filled the same way. A recor
 written warns once and changes nothing the route gets. If `next.config` sets `distDir`, pass it
 as `{ buildDir }`, as `nextBuildDir`. An address the build answered not found, such as a topic
 whose page calls `notFound()` because it has no posts yet, is left out once Next.js has written
-its prerender manifest. While the build runs, nothing has said yet which declared pages will
+its prerender manifest. With Cache Components on, Next.js keeps that answer only in the record
+beside the page's HTML (`.next/server/app/<address>.meta`), so a deploy that copies only part of
+`.next` keeps those records too, or such an address stays listed. While the build runs, nothing has said yet which declared pages will
 answer not found, so a sitemap made then lists every address the params make: return params only
 for pages that exist, leaving out a topic with no posts.
 
