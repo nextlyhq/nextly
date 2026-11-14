@@ -23,7 +23,7 @@ import { dispatchCollections } from "../../../dispatcher/handlers/collection-dis
 import { container } from "../../../di/container";
 import type { ServiceContainer } from "../../../services";
 import type { PublishGate } from "../services/publish-gate";
-import { defineCollection, text } from "../../../config";
+import { defineCollection, group, text } from "../../../config";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -600,6 +600,591 @@ describeEachDialect("publishing the chosen parts of an entry", dialect => {
 
     expect(refusal).toMatch(/NOT_TRANSLATED/);
     expect(row?.status).toBe("draft");
+  });
+
+  // Publishing every language asks each language's publish rule before any value rule: a caller
+  // refused in one language learns nothing of what the entry holds there.
+  it("asks each language's publish rule before judging what publishing every language puts live", async () => {
+    await boot(
+      posts({
+        requireEveryLanguage: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: ({ locale }) => locale !== "es",
+        },
+      })
+    );
+    const id = await entry({ es: { title: "" } });
+    const publisher = await userWhoMay(t!, "publisher", "publish", ["posts"]);
+    await grantTo(t!, publisher, "read", ["posts"]);
+    await grantTo(t!, publisher, "update", ["posts"]);
+    const handler = t!.getService("collectionsHandler") as unknown as {
+      publishAllLocales(params: Record<string, unknown>): Promise<{
+        success: boolean;
+        statusCode: number;
+      }>;
+    };
+
+    const everyLanguage = await handler.publishAllLocales({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: false,
+      user: { id: publisher, email: "publisher@example.test", roles: [] },
+      data: { _overwrite: true },
+    });
+
+    expect(everyLanguage.success).toBe(false);
+    expect(JSON.stringify(everyLanguage)).not.toMatch(
+      /title|REQUIRED_IN_LANGUAGE/
+    );
+  });
+
+  // A language the caller may not publish but that this publish does not put live (no row of its
+  // own) leaves the value rules standing for the languages it does put live.
+  it("keeps the value rules where only a language not going live is refused", async () => {
+    await boot(
+      posts({
+        requireEveryLanguage: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: ({ locale }) => locale !== "fr",
+        },
+      })
+    );
+    // Spanish has a row whose required title is empty; French has none.
+    const id = await entry({ es: { title: "" } });
+    const before = await states(id);
+    const publisher = await userWhoMay(t!, "publisher", "publish", ["posts"]);
+    await grantTo(t!, publisher, "read", ["posts"]);
+    await grantTo(t!, publisher, "update", ["posts"]);
+    const handler = t!.getService("collectionsHandler") as unknown as {
+      publishAllLocales(params: Record<string, unknown>): Promise<{
+        success: boolean;
+        message?: string;
+      }>;
+    };
+
+    const everyLanguage = await handler.publishAllLocales({
+      collectionName: "posts",
+      entryId: id,
+      overrideAccess: false,
+      user: { id: publisher, email: "publisher@example.test", roles: [] },
+      data: { _overwrite: true },
+    });
+
+    expect(everyLanguage.success).toBe(false);
+    expect(everyLanguage.message).toMatch(/title/);
+    expect(await states(id)).toEqual(before);
+  });
+
+  // Without per-language storage a language's pending change carries its shared edits, and
+  // publishing it with the shared part shows them in every live language: they are validated in
+  // each, and asked of each language's field rules, as a shared draft's are.
+  const lockedPosts = (fieldAccess?: {
+    update: (args: { locale?: string }) => boolean;
+  }) =>
+    posts({
+      versions: { drafts: true },
+      fields: [
+        text({ name: "title", required: true }),
+        text({
+          name: "tagline",
+          localized: false,
+          validate: (
+            value: unknown,
+            { data }: { data: Record<string, unknown> }
+          ) =>
+            data.title !== "Locked" ||
+            value === "Shared" ||
+            "The tagline cannot change while the title is Locked.",
+          ...(fieldAccess ? { access: fieldAccess } : {}),
+        }),
+      ],
+    });
+
+  it("validates a language's shared edits in every live language when the shared part moves", async () => {
+    await boot(lockedPosts());
+    const id = await entry({ es: { title: "Locked" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    await t!.nextly.update({
+      collection: "posts",
+      id,
+      locale: "en",
+      data: { tagline: "Changed", _overwrite: true },
+    });
+
+    const refusal = await refusalOf(
+      t!.nextly.publish({
+        collection: "posts",
+        id,
+        locales: ["en"],
+        shared: true,
+        data: { _overwrite: true },
+      })
+    );
+    const [main] = await t!.adapter.executeQuery<{ tagline: string }>(
+      `SELECT ${q("tagline")} AS tagline FROM ${q("dc_posts")} WHERE ${q("id")} = '${id}'`
+    );
+
+    expect(refusal).toMatch(/tagline/);
+    expect(main?.tagline).toBe("Shared");
+  });
+
+  it("asks a language's shared edits of every live language's field rules when the shared part moves", async () => {
+    await boot(
+      posts({
+        versions: { drafts: true },
+        access: { read: () => true, update: () => true, publish: () => true },
+        fields: [
+          text({ name: "title", required: true }),
+          text({
+            name: "tagline",
+            localized: false,
+            access: { update: ({ locale }) => locale !== "es" },
+          }),
+        ],
+      })
+    );
+    const id = await entry({ es: { title: "Hola" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    await t!.nextly.update({
+      collection: "posts",
+      id,
+      locale: "en",
+      data: { tagline: "Changed", _overwrite: true },
+    });
+    const publisher = await userWhoMay(t!, "publisher", "publish", ["posts"]);
+    await grantTo(t!, publisher, "read", ["posts"]);
+    await grantTo(t!, publisher, "update", ["posts"]);
+
+    const refusal = await refusalOf(
+      t!.nextly.publish({
+        collection: "posts",
+        id,
+        locales: ["en"],
+        shared: true,
+        overrideAccess: false,
+        user: { id: publisher, email: "publisher@example.test", roles: [] },
+        data: { _overwrite: true },
+      })
+    );
+    const [main] = await t!.adapter.executeQuery<{ tagline: string }>(
+      `SELECT ${q("tagline")} AS tagline FROM ${q("dc_posts")} WHERE ${q("id")} = '${id}'`
+    );
+
+    expect(refusal).toMatch(/tagline/);
+    expect(main?.tagline).toBe("Shared");
+  });
+
+  // The value rules are judged again on the entry as the publish locks it: a change saved after
+  // they were first judged is what goes live, so it is what they judge.
+  it("judges the value rules again on the change the lock finds", async () => {
+    let onAsk: (() => Promise<void>) | undefined;
+    await boot(
+      defineCollection({
+        slug: "pages",
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: {
+          read: () => true,
+          update: () => true,
+          // Asked in Spanish, once: the shared part is asked first, with no language.
+          publish: async ({ locale }: { locale?: string }) => {
+            if (locale === "es" && onAsk) {
+              const once = onAsk;
+              onAsk = undefined;
+              await once();
+            }
+            return true;
+          },
+        },
+        fields: [
+          text({ name: "title" }),
+          text({ name: "slug", required: true, unique: true }),
+        ],
+      } as never)
+    );
+    const created = await t!.nextly.create({
+      collection: "pages",
+      locale: "en",
+      data: { title: "Hello", slug: "hola", status: "published" },
+    });
+    const id = String(created.item.id);
+    // Spanish's pending change supplies its own slug, as the value rules first see it.
+    await t!.nextly.update({
+      collection: "pages",
+      id,
+      locale: "es",
+      data: { title: "Hola", slug: "hola-es", _overwrite: true },
+    });
+    // While the rule is asked, another writer replaces Spanish's pending change with one that
+    // has no slug of its own (an ordinary save keeps the slug a change already holds).
+    onAsk = async () => {
+      const where = {
+        and: [
+          { column: "entryId", op: "=" as const, value: id },
+          { column: "locale", op: "=" as const, value: "es" },
+          { column: "versionNo", op: "IS NULL" as const },
+        ],
+      };
+      const [pending] = await t!.adapter.select<{ snapshot: unknown }>(
+        "nextly_versions",
+        { where }
+      );
+      const snapshot =
+        typeof pending?.snapshot === "string"
+          ? (JSON.parse(pending.snapshot) as Record<string, unknown>)
+          : { ...(pending?.snapshot as Record<string, unknown>) };
+      await t!.adapter.update(
+        "nextly_versions",
+        { snapshot: JSON.stringify({ ...snapshot, slug: "" }) },
+        where
+      );
+    };
+    const publisher = await userWhoMay(t!, "publisher", "publish", ["pages"]);
+    await grantTo(t!, publisher, "read", ["pages"]);
+    await grantTo(t!, publisher, "update", ["pages"]);
+
+    const refusal = await refusalOf(
+      t!.nextly.publish({
+        collection: "pages",
+        id,
+        locales: ["es"],
+        overrideAccess: false,
+        user: { id: publisher, email: "publisher@example.test", roles: [] },
+        data: { _overwrite: true },
+      })
+    );
+
+    // The newer change was saved while the rule was asked, so the race happened.
+    expect(onAsk).toBeUndefined();
+    expect(refusal).toMatch(/UNIQUE_VALUE_REQUIRED_IN_LANGUAGE/);
+    expect((await states(id, "dc_pages")).es ?? "none").not.toBe("published");
+  });
+
+  // A save that publishes is judged on what it may write: a value its field rule refuses is not
+  // counted, so it cannot stand in for the value the language lacks.
+  it("judges a publishing save on the values its field rules let it write", async () => {
+    await boot(
+      posts({
+        requireEveryLanguage: true,
+        access: { read: () => true, update: () => true, publish: () => true },
+        fields: [
+          text({
+            name: "title",
+            required: true,
+            access: { update: () => false },
+          }),
+          text({ name: "tagline", localized: false }),
+        ],
+      })
+    );
+    const id = await entry({ es: { tagline: "Shared" } });
+    const before = await states(id);
+    const editor = await userWhoMay(t!, "editor", "update", ["posts"]);
+    await grantTo(t!, editor, "publish", ["posts"]);
+    await grantTo(t!, editor, "read", ["posts"]);
+
+    const refusal = await refusalOf(
+      t!.nextly.update({
+        collection: "posts",
+        id,
+        locale: "es",
+        overrideAccess: false,
+        user: { id: editor, email: "editor@example.test", roles: [] },
+        data: { title: "Hola", status: "published", _overwrite: true },
+      })
+    );
+
+    expect(refusal).toMatch(/REQUIRED_IN_LANGUAGE/);
+    expect(await states(id)).toEqual(before);
+  });
+
+  // Taking one language down is not a publish, whatever a language it did not move holds: the
+  // trail judges the move by the parts it moved.
+  it("records no publish when one language alone is taken down beside a language still a draft", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" }, fr: { title: "Bonjour" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: ["en", "es"],
+      shared: true,
+      data: { _overwrite: true },
+    });
+    const editor = await userWhoMay(t!, "editor", "unpublish", ["posts"]);
+    await grantTo(t!, editor, "update", ["posts"]);
+    await grantTo(t!, editor, "read", ["posts"]);
+    const publishMarks = async () =>
+      (
+        await t!.adapter.select<{ metadata: unknown }>("activity_log", {
+          where: { and: [{ column: "entryId", op: "=", value: id }] },
+        })
+      ).filter(row => {
+        const metadata =
+          typeof row.metadata === "string"
+            ? (JSON.parse(row.metadata) as Record<string, unknown>)
+            : (row.metadata as Record<string, unknown> | null);
+        return metadata?.published === true;
+      }).length;
+    const before = await publishMarks();
+
+    await t!.nextly.unpublish({
+      collection: "posts",
+      id,
+      locales: ["es"],
+      overrideAccess: false,
+      user: { id: editor, email: "editor@example.test", roles: [] },
+      data: { _overwrite: true },
+    });
+
+    expect((await states(id)).es).toBe("draft");
+    expect(await publishMarks()).toBe(before);
+  });
+
+  // A takedown is never a publish, whichever of the chosen languages were already drafts.
+  it("records no publish when chosen languages are taken down and one was already a draft", async () => {
+    await boot(posts());
+    const id = await entry({ es: { title: "Hola" }, fr: { title: "Bonjour" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: ["en", "es"],
+      shared: true,
+      data: { _overwrite: true },
+    });
+    const editor = await userWhoMay(t!, "editor", "unpublish", ["posts"]);
+    await grantTo(t!, editor, "update", ["posts"]);
+    await grantTo(t!, editor, "read", ["posts"]);
+    const publishMarks = async () =>
+      (
+        await t!.adapter.select<{ metadata: unknown }>("activity_log", {
+          where: { and: [{ column: "entryId", op: "=", value: id }] },
+        })
+      ).filter(row => {
+        const metadata =
+          typeof row.metadata === "string"
+            ? (JSON.parse(row.metadata) as Record<string, unknown>)
+            : (row.metadata as Record<string, unknown> | null);
+        return metadata?.published === true;
+      }).length;
+    const before = await publishMarks();
+
+    await t!.nextly.unpublish({
+      collection: "posts",
+      id,
+      locales: ["es", "fr"],
+      overrideAccess: false,
+      user: { id: editor, email: "editor@example.test", roles: [] },
+      data: { _overwrite: true },
+    });
+
+    expect((await states(id)).es).toBe("draft");
+    expect(await publishMarks()).toBe(before);
+  });
+
+  // A shared field's rule in a live language is asked of that language's own document: a rule
+  // that refuses a change while Spanish's own title is locked refuses it, whichever language the
+  // publish chose.
+  it("asks a live language's field rule of that language's own document", async () => {
+    await boot(
+      posts({
+        versions: { drafts: true },
+        access: { read: () => true, update: () => true, publish: () => true },
+        fields: [
+          text({ name: "title", required: true }),
+          text({
+            name: "tagline",
+            localized: false,
+            access: {
+              update: ({
+                locale,
+                data,
+              }: {
+                locale?: string;
+                data?: Record<string, unknown>;
+              }) => !(locale === "es" && data?.title === "Locked"),
+            },
+          }),
+        ],
+      } as never)
+    );
+    const id = await entry({ es: { title: "Locked" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    await t!.nextly.update({
+      collection: "posts",
+      id,
+      locale: "en",
+      data: { tagline: "Changed", _overwrite: true },
+    });
+    const publisher = await userWhoMay(t!, "publisher", "publish", ["posts"]);
+    await grantTo(t!, publisher, "read", ["posts"]);
+    await grantTo(t!, publisher, "update", ["posts"]);
+
+    const refusal = await refusalOf(
+      t!.nextly.publish({
+        collection: "posts",
+        id,
+        locales: ["en"],
+        shared: true,
+        overrideAccess: false,
+        user: { id: publisher, email: "publisher@example.test", roles: [] },
+        data: { _overwrite: true },
+      })
+    );
+    const [main] = await t!.adapter.executeQuery<{ tagline: string }>(
+      `SELECT ${q("tagline")} AS tagline FROM ${q("dc_posts")} WHERE ${q("id")} = '${id}'`
+    );
+
+    expect(refusal).toMatch(/tagline/);
+    expect(main?.tagline).toBe("Shared");
+  });
+
+  // The shared value a publish writes is the one its languages' changes resolve to, field by
+  // field; the field rules judge that value, not an older copy a later save kept.
+  it("asks the field rules of the shared value the changes resolve to", async () => {
+    await boot(
+      posts({
+        versions: { drafts: true },
+        access: { read: () => true, update: () => true, publish: () => true },
+        fields: [
+          text({ name: "title", required: true }),
+          text({
+            name: "tagline",
+            localized: false,
+            access: {
+              update: ({
+                locale,
+                data,
+              }: {
+                locale?: string;
+                data?: Record<string, unknown>;
+              }) => !(locale === "fr" && data?.tagline === "Second"),
+            },
+          }),
+        ],
+      } as never)
+    );
+    const id = await entry({ es: { title: "Hola" }, fr: { title: "Bonjour" } });
+    await t!.nextly.publish({
+      collection: "posts",
+      id,
+      locales: "all",
+      data: { _overwrite: true },
+    });
+    // Spanish changes the tagline first, English changes it last, then Spanish saves again
+    // without touching it: English's value is the one the changes resolve to.
+    await t!.nextly.update({
+      collection: "posts",
+      id,
+      locale: "es",
+      data: { tagline: "First", _overwrite: true },
+    });
+    await t!.nextly.update({
+      collection: "posts",
+      id,
+      locale: "en",
+      data: { tagline: "Second", _overwrite: true },
+    });
+    await t!.nextly.update({
+      collection: "posts",
+      id,
+      locale: "es",
+      data: { title: "Hola 2", _overwrite: true },
+    });
+    const publisher = await userWhoMay(t!, "publisher", "publish", ["posts"]);
+    await grantTo(t!, publisher, "read", ["posts"]);
+    await grantTo(t!, publisher, "update", ["posts"]);
+
+    const refusal = await refusalOf(
+      t!.nextly.publish({
+        collection: "posts",
+        id,
+        locales: ["en", "es"],
+        shared: true,
+        overrideAccess: false,
+        user: { id: publisher, email: "publisher@example.test", roles: [] },
+        data: { _overwrite: true },
+      })
+    );
+
+    expect(refusal).toMatch(/FORBIDDEN/);
+    expect(refusal).toMatch(/tagline/);
+  });
+
+  // Judging a publishing save's values reads a copy of them: the save itself, and its hooks, are
+  // handed what was submitted, nested values included.
+  it("leaves a publishing save's submitted values as they were sent", async () => {
+    const seen: unknown[] = [];
+    await boot(
+      posts({
+        requireEveryLanguage: true,
+        access: { read: () => true, update: () => true, publish: () => true },
+        hooks: {
+          beforeValidate: [
+            ({ data }: { data?: Record<string, unknown> }) => {
+              seen.push(
+                (data?.meta as { secret?: unknown } | undefined)?.secret
+              );
+              return data;
+            },
+          ],
+        },
+        fields: [
+          text({ name: "title", required: true }),
+          text({ name: "tagline", localized: false }),
+          group({
+            name: "meta",
+            fields: [
+              text({ name: "note" }),
+              text({ name: "secret", access: { update: () => false } }),
+            ],
+          }),
+        ],
+      } as never)
+    );
+    const id = await entry({ es: { title: "Hola" } });
+    const editor = await userWhoMay(t!, "editor", "update", ["posts"]);
+    await grantTo(t!, editor, "publish", ["posts"]);
+    await grantTo(t!, editor, "read", ["posts"]);
+    seen.length = 0;
+
+    await refusalOf(
+      t!.nextly.update({
+        collection: "posts",
+        id,
+        locale: "es",
+        overrideAccess: false,
+        user: { id: editor, email: "editor@example.test", roles: [] },
+        data: {
+          title: "Hola",
+          meta: { note: "n", secret: "s" },
+          status: "published",
+          _overwrite: true,
+        },
+      })
+    );
+
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[0]).toBe("s");
   });
 
   /** A gate holding back the parts `held` names: a language code, or "shared". */

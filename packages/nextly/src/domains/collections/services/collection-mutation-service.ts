@@ -502,7 +502,7 @@ import {
   entryStillReferenced,
   referrersHolding,
 } from "./entry-still-referenced";
-import type { PartsState } from "./publish-parts";
+import { type PartsState, publishValueIssues } from "./publish-parts";
 import { requiresEveryLanguage } from "./require-every-language";
 import {
   entryWriteContext,
@@ -6004,6 +6004,11 @@ export class CollectionMutationService extends BaseService {
      * opened. Ignored for an unlocalized document, which has one.
      */
     locale?: string | null;
+    /**
+     * Discard the shared part's pending change alone, leaving each language's: where the shared
+     * part keeps a draft of its own (a translated collection under per-language storage).
+     */
+    shared?: boolean;
     /** Who discarded it, for the document's history. */
     actor?: RequestActor;
     user?: UserContext;
@@ -6067,12 +6072,35 @@ export class CollectionMutationService extends BaseService {
           );
           if (denied) throw errorFromServiceEnvelope(denied);
         }
-        const draftLocale = workingDraftLocale({
-          documentLocalized:
-            (collection as { localized?: boolean }).localized === true,
-          requestLocale: params.locale ?? null,
-          defaultLocale: this.localization?.defaultLocale ?? null,
-        });
+        // The shared part's draft is kept apart only where each part has its own; elsewhere there
+        // is no such draft to discard, and the request is refused rather than read as another.
+        if (
+          params.shared === true &&
+          !(
+            draftsKeptByPart() &&
+            (collection as { localized?: boolean }).localized === true
+          )
+        ) {
+          throw NextlyError.validation({
+            errors: [
+              {
+                path: "part",
+                code: "NO_SHARED_DRAFT",
+                message:
+                  "This entry keeps no draft of its shared part on its own: discard a language's pending change instead.",
+              },
+            ],
+          });
+        }
+        const draftLocale =
+          params.shared === true
+            ? SHARED_DRAFT_SLOT
+            : workingDraftLocale({
+                documentLocalized:
+                  (collection as { localized?: boolean }).localized === true,
+                requestLocale: params.locale ?? null,
+                defaultLocale: this.localization?.defaultLocale ?? null,
+              });
         const discardedRef = {
           scopeKind: "collection" as const,
           scopeSlug: params.collectionName,
@@ -6146,7 +6174,13 @@ export class CollectionMutationService extends BaseService {
               kind: "draftDiscarded",
               actor: actorForWrite(params.actor, params.user),
               personName: params.user?.name ?? null,
-              ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
+              // The history names the part thrown away: a language's pending
+              // change by its language, the shared part's by `shared`.
+              ...(params.shared === true
+                ? { parts: { shared: true } }
+                : draftLocale
+                  ? { parts: { locales: [draftLocale] } }
+                  : {}),
             }
           );
           // The discarded part has nothing unpublished left to review: its
@@ -10822,6 +10856,11 @@ export class CollectionMutationService extends BaseService {
         movesShared(params.parts)
           ? direction.nextStatus
           : (lockedPreviousStatus ?? direction.nextStatus);
+      // Whether a value rule could refuse this publish, decided from the declaration before the
+      // transaction opens: only then is the entry read again under the lock to judge them.
+      const valueRulesApply =
+        direction.nextStatus === "published" &&
+        (await this.valueRulesCanRefuse(params.collectionName));
       await this.adapter.transaction(async tx => {
         // Lock the main row up front. One read serves three needs: it is the
         // liveness check (a row deleted between the pre-transaction read and
@@ -10992,6 +11031,31 @@ export class CollectionMutationService extends BaseService {
           staleWrite
         );
         const languagesBefore = judgedLanguageStates(mainBefore, judgedLocales);
+
+        // The value rules judged before the transaction, judged again on the entry as this
+        // transaction locked it: a change saved since is what goes live, so it is what they judge.
+        if (valueRulesApply) {
+          const lockedIssues = publishValueIssues(
+            await this.partsStateOf(
+              {
+                collectionName: params.collectionName,
+                entryId: params.entryId,
+                row: preImageRow,
+                collection: publishCollection as {
+                  localized?: boolean;
+                  fields?: FieldDefinition[];
+                },
+              },
+              tx
+            ),
+            params.parts === undefined ? "all" : [...params.parts.locales]
+          );
+          if (lockedIssues.length > 0) {
+            const refusal = NextlyError.validation({ errors: lockedIssues });
+            publishRefused = refusal;
+            throw refusal;
+          }
+        }
 
         // One instant for everything this attempt writes.
         const publishNow = new Date();
@@ -11472,13 +11536,19 @@ export class CollectionMutationService extends BaseService {
         // Publishing every language puts each one live, so it publishes the
         // entry whenever ANY of them was not, even with the main row already
         // live, when the changed fields name no status at all.
-        const priorLanguageStatuses = [
-          (preImageRow as { status?: unknown }).status as
-            | string
-            | null
-            | undefined,
-          ...priorCompanionStatuses.values(),
+        // Only the parts this write moves: the entry's own status where the shared part moves,
+        // and each moved language's. A move of chosen languages is judged by those alone, so a
+        // language it left as a draft does not make taking another down read as a publish.
+        const entryStatusBefore = (preImageRow as { status?: unknown })
+          .status as string | null | undefined;
+        const movedStatuses = [
+          ...(movesShared(params.parts) ? [entryStatusBefore] : []),
+          ...[...priorCompanionStatuses]
+            .filter(([locale]) => movesLanguage(params.parts, locale))
+            .map(([, status]) => status),
         ];
+        const priorLanguageStatuses =
+          movedStatuses.length > 0 ? movedStatuses : [entryStatusBefore];
         const statusBeforeEveryLanguage = priorLanguageStatuses.every(
           status => status === "published"
         )
@@ -11498,7 +11568,12 @@ export class CollectionMutationService extends BaseService {
           actor: publishActor,
           publication: {
             statusAfter: entryStatusAfter(),
-            statusBefore: statusBeforeEveryLanguage,
+            // A takedown of chosen languages leaves the entry as it was: before and after are the
+            // same, so it never reads as a publish, whatever the languages it took down held.
+            statusBefore:
+              publishes || movesShared(params.parts)
+                ? statusBeforeEveryLanguage
+                : entryStatusAfter(),
             // A promotion leaves a live language published, so whether
             // this publish put pending edits live cannot be read from the
             // statuses.
@@ -12230,6 +12305,48 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The shared part's pending change a publish promotes, as the shared values it writes: the
+   * shared draft's, or, without per-language storage, where each language's change holds the
+   * shared values too, the shared fields those changes edit against the live row (a later save's
+   * value over an earlier one's). Undefined where the publish changes no shared value.
+   */
+  private sharedChangeOf(
+    args: Parameters<CollectionMutationService["promotionsJudgedOnTx"]>[1]
+  ): Record<string, unknown> | undefined {
+    // The changes as the publish resolved them, field by field, which is what it writes: never a
+    // stored draft an earlier or later save left with an older copy of a shared value.
+    const slot = args.changes.find(
+      change => change.locale === SHARED_DRAFT_SLOT
+    );
+    if (slot !== undefined) return snapshotRecord(slot.snapshot);
+    if (draftsKeptByPart()) return undefined;
+    const localized =
+      (args.collection as { localized?: boolean }).localized === true;
+    const fields = args.fields.flatMap(field =>
+      typeof field.name === "string"
+        ? [
+            {
+              name: field.name,
+              translatable: isFieldLocalized(
+                field as Parameters<typeof isFieldLocalized>[0],
+                localized
+              ),
+            },
+          ]
+        : []
+    );
+    const edited: Record<string, unknown> = {};
+    for (const change of args.changes) {
+      if (change.locale === null) continue;
+      const snapshot = snapshotRecord(change.snapshot);
+      for (const name of sharedFieldsEdited(fields, snapshot, args.row)) {
+        edited[name] = snapshot[name];
+      }
+    }
+    return Object.keys(edited).length > 0 ? edited : undefined;
+  }
+
+  /**
    * Refuses a publish whose shared draft changes a value the caller may not change in a language
    * that shows the shared part. The shared part's values show in every language it is live in, so
    * its field rules are asked in each of them, not only in the language whose change carries it:
@@ -12242,14 +12359,12 @@ export class CollectionMutationService extends BaseService {
     args: Parameters<CollectionMutationService["promotionsJudgedOnTx"]>[1],
     promotion: NonNullable<LifecycleAllLocalesReady["promotion"]>
   ): Promise<void> {
-    const sharedDraft = args.pending.find(
-      change => change.locale === SHARED_DRAFT_SLOT
-    );
+    const sharedChange = this.sharedChangeOf(args);
     const grants = promotion.grants;
     // Only a trusted caller skips the field rules, and a caller no field rule could ask: an API
     // key is judged like a person, whether or not a user comes with it.
     if (
-      sharedDraft === undefined ||
+      sharedChange === undefined ||
       args.caller.overrideAccess === true ||
       grants === undefined
     ) {
@@ -12268,17 +12383,29 @@ export class CollectionMutationService extends BaseService {
           movesLanguage(args.caller.parts, locale) ||
           args.prior.get(locale) === "published"
       );
+    // Each language's own document, as it is live: a rule asked in a language reads that
+    // language's values, never another's.
+    const documents = await this.languageDocumentsOnTx(tx, {
+      row: args.row,
+      collectionName: args.collectionName,
+      entryId: args.entryId,
+      tableName: args.tableName,
+      fields: args.fields,
+      manyToManyFields: args.manyToManyFields,
+      locales: showing,
+    });
     const issues: ValidationIssue[] = [];
     for (const locale of showing) {
+      const ownLive = documents.get(locale) ?? live;
       const refused = await withRuleLanguage(
         writeLanguagesFor(this.localization, locale),
         () =>
           this.promotionAccessIssues(promotion.context, {
             collectionName: args.collectionName,
             entryId: args.storedId,
-            snapshot: sharedDraft.snapshot,
+            snapshot: sharedChange,
             restoreCtx: promotion.restoreContext,
-            live,
+            live: ownLive,
             user: args.caller.user,
             authenticatedScope: args.caller.authenticatedScope,
             grants,
@@ -12392,7 +12519,7 @@ export class CollectionMutationService extends BaseService {
     const sharedPromoted =
       args.caller.parts !== undefined &&
       movesShared(args.caller.parts) &&
-      args.pending.some(change => change.locale === SHARED_DRAFT_SLOT);
+      this.sharedChangeOf(args) !== undefined;
     await this.assertLanguagesGoLiveValid({
       parts: args.caller.parts,
       ...(sharedPromoted
@@ -12812,6 +12939,114 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The entry as a publish of chosen parts judges it: whether its shared part is live, and each
+   * stored language's own state and values with its pending change laid over them, never filled
+   * from another language. Read on `tx` where one is given, as the transition reads it under the
+   * row lock, and on the pool otherwise; `collection` is the declaration read before either.
+   */
+  private async partsStateOf(
+    args: {
+      collectionName: string;
+      entryId: string;
+      /** The entry's main row, as the caller read it. */
+      row: Record<string, unknown>;
+      collection: { localized?: boolean; fields?: FieldDefinition[] };
+    },
+    tx?: TransactionContext
+  ): Promise<PartsState> {
+    const configured = this.localization?.locales.map(l => l.code) ?? [];
+    const defaultLocale = this.localization?.defaultLocale ?? "";
+    const companion = await this.fileManager.loadCompanionSchema(
+      args.collectionName,
+      tx?.getDrizzle()
+    );
+    const statuses =
+      (await this.storedLanguageStatuses(
+        args.collectionName,
+        args.entryId,
+        tx
+      )) ?? new Map<string, string | null>();
+    const values = companion
+      ? await this.companionValuesByLanguageOf(
+          tx?.getDrizzle() ?? this.db,
+          companion,
+          [args.entryId],
+          [...statuses.keys()]
+        )
+      : new Map<string, Map<string, Record<string, unknown>>>();
+    const { collection } = args;
+    const fields = (collection.fields ?? []).flatMap(field =>
+      typeof field.name === "string"
+        ? [
+            {
+              name: field.name,
+              label: typeof field.label === "string" ? field.label : field.name,
+              required: field.required === true,
+              unique: (field as { unique?: unknown }).unique === true,
+              translatable: isFieldLocalized(
+                field as Parameters<typeof isFieldLocalized>[0],
+                collection.localized === true
+              ),
+            },
+          ]
+        : []
+    );
+    const languages = new Map(
+      [...statuses].map(([locale, status]) => [
+        locale,
+        {
+          live: status === "published",
+          values: values.get(locale)?.get(args.entryId) ?? {},
+        },
+      ])
+    );
+    // What each language puts live: its stored values with its pending change laid over them,
+    // since a publish promotes that change. Only the language's translated fields come from the
+    // change; a language with a change and no stored row yet is judged on the change alone.
+    const translated = new Set(
+      fields.filter(field => field.translatable).map(field => field.name)
+    );
+    for (const draft of await new VersionsRepository(
+      tx ?? this.adapter
+    ).findAllWorkingDrafts({
+      scopeKind: "collection",
+      scopeSlug: args.collectionName,
+      entryId: args.entryId,
+    })) {
+      if (typeof draft.locale !== "string") continue;
+      const stored = languages.get(draft.locale);
+      const pending = Object.fromEntries(
+        Object.entries(snapshotRecord(draft.snapshot)).filter(([name]) =>
+          translated.has(name)
+        )
+      );
+      languages.set(draft.locale, {
+        live: stored?.live ?? false,
+        values: { ...stored?.values, ...pending },
+        ...(draftsKeptByPart()
+          ? {}
+          : {
+              pendingSharedEdits: sharedFieldsEdited(
+                fields,
+                snapshotRecord(draft.snapshot),
+                args.row
+              ),
+            }),
+      });
+    }
+    const state: PartsState = {
+      configured,
+      translated: collection.localized === true,
+      defaultLocale,
+      sharedLive: args.row.status === "published",
+      languages,
+      fields,
+      requireEveryLanguage: requiresEveryLanguage(args.collectionName),
+    };
+    return state;
+  }
+
+  /**
    * What a publish or unpublish of chosen parts reads before it decides anything, on the pool:
    * the entry as stored (whether its shared part is live, and each stored language's own state and
    * values, never filled from another language) and the caller's refusal for each chosen language
@@ -12847,92 +13082,12 @@ export class CollectionMutationService extends BaseService {
       fields?: FieldDefinition[];
     };
     const configured = this.localization?.locales.map(l => l.code) ?? [];
-    const defaultLocale = this.localization?.defaultLocale ?? "";
-    const companion = await this.fileManager.loadCompanionSchema(
-      params.collectionName
-    );
-    const statuses =
-      (await this.storedLanguageStatuses(
-        params.collectionName,
-        params.entryId
-      )) ?? new Map<string, string | null>();
-    const values = companion
-      ? await this.companionValuesByLanguageOf(
-          this.db,
-          companion,
-          [params.entryId],
-          [...statuses.keys()]
-        )
-      : new Map<string, Map<string, Record<string, unknown>>>();
-    const fields = (collection.fields ?? []).flatMap(field =>
-      typeof field.name === "string"
-        ? [
-            {
-              name: field.name,
-              label: typeof field.label === "string" ? field.label : field.name,
-              required: field.required === true,
-              unique: (field as { unique?: unknown }).unique === true,
-              translatable: isFieldLocalized(
-                field as Parameters<typeof isFieldLocalized>[0],
-                collection.localized === true
-              ),
-            },
-          ]
-        : []
-    );
-    const languages = new Map(
-      [...statuses].map(([locale, status]) => [
-        locale,
-        {
-          live: status === "published",
-          values: values.get(locale)?.get(params.entryId) ?? {},
-        },
-      ])
-    );
-    // What each language puts live: its stored values with its pending change laid over them,
-    // since a publish promotes that change. Only the language's translated fields come from the
-    // change; a language with a change and no stored row yet is judged on the change alone.
-    const translated = new Set(
-      fields.filter(field => field.translatable).map(field => field.name)
-    );
-    for (const draft of await new VersionsRepository(
-      this.adapter
-    ).findAllWorkingDrafts({
-      scopeKind: "collection",
-      scopeSlug: params.collectionName,
+    const state = await this.partsStateOf({
+      collectionName: params.collectionName,
       entryId: params.entryId,
-    })) {
-      if (typeof draft.locale !== "string") continue;
-      const stored = languages.get(draft.locale);
-      const pending = Object.fromEntries(
-        Object.entries(snapshotRecord(draft.snapshot)).filter(([name]) =>
-          translated.has(name)
-        )
-      );
-      languages.set(draft.locale, {
-        live: stored?.live ?? false,
-        values: { ...stored?.values, ...pending },
-        ...(draftsKeptByPart()
-          ? {}
-          : {
-              pendingSharedEdits: sharedFieldsEdited(
-                fields,
-                snapshotRecord(draft.snapshot),
-                existingEntry as Record<string, unknown>
-              ),
-            }),
-      });
-    }
-    const state: PartsState = {
-      configured,
-      translated: collection.localized === true,
-      defaultLocale,
-      sharedLive:
-        (existingEntry as { status?: unknown }).status === "published",
-      languages,
-      fields,
-      requireEveryLanguage: requiresEveryLanguage(params.collectionName),
-    };
+      row: existingEntry as Record<string, unknown>,
+      collection,
+    });
     // The publish or unpublish permission and rule, as the transition asks it: never
     // route-authorized, since a route attests no lifecycle gate.
     const refusalNow = () =>

@@ -416,6 +416,19 @@ export function publishValueRefusal(
   return issues.length > 0 ? refused(issues) : null;
 }
 
+/**
+ * The issues behind {@link publishValueRefusal}, for the transition that judges them again under
+ * the entry's row lock and refuses with them there.
+ *
+ * @experimental
+ */
+export function publishValueIssues(
+  state: PartsState,
+  locales: readonly string[] | "all"
+): ValidationPublicData["errors"] {
+  return valueIssues(state, locales);
+}
+
 /** The issues a preview's blockers stand for: what the publish it previews would refuse. */
 function blockerIssues(blockers: readonly PublishAllBlocker[]): Issue[] {
   return blockers.map(blocker => ({

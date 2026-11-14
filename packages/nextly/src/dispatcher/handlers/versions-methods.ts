@@ -947,6 +947,8 @@ export async function discardWorkingDraftForDocument(
     locale?: string | null;
     /** `_rev` and `_overwrite`: a discard is judged as a save of the change. */
     version?: Readonly<Record<string, unknown>>;
+    /** Discard the shared part's pending change alone (`?part=shared`). @experimental */
+    shared?: boolean;
   }
 ): Promise<unknown> {
   const authenticatedScope = await assertDocumentWriteAllowed(
@@ -960,6 +962,7 @@ export async function discardWorkingDraftForDocument(
     entryId: args.entryId,
     user: args.user,
     locale: args.locale ?? null,
+    ...(args.shared === true ? { shared: true } : {}),
     authenticatedScope,
     actor: readAuthenticatedActor(),
     version: args.version,

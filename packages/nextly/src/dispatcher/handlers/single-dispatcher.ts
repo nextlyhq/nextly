@@ -456,6 +456,10 @@ export const SINGLE_VERSION_METHODS: Record<
         // away. An empty value is the same as none: the request named no
         // language, which a localized Single resolves to its default.
         locale: typeof p.locale === "string" && p.locale ? p.locale : null,
+        // `?part=shared` asks for the shared part's pending change alone. It is
+        // forwarded so the discard can refuse it where the Single keeps no such
+        // draft, rather than reading it as a discard of the default language's.
+        shared: p.part === "shared",
         // The version the change was read at, from the query: a DELETE
         // carries no body to read it from.
         version: versionInputOfQuery(p),

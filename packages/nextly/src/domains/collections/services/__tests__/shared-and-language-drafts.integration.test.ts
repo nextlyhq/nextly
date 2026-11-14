@@ -39,6 +39,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import type { CollectionEntryService } from "../../../../services/collections/collection-entry-service";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
+import { discardWorkingDraft } from "../../../versions/discard-working-draft";
 
 const TRANSLATED = "partposts";
 const UNTRANSLATED = "partnotes";
@@ -624,6 +625,72 @@ describe.each(getConfiguredTestDialects())(
 
       expect(published.success, JSON.stringify(published)).toBe(false);
       expect((await read(entries, LOCKED, id, "es")).views).toBe(10);
+    }, 90_000);
+
+    // The shared part's pending change can be thrown away on its own: each language's change
+    // stays, and what readers see does not move.
+    it("discards the shared draft alone, keeping each language's", async () => {
+      const entries = await boot(dialect);
+      const id = await publishedInBoth(entries, TRANSLATED);
+      await save(entries, TRANSLATED, id, "es", { title: "es 2", views: 40 });
+      expect(Object.keys(await drafts(id)).sort()).toEqual(["es", "shared"]);
+
+      await discardWorkingDraft({
+        scopeKind: "collection",
+        slug: TRANSLATED,
+        entryId: id,
+        user: { id: "editor" } as never,
+        shared: true,
+        version: { _overwrite: true },
+      });
+
+      expect(Object.keys(await drafts(id))).toEqual(["es"]);
+      expect((await read(entries, TRANSLATED, id, "es", true)).title).toBe(
+        "es 2"
+      );
+      expect((await read(entries, TRANSLATED, id, "en")).views).toBe(10);
+      // The history names the shared part as the one thrown away, not a language.
+      const [discarded] = await handle!.adapter.select<{ id: string }>(
+        "nextly_content_events",
+        {
+          where: {
+            and: [
+              { column: "subjectId", op: "=", value: id },
+              { column: "kind", op: "=", value: "draft-discarded" },
+            ],
+          },
+        }
+      );
+      const parts = await handle!.adapter.select<{ part: string }>(
+        "nextly_content_event_parts",
+        {
+          where: { and: [{ column: "eventId", op: "=", value: discarded.id }] },
+        }
+      );
+      expect(parts.map(row => row.part)).toEqual(["~shared"]);
+    }, 90_000);
+
+    // While the entry is live, a shared edit is pending until the shared part is published,
+    // whichever language it is saved from: a save in a language not yet live joins the shared
+    // draft rather than writing the shared value live beside it.
+    it("keeps a shared edit saved in a language not yet live pending with the shared draft", async () => {
+      const entries = await boot(dialect);
+      const created = await entries.createEntry(
+        { collectionName: TRANSLATED, overrideAccess: true, locale: "en" },
+        { title: "en title", body: "en body", views: 10, status: "published" }
+      );
+      expect(created.success, JSON.stringify(created)).toBe(true);
+      const id = (created.data as { id: string }).id;
+      await save(entries, TRANSLATED, id, "en", { views: 40 });
+      expect((await drafts(id)).shared?.views).toBe(40);
+
+      await save(entries, TRANSLATED, id, "es", {
+        title: "es title",
+        views: 50,
+      });
+
+      expect((await read(entries, TRANSLATED, id, "en")).views).toBe(10);
+      expect((await drafts(id)).shared?.views).toBe(50);
     }, 90_000);
 
     // A shared-only draft goes live in every language, so a publish of every

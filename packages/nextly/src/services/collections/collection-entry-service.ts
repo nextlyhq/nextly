@@ -81,6 +81,7 @@ import type {
   RevalidationIntent,
 } from "../../revalidation/types";
 import type { ValidationIssue } from "../../shared/lib/entry-validation";
+import { applyFieldWriteAccess } from "../../shared/lib/field-level-registry";
 import type { HiddenFieldPaths } from "../../shared/lib/filterable-fields";
 import type { PaginatedResponse } from "../../types/pagination";
 import { BaseService } from "../base-service";
@@ -1064,24 +1065,56 @@ export class CollectionEntryService extends BaseService {
     // what the entry holds.
     const read = await this.mutationService.publishPartsReads(params, {
       action: "publish",
-      locales: locales === "all" ? [] : locales,
+      // Each language's rule, in that language: every language for a publish of all of them.
+      locales,
       shared: locales === "all",
     });
     if ("answer" in read) return null;
-    if (read.sharedRefusal !== null || read.languageRefusals.size > 0) {
+    const { state } = read;
+    // The languages the value rules judge: each one written, or, for every language, each stored
+    // one not yet live. Where the caller may not publish one of them, the transition refuses it as
+    // access, and the value rules say nothing of what the entry holds there. A language refused
+    // that is not judged here is not one this publish puts live.
+    const judged =
+      locales === "all"
+        ? state.configured.filter(locale => {
+            const stored = state.languages.get(locale);
+            return stored !== undefined && !stored.live;
+          })
+        : locales;
+    if (
+      read.sharedRefusal !== null ||
+      judged.some(locale => read.languageRefusals.has(locale))
+    ) {
       return null;
     }
-    const { state } = read;
     if (written === undefined || locales === "all") {
       return publishValueRefusal(state, locales);
+    }
+    // Only what the save may write counts: a value its field rules refuse is not written, so it
+    // cannot stand in for one the language lacks.
+    // A deep copy: the field write rules delete denied values in place, nested ones too, and the
+    // save and its hooks must still be handed what was submitted.
+    const writable = structuredClone({ ...written });
+    if (params.overrideAccess !== true) {
+      await applyFieldWriteAccess({
+        kind: "collection",
+        slug: params.collectionName,
+        data: writable,
+        operation: "update",
+        user: params.user,
+        authenticatedScope: params.authenticatedScope,
+        overrideAccess: false,
+        id: params.entryId,
+      });
     }
     const languages = new Map(state.languages);
     for (const locale of locales) {
       const stored = languages.get(locale);
       const own = Object.fromEntries(
         state.fields
-          .filter(field => field.translatable && field.name in written)
-          .map(field => [field.name, written[field.name]])
+          .filter(field => field.translatable && field.name in writable)
+          .map(field => [field.name, writable[field.name]])
       );
       languages.set(locale, {
         live: stored?.live ?? false,
@@ -1239,8 +1272,14 @@ export class CollectionEntryService extends BaseService {
   ): Promise<number> {
     // The draft is deleted under the language as named, so one the site no
     // longer configures is told every language, not the default.
+    // The shared part's draft shows in every language, so discarding it is judged in each.
     return withRuleLanguage(
-      writeAsNamedLanguagesFor(this.localization, params.locale ?? undefined),
+      params.shared === true
+        ? writeLanguagesFor(this.localization, EVERY_LOCALE)
+        : writeAsNamedLanguagesFor(
+            this.localization,
+            params.locale ?? undefined
+          ),
       () => this.mutationService.discardWorkingDraft(params)
     );
   }
