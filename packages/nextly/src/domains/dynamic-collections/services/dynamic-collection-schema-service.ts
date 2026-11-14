@@ -57,6 +57,7 @@ import {
   junctionTableNameFor,
   junctionTablesOf,
   usesJunctionTable,
+  fieldsStoredOnRow,
   getColumnDescriptor,
   getSystemColumnDescriptors,
   relationshipStoresJson,
@@ -1306,8 +1307,12 @@ export class DynamicCollectionSchemaService {
       targetTables?: CollectionTables;
     }
   ): string {
+    // The fields whose columns sit on this row: those inside a group with no name are stored where
+    // it sits, as the runtime table and the desired schema read them (`fieldsStoredOnRow`). Handed
+    // the group itself, the column naming below read its missing name and stopped.
+    const stored = fieldsStoredOnRow(fields);
     // Refuse an unusable decimal shape before any of it becomes SQL.
-    this.assertDecimalDimensions(fields);
+    this.assertDecimalDimensions(stored);
     // A Single's field defaults are the application's (`fieldDefaultsAreColumns`).
     const columnDefaults = this.fieldDefaultsAreColumns(_options?.isSingle);
 
@@ -1316,12 +1321,12 @@ export class DynamicCollectionSchemaService {
     const junctionTables: string[] = [];
 
     // i18n: drop translatable fields from the main table when localized (they go to
-    // the companion). Uses the shared classifier so main/companion agree on the split.
-    const mainFields = _options?.localized
-      ? fields.filter(
-          f => !resolveLocalizedFieldNames([f], true).includes(f.name)
-        )
-      : fields;
+    // the companion). Uses the shared classifier so main/companion agree on the split, over the
+    // declared list as the companion reads it: a field inside a group with no name stays here.
+    const translated = _options?.localized
+      ? new Set(resolveLocalizedFieldNames(fields, true))
+      : new Set<string>();
+    const mainFields = stored.filter(f => !translated.has(f.name));
 
     const columns = mainFields
       .map(f => {
@@ -1407,7 +1412,7 @@ export class DynamicCollectionSchemaService {
     // `Title` means the same column, and comparing the raw name would inject the system one beside
     // it — two columns of the same name, which no dialect will create.
     const declaresColumn = (column: string) =>
-      fields.some(
+      stored.some(
         f =>
           typeof f.name === "string" &&
           toSnakeCase(f.name) === column &&
@@ -1579,8 +1584,8 @@ ${allColumnDefs.join(",\n")}
    */
   generateAlterTableMigration(
     tableName: string,
-    oldFields: FieldDefinition[],
-    newFields: FieldDefinition[],
+    declaredOldFields: FieldDefinition[],
+    declaredNewFields: FieldDefinition[],
     options?: {
       /**
        * Previous Draft/Published flag — pass `existing.status === true` so
@@ -1715,6 +1720,11 @@ ${allColumnDefs.join(",\n")}
       isSingle?: boolean;
     }
   ): string {
+    // The fields whose columns sit on the row before and after, those inside a group with no name
+    // among them, as the creating SQL reads them (`fieldsStoredOnRow`): the group has no name to
+    // pair or to name a column by, and the fields it holds are columns that stay where they are.
+    const oldFields = fieldsStoredOnRow(declaredOldFields);
+    const newFields = fieldsStoredOnRow(declaredNewFields);
     // The added columns become SQL here too, so the same refusal applies.
     this.assertDecimalDimensions(newFields);
     const columnDefaults = this.fieldDefaultsAreColumns(options?.isSingle);
@@ -2411,8 +2421,9 @@ ${allColumnDefs.join(",\n")}
     statements.push(
       ...this.junctionLifecycle(
         tableName,
-        options?.junctionFields?.old ?? oldFields,
-        options?.junctionFields?.new ?? newFields,
+        // The declared lists, as the creating SQL reads its junctions from the declared fields.
+        options?.junctionFields?.old ?? declaredOldFields,
+        options?.junctionFields?.new ?? declaredNewFields,
         options?.targetTables
       )
     );
@@ -2745,7 +2756,14 @@ ${allColumnDefs.join(",\n")}
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[]
   ): { from: FieldDefinition; to: FieldDefinition } | null {
-    const { oldOnly, newOnly } = renameCandidates(oldFields, newFields);
+    // Paired over the fields whose columns sit on the row (`fieldsStoredOnRow`), as the alter
+    // reads them: a field renamed inside a group with no name renames a column of this row, and
+    // every caller (the alter, the save's preconditions, the retry after a part-made rename) asks
+    // here, so they agree on it. Over the declared lists the unnamed group matched itself and hid it.
+    const { oldOnly, newOnly } = renameCandidates(
+      fieldsStoredOnRow(oldFields),
+      fieldsStoredOnRow(newFields)
+    );
 
     if (oldOnly.length === 0 || newOnly.length === 0) {
       // Pure add or pure drop — not a rename candidate.
@@ -2960,7 +2978,9 @@ ${allColumnDefs.join(",\n")}
       indexNames.add(indexNameForColumn(tableName, column));
       indexColumns.set(indexNameForColumn(tableName, column), [column]);
     }
-    for (const field of fields) {
+    // The fields whose columns sit on the row, those inside a group with no name among them
+    // (`fieldsStoredOnRow`): the creating SQL indexes and keys them as it does the rest.
+    for (const field of fieldsStoredOnRow(fields)) {
       if (!fieldProducesColumn(field)) continue;
       const column = toSnakeCase(field.name);
       // Asked through the statement builder, not through `columnIsIndexed` alone. Wanting an
@@ -3017,7 +3037,9 @@ ${allColumnDefs.join(",\n")}
    */
   plannedColumnTypes(fields: FieldDefinition[]): Map<string, string> {
     const types = new Map<string, string>();
-    for (const field of fields) {
+    // Every column of the row, those of the fields inside a group with no name among them
+    // (`fieldsStoredOnRow`), as the creating SQL makes them.
+    for (const field of fieldsStoredOnRow(fields)) {
       if (!fieldProducesColumn(field)) continue;
       types.set(toSnakeCase(field.name), this.newColumnType(field));
     }

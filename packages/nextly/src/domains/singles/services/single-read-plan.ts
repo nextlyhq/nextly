@@ -68,9 +68,16 @@ export function singleReadPlan<
   // The same elements the caller passed, reached through layout groups: the
   // walk returns the fields themselves, never copies.
   const stored = addressableFields(args.fields) as unknown as F[];
-  const fields = stored.filter(
-    field => typeof field.name === "string" && selected.has(field.name)
-  );
+  const topLevel = new Set<F>(args.fields);
+  const fields = stored
+    .filter(field => typeof field.name === "string" && selected.has(field.name))
+    // A field reached through a group with no name is shared whatever it says: which fields
+    // are translated is read from the declared list, where the group, not the field, stands,
+    // so the column is on the main row (`fieldsStoredOnRow`). Said so on the copy the read is
+    // described by, or the translations table read for a selection named a column it never had.
+    .map(field =>
+      topLevel.has(field) ? field : { ...field, localized: false }
+    );
   const columns = new Set<string>(SINGLE_SYSTEM_COLUMNS);
   for (const column of columnsDeclaredBy(fields)) {
     columns.add(column);
