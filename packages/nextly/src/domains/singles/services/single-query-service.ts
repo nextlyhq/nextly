@@ -167,6 +167,7 @@ import {
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
 import {
+  fieldsStoredOnRow,
   getColumnDescriptor,
   isTextStorageKind,
 } from "../../schema/services/field-column-descriptor";
@@ -2011,9 +2012,13 @@ export class SingleQueryService extends BaseService {
     const codeFirstFields = this.singleRegistryService.getCodeFirstFields(
       singleMeta.slug
     );
+    // Both lists are read at the row's level (`fieldsStoredOnRow`): a field inside a group with no
+    // name is a column of this row, with a default like one beside the group, and a required one
+    // is NOT NULL, so leaving it out of this insert failed the first read.
+    const rowFields = fieldsStoredOnRow(singleMeta.fields);
     const codeFirstFieldByName = codeFirstFields
       ? new Map(
-          codeFirstFields
+          fieldsStoredOnRow(codeFirstFields)
             .filter(field => "name" in field && field.name)
             .map(field => [(field as { name: string }).name, field])
         )
@@ -2240,7 +2245,7 @@ export class SingleQueryService extends BaseService {
           : after;
     };
 
-    for (const field of singleMeta.fields) {
+    for (const field of rowFields) {
       if (!hasFieldName(field)) continue;
       // Prefer the live code-first field for the declared default: the
       // serialized `field` has lost any `defaultValue` function/structured value.
@@ -2258,7 +2263,7 @@ export class SingleQueryService extends BaseService {
     // `coerceDateFieldsToDate`, and this direct-insert path must do the same or
     // SQLite stores the string in an integer column and reads back an invalid
     // date. Idempotent: an existing `Date` passes through untouched.
-    coerceDateFieldsToDate(defaults, singleMeta.fields);
+    coerceDateFieldsToDate(defaults, rowFields);
 
     // A field can be translatable/required yet emit NO storage column — a
     // component or other layout-only ("skip") field type. Its default has nowhere
@@ -2268,7 +2273,7 @@ export class SingleQueryService extends BaseService {
     // (id/title/slug/timestamps/status) are not user fields, so they are never in
     // this set and always route to the main insert below.
     const noColumnFieldNames = new Set<string>();
-    for (const field of singleMeta.fields) {
+    for (const field of rowFields) {
       if (!("name" in field) || !field.name) continue;
       // Reserved identity keys are backed by the system text column even when a
       // same-named field emits none, so their seed must never be dropped here.

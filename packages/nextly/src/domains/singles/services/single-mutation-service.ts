@@ -4310,7 +4310,10 @@ export class SingleMutationService extends BaseService {
             preRestoreComponents = {};
             // The named component fields whose current subtrees the snapshot
             // must read before the restore overwrites them.
-            const preComponentFields = fieldConfigs.filter(
+            // Inside a group with no name too, where the write stores them from this level.
+            const preComponentFields = (
+              addressableFields(fieldConfigs) as unknown as typeof fieldConfigs
+            ).filter(
               (f): f is typeof f & { name: string } =>
                 isFieldGroupField(f) && !!f.name
             );

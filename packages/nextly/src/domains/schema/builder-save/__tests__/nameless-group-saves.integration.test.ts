@@ -590,5 +590,174 @@ describe.each(getConfiguredTestDialects())(
         (await singles.get("notice", { overrideAccess: true })).data
       ).toMatchObject({ banner: { note: "kept" } });
     });
+
+    it("gives a required field inside the group its default on a Single's first read, and takes a first save", async () => {
+      const t = await singleApp();
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          fields: [
+            text("heading"),
+            {
+              type: "group",
+              label: "Byline",
+              fields: [
+                { name: "subtitle", type: "text", required: true },
+                { name: "rank", type: "number", defaultValue: 4 },
+              ],
+            } as Field,
+          ],
+        }
+      );
+      const singles = t.getService("singleEntryService");
+
+      // The first read makes the row, NOT NULL column included, with the defaults declared inside
+      // the group, as it does for fields beside it.
+      const first = await singles.get("notice", { overrideAccess: true });
+      expect(first.success, JSON.stringify(first)).toBe(true);
+      expect(first.data).toMatchObject({ rank: 4 });
+
+      const saved = await singles.update(
+        "notice",
+        { subtitle: "Below", _overwrite: true },
+        { overrideAccess: true }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+      expect(
+        (await singles.get("notice", { overrideAccess: true })).data
+      ).toMatchObject({ subtitle: "Below", rank: 4 });
+    });
+
+    it("reads a selected field inside the group of a translated Single from the main row", async () => {
+      const t = await singleApp({
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          localized: true,
+          fields: [text("heading"), laidOut],
+        }
+      );
+      const singles = t.getService("singleEntryService");
+      const saved = await singles.update(
+        "notice",
+        { heading: "Hello", subtitle: "Below", _overwrite: true },
+        { overrideAccess: true, locale: "en" }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+
+      // The group's text field is shared, on the main row, so a read selecting it asks the
+      // translations table for nothing it does not hold.
+      const read = await singles.get("notice", {
+        overrideAccess: true,
+        locale: "en",
+        select: { subtitle: true },
+      });
+      expect(read.success, JSON.stringify(read)).toBe(true);
+      expect(read.data).toMatchObject({ subtitle: "Below" });
+    });
+
+    it("records a field group inside the group in a Single's versions", async () => {
+      const t = await singleApp();
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "meta",
+          label: "Meta",
+          fields: [{ name: "note", type: "text" }],
+        }
+      );
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "notice",
+          label: "Notice",
+          versions: true,
+          fields: [
+            text("heading"),
+            {
+              type: "group",
+              label: "Byline",
+              fields: [{ name: "promo", type: "component", component: "meta" }],
+            } as Field,
+          ],
+        }
+      );
+      const singles = t.getService("singleEntryService");
+      for (const note of ["first", "second"]) {
+        const saved = await singles.update(
+          "notice",
+          { heading: note, promo: { note }, _overwrite: true },
+          { overrideAccess: true }
+        );
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+      }
+
+      // Each version holds the field group's content as the save left it, as one beside the
+      // group is held, so a restore can put it back.
+      const versions = (
+        await t.adapter.select<{
+          scopeSlug: string;
+          versionNo: number | null;
+          snapshot: unknown;
+        }>("nextly_versions")
+      )
+        .filter(row => row.scopeSlug === "notice" && row.versionNo !== null)
+        .sort((a, b) => (a.versionNo ?? 0) - (b.versionNo ?? 0));
+      const snapshot = (row: { snapshot: unknown }) =>
+        (typeof row.snapshot === "string"
+          ? JSON.parse(row.snapshot)
+          : row.snapshot) as Record<string, unknown>;
+      expect(versions.length).toBeGreaterThan(0);
+      expect(snapshot(versions[versions.length - 1]!)).toMatchObject({
+        heading: "second",
+        promo: { note: "second" },
+      });
+    });
+
+    it("changes a field group holding a relationship inside a group with no name, which the field group stores no column for", async () => {
+      await singleApp();
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "meta",
+          label: "Meta",
+          fields: [{ name: "note", type: "text" }],
+        }
+      );
+
+      // The field group's creator gives the fields inside a group with no name no column, so the
+      // save plans no key for one: a key over a column the table does not have fails the save.
+      await dispatchComponents(
+        "updateComponent",
+        { slug: "meta" },
+        {
+          fields: [
+            { name: "note", type: "text" },
+            {
+              type: "group",
+              label: "Byline",
+              fields: [
+                {
+                  name: "owner",
+                  type: "relationship",
+                  options: { target: "people", onDelete: "set null" },
+                },
+              ],
+            },
+          ],
+        }
+      );
+    });
   }
 );

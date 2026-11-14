@@ -2041,9 +2041,7 @@ export class DynamicCollectionService extends BaseService {
     fields: readonly FieldDefinition[],
     targetTables?: CollectionTables
   ): ForeignKeySpec[] {
-    // A relationship inside a group with no name is a column of this row (`fieldsStoredOnRow`), so
-    // its key is one of this table's too, as the creating SQL declares it.
-    return fieldsStoredOnRow(fields).flatMap(field => {
+    return fields.flatMap(field => {
       const key = this.schemaService.relationshipForeignKey(
         tableName,
         field,
@@ -2111,7 +2109,13 @@ export class DynamicCollectionService extends BaseService {
   async writerRelations(
     tableName: string,
     oldFields: FieldDefinition[],
-    newFields: FieldDefinition[]
+    newFields: FieldDefinition[],
+    /**
+     * Whose table this is. A collection's or Single's row holds the fields inside a group with no
+     * name as columns; a field group's creator gives them none (`FieldGroupSchemaService
+     * .columnFields`), so its keys are read from its named top-level fields alone.
+     */
+    owner: "row" | "fieldGroup" = "row"
   ): Promise<{
     junctions: { up: string[]; down: string[] };
     keys: { before: ForeignKeySpec[]; after: ForeignKeySpec[] };
@@ -2152,7 +2156,8 @@ export class DynamicCollectionService extends BaseService {
         tableName,
         oldFields,
         newFields,
-        targetTables
+        targetTables,
+        owner === "fieldGroup" ? namedFieldsOnly : fieldsStoredOnRow
       ),
     };
   }
@@ -2193,13 +2198,15 @@ export class DynamicCollectionService extends BaseService {
     tableName: string,
     declaredOldFields: FieldDefinition[],
     declaredNewFields: FieldDefinition[],
-    targetTables: CollectionTables | undefined
+    targetTables: CollectionTables | undefined,
+    columnFieldsOf: (fields: FieldDefinition[]) => FieldDefinition[]
   ): Promise<{ before: ForeignKeySpec[]; after: ForeignKeySpec[] }> {
-    // The row's columns before and after, those of the fields inside a group with no name among
-    // them (`fieldsStoredOnRow`): a relationship there holds a key on this table, and the group
-    // itself has no column, nor a name to spell one from.
-    const oldFields = fieldsStoredOnRow(declaredOldFields);
-    const newFields = fieldsStoredOnRow(declaredNewFields);
+    // The fields with a column on the table before and after, as its creator reads them
+    // (`writerRelations`' owner): on a row, those inside a group with no name too, whose
+    // relationships hold keys here; on a field group, its named fields. The group itself has no
+    // column, nor a name to spell one from.
+    const oldFields = columnFieldsOf(declaredOldFields);
+    const newFields = columnFieldsOf(declaredNewFields);
     // Which fields are translated is read from the declared lists, as the creating SQL and the
     // desired table read it: a field inside a group with no name stays on the row whatever it
     // says, so its key is this table's.
@@ -2420,4 +2427,15 @@ function fieldRenameOf(
   rename: { from: FieldDefinition; to: FieldDefinition } | null
 ): FieldRename | undefined {
   return rename ? { from: rename.from.name, to: rename.to.name } : undefined;
+}
+
+/**
+ * A field group's fields that own a column on its row: the named ones. Its creator gives a group
+ * with no name, and the fields inside it, no column (`FieldGroupSchemaService.columnFields`), and
+ * its desired table reads them the same way (`buildDesiredTableFromComponentFields`).
+ */
+function namedFieldsOnly(fields: FieldDefinition[]): FieldDefinition[] {
+  return fields.filter(
+    field => typeof field.name === "string" && field.name.length > 0
+  );
 }
