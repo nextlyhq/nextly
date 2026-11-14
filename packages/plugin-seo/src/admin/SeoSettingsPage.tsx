@@ -53,8 +53,10 @@ import {
   type SeoContentType,
   type SwitchedOffType,
 } from "../settings/contract";
+import type { StructuredDataBrand } from "../structured-data/rules";
 
 import { useAddressParam } from "./address";
+import { codeBrandOf } from "./brand-draft";
 import { ConnectionsTab } from "./connections";
 import { ContentTypesTab } from "./content-types";
 import { useLeaveWarning } from "./leave-warning";
@@ -266,6 +268,16 @@ function useSettingsDefaults(): SettingsDefaults {
     }),
     [aiCrawlers, hiddenTypes, structuredData]
   );
+}
+
+/**
+ * The brand facts the site's code gives (the plugin's `structuredData.brand`
+ * option), handed to the screen with its client config, for the
+ * Organization tab to show where the settings hold none of their own.
+ */
+function useCodeBrand(): StructuredDataBrand {
+  const brand = usePluginClientConfig(SEO_PLUGIN_NAME)?.brand;
+  return useMemo(() => codeBrandOf(brand), [brand]);
 }
 
 /** Whether a save answered with the stored document, version and all. */
@@ -505,13 +517,15 @@ function SettingsPanel({
   typesFailed: boolean;
   serverAddresses: readonly string[];
 }): JSX.Element {
+  // The brand facts the site's code gives, which the Organization tab shows.
+  const codeBrand = useCodeBrand();
   switch (tab) {
     case "general":
       return <GeneralTab {...tabProps} serverAddresses={serverAddresses} />;
     case "images":
       return <ShareImagesTab {...tabProps} />;
     case "brand":
-      return <BrandTab {...tabProps} />;
+      return <BrandTab {...tabProps} codeBrand={codeBrand} />;
     case "crawlers":
       return (
         <CrawlersTab

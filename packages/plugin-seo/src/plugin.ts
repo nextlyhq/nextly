@@ -170,6 +170,7 @@ import {
   rulesFromOptions,
   type ReadStructuredDataRules,
   type StructuredDataOptions,
+  type StructuredDataBrand,
 } from "./structured-data/rules";
 import { seoTabParts } from "./tab/install";
 import { SEO_GROUP } from "./tab/typed";
@@ -670,6 +671,11 @@ function ownRulesCheckRoute(
  * });
  * ```
  */
+/** The brand facts the options give, as the settings screen is handed them. */
+function codeBrandOption(options: SeoPluginOptions): StructuredDataBrand {
+  return options.structuredData?.brand ?? {};
+}
+
 /**
  * How the Proxy answers an address made Gone: with the site's own page,
  * named as an address from the site's root, where the site names one.
@@ -954,6 +960,10 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         // Each type's structured data choice the options make, which the
         // screen shows until the site chooses its own.
         structuredData: checkedTypeRules(options.structuredData?.types),
+        // The brand facts the options give, which the Organization tab shows
+        // where the settings hold none of their own. Every one is public
+        // already: each page's structured data states it.
+        brand: codeBrandOption(options),
         // The collections whose pages the SEO tab edits, so the tab in the
         // Page Builder's Settings knows a page it has a group to edit.
         tabCollections: tab.tabCollections,

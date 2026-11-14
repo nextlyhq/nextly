@@ -22,6 +22,7 @@ import { isRecord, textOf } from "../plain-values";
 import { imageOf } from "../resolver/page-levels";
 import type { StructuredDataTypeRule } from "../structured-data/rules";
 
+import { brandDetailsOf, type BrandDetails } from "./brand-details";
 import {
   AI_CRAWLER_CHOICES,
   largeImagePreviewsOn,
@@ -114,8 +115,13 @@ export interface SocialProfile {
   url: string;
 }
 
-/** The one record of facts about the site's owner, for every output. */
-export interface BrandFacts {
+/**
+ * The one record of facts about the site's owner, for every output: its
+ * name, other names, logo and profiles, and the details kept with them
+ * (`brandDetails`): what it is, how to reach it, when it was founded and
+ * who owns it.
+ */
+export interface BrandFacts extends BrandDetails {
   name?: string;
   /** Other names people search for the brand by. */
   otherNames: string[];
@@ -264,6 +270,8 @@ async function brandOf(
     .map(other => other.trim())
     .filter(other => other !== "");
   return {
+    // The details first: the facts named below are never among them.
+    ...brandDetailsOf(document.brandDetails),
     ...(name === undefined ? {} : { name }),
     otherNames,
     ...(logo === undefined ? {} : { logo }),

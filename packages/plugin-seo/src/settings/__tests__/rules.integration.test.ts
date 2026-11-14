@@ -189,6 +189,13 @@ describe.each(getConfiguredTestDialects())(
           ],
           siteKind: "company",
           aiCrawlers: "search",
+          brandDetails: {
+            email: "hello@example.com",
+            contactPoints: [
+              { contactType: "customer support", email: "help@example.com" },
+            ],
+            parentOrganization: { name: "Example Holdings" },
+          },
         },
       });
 
@@ -221,6 +228,11 @@ describe.each(getConfiguredTestDialects())(
           },
         ],
         siteKind: "company",
+        email: "hello@example.com",
+        contactPoints: [
+          { contactType: "customer support", email: "help@example.com" },
+        ],
+        parentOrganization: { name: "Example Holdings" },
       });
     });
 
@@ -277,6 +289,15 @@ describe.each(getConfiguredTestDialects())(
           data: {
             _overwrite: true,
             structuredData: { seot_posts: { type: "recipe" } },
+          },
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      await expect(
+        t.nextly.updateSingle({
+          slug: SEO_SETTINGS_SLUG,
+          data: {
+            _overwrite: true,
+            brandDetails: { email: "not an address" },
           },
         })
       ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
