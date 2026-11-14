@@ -2909,23 +2909,6 @@ export class UserMutationService extends BaseService {
     if (caller === "plugin") {
       await this.refuseSuperAdminAccount(userId, administratorRefusal);
     }
-    // A required relationship the Schema Builder keyed to this account refuses the deletion.
-    // Asked first, before anything of the account is removed (its roles, media ownership, email
-    // records, its row), so the refusal leaves the account whole and says what still points at it.
-    // An optional relationship is emptied by the database when the row goes.
-    const referrers = await referrersHolding(
-      this.adapter,
-      this.dialect,
-      "users",
-      String(userId)
-    );
-    if (referrers.length > 0) {
-      throw entryStillReferenced(
-        referrers,
-        { operation: "deleteUser", userId },
-        "user"
-      );
-    }
     // The same refusal, asked again inside the deletion's transaction.
     const refuseAdministratorInTx = async (txDb: DrizzleTransactionLike) => {
       if (caller !== "plugin") return;
@@ -3170,6 +3153,28 @@ export class UserMutationService extends BaseService {
           });
         }
         await refuseAdministratorInTx(txDb);
+
+        // A required relationship the Schema Builder keyed to this account refuses the deletion.
+        // Asked before anything of the account is removed (its roles, media ownership, email
+        // records, its row), so the refusal leaves the account whole and says what still points at it.
+        // An optional relationship is emptied by the database when the row goes. Read through
+        // `txDb`: inside a caller's transaction this one joins, the reads see what it already
+        // wrote (a referring entry it deleted is gone) and run on its connection, not a second
+        // one from the pool; and after the row lock above, no new reference can commit between
+        // the count and the delete on PostgreSQL.
+        const referrers = await referrersHolding(
+          txDb,
+          this.dialect,
+          "users",
+          String(userId)
+        );
+        if (referrers.length > 0) {
+          throw entryStillReferenced(
+            referrers,
+            { operation: "deleteUser", userId },
+            "user"
+          );
+        }
 
         // Delete user_ext row if custom fields are configured
         if (this.hasCustomFields()) {
