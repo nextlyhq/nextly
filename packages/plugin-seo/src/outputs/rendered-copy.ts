@@ -222,21 +222,27 @@ interface Open {
 const EMPHASIS: Readonly<Record<string, string>> = {
   strong: "**",
   b: "**",
-  em: "_",
-  i: "_",
+  // Asterisks, not underscores: Markdown reads them inside a word too.
+  em: "*",
+  i: "*",
   s: "~~",
   del: "~~",
 };
 
-/** `text` without emphasis marks that wrap all of it. */
+/**
+ * `text` without emphasis marks that wrap all of it. Marks that open and
+ * close two separate parts (`**a** and **b**`) wrap neither whole, so they
+ * stay.
+ */
 function unwrapped(text: string): string {
   let words = text;
   for (;;) {
-    const inner = /^(\*\*|_|~~)([\s\S]*)\1$/.exec(words);
-    if (inner === null || inner[2] === undefined || inner[2].trim() === "") {
+    const inner = /^(\*\*|\*|~~)([\s\S]*)\1$/.exec(words);
+    const [, mark = "", rest = ""] = inner ?? [];
+    if (inner === null || rest.trim() === "" || rest.includes(mark)) {
       return words;
     }
-    words = inner[2].trim();
+    words = rest.trim();
   }
 }
 

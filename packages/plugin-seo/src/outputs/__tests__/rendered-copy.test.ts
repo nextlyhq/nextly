@@ -49,7 +49,7 @@ describe("a copy made from the rendered page", () => {
     expect(copy.body).toBe(
       [
         "# Pricing",
-        "Plans for **every** team, _billed_ monthly. See [the FAQ](https://acme.example/faq).",
+        "Plans for **every** team, *billed* monthly. See [the FAQ](https://acme.example/faq).",
         "- One\n  - One a\n- Two",
         "1. First\n2. Second",
         "> Worth it.",
@@ -60,6 +60,16 @@ describe("a copy made from the rendered page", () => {
         "---",
         "Questions? [Write to us](mailto:hi@acme.example)",
       ].join("\n\n")
+    );
+  });
+
+  it("marks emphasis on part of a word so Markdown still reads it", () => {
+    const html = page(
+      "",
+      "<main><p>A pre<em>fix</em>, a <i>whole</i> word, <b><i>both</i></b>.</p></main>"
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe(
+      "A pre*fix*, a *whole* word, ***both***."
     );
   });
 
@@ -105,6 +115,16 @@ describe("a copy made from the rendered page", () => {
     );
     expect(renderedCopyOf(html, BASE).body).toBe(
       "## Why\n\nPut it in the \\<head\\> of \\*every\\* page."
+    );
+  });
+
+  it("keeps emphasis on parts of a heading that is not emphasised whole", () => {
+    const html = page(
+      "",
+      "<main><h2><b>Fast</b> and <b>safe</b></h2><h3><b><i>Both</i></b></h3></main>"
+    );
+    expect(renderedCopyOf(html, BASE).body).toBe(
+      "## **Fast** and **safe**\n\n### Both"
     );
   });
 });
