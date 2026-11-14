@@ -929,6 +929,65 @@ describe("a worker where nothing has started Nextly yet", () => {
   });
 });
 
+describe("the answer's other forms of the page", () => {
+  it("are placed as alternate links by media type, beside the canonical", () => {
+    expect(
+      metadataFromAnswer({
+        canonical: "/blog/hello",
+        formats: { "text/markdown": "/blog/hello.md" },
+      }).alternates
+    ).toEqual({
+      canonical: "/blog/hello",
+      types: { "text/markdown": "/blog/hello.md" },
+    });
+  });
+
+  it("are nothing where the answer has none, or an empty set", () => {
+    expect(metadataFromAnswer({ formats: {} }).alternates).toBeUndefined();
+  });
+
+  it("replace the route's own link for their media type only, keeping its others and its language links", async () => {
+    provide({
+      resolve: () => ({
+        canonical: "/blog/hello",
+        formats: { "text/markdown": "/blog/hello.md" },
+      }),
+    });
+    const meta = await pageMetadataFor({
+      ...page,
+      code: {
+        alternates: {
+          languages: { de: "/de/blog/hello" },
+          types: {
+            "text/markdown": "/old.md",
+            "application/rss+xml": "/blog/feed.xml",
+          },
+        },
+      },
+      tags: [],
+    });
+    expect(meta.alternates).toEqual({
+      canonical: "/blog/hello",
+      languages: { de: "/de/blog/hello" },
+      types: {
+        "text/markdown": "/blog/hello.md",
+        "application/rss+xml": "/blog/feed.xml",
+      },
+    });
+  });
+
+  it("refuse the answer whole where one is keyed by anything but a media type", async () => {
+    provide({
+      resolve: () => ({
+        title: "Answered",
+        formats: { "markdown copy": "/blog/hello.md" },
+      }),
+    });
+    const code: Metadata = { title: "Own" };
+    expect(await pageMetadataFor({ ...page, code, tags: [] })).toEqual(code);
+  });
+});
+
 describe("the answer's verification tags", () => {
   it("are placed as meta tags by name", () => {
     expect(

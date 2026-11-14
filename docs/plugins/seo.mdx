@@ -688,29 +688,51 @@ Settings > Search engines and AI**. Few tools read them today, so neither is on 
   never in it. Until it is switched on, `/llms.txt` is not found. Like the sitemap, it
   answers `503` while the address record catches up at start.
 - **Plain-text copies** add a text version of each page the sitemap lists, at the page's
-  address with `.md` added: `/blog/hello.md` for `/blog/hello`, and `/index.html.md` for
-  the home page. The copy is the page's title as a heading, then the words of its text,
-  long text and rich text fields, in the order its type declares them, those inside its
-  groups and repeaters included, with rich text's headings, lists, links, quotes, code,
-  tables and images written as Markdown. A field group's rich text is read too. A page's SEO
-  fields, its address, fields holding a choice, a number or a date, and other documents
-  read with it, such as an author, are left out. Each copy is served as
-  `text/markdown; charset=utf-8` and names its page as canonical in a `Link` header, so
-  search engines keep listing the page. With copies on, `/llms.txt` links each page's copy.
+  address with `.md` added: `/blog/hello.md` for `/blog/hello`, and `/index.md` for the
+  home page (and for any address ending in a slash; `/index.html.md` answers too). The copy
+  starts with front matter naming the page (`title` and `description` as its head carries
+  them, `url`, and `last_updated`, as the sitemap dates it), then the page's title as a
+  heading, then the words of its text, long text, rich text and picture fields, in the
+  order its type declares them, those inside its groups and repeaters included. Rich
+  text's headings, lists, links, quotes, code, tables and images are written as Markdown,
+  with the bold, italic, struck-through and code a reader sees inside a line; a picture
+  field shows its image with its alt text; every link and image written from the site's
+  root is made whole (`https://example.com/pricing`). A field group's rich text is read
+  too. A page's SEO fields, its address, fields holding a choice, a number or a date, and
+  other documents read with it, such as an author, are left out. With copies on,
+  `/llms.txt` links each page's copy, and each listed page's head links its copy with
+  `<link rel="alternate" type="text/markdown">`.
 
 A copy is read as a visitor with no session reads the page: the Public role's grants, the
 type's read rule and each field's read rule decide what is in it, so a field kept from the
 public is never in a copy, and a page the public may not read has none. Where a page of the
 site already has a copy's address, such as a page at `/guide.md`, that page is served there
 and no copy is, and `/llms.txt` links the page itself. A page at `/index.html` keeps
-`/index.html.md`, and the home page is then linked as itself. A copy's words are escaped
+`/index.html.md`, and a page at `/index` keeps `/index.md`, the home page's copy then
+linked as the home page itself. A copy's words are escaped
 where Markdown would read them as markup, so it says what the page shows.
 
-Every reader gets the same answer: neither output looks at who is asking. Neither changes a
-page either: llms.txt is its own file, and a copy is answered only at a copy's address. A
-copy is answered by the site's [Proxy](/docs/plugins/proxy), so the site needs its
-`proxy.ts`, as [redirects](#redirects) do; a site that ships its own `public/llms.txt` or
-`app/llms.txt/route.ts` keeps serving it.
+A copy at its `.md` address is served as `text/markdown; charset=utf-8`, cacheable for five
+minutes (`Cache-Control: public, max-age=300`), with `X-Robots-Tag: noindex` and a `Link`
+header naming its page as canonical, so search engines keep listing the page and not the
+copy; with llms.txt on, the `Link` header also points to it (`rel="describedby"`), as the
+[llms.txt proposal](https://llmstxt.org) suggests.
+
+A request for a listed page's own address whose `Accept` header asks for Markdown over HTML
+(`text/markdown` weighted above `text/html`, or as high and named first, as coding agents
+send it: `Accept: text/markdown, text/html, */*`) is answered with the page's copy instead,
+with `Vary: Accept`, the canonical `Link`, and `Cache-Control: private, no-store`, so no
+shared cache keeps it and hands it to a browser: a CDN that ignores `Vary` (Cloudflare's
+default, for one) would otherwise serve Markdown at the page's address. It is never marked
+noindex there, so a cache's mistake can never mark the page. A browser never asks for
+Markdown, so it is always served the page.
+
+No reader is told apart by who it is: neither output looks at the user agent, and every
+reader asking the same way gets the same answer. llms.txt is its own file. A copy is
+answered by the site's [Proxy](/docs/plugins/proxy), so the site needs its `proxy.ts`, as
+[redirects](#redirects) do, and its matcher must reach addresses ending in `.md`: a matcher
+that leaves out every address with a dot in its last part leaves the copies to the site. A
+site that ships its own `public/llms.txt` or `app/llms.txt/route.ts` keeps serving it.
 
 A copy is made from the page as it is stored, the fields the site renders, not from the
 rendered page: the words of a Page Builder layout are not in it.

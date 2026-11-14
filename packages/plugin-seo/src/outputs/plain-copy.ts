@@ -4,17 +4,20 @@
  * as stored, the same fields the site renders, and the same for every reader:
  * nothing here asks who is reading.
  *
- * The copy is the page's title as a heading, then the words of each content
- * field in the order its type declares them. Rich text keeps its structure
- * (headings, lists, links, quotes, code, tables, images); the inline styling
- * a reader sees as emphasis is left out, as plain text has none. What a
- * visitor never reads stays out: the page's SEO, its address, its
- * bookkeeping, fields holding a choice, a number or a date, and other
- * documents read with it, such as an author.
+ * The copy is front matter naming the page (its title, description, address
+ * and last change), the page's title as a heading, then the words of each
+ * content field in the order its type declares them. Rich text keeps its
+ * structure (headings, lists, links, quotes, code, tables, images) and the
+ * emphasis and code a reader sees inside a line; a picture field shows its
+ * image with its alt text. Every address is made whole against the page's,
+ * so a link read away from the site still leads somewhere. What a visitor
+ * never reads stays out: the page's SEO, its address, its bookkeeping,
+ * fields holding a choice, a number or a date, and other documents read with
+ * it, such as an author.
  *
  * A copy is served beside its page, at the page's address with `.md` added
- * (`index.html.md` where the address ends in a slash), as the llms.txt
- * proposal describes.
+ * (`index.md` where the address ends in a slash, and `index.html.md` there
+ * too), as the llms.txt proposal describes.
  *
  * @module outputs/plain-copy
  */
@@ -25,6 +28,17 @@ export interface CopyField {
   name?: string;
   type: string;
   fields?: readonly CopyField[];
+}
+
+/** What the copy's front matter says of the page. */
+export interface CopyAbout {
+  /** The title the page's head carries. */
+  title?: string;
+  description?: string;
+  /** The page's own address, absolute. */
+  url: string;
+  /** When the published page last changed, as ISO 8601. */
+  lastUpdated?: string;
 }
 
 /** What a copy is made from. */
@@ -40,6 +54,10 @@ export interface CopySource {
   document: Readonly<Record<string, unknown>>;
   /** The fields its type declares; where unknown, only its rich text is read. */
   fields?: readonly CopyField[];
+  /** The page's address, absolute, which addresses in the copy are made whole against. */
+  base?: string;
+  /** What the front matter says of the page; none without it. */
+  about?: CopyAbout;
 }
 
 /** Fields that are the page's address, SEO or bookkeeping, never its words. */
@@ -62,6 +80,56 @@ type Node = Record<string, unknown>;
 const childrenOf = (node: Node): Node[] =>
   Array.isArray(node.children) ? node.children.filter(isRecord) : [];
 
+/**
+ * The page's address, which a link or an image written from the site's root
+ * is made whole against while a copy is written. Set only for the length of
+ * one synchronous write, so no copy reads another's.
+ */
+let writingFor: string | undefined;
+
+/** `url` made whole against the page being written, where it can be. */
+function wholeAddress(url: string): string {
+  if (writingFor === undefined) return url;
+  try {
+    return new URL(url, writingFor).href;
+  } catch {
+    return url;
+  }
+}
+
+/** Rich text's format bits a reader sees, as Lexical stores them. */
+const BOLD = 1;
+const ITALIC = 2;
+const STRIKETHROUGH = 4;
+const CODE = 16;
+
+/** Inline code, fenced with more backticks than it holds, as Markdown spells it. */
+function inlineCode(code: string): string {
+  const longest = Math.max(
+    0,
+    ...(code.match(/`+/g) ?? []).map(run => run.length)
+  );
+  const fence = "`".repeat(longest + 1);
+  // A space keeps a backtick at either end from joining the fence.
+  const padded = /^`|`$/.test(code) ? ` ${code} ` : code;
+  return `${fence}${padded}${fence}`;
+}
+
+/** A text node's words, with the emphasis and code a reader sees in it. */
+function styledText(node: Node, text: string): string {
+  const format = typeof node.format === "number" ? node.format : 0;
+  if ((format & CODE) !== 0) return inlineCode(text);
+  if (text.trim() === "") return escapeText(text);
+  // Markers hug the words: Markdown reads none around a space.
+  const [, lead = "", words = "", trail = ""] =
+    /^(\s*)([\s\S]*?)(\s*)$/.exec(text) ?? [];
+  let styled = escapeText(words);
+  if ((format & ITALIC) !== 0) styled = `_${styled}_`;
+  if ((format & BOLD) !== 0) styled = `**${styled}**`;
+  if ((format & STRIKETHROUGH) !== 0) styled = `~~${styled}~~`;
+  return `${lead}${styled}${trail}`;
+}
+
 /** The words of `nodes` on one line: text, line breaks and links. */
 function inline(nodes: readonly Node[]): string {
   return nodes
@@ -70,9 +138,11 @@ function inline(nodes: readonly Node[]): string {
       if (node.type === "link" || node.type === "autolink") {
         const words = inline(childrenOf(node));
         const url = textOf(node.url);
-        return url === undefined ? words : `[${words}](${linkAddress(url)})`;
+        return url === undefined
+          ? words
+          : `[${words}](${linkAddress(wholeAddress(url))})`;
       }
-      if (typeof node.text === "string") return escapeText(node.text);
+      if (typeof node.text === "string") return styledText(node, node.text);
       return inline(childrenOf(node));
     })
     .join("");
@@ -141,13 +211,20 @@ function list(node: Node): string {
     .join("\n");
 }
 
+/**
+ * A table cell's words on one line, every pipe escaped: a table reads a
+ * pipe as the end of its cell even inside code, so code's `A | B` is
+ * written `A \| B`, which a table reads back as the pipe.
+ */
+const cellOf = (cell: Node): string =>
+  blocks(childrenOf(cell), 0)
+    .replace(/\n+/g, " ")
+    .replace(/(?<!\\)\|/g, "\\|");
+
 /** A table, its first row as the header. */
 function table(node: Node): string {
   const rows = childrenOf(node).map(
-    row =>
-      `| ${childrenOf(row)
-        .map(cell => blocks(childrenOf(cell), 0).replace(/\n+/g, " "))
-        .join(" | ")} |`
+    row => `| ${childrenOf(row).map(cellOf).join(" | ")} |`
   );
   const [header, ...rest] = rows;
   if (header === undefined) return "";
@@ -162,7 +239,7 @@ function image(node: Node): string {
   if (src === undefined) return "";
   const alt = escapeText(textOf(node.altText) ?? textOf(node.alt) ?? "");
   const caption = textOf(node.caption);
-  const drawn = `![${alt}](${linkAddress(src)})`;
+  const drawn = `![${alt}](${linkAddress(wholeAddress(src))})`;
   return caption === undefined ? drawn : `${drawn}\n${escapeText(caption)}`;
 }
 
@@ -173,7 +250,7 @@ function button(value: Record<string, unknown>): string {
   if (words === undefined) return "";
   return url === undefined
     ? escapeText(words)
-    : `[${escapeText(words)}](${linkAddress(url)})`;
+    : `[${escapeText(words)}](${linkAddress(wholeAddress(url))})`;
 }
 
 /** Each item of a node's list (`images`, `buttons`), drawn by `draw`. */
@@ -269,12 +346,27 @@ function isRichText(value: unknown): value is { root: Node } {
 }
 
 /**
- * A rich text value as Markdown, or nothing where `value` is not rich text
- * or shows no words.
+ * `write`'s answer with addresses made whole against `base`, where given,
+ * and as written otherwise.
  */
-export function markdownOfRichText(value: unknown): string {
+function writtenFor<T>(base: string | undefined, write: () => T): T {
+  const outer = writingFor;
+  writingFor = base ?? outer;
+  try {
+    return write();
+  } finally {
+    writingFor = outer;
+  }
+}
+
+/**
+ * A rich text value as Markdown, or nothing where `value` is not rich text
+ * or shows no words. Where `base`, the page's address, is given, a link or
+ * an image written from the site's root is made whole against it.
+ */
+export function markdownOfRichText(value: unknown, base?: string): string {
   if (!isRichText(value)) return "";
-  return blocks(childrenOf(value.root), 0);
+  return writtenFor(base, () => blocks(childrenOf(value.root), 0));
 }
 
 /**
@@ -340,14 +432,36 @@ const fieldGroupField: FieldReader = (_field, value, at) => {
 };
 
 /**
+ * A picture field: each image it holds, with its alt text, as the page
+ * shows it. A file that is not an image, or a media item not read with the
+ * page (an id alone), shows nothing.
+ */
+const uploadField: FieldReader = (_field, value, at) => {
+  for (const each of Array.isArray(value) ? value : [value]) {
+    if (!isRecord(each)) continue;
+    const src = textOf(each.url);
+    const type = textOf(each.mimeType);
+    if (
+      src === undefined ||
+      (type !== undefined && !type.startsWith("image/"))
+    ) {
+      continue;
+    }
+    const alt = textOf(each.alt) ?? textOf(each.altText) ?? "";
+    at.parts.push(`![${escapeText(alt)}](${linkAddress(wholeAddress(src))})`);
+  }
+};
+
+/**
  * The field types whose value a visitor reads, and how each is read. Every
- * other type (a choice, a number, a date, a relation, a file, JSON) shows no
- * words of its own and is left out.
+ * other type (a choice, a number, a date, a relation, a file that is not a
+ * picture, JSON) shows no words of its own and is left out.
  */
 const FIELD_READERS: Readonly<Record<string, FieldReader>> = {
   text: wordsField,
   textarea: wordsField,
   richText: richTextField,
+  upload: uploadField,
   group: groupField,
   repeater: repeaterField,
   fieldGroup: fieldGroupField,
@@ -389,58 +503,104 @@ function richTextWords(value: unknown, parts: string[], depth: number): void {
   }
 }
 
+/** `text` on one line, its line breaks and runs of space made one space. */
+const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim();
+
+/** One line of front matter, its text quoted as YAML reads JSON's strings. */
+const quoted = (value: string): string => JSON.stringify(oneLine(value));
+
+/**
+ * The front matter naming the page: its title and description as quoted
+ * text, its address and when it last changed, each where known.
+ */
+function frontMatterOf(about: CopyAbout): string {
+  const title = textOf(about.title);
+  const description = textOf(about.description);
+  return [
+    "---",
+    ...(title === undefined ? [] : [`title: ${quoted(title)}`]),
+    ...(description === undefined
+      ? []
+      : [`description: ${quoted(description)}`]),
+    `url: ${about.url}`,
+    ...(about.lastUpdated === undefined
+      ? []
+      : [`last_updated: ${about.lastUpdated}`]),
+    "---",
+  ].join("\n");
+}
+
 /** A page's plain-text copy, as Markdown, ending in a newline. */
 export function plainCopyOf(source: CopySource): string {
   const parts: string[] = [];
   const title = textOf(source.title)?.trim();
   if (title !== undefined) parts.push(`# ${escapeText(title)}`);
-  if (source.fields === undefined) {
-    for (const [name, value] of Object.entries(source.document)) {
-      if (!NOT_CONTENT.has(name)) richTextWords(value, parts, 0);
+  writtenFor(source.base ?? source.about?.url, () => {
+    if (source.fields === undefined) {
+      for (const [name, value] of Object.entries(source.document)) {
+        if (!NOT_CONTENT.has(name)) richTextWords(value, parts, 0);
+      }
+    } else {
+      fieldsWords(source.fields, source.document, {
+        parts,
+        depth: 0,
+        ...(source.titleField === undefined
+          ? {}
+          : { titleField: source.titleField }),
+      });
     }
-  } else {
-    fieldsWords(source.fields, source.document, {
-      parts,
-      depth: 0,
-      ...(source.titleField === undefined
-        ? {}
-        : { titleField: source.titleField }),
-    });
-  }
-  return `${parts.join("\n\n")}\n`;
+  });
+  const body = `${parts.join("\n\n")}\n`;
+  return source.about === undefined
+    ? body
+    : `${frontMatterOf(source.about)}\n\n${body}`;
 }
 
-/** The suffix a copy of a page whose address ends in a slash is served at. */
-const INDEX_COPY = "index.html.md";
+/**
+ * The names a copy of a page whose address ends in a slash is served at:
+ * `index.md`, the one linked, and `index.html.md`, which the llms.txt
+ * proposal named first and readers may still ask for.
+ */
+const INDEX_COPIES = ["index.md", "index.html.md"] as const;
 
 /**
- * Where the plain-text copy of the page at `address` is served: the page's
- * address with `.md` added, or `index.html.md` where it ends in a slash. A
- * query or fragment is not part of it.
+ * Every path the plain-text copy of the page at `address` is served at, the
+ * one linked first: the page's path with `.md` added, or, where it ends in a
+ * slash, `index.md` and `index.html.md` added. A query or fragment is not
+ * part of it.
+ */
+export function copyPathsOf(address: string): string[] {
+  const { pathname } = new URL(address);
+  return pathname.endsWith("/")
+    ? INDEX_COPIES.map(name => `${pathname}${name}`)
+    : [`${pathname}.md`];
+}
+
+/**
+ * Where the plain-text copy of the page at `address` is linked: the page's
+ * address with `.md` added, or `index.md` where it ends in a slash. A query
+ * or fragment is not part of it.
  */
 export function copyAddressOf(address: string): string {
   const url = new URL(address);
   url.search = "";
   url.hash = "";
-  url.pathname = url.pathname.endsWith("/")
-    ? `${url.pathname}${INDEX_COPY}`
-    : `${url.pathname}.md`;
+  url.pathname = copyPathsOf(address)[0] ?? `${url.pathname}.md`;
   return url.href;
 }
 
 /**
  * The page addresses a request for `path` may ask for a copy of, in the
  * order they are tried: the address the copy's name says literally (`/a.md`
- * for `/a`, `/index.html.md` for `/index.html`), then, for `index.html.md`,
- * the folder's own page (`/` or `/docs/`), whose copy has that name too.
- * None where `path` is not a copy's address.
+ * for `/a`, `/index.md` for `/index`), then, for `index.md` and
+ * `index.html.md`, the folder's own page (`/` or `/docs/`), whose copy has
+ * that name too. None where `path` is not a copy's address.
  */
 export function pagesOfCopy(path: string): string[] {
   if (!path.endsWith(".md")) return [];
   const literal = path.slice(0, -".md".length);
   const pages = literal === "" || literal.endsWith("/") ? [] : [literal];
-  if (path.endsWith(`/${INDEX_COPY}`)) {
-    pages.push(path.slice(0, -INDEX_COPY.length));
-  }
+  const index = INDEX_COPIES.find(name => path.endsWith(`/${name}`));
+  if (index !== undefined) pages.push(path.slice(0, -index.length));
   return pages;
 }

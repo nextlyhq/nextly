@@ -16,7 +16,7 @@ vi.mock("../../address-record/catch-up", () => ({
   },
 }));
 
-import { plainCopyProxyHandler } from "../ai-outputs";
+import { plainCopyProxyHandler, prefersMarkdown } from "../ai-outputs";
 
 beforeEach(() => {
   record.retried = 0;
@@ -48,5 +48,56 @@ describe("a copy asked for before the address record is ready", () => {
       {} as PluginContext
     );
     expect(record.retried).toBe(0);
+  });
+});
+
+describe("a page's own address", () => {
+  it("is left alone, nothing read, unless the request asks for Markdown", async () => {
+    record.ready = true;
+    try {
+      const readRules = vi.fn(async () => ({
+        patterns: {},
+        plainTextCopies: true,
+      }));
+      const handler = plainCopyProxyHandler({ readRules });
+      const answer = await handler.handle(
+        new Request("https://acme.example/blog/hello", {
+          headers: { accept: "text/html,application/xhtml+xml,*/*;q=0.8" },
+        }),
+        {} as PluginContext
+      );
+      expect(answer).toBeUndefined();
+      expect(readRules).not.toHaveBeenCalled();
+    } finally {
+      record.ready = false;
+    }
+  });
+});
+
+describe("whether a request asks for Markdown over HTML", () => {
+  it.each([
+    // As coding agents send it: Markdown named first, at the same weight.
+    ["text/markdown, text/html, */*", true],
+    ["text/markdown,text/html;q=0.9,*/*;q=0.8", true],
+    [
+      "text/markdown;q=1.0, text/x-markdown;q=0.9, text/plain;q=0.8, text/html;q=0.7, */*;q=0.1",
+      true,
+    ],
+    ["text/markdown", true],
+    // As browsers and other readers send it.
+    ["text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", false],
+    ["*/*", false],
+    ["text/html, text/markdown", false],
+    ["text/html;q=1, text/markdown;q=0.5", false],
+    // Named only to refuse it.
+    ["text/markdown;q=0, text/html", false],
+    ["text/markdown;q=0.0", false],
+  ])("%s: %s", (accept, asks) => {
+    expect(prefersMarkdown(accept)).toBe(asks);
+  });
+
+  it("is no where the request names no types", () => {
+    expect(prefersMarkdown(null)).toBe(false);
+    expect(prefersMarkdown("")).toBe(false);
   });
 });

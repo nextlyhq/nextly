@@ -4,9 +4,11 @@
  * plain-text copy of each listed page beside it.
  *
  * Both list exactly the pages the sitemap lists, read from the one listing,
- * and both answer every reader alike: no reader is told apart from another.
- * Neither can affect a page: llms.txt is its own file, and a copy is answered
- * only at a copy's address, never at a page's.
+ * and both answer every reader alike: no reader is told apart by who it is.
+ * A copy is answered at its own address, and at the page's own address only
+ * to a request that asks for Markdown over HTML in its `Accept` header; that
+ * answer is never kept by a shared cache, so a browser is always served the
+ * page.
  *
  * @module outputs/ai-outputs
  */
@@ -41,6 +43,7 @@ import { listedPageAt, listPages, type ListedPage } from "./listing";
 import { llmsTxt, type LlmsEntry } from "./llms-txt";
 import {
   copyAddressOf,
+  copyPathsOf,
   pagesOfCopy,
   plainCopyOf,
   type CopyField,
@@ -412,15 +415,16 @@ async function publicHead(
 }
 
 /**
- * The language and kept path of each page a request for `url` may ask for a
- * copy of, in the order they are tried (`pagesOfCopy`). A path is kept
- * without its trailing slash, as the record keys it.
+ * The language and kept path of each page of `candidates`, paths on `url`'s
+ * host, in their order. A path is kept without its trailing slash, as the
+ * record keys it.
  */
 async function pageAddressesAsked(
-  url: URL
+  url: URL,
+  candidates: readonly string[]
 ): Promise<{ locale: string; path: string }[]> {
   const asked: { locale: string; path: string }[] = [];
-  for (const candidate of pagesOfCopy(url.pathname)) {
+  for (const candidate of candidates) {
     const pageUrl = new URL(url.href);
     pageUrl.pathname = candidate;
     pageUrl.search = "";
@@ -435,7 +439,10 @@ async function pageAddressesAsked(
   return asked;
 }
 
-/** A listed page's plain-text copy, from its published document. */
+/**
+ * A listed page's plain-text copy, from its published document: its front
+ * matter from the head the public may read and the sitemap's last change.
+ */
 async function copyOf(
   ctx: PluginContext,
   page: ListedPage,
@@ -443,21 +450,31 @@ async function copyOf(
 ): Promise<string | null> {
   const document = (await publicDocuments([page])).get(readingKey(page));
   if (document === undefined) return null;
+  const head = await publicHead(ctx, page, document, readRules);
   // The page's own title, as the page shows it, and the field it is in;
   // else its head's, worked out from what the public may read.
   const titleField = TITLE_FIELDS.find(
     name => textOf(document[name]) !== undefined
   );
   const title =
-    titleField === undefined
-      ? (await publicHead(ctx, page, document, readRules)).title
-      : textOf(document[titleField]);
+    titleField === undefined ? head.title : textOf(document[titleField]);
   const fields = await fieldsOf(ctx, page.holder.collection);
   return plainCopyOf({
     ...(title === undefined ? {} : { title }),
     ...(titleField === undefined ? {} : { titleField }),
     document,
     ...(fields === undefined ? {} : { fields }),
+    base: page.loc,
+    about: {
+      ...(head.title === undefined ? {} : { title: head.title }),
+      ...(head.description === undefined
+        ? {}
+        : { description: head.description }),
+      url: page.loc,
+      ...(page.lastModified === undefined
+        ? {}
+        : { lastUpdated: page.lastModified }),
+    },
   });
 }
 
@@ -492,53 +509,205 @@ async function copiesTaken(
   return taken;
 }
 
+/** A copy found for a request, and what its answer says beside it. */
+interface FoundCopy {
+  body: string;
+  page: ListedPage;
+  /** Whether llms.txt is served, which the answer then points to. */
+  llmsTxt: boolean;
+}
+
 /**
- * The plain-text copy asked for at `url`, or null where none is served
- * there: copies are switched off, the address is not a copy's, or no page
- * the sitemap lists is at the page address it names. The page is read at
- * the site's origin, as the sitemap lists it, whichever of the site's hosts
- * the request reached.
+ * Whether `page` is the one a request for `url` asks the copy of: the page
+ * whose copy is served at that address, or, asked `atPage`, the page at
+ * that address itself.
  */
-async function plainCopyAt(
+function asksFor(page: ListedPage, url: URL, atPage: boolean): boolean {
+  if (!atPage) return copyPathsOf(page.loc).includes(url.pathname);
+  // `/a` and `/a/` are one page, whichever way the site writes it.
+  return bare(new URL(page.loc).pathname) === bare(url.pathname);
+}
+
+/** A path with its trailing slashes taken off, `/` itself kept. */
+const bare = (path: string): string =>
+  path.length > 1 ? path.replace(/\/+$/, "") || "/" : path;
+
+/**
+ * The first listed page a request for `url` asks the copy of, trying
+ * `candidates` in order: the page the name says literally before the
+ * folder's own page, as llms.txt links them. Each is read at the site's
+ * origin, as the sitemap lists it, whichever of the site's hosts the
+ * request reached; a language served on a domain of its own is listed on
+ * that domain.
+ */
+async function pageAsked(
   ctx: PluginContext,
   url: URL,
-  config: AiOutputsConfig
-): Promise<{ body: string; page: ListedPage } | null> {
-  const rules = await config.readRules(ctx, undefined);
-  if (rules.plainTextCopies !== true) return null;
-  // A page of the site's at the copy's address is served there instead.
-  if ((await copiesTaken(ctx, [url.href])).size > 0) return null;
+  config: AiOutputsConfig,
+  candidates: readonly string[],
+  atPage: boolean
+): Promise<ListedPage | null> {
   const site = (await siteOriginFor(url.origin, ctx, config)) ?? url.origin;
-  // The first listed page whose own copy this is: the page the name says
-  // literally before the folder's own page, as llms.txt links them.
-  for (const address of await pageAddressesAsked(url)) {
-    // A language served on a domain of its own is listed on that domain.
+  for (const address of await pageAddressesAsked(url, candidates)) {
     const own = originOf(await servedAt("/", address.locale));
-    const origin = own === url.origin ? url.origin : site;
     const page = await listedPageAt(ctx, address.path, address.locale, {
-      origin,
+      origin: own === url.origin ? url.origin : site,
       readRules: config.readRules,
       ...(config.collections === undefined
         ? {}
         : { collections: config.collections }),
     });
-    if (
-      page === null ||
-      new URL(copyAddressOf(page.loc)).pathname !== url.pathname
-    ) {
-      continue;
-    }
-    const body = await copyOf(ctx, page, config.readRules);
-    return body === null ? null : { body, page };
+    if (page !== null && asksFor(page, url, atPage)) return page;
   }
   return null;
 }
 
 /**
- * The Proxy handler that answers a request for a page's plain-text copy.
- * Only a GET or HEAD of an address ending in `.md` is looked at; every other
- * request passes untouched, and so does one for a copy that is not served.
- * The copy names its page as canonical, so search engines keep the page.
+ * The listed page at `loc` where the copy at `url`, a copy's address, is
+ * its copy, else null: no page of the site holds the address itself, and
+ * the first listed page it names is that page. The one decision both serving a copy and
+ * linking one make, so a link never leads to another page's copy.
+ */
+async function copyServedAt(
+  ctx: PluginContext,
+  url: URL,
+  loc: string,
+  config: AiOutputsConfig
+): Promise<ListedPage | null> {
+  if ((await copiesTaken(ctx, [url.href])).size > 0) return null;
+  const page = await pageAsked(
+    ctx,
+    url,
+    config,
+    pagesOfCopy(url.pathname),
+    false
+  );
+  return page !== null && new URL(page.loc).pathname === new URL(loc).pathname
+    ? page
+    : null;
+}
+
+/**
+ * Where the copy of the listed page at `loc` is served, as the head links
+ * it: the first of its copy's addresses that is this page's copy, or none
+ * where another page holds them all, or where the public may not read the
+ * page, which then has no copy to serve.
+ */
+export async function servedCopyAddress(
+  ctx: PluginContext,
+  loc: string,
+  config: AiOutputsConfig
+): Promise<string | undefined> {
+  for (const path of copyPathsOf(loc)) {
+    const url = new URL(path, loc);
+    const page = await copyServedAt(ctx, url, loc, config);
+    if (page === null) continue;
+    return (await publicDocuments([page])).has(readingKey(page))
+      ? url.href
+      : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * The plain-text copy asked for at `url`, or null where none is served
+ * there: copies are switched off, the address is not a copy's, or no page
+ * the sitemap lists is at the page address it names. Asked `atPage`, `url`
+ * is the page's own address rather than its copy's.
+ */
+async function plainCopyAt(
+  ctx: PluginContext,
+  url: URL,
+  config: AiOutputsConfig,
+  atPage = false
+): Promise<FoundCopy | null> {
+  const rules = await config.readRules(ctx, undefined);
+  if (rules.plainTextCopies !== true) return null;
+  // A page of the site's at the copy's address is served there instead.
+  if (!atPage && (await copiesTaken(ctx, [url.href])).size > 0) return null;
+  const candidates = atPage ? [url.pathname] : pagesOfCopy(url.pathname);
+  const page = await pageAsked(ctx, url, config, candidates, atPage);
+  if (page === null) return null;
+  const body = await copyOf(ctx, page, config.readRules);
+  return body === null ? null : { body, page, llmsTxt: rules.llmsTxt === true };
+}
+
+/** A media range of an `Accept` header and the weight it is given. */
+interface AcceptedType {
+  type: string;
+  q: number;
+  at: number;
+}
+
+/** The media ranges an `Accept` header lists, each with its weight and place. */
+function acceptedTypes(accept: string): AcceptedType[] {
+  return accept.split(",").flatMap((part, at) => {
+    const [type = "", ...params] = part.split(";").map(each => each.trim());
+    if (type === "") return [];
+    const weight = params
+      .map(param => /^q=([0-9.]+)$/i.exec(param)?.[1])
+      .find(value => value !== undefined);
+    const q = weight === undefined ? 1 : Number(weight);
+    return [{ type: type.toLowerCase(), q: Number.isFinite(q) ? q : 0, at }];
+  });
+}
+
+/**
+ * Whether an `Accept` header asks for Markdown over HTML: `text/markdown`
+ * named with a weight above nothing, and above `text/html`'s, or as high
+ * and named first, as coding agents send it (`text/markdown, text/html`). A
+ * browser never names Markdown, so it is always served the page.
+ */
+export function prefersMarkdown(accept: string | null): boolean {
+  if (accept === null) return false;
+  const types = acceptedTypes(accept);
+  const markdown = types.find(each => each.type === "text/markdown");
+  if (markdown === undefined || markdown.q <= 0) return false;
+  const html = types.find(each => each.type === "text/html");
+  if (html === undefined) return true;
+  return (
+    markdown.q > html.q || (markdown.q === html.q && markdown.at < html.at)
+  );
+}
+
+/** Where a program finds the site's description of itself, where llms.txt is served. */
+const describedBy = (copy: FoundCopy): string[] =>
+  copy.llmsTxt
+    ? [
+        `<${new URL("/llms.txt", copy.page.loc).href}>; rel="describedby"; type="text/plain"`,
+      ]
+    : [];
+
+/**
+ * The headers a copy is answered with. At its own address it is cacheable,
+ * kept out of search results (its page is the one to list) and names its
+ * page as canonical. At the page's own address, asked for by `Accept`, it is
+ * never kept by a shared cache, which might not tell readers apart by what
+ * they accept and hand it to a browser, and is never marked noindex, which a
+ * cache's mistake would then put on the page.
+ */
+function copyHeaders(copy: FoundCopy, atPage: boolean): Record<string, string> {
+  return {
+    "content-type": "text/markdown; charset=utf-8",
+    link: [`<${copy.page.loc}>; rel="canonical"`, ...describedBy(copy)].join(
+      ", "
+    ),
+    vary: "Accept",
+    ...(atPage
+      ? { "cache-control": "private, no-store" }
+      : {
+          "cache-control": "public, max-age=300",
+          "x-robots-tag": "noindex",
+        }),
+  };
+}
+
+/**
+ * The Proxy handler that answers a request for a page's plain-text copy:
+ * a GET or HEAD of an address ending in `.md`, or of a page's own address
+ * whose `Accept` header asks for Markdown over HTML. Every other request
+ * passes untouched, and so does one for a copy that is not served. The copy
+ * names its page as canonical, so search engines keep the page.
  */
 export function plainCopyProxyHandler(
   config: AiOutputsConfig
@@ -548,7 +717,10 @@ export function plainCopyProxyHandler(
     async handle(request, ctx) {
       if (request.method !== "GET" && request.method !== "HEAD") return;
       const url = new URL(request.url);
-      if (!url.pathname.endsWith(".md")) return;
+      const atPage =
+        !url.pathname.endsWith(".md") &&
+        prefersMarkdown(request.headers.get("accept"));
+      if (!url.pathname.endsWith(".md") && !atPage) return;
       // While the address record catches up, a page may not hold its address
       // yet: the request passes to the site as if no copy were served, and a
       // catch-up that failed is tried again.
@@ -556,14 +728,11 @@ export function plainCopyProxyHandler(
         retryFailedCatchUp();
         return;
       }
-      const copy = await plainCopyAt(ctx, url, config);
+      const copy = await plainCopyAt(ctx, url, config, atPage);
       if (copy === null) return;
       return {
         response: new Response(request.method === "HEAD" ? null : copy.body, {
-          headers: {
-            "content-type": "text/markdown; charset=utf-8",
-            link: `<${copy.page.loc}>; rel="canonical"`,
-          },
+          headers: copyHeaders(copy, atPage),
         }),
       };
     },

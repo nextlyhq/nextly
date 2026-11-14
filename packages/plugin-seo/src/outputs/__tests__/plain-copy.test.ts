@@ -14,11 +14,13 @@ import {
   select,
   text,
   textarea,
+  upload,
 } from "nextly";
 import { describe, expect, it } from "vitest";
 
 import {
   copyAddressOf,
+  copyPathsOf,
   markdownOfRichText,
   pagesOfCopy,
   plainCopyOf,
@@ -110,6 +112,36 @@ describe("rich text as Markdown", () => {
     });
     expect(markdownOfRichText(value)).toBe(
       "| Plan | Price |\n| --- | --- |\n| Pro | $10 |"
+    );
+  });
+
+  it("keeps a pipe in a table cell's code inside its cell", () => {
+    const value = rich({
+      type: "table",
+      children: [
+        {
+          type: "tablerow",
+          children: [
+            { type: "tablecell", children: [paragraph(text_("Type"))] },
+            { type: "tablecell", children: [paragraph(text_("Meaning"))] },
+          ],
+        },
+        {
+          type: "tablerow",
+          children: [
+            {
+              type: "tablecell",
+              children: [
+                paragraph({ type: "text", text: "A | B", format: 16 }),
+              ],
+            },
+            { type: "tablecell", children: [paragraph(text_("Either"))] },
+          ],
+        },
+      ],
+    });
+    expect(markdownOfRichText(value)).toBe(
+      "| Type | Meaning |\n| --- | --- |\n| `A \\| B` | Either |"
     );
   });
 
@@ -208,6 +240,57 @@ describe("rich text as Markdown", () => {
     });
     expect(markdownOfRichText(value)).toBe(
       "![Ana](/a.png)\n![Ben](/b.png)\nOur team, 2026"
+    );
+  });
+
+  it("keeps the emphasis and code a reader sees inside a line", () => {
+    const styled = (value: string, format: number) => ({
+      type: "text",
+      text: value,
+      format,
+    });
+    const value = rich(
+      paragraph(
+        text_("Use "),
+        styled("bold", 1),
+        text_(", "),
+        styled("italic", 2),
+        text_(", "),
+        styled("both", 3),
+        text_(", "),
+        styled("gone", 4),
+        text_(" and "),
+        styled("npm i `x`", 16),
+        text_(".")
+      )
+    );
+    expect(markdownOfRichText(value)).toBe(
+      "Use **bold**, _italic_, **_both_**, ~~gone~~ and `` npm i `x` ``."
+    );
+  });
+
+  it("makes a link or an image written from the site's root whole, against the page's address", () => {
+    const value = rich(
+      paragraph(
+        {
+          type: "link",
+          url: "/pricing",
+          children: [text_("plans")],
+        },
+        text_(" and "),
+        {
+          type: "link",
+          url: "mailto:hello@acme.example",
+          children: [text_("mail")],
+        }
+      ),
+      { type: "image", src: "/media/cat.png", altText: "A cat" }
+    );
+    expect(markdownOfRichText(value, "https://acme.example/blog/hello")).toBe(
+      [
+        "[plans](https://acme.example/pricing) and [mail](mailto:hello@acme.example)",
+        "![A cat](https://acme.example/media/cat.png)",
+      ].join("\n\n")
     );
   });
 
@@ -329,6 +412,65 @@ describe("a page's plain-text copy", () => {
     expect(copy).toBe("# T\n\nAct now.\n");
   });
 
+  it("shows a picture field's image with its alt text, where it holds one", () => {
+    const copy = plainCopyOf({
+      title: "T",
+      base: "https://acme.example/blog/t",
+      fields: [
+        upload({ name: "cover", relationTo: "media" }),
+        upload({ name: "brochure", relationTo: "media" }),
+        richText({ name: "body" }),
+      ],
+      document: {
+        cover: {
+          id: "m1",
+          url: "/media/cover.png",
+          alt: "The launch pad",
+          mimeType: "image/png",
+          createdAt: "2026-01-01",
+        },
+        brochure: {
+          id: "m2",
+          url: "/media/brochure.pdf",
+          mimeType: "application/pdf",
+          createdAt: "2026-01-01",
+        },
+        body: rich(paragraph(text_("Body."))),
+      },
+    });
+    expect(copy).toBe(
+      "# T\n\n![The launch pad](https://acme.example/media/cover.png)\n\nBody.\n"
+    );
+  });
+
+  it("begins with the page's title, description, address and last change, as front matter", () => {
+    const copy = plainCopyOf({
+      title: "Hello",
+      about: {
+        title: 'Hello "world" | Acme',
+        description: "A short hello.",
+        url: "https://acme.example/blog/hello",
+        lastUpdated: "2026-11-01T09:00:00.000Z",
+      },
+      document: { body: rich(paragraph(text_("Hi."))) },
+    });
+    expect(copy).toBe(
+      [
+        "---",
+        'title: "Hello \\"world\\" | Acme"',
+        'description: "A short hello."',
+        "url: https://acme.example/blog/hello",
+        "last_updated: 2026-11-01T09:00:00.000Z",
+        "---",
+        "",
+        "# Hello",
+        "",
+        "Hi.",
+        "",
+      ].join("\n")
+    );
+  });
+
   it("reads rich text wherever it is when the type's fields are not known", () => {
     const copy = plainCopyOf({
       title: "T",
@@ -344,16 +486,26 @@ describe("a page's plain-text copy", () => {
 });
 
 describe("where a page's plain-text copy is served", () => {
-  it("adds .md to a page's address, and index.html.md to one ending in a slash", () => {
+  it("adds .md to a page's address, and index.md to one ending in a slash", () => {
     expect(copyAddressOf("https://acme.example/blog/hello")).toBe(
       "https://acme.example/blog/hello.md"
     );
     expect(copyAddressOf("https://acme.example/")).toBe(
-      "https://acme.example/index.html.md"
+      "https://acme.example/index.md"
     );
     expect(copyAddressOf("https://acme.example/docs/")).toBe(
-      "https://acme.example/docs/index.html.md"
+      "https://acme.example/docs/index.md"
     );
+  });
+
+  it("serves the copy of a page ending in a slash at index.html.md too", () => {
+    expect(copyPathsOf("https://acme.example/")).toEqual([
+      "/index.md",
+      "/index.html.md",
+    ]);
+    expect(copyPathsOf("https://acme.example/blog/hello?x=1")).toEqual([
+      "/blog/hello.md",
+    ]);
   });
 
   it("reads a copy's address back to the page addresses it may be a copy of, the literal one first", () => {
@@ -361,6 +513,8 @@ describe("where a page's plain-text copy is served", () => {
     // A page named index.html and the folder's own page share a copy
     // address: the page whose address it literally is comes first.
     expect(pagesOfCopy("/index.html.md")).toEqual(["/index.html", "/"]);
+    expect(pagesOfCopy("/index.md")).toEqual(["/index", "/"]);
+    expect(pagesOfCopy("/docs/index.md")).toEqual(["/docs/index", "/docs/"]);
     expect(pagesOfCopy("/docs/index.html.md")).toEqual([
       "/docs/index.html",
       "/docs/",
