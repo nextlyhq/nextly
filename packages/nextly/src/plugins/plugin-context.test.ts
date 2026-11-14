@@ -172,6 +172,7 @@ describe("createPluginContext (P1 reshape)", () => {
       "table",
       "transaction",
       "update",
+      "withTransactionBounds",
     ]);
     // The restriction applies to the escape hatch too: the raw handle a
     // plugin without rawSql receives carries only the fluent four.
