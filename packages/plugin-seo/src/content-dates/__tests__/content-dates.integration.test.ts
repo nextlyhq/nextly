@@ -20,7 +20,11 @@ import {
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
 import { defineCollection, defineSingle, text } from "nextly";
-import { createDynamicHandlers } from "nextly/runtime";
+import {
+  createDynamicHandlers,
+  createPublicContentRoute,
+  type ContentEntry,
+} from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { lastCatchUp } from "../../address-record/catch-up";
@@ -49,9 +53,15 @@ afterEach(async () => {
  * The site with the plugin, naming its types, or, with `everyType`, naming
  * none, so SEO is on every type it defines.
  */
-async function boot(dialect: TestDialect, { everyType = false } = {}) {
+async function boot(
+  dialect: TestDialect,
+  { everyType = false, described = false } = {}
+) {
   current = await createTestNextly({
     dialect,
+    // With `described`, posts are described as blog posts, read by a visitor
+    // through the Public role a site's boot grants.
+    ...(described ? { seedPublic: true } : {}),
     plugins: [
       seoPlugin(
         everyType
@@ -60,6 +70,14 @@ async function boot(dialect: TestDialect, { everyType = false } = {}) {
               collections: [PAGES, POSTS],
               singles: ["seocd_home"],
               baseUrl: SITE,
+              ...(described
+                ? {
+                    structuredData: {
+                      brand: { name: "Acme" },
+                      types: { [POSTS]: { type: "blogPosting" as const } },
+                    },
+                  }
+                : {}),
             }
       ),
     ],
@@ -110,6 +128,31 @@ async function lastmodOf(loc: string): Promise<string | undefined> {
     .find(each => each.includes(`<url><loc>${loc}</loc>`));
   if (line === undefined) throw new Error(`${loc} is not listed`);
   return /<lastmod>([^<]+)<\/lastmod>/.exec(line)?.[1];
+}
+
+/** A date as the instant it names, so two spellings of one instant agree. */
+const instant = (value: unknown) => Date.parse(String(value));
+
+/** The `dateModified` the page at `/blog/<slug>` is described with, as served. */
+async function dateModifiedOf(t: TestNextly, slug: string): Promise<unknown> {
+  await contentDatesSettled();
+  const route = createPublicContentRoute({
+    collections: [POSTS],
+    nextly: t.nextly,
+    render: (_: ContentEntry, context) => context.structuredData,
+  });
+  const text = await route.ContentPage({ params: { slug: [slug] } });
+  const graph = (JSON.parse(String(text ?? "{}")) as { "@graph"?: unknown[] })[
+    "@graph"
+  ];
+  // The page's own node, whichever type it is described as: a post missing
+  // a detail its type needs is described as a web page.
+  const page = (graph ?? []).find(
+    node =>
+      (node as { "@id"?: unknown })["@id"] === `${SITE}/blog/${slug}#webpage`
+  ) as Record<string, unknown> | undefined;
+  if (page === undefined) throw new Error(`${slug} is not described`);
+  return page.dateModified;
 }
 
 /** The rows kept, as stored. */
@@ -441,6 +484,43 @@ describe.each(getConfiguredTestDialects())(
       expect(second(await lastmodOf(`${SITE}/blog/hello`))).toBe(
         second(post.updatedAt)
       );
+    });
+
+    it("describes a post as changed when its content last changed, as the sitemap dates it, not at an SEO-only save", async () => {
+      const { t } = await boot(dialect, { described: true });
+      const post = await create(t, POSTS, {
+        title: "Hello",
+        slug: "hello",
+        body: "First words.",
+        status: "published",
+      });
+      const loc = `${SITE}/blog/hello`;
+      const first = await lastmodOf(loc);
+      expect(instant(await dateModifiedOf(t, "hello"))).toBe(instant(first));
+
+      // An SEO-only save, as the import makes: the save's own stamp moves,
+      // the content's date does not.
+      await nextSecond();
+      await t.nextly.update({
+        collection: POSTS,
+        id: post.id,
+        data: { seo: { metaTitle: "Hello, world" }, _overwrite: true },
+      });
+      expect(await lastmodOf(loc)).toBe(first);
+      expect(instant(await dateModifiedOf(t, "hello"))).toBe(instant(first));
+
+      // A content change moves both, to the same date.
+      await nextSecond();
+      await t.nextly.update({
+        collection: POSTS,
+        id: post.id,
+        data: { body: "Rewritten.", _overwrite: true },
+      });
+      const moved = await lastmodOf(loc);
+      expect(Date.parse(String(moved))).toBeGreaterThan(
+        Date.parse(String(first))
+      );
+      expect(instant(await dateModifiedOf(t, "hello"))).toBe(instant(moved));
     });
   }
 );
