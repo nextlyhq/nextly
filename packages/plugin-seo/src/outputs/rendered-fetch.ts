@@ -62,6 +62,32 @@ function keep(
 }
 
 /**
+ * The body of `response` as text, or null once it runs past `limit`
+ * bytes: read piece by piece and given up there, so a page that does not
+ * say its length is never read whole into memory.
+ */
+async function textWithin(
+  response: Response,
+  limit: number
+): Promise<string | null> {
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let read = 0;
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return text + decoder.decode();
+    read += value.byteLength;
+    if (read > limit) {
+      await reader.cancel();
+      return null;
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+}
+
+/**
  * The page at `address` rendered as the public sees it, as a copy: its
  * head's title and description, and its main content as Markdown, its
  * addresses made whole against `canonical`. None where the page does not
@@ -96,8 +122,8 @@ export async function renderedCopyAt(
     await response.body?.cancel();
     return null;
   }
-  const html = await response.text();
-  if (html.length > MAX_HTML_BYTES) return null;
+  const html = await textWithin(response, MAX_HTML_BYTES);
+  if (html === null) return null;
   const copy = renderedCopyOf(html, canonical);
   if (copy.body === "") return null;
   keep(kept, address, copy);
