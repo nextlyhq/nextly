@@ -31,6 +31,7 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { indexNameForColumn } from "../../schema/services/index-name";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 
 let current: TestNextly | undefined;
@@ -178,5 +179,109 @@ for (const dialect of getConfiguredTestDialects()) {
         message: expect.stringContaining(`"${planted.field}" is declared`),
       });
     });
+  });
+}
+
+/**
+ * Fields whose index or default the generator decides beyond the flag the field carries.
+ *
+ * A single reference is indexed whether or not it declares `index`, by the rule the desired table
+ * and the creator share, so the undeclared index on `a_ref` is part of a healthy table. A Builder
+ * save writes no column DEFAULT for a user field (the default is filled when an instance is saved),
+ * so `a_flag` has none on the table even though its field declares one. `a_count` asks for nothing,
+ * and is the control for the index cases below.
+ */
+const GENERATOR_DECIDED = [
+  { name: "a_ref", type: "relationship", relationTo: "users" },
+  { name: "a_flag", type: "checkbox", defaultValue: true },
+  { name: "a_count", type: "number" },
+];
+
+/** The statement that changes `a_flag`'s column DEFAULT, on the servers that can alter one in place. */
+const SET_FLAG_DEFAULT: Partial<Record<string, string>> = {
+  postgresql: "ALTER TABLE {t} ALTER COLUMN a_flag SET DEFAULT false",
+  mysql: "ALTER TABLE {t} ALTER COLUMN a_flag SET DEFAULT 0",
+};
+
+/** The statement that drops the index `name` from `{t}`, as each dialect spells it. */
+function dropIndexSql(dialect: string, name: string): string {
+  return dialect === "mysql"
+    ? `DROP INDEX ${name} ON {t}`
+    : `DROP INDEX "${name}"`;
+}
+
+for (const dialect of getConfiguredTestDialects()) {
+  describe(`a Builder field group's generator-decided index and default — ${dialect}`, () => {
+    const slug = `decided_${dialect.slice(0, 2)}`;
+    const table = resolveComponentTableName(slug);
+
+    /** A Builder-made group with the fields above, altered by `statements`, and its reconcile. */
+    async function reconcileAfter(...statements: string[]) {
+      current = await createTestNextly({ dialect });
+      await current.nextly.fieldGroups.create({
+        slug,
+        label: "Decided",
+        fields: GENERATOR_DECIDED,
+      });
+      for (const statement of statements) {
+        await current.adapter.executeQuery(statement.replaceAll("{t}", table));
+      }
+      const { reconcileFieldGroup } = await import(
+        "../services/field-group-reconcile-service"
+      );
+      return reconcileFieldGroup({
+        registry: current.getService("fieldGroupRegistryService"),
+        adapter: current.adapter,
+        logger: current.getService("logger"),
+        slug,
+      });
+    }
+
+    it("reports nothing to repair for a single reference and a checkbox default", async () => {
+      const report = await reconcileAfter();
+
+      expect(report.removed.map(r => r.fieldName)).toEqual([]);
+      expect(report.repaired.map(r => `${r.fieldName}.${r.attribute}`)).toEqual(
+        []
+      );
+      expect(report.adopted.map(a => a.fieldName)).toEqual([]);
+      expect(report.unchanged).toBe(true);
+    });
+
+    // The break-checks: each of these is a table that no longer matches the definition, and the
+    // healthy answer above must not have been bought by ceasing to look.
+    it("still records an index the definition does not ask for", async () => {
+      const report = await reconcileAfter(
+        `CREATE INDEX extra_${slug}_count ON {t} (a_count)`
+      );
+
+      expect(report.repaired.map(r => `${r.fieldName}.${r.attribute}`)).toEqual(
+        ["a_count.index"]
+      );
+    });
+
+    it("refuses a single reference whose index is gone, naming the field", async () => {
+      await expect(
+        reconcileAfter(
+          dropIndexSql(dialect, indexNameForColumn(table, "a_ref"))
+        )
+      ).rejects.toMatchObject({
+        code: "CONFLICT",
+        message: expect.stringContaining('"a_ref"'),
+      });
+    });
+
+    const setDefault = SET_FLAG_DEFAULT[dialect];
+    // SQLite cannot change a column's DEFAULT without rebuilding the table, so it is asked only on
+    // the servers.
+    it.skipIf(setDefault === undefined)(
+      "refuses a checkbox column whose default differs from the declared one",
+      async () => {
+        await expect(reconcileAfter(setDefault ?? "")).rejects.toMatchObject({
+          code: "CONFLICT",
+          message: expect.stringContaining('"a_flag"'),
+        });
+      }
+    );
   });
 }
