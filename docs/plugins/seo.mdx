@@ -1188,10 +1188,13 @@ A page is described as one linked graph, each node naming the others by `@id`:
   a page built in code goes by), so a post reads Home › Blog › the post. A part of the address that
   holds no page gets no step, since a trail leads only through pages a visitor can open;
 - the page's **subject**, as its type describes it (`<address>#<type>`), and, where the page lists
-  entries, the list. Questions and answers are described only on a page whose type is Questions
-  and answers, chosen for its content type, for the page or by its route: a page of any other
-  type gets no `FAQPage` markup, whatever questions it shows. The choosers list it as
-  "Questions and answers · no longer shown by Google".
+  entries, the list. Questions and answers are described as a page's subject on a page whose type
+  is Questions and answers, chosen for its content type, for the page or by its route. The choosers
+  list it as "Questions and answers · no longer shown by Google";
+- an **FAQ section** (`<address>#faq`), where one is declared for a page of any other type: the
+  questions it shows as an `FAQPage` that is part of the page, named by the page's `hasPart`. See
+  [An FAQ section on any page](#an-faq-section-on-any-page). A page nobody declared one for gets no
+  `FAQPage` markup, whatever questions it shows.
 
 The home page is the start of every trail, so it has none; it is named by its whole title, and
 what it describes, such as the site's app, by the brand's name. Every address is spelled as the
@@ -1350,9 +1353,10 @@ export const route = createPublicContentRoute({
 `items` lists the entries a page shows, in order, each `{ name, url }`: the page is then a
 Collection page with an `ItemList` as its main subject, unless somebody chose another type.
 `questions` lists the questions it answers, each `{ question, answer }`: on a Questions and answers
-page they are its main subject. On a page of any other type they are not described: no `FAQPage`
-is added beside it, since Google no longer shows these results and markup nobody chose for a page
-is markup made up for it. Questions can also come from a field: a list named `faq`, `faqs` or `questions`, each
+page they are its main subject. On a page of any other type they are described only where an
+[FAQ section](#an-faq-section-on-any-page) is declared for it (`faqSection: true`, or for its
+content type); otherwise no `FAQPage` is added, since markup nobody chose for a page is markup made
+up for it. Questions can also come from a field: a list named `faq`, `faqs` or `questions`, each
 item with its `question` and its `answer` (plain or rich text). Give only what the page shows:
 Google asks that structured data describe content a visitor can see, and the plugin never makes a
 question, a list or a rating up.
@@ -1391,6 +1395,34 @@ Single, and [`seoStructuredData`](#pages-built-in-code) for a page built in code
 Page Builder routes (`createBlocksPage`, `createSinglePage`, `createContentPage` and their public
 forms) place it themselves, before the page's blocks, so a page built in the Page Builder needs
 nothing more.
+
+#### An FAQ section on any page
+
+A pricing page, a home page or a feature page often ends with a few questions and answers. The page
+stays what it is (a web page, an About page, an app), and its questions can still be described for
+search engines and AI tools: declare an FAQ section, and the plugin adds an `FAQPage` node for the
+questions (`<address>#faq`) that is part of the page (`isPartOf`), and the page names it as a part
+of itself (`hasPart`).
+
+Declare it in one of two places:
+
+- **By the route**, for one page or a page built in code: `faqSection: true` in
+  `structuredDataHints`, beside the `questions` it shows, as in the route above:
+  `structuredDataHints: async entry => ({ questions: await questionsShownOn(String(entry.slug)), faqSection: true })`.
+  A page built in code passes the same in
+  `seoStructuredData`'s options:
+  `seoStructuredData("/pricing", { structuredDataHints: { questions, faqSection: true } })`.
+
+- **For a content type**, for every page of it: in **SEO › Settings › Content types**, open the type
+  and switch on **Questions on its pages are an FAQ section**; or in code,
+  `structuredData: { types: { pages: { faqSection: true } } }`.
+
+The questions are read as a Questions and answers page reads them: the route's `questions` where it
+gives any, else the field the type maps for Questions and answers, else a field named `faq`, `faqs`
+or `questions`. A page that declares a section but shows no questions gets none, and nothing points
+at it. A Questions and answers page needs no section: its questions are already its subject, so a
+declaration there adds nothing. Google no longer shows FAQ rich results, so the section is for other
+search engines and AI tools that read the page's structured data.
 
 ## Redirects
 

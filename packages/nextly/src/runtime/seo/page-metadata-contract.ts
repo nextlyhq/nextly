@@ -116,6 +116,13 @@ export interface PageStructuredDataHints {
   items?: readonly PageListItem[];
   /** The questions the page answers, in the order shown. */
   questions?: readonly PageQuestion[];
+  /**
+   * Whether the page's questions are a section of it, such as an FAQ block
+   * under a pricing table, rather than its whole subject: a provider then
+   * describes them as a part of the page, whatever kind of page it is. The
+   * questions are the ones above, or the ones the page's own fields hold.
+   */
+  faqSection?: boolean;
 }
 
 /** @experimental What a resolver is asked about one page. */

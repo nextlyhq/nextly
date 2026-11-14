@@ -43,6 +43,7 @@ import type {
   StructuredDataDefaultAuthor,
   StructuredDataPerson,
   StructuredDataRules,
+  StructuredDataTypeRule,
 } from "./rules";
 import {
   dateOf,
@@ -304,6 +305,8 @@ interface PageFacts {
   document: Readonly<Record<string, unknown>>;
   origin: string;
   mapping: DetailMapping;
+  /** The page's content type's rule, where the site gives one. */
+  rule: StructuredDataTypeRule | undefined;
   rules: StructuredDataRules;
   /** What the route says about the page, where it says anything. */
   hints: PageStructuredDataHints;
@@ -415,6 +418,37 @@ function questionsFor(facts: PageFacts, read: DetailRead): Question[] {
     each => each.question.trim() !== "" && each.answer.trim() !== ""
   );
   return fromRoute.length > 0 ? [...fromRoute] : questionsOf(read.value);
+}
+
+/**
+ * The page's FAQ section, where its route or its content type declares one:
+ * its questions as an `FAQPage` that is a part of the page (`<address>#faq`),
+ * so a page of any kind can carry the questions it shows without changing
+ * what kind of page it is. Its questions are read as a Questions and answers
+ * page reads them (`questionsValue`), by that type's mapping, so the two
+ * cannot read a page differently. None where nobody declared one, where the
+ * page shows no questions, and on a Questions and answers page, whose
+ * questions are already its own subject.
+ */
+function faqSectionOf(
+  facts: PageFacts,
+  page: DescribedPage,
+  type: StructuredDataTypeKey
+): StructuredDataNode | undefined {
+  const declared =
+    facts.hints.faqSection === true || facts.rule?.faqSection === true;
+  if (!declared || type === "faqPage") return undefined;
+  const source = facts.rule?.details?.faqPage?.questions;
+  const read = readDetail(facts.document, "questions", source);
+  const questions = questionsValue(facts, read);
+  if (questions === undefined) return undefined;
+  return node({
+    "@type": "FAQPage",
+    "@id": `${page.url}#faq`,
+    isPartOf: ref(page.id),
+    mainEntity: questions,
+    inLanguage: page.language,
+  });
 }
 
 /** The page's questions as structured data states them; nothing for none. */
@@ -1146,9 +1180,10 @@ function mainEntityOf(
  * The page's nodes: the page, as its own kind where it is described as one
  * and has what it needs, else a web page; its trail; the entries it lists;
  * and its subject, where it is described as a thing and has what that needs.
- * Questions and answers are described only as the main subject of a page
- * whose kind someone chose as Questions and answers: a page of another kind
- * gets no `FAQPage` beside it, whatever questions its route or fields hold,
+ * Questions and answers are described as the main subject of a page whose
+ * kind someone chose as Questions and answers, or as an FAQ section of a page
+ * of another kind where its route or content type declares one: never on a
+ * page nobody declared them for, whatever questions its route or fields hold,
  * since markup nobody chose is markup the plugin made up.
  */
 async function pageNodesOf(
@@ -1167,6 +1202,7 @@ async function pageNodesOf(
       ? undefined
       : subjectNode(type, values, page, { organization: site.organizationId });
   const aboutBrand = ABOUT_THE_BRAND.includes(type) && described;
+  const faqSection = faqSectionOf(facts, page, type);
   const pageNode = node({
     "@type": definition.page && described ? definition.schemaType : "WebPage",
     "@id": page.id,
@@ -1180,13 +1216,19 @@ async function pageNodesOf(
     datePublished: page.published,
     dateModified: page.modified,
     mainEntity: mainEntityOf(description, { subject, itemList }, site),
+    hasPart: refTo(faqSection),
     inLanguage: page.language,
   });
   // The brand's founders are described where the site says who it is: the
   // founders are given only for a described About page.
-  return [pageNode, breadcrumb, itemList, subject, ...founders].filter(
-    each => each !== undefined
-  );
+  return [
+    pageNode,
+    breadcrumb,
+    itemList,
+    subject,
+    faqSection,
+    ...founders,
+  ].filter(each => each !== undefined);
 }
 
 /** The details a type is missing, the name a described thing needs first. */
@@ -1425,7 +1467,8 @@ async function graphOf(
  * what its route says about it: the organisation and website from the brand
  * facts, the page, a breadcrumb trail from the site's home, the entries it
  * lists, and the page's subject as its chosen type describes it, the
- * questions it answers where that type is Questions and answers. A type missing a detail it needs is left out, and
+ * questions it answers where that type is Questions and answers or where an
+ * FAQ section is declared for it. A type missing a detail it needs is left out, and
  * listed as a problem.
  */
 export async function buildStructuredData(
@@ -1452,6 +1495,7 @@ export async function buildStructuredData(
       document,
       origin,
       mapping: rule?.details?.[decided.type] ?? {},
+      rule,
       rules,
       hints,
       contentDate: once(() => contentDateOfPage(ctx, input, document)),
