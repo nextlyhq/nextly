@@ -25,6 +25,10 @@ import type { DynamicFieldGroupInsert } from "../../../schemas/dynamic-field-gro
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
+import {
+  builtByFor,
+  isCodeOwned,
+} from "../../schema/pipeline/registered-collections";
 import type { SupportedDialect } from "../../schema/services/field-column-descriptor";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
@@ -32,7 +36,6 @@ import type { FieldGroupRegistryService } from "./field-group-registry-service";
 import type { FieldGroupSchemaService } from "./field-group-schema-service";
 import {
   planFieldGroupReconcile,
-  type ExpectedColumnDefault,
   type ReconcileAdoption,
   type ReconcileAwaitingColumn,
   type ReconcileBlocker,
@@ -210,16 +213,6 @@ async function preBuilderSaveColumnTypeResolver(
 }
 
 /**
- * The DEFAULT each builder would give a field, alongside the type resolver above.
- *
- * Split from it rather than folded in because the two answers have different shapes: a type is a
- * value or nothing, while a default has to distinguish "writes none" from "cannot say" — and the
- * companion is exactly the case that needs the distinction. Its columns are rendered by the
- * localization path, which this module does not model defaults for, so a companion-resident column
- * reports `known: false` and is skipped rather than being claimed to have no default. Claiming
- * that would turn every localized checkbox carrying a default into a refusal.
- */
-/**
  * The DEFAULT each system column is created with, asked of the code that creates them.
  *
  * The desired-state skeleton records no default for any system column, so it cannot answer this —
@@ -235,21 +228,23 @@ async function structuralColumnDefaults(
   return new FieldGroupSchemaService(dialect).structuralColumnDefaults();
 }
 
-async function expectedColumnDefaultResolver(
+/**
+ * The DEFAULT the field group's creator writes for a field's main column, or `undefined` where it
+ * writes none.
+ *
+ * Accepted beside the default a table built from the definition carries, which the planner asks of
+ * the desired-table builder: a Builder save writes no DEFAULT for a user column, while the creator,
+ * run by `nextly db:sync` and by a create with no save writer, writes a checkbox's. Tables of both
+ * kinds exist, so either is the field's default.
+ */
+async function creatorColumnDefaultResolver(
   dialect: SupportedDialect
-): Promise<
-  (field: FieldDefinition, table: ReconcileTable) => ExpectedColumnDefault
-> {
+): Promise<(field: FieldDefinition) => string | undefined> {
   const { FieldGroupSchemaService } = await import(
     "./field-group-schema-service"
   );
   const creator = new FieldGroupSchemaService(dialect);
-
-  return (field, table) => {
-    if (table === "companion") return { known: false };
-    const value = creator.columnDefaultFor(asCreatorField(field));
-    return value === null ? { known: true } : { known: true, value };
-  };
+  return field => creator.columnDefaultFor(asCreatorField(field)) ?? undefined;
 }
 
 /**
@@ -386,7 +381,10 @@ async function assessFieldGroupReconcile(
     typeColumn,
     expectedColumnType: await expectedColumnTypeResolver(dialect),
     preBuilderSaveColumnType: await preBuilderSaveColumnTypeResolver(dialect),
-    expectedColumnDefault: await expectedColumnDefaultResolver(dialect),
+    creatorColumnDefault: await creatorColumnDefaultResolver(dialect),
+    // Whose column rules built the table, read from the row as every other reader of the registry
+    // reads it, so the indexes a field implies are judged by the rules that made its column.
+    builtBy: builtByFor("fieldGroup", !isCodeOwned(existing)),
     structuralColumnDefaults: await structuralColumnDefaults(dialect),
   });
 

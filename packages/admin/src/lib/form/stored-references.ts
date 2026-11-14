@@ -59,10 +59,16 @@ interface StoredLink {
 }
 
 /**
- * A depth-0 value read as a link: a bare id, or the `{ relationTo, value }`
- * pair a field naming several collections stores.
+ * A depth-0 value read as a link: a bare id, the `{ relationTo, value }` pair
+ * a field naming several collections stores, or the object a link inside a
+ * group or a repeater may be stored as, which names it by its `id`. The read
+ * gives such a container as stored, and an older save could store the media
+ * object it was sent there rather than the id.
  */
 function storedLinkOf(value: unknown): StoredLink | undefined {
+  if (isRecord(value) && typeof value.relationTo !== "string") {
+    return storedLinkOf(idOf(value.id));
+  }
   const id = idOf(value);
   if (id !== undefined) {
     return { key: id, placeholder: { id, [RESTRICTED_REFERENCE]: true } };
@@ -423,8 +429,9 @@ function writableField(field: FieldConfig, value: unknown): unknown {
  * repeaters and field groups (dynamic zones included), which is everywhere
  * {@link withStoredReferences} puts one: a
  * JSON value that happens to carry the marker key is the author's content and
- * is sent as it is. The server reduces a related object to its id at the top
- * level, but not an upload inside a group or a repeater.
+ * is sent as it is. The server reduces a populated row or media object to its
+ * id at any depth, but a server older than that stored an upload inside a group
+ * or a repeater as it was sent, so the reference is not left to it.
  */
 export function withoutPlaceholders<T extends Doc>(
   fields: FieldConfig[],
