@@ -85,8 +85,9 @@ test.describe("a past version in the editor", () => {
     ).toBeVisible();
 
     // Back to current and Restore this version stand where Save and Publish
-    // do; nothing that would act on the live document stays in view.
-    const header = page.locator("main");
+    // do, in the admin's top bar, where an open document draws its controls;
+    // nothing that would act on the live document stays in view.
+    const header = page.getByRole("banner");
     await expect(
       header.getByRole("button", { name: "Restore this version" })
     ).toBeVisible();
