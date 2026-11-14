@@ -131,11 +131,27 @@ async function linkedCopies(
 }
 
 /**
+ * Whether a page may be rendered to make its copy: only where the site
+ * names its own addresses (a production address, or the configured
+ * origin), so a listed address is one the site chose, never the host a
+ * request named, and no request can send the site to fetch another host.
+ * Serving a copy, llms.txt and a page's head all ask this, so none links a
+ * rendered copy that is not served.
+ */
+async function rendersPages(
+  ctx: PluginContext,
+  config: AiOutputsConfig
+): Promise<boolean> {
+  return (await siteOriginFor(undefined, ctx, config)) !== undefined;
+}
+
+/**
  * Each listed page's title and description as the public may read them,
  * and whether the public may read it at all, by its place in `pages`. A page
  * built in code has no document: its head is the SEO set for its address,
  * which every visitor's page already carries, and its copy is made from the
- * page as it renders, so the public may read it.
+ * page as it renders, so the public may read it wherever the site's pages
+ * may be rendered.
  */
 async function listedHeads(
   ctx: PluginContext,
@@ -151,12 +167,13 @@ async function listedHeads(
   );
   const heads = await publicHeads(ctx, pages, readable, readRules);
   const codeHeads = await codeHeadsOf(ctx, config, readRules);
+  const renders = await rendersPages(ctx, config);
   return at => {
     const page = pages[at];
     if (page === undefined) return { readable: false };
     if (page.holder.collection === codeSlug) {
-      // Its copy is made from the page as it renders, so it links its copy.
-      return { ...codeHeads.get(page.path), readable: true };
+      // Its copy is made from the page as it renders, where it may be.
+      return { ...codeHeads.get(page.path), readable: renders };
     }
     return {
       ...heads.get(at),
@@ -496,10 +513,8 @@ const holdsWords = (copy: string): boolean =>
  * its published document, read as the public reads it. The front matter is
  * the head the public may read, and the sitemap's last change.
  *
- * A page is rendered only where `render` says the site names its own
- * addresses (a production address, or the configured origin): only then is
- * the listed address one the site chose, never the host a request named,
- * so no request can send the site to fetch another host.
+ * A page is rendered only where `render` says it may be
+ * ({@link rendersPages}).
  */
 async function copyOf(
   ctx: PluginContext,
@@ -662,6 +677,9 @@ export async function servedCopyAddress(
     const url = new URL(path, loc);
     const page = await copyServedAt(ctx, url, loc, config);
     if (page === null) continue;
+    if (page.holder.collection === codePagesSlug(ctx)) {
+      return (await rendersPages(ctx, config)) ? url.href : undefined;
+    }
     return (await publicDocuments([page])).has(readingKey(page))
       ? url.href
       : undefined;
@@ -688,8 +706,7 @@ async function plainCopyAt(
   const candidates = atPage ? [url.pathname] : pagesOfCopy(url.pathname);
   const page = await pageAsked(ctx, url, config, candidates, atPage);
   if (page === null) return null;
-  const named = await siteOriginFor(url.origin, ctx, config);
-  const body = await copyOf(ctx, page, config, named !== undefined);
+  const body = await copyOf(ctx, page, config, await rendersPages(ctx, config));
   return body === null ? null : { body, page, llmsTxt: rules.llmsTxt === true };
 }
 
