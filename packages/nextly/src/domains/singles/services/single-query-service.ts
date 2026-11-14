@@ -973,17 +973,16 @@ export class SingleQueryService extends BaseService {
     // The snapshot stores JSON-backed fields serialized and relations as ids,
     // exactly as the live row does, so the same stages restore both.
     let overlaid = this.deserializeJsonFields(shaped, singleMeta.fields);
-    overlaid = await this.readUploadFields(
-      overlaid,
-      singleMeta.fields,
-      options
-    );
+    // The references the row holds, those inside a group with no name among them, as the live
+    // assembly reads them (`fieldsStoredOnRow`), so a draft and the live document match.
+    const rowFields = fieldsStoredOnRow(singleMeta.fields);
+    overlaid = await this.readUploadFields(overlaid, rowFields, options);
     // The SAME context the live document's relationships were read under,
     // so a related row is judged identically whether it arrived through the
     // live row or through the draft that replaces it.
     overlaid = await this.expandRelationshipFields(
       overlaid,
-      singleMeta.fields,
+      rowFields,
       options.depth,
       this.relatedRowAccess(
         options,

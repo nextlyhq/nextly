@@ -3807,7 +3807,12 @@ export class CollectionMutationService extends BaseService {
     fields: FieldDefinition[]
   ): Record<string, unknown> {
     const componentFieldData: Record<string, unknown> = {};
-    for (const field of fields) {
+    // The field groups stored at this level, those inside a group with no name among them, as
+    // the field-group save writes them (`directFieldGroupFields`). Left in the row's values, one
+    // named a column the row does not have, and its instances were never saved.
+    for (const field of addressableFields(
+      fields
+    ) as unknown as FieldDefinition[]) {
       if (isFieldGroupField(field) && data[field.name] !== undefined) {
         componentFieldData[field.name] = data[field.name];
         delete data[field.name];

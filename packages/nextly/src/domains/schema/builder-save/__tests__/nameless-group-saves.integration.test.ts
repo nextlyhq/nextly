@@ -826,5 +826,84 @@ describe.each(getConfiguredTestDialects())(
         ).toISOString()
       ).toBe("2026-11-14T09:00:00.000Z");
     });
+
+    it("expands a relationship inside the group on a collection's reads, one entry and a list", async () => {
+      const t = await singleApp();
+      await writeCollectionSave(deps(t), {
+        slug: "posts",
+        previous: null,
+        entity: collection("posts", [
+          text("title"),
+          {
+            type: "group",
+            label: "Byline",
+            fields: [
+              { name: "owner", type: "relationship", relationTo: "people" },
+            ],
+          } as Field,
+        ]),
+        change: "create",
+      });
+      const person = await t.nextly.create({
+        collection: "people",
+        data: { name: "Ana" },
+      });
+      const id = String(person.item.id);
+      const post = await t.nextly.create({
+        collection: "posts",
+        data: { title: "First", owner: id },
+      });
+
+      // Expanded at depth as a relationship beside the group is, on the detail read and on the
+      // list read, which expands a page of entries in one batch.
+      const expected = { owner: expect.objectContaining({ id, name: "Ana" }) };
+      expect(
+        await t.nextly.findByID({
+          collection: "posts",
+          id: String(post.item.id),
+          depth: 1,
+        })
+      ).toMatchObject(expected);
+      const listed = await t.nextly.find({ collection: "posts", depth: 1 });
+      expect(listed.items).toEqual([expect.objectContaining(expected)]);
+    });
+
+    it("saves a field group placed inside the group on a collection's entry", async () => {
+      const t = await singleApp();
+      await dispatchComponents(
+        "createComponent",
+        {},
+        {
+          slug: "meta",
+          label: "Meta",
+          fields: [{ name: "note", type: "text" }],
+        }
+      );
+      await writeCollectionSave(deps(t), {
+        slug: "posts",
+        previous: null,
+        entity: collection("posts", [
+          text("title"),
+          {
+            type: "group",
+            label: "Byline",
+            fields: [{ name: "promo", type: "component", component: "meta" }],
+          } as Field,
+        ]),
+        change: "create",
+      });
+
+      // The field group's value is stored as its instance, not left on the row, and read back.
+      const post = await t.nextly.create({
+        collection: "posts",
+        data: { title: "First", promo: { note: "kept" } },
+      });
+      expect(
+        await t.nextly.findByID({
+          collection: "posts",
+          id: String(post.item.id),
+        })
+      ).toMatchObject({ promo: { note: "kept" } });
+    });
   }
 );
