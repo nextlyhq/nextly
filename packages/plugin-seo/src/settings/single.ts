@@ -164,6 +164,12 @@ export function seoSettingsSingle(): SingleConfig {
       // The optional connections and outputs, each off until switched on.
       checkbox({ name: "indexNow", label: "IndexNow" }),
       checkbox({ name: "llmsTxt", label: "llms.txt" }),
+      // Every listed page's words in one file, beside llms.txt; off until
+      // switched on.
+      checkbox({ name: "llmsFullTxt", label: "llms-full.txt" }),
+      // What the site tells AI tools in its own words, after llms.txt's
+      // summary.
+      textarea({ name: "llmsIntro", label: "What AI tools should know" }),
       checkbox({
         name: "plainTextCopies",
         label: "Plain-text copies of pages",

@@ -589,6 +589,61 @@ describe.each(getConfiguredTestDialects())(
       ).toBeUndefined();
     });
 
+    it("serves llms-full.txt, every listed page's words in one file, only beside llms.txt", async () => {
+      const t = await boot(dialect);
+      await post(t, "hello", "published", {
+        excerpt: "A short hello.",
+        body: body(paragraph(words("Rockets go up."))),
+        internal: "Staff only.",
+      });
+      await post(t, "unfinished", "draft", {
+        body: body(paragraph(words("Not yet."))),
+      });
+      await t.nextly.create({
+        collection: "members",
+        data: { title: "Secret plans", slug: "plans", status: "published" },
+      });
+      await switches(t, {
+        llmsTxt: true,
+        llmsIntro: "Ask us about rockets.\n# Not a heading",
+      });
+      expect((await rootFile("llms-full.txt")).status).toBe(404);
+      expect((await rootFile("llms.txt")).body).not.toContain("llms-full.txt");
+      expect((await rootFile("llms.txt")).body).toContain(
+        "> Acme makes rockets.\n\nAsk us about rockets.\n\\# Not a heading\n"
+      );
+
+      await switches(t, {
+        llmsTxt: true,
+        llmsFullTxt: true,
+        llmsIntro: "Ask us about rockets.",
+      });
+      const full = await rootFile("llms-full.txt");
+      expect(full.status).toBe(200);
+      expect(full.type).toBe("text/plain; charset=utf-8");
+      expect(
+        full.body.startsWith(
+          "# Acme\n\n> Acme makes rockets.\n\nAsk us about rockets.\n\n---\n\n"
+        )
+      ).toBe(true);
+      expect(full.body).toContain(
+        `# Post hello | Acme\n\nSource: ${SITE}/blog/hello\n\nA short hello.\n\nRockets go up.`
+      );
+      // What the public may not read is named by its address alone.
+      expect(full.body).toContain(`Source: ${SITE}/members/plans`);
+      expect(full.body).not.toContain("Secret plans");
+      expect(full.body).not.toContain("Staff only.");
+      expect(full.body).not.toContain("Not yet.");
+      // llms.txt points to it.
+      expect((await rootFile("llms.txt")).body).toContain(
+        `[llms-full.txt](${SITE}/llms-full.txt)`
+      );
+
+      // Not without llms.txt, though its own switch is on.
+      await switches(t, { llmsTxt: false, llmsFullTxt: true });
+      expect((await rootFile("llms-full.txt")).status).toBe(404);
+    });
+
     it("tells the public nothing it may not read, in llms.txt or a copy's heading", async () => {
       const t = await boot(dialect);
       await t.nextly.create({

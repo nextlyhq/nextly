@@ -59,6 +59,13 @@ export interface SiteRules {
   indexNow?: boolean;
   /** Whether `/llms.txt` is served: only once switched on. */
   llmsTxt?: boolean;
+  /**
+   * Whether `/llms-full.txt`, every listed page's words in one file, is
+   * served: only once switched on, and only beside llms.txt.
+   */
+  llmsFullTxt?: boolean;
+  /** What the site tells AI tools in its own words, at the top of llms.txt. */
+  llmsIntro?: string;
   /** Whether each listed page has a plain-text copy: only once switched on. */
   plainTextCopies?: boolean;
   /** The site's own robots.txt lines, where stored and passing their rule. */

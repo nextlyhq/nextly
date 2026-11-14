@@ -40,12 +40,18 @@ import type { ReadRules } from "../resolver/provider";
 import { TITLE_FIELDS } from "../settings/patterns";
 
 import { listedPageAt, listPages, type ListedPage } from "./listing";
-import { llmsTxt, type LlmsEntry } from "./llms-txt";
+import {
+  llmsFullTxt,
+  llmsTxt,
+  type LlmsEntry,
+  type LlmsFullPage,
+} from "./llms-txt";
 import {
   copyAddressOf,
   copyPathsOf,
   pagesOfCopy,
   plainCopyOf,
+  type CopyAbout,
   type CopyField,
 } from "./plain-copy";
 import { siteOriginFor } from "./site-origin";
@@ -127,6 +133,15 @@ async function linkedCopies(
   };
 }
 
+/** A listed page's head as the public may read it, and its published document. */
+interface ListedHead {
+  title?: string;
+  description?: string;
+  readable: boolean;
+  /** The published document, as the public reads it, where it may. */
+  document?: Record<string, unknown>;
+}
+
 /**
  * Each listed page's title and description as the public may read them,
  * and whether the public may read it at all, by its place in `pages`. A page
@@ -138,9 +153,7 @@ async function listedHeads(
   pages: readonly ListedPage[],
   config: AiOutputsConfig,
   readRules: ReadRules
-): Promise<
-  (at: number) => { title?: string; description?: string; readable: boolean }
-> {
+): Promise<(at: number) => ListedHead> {
   const codeSlug = codePagesSlug(ctx);
   const readable = await publicDocuments(
     pages.filter(page => page.holder.collection !== codeSlug)
@@ -153,9 +166,11 @@ async function listedHeads(
     if (page.holder.collection === codeSlug) {
       return { ...codeHeads.get(page.path), readable: false };
     }
+    const document = readable.get(readingKey(page));
     return {
       ...heads.get(at),
-      readable: readable.has(readingKey(page)),
+      readable: document !== undefined,
+      ...(document === undefined ? {} : { document }),
     };
   };
 }
@@ -202,11 +217,78 @@ export async function llmsTxtOf(
     };
   });
   return llmsTxt({
+    ...fileHeadOf(origin, rules),
+    ...(rules.llmsFullTxt === true
+      ? { fullTxt: new URL("/llms-full.txt", origin).href }
+      : {}),
+    entries,
+  });
+}
+
+/** What both llms files begin with: the site's name, summary and own words. */
+function fileHeadOf(
+  origin: string,
+  rules: SiteRules
+): { name: string; description?: string; intro?: string } {
+  return {
     name: rules.siteName ?? new URL(origin).host,
     ...(rules.description === undefined
       ? {}
       : { description: rules.description }),
-    entries,
+    ...(rules.llmsIntro === undefined ? {} : { intro: rules.llmsIntro }),
+  };
+}
+
+/**
+ * The llms-full.txt of the site at `origin`, or null unless both it and
+ * llms.txt are switched on: llms.txt's head, then every page llms.txt lists,
+ * in its order, with the words its plain-text copy holds. A page the public
+ * may not read, or one built in code, is named by its address alone. Each
+ * type's fields and every page's document are read once for the file.
+ */
+export async function llmsFullTxtOf(
+  ctx: PluginContext,
+  origin: string,
+  config: AiOutputsConfig,
+  rules: SiteRules
+): Promise<string | null> {
+  if (rules.llmsTxt !== true || rules.llmsFullTxt !== true) return null;
+  const readRules = onceEach(config.readRules);
+  const { pages } = await listPages(ctx, {
+    origin,
+    readRules,
+    ...(config.codeRoutes === undefined
+      ? {}
+      : { codeRoutes: config.codeRoutes }),
+    ...(config.collections === undefined
+      ? {}
+      : { collections: config.collections }),
+  });
+  const headOf = await listedHeads(ctx, pages, config, readRules);
+  const fields = new Map<string, readonly CopyField[] | undefined>();
+  const full: LlmsFullPage[] = [];
+  for (const [at, page] of pages.entries()) {
+    const head = headOf(at);
+    const { collection } = page.holder;
+    if (head.document !== undefined && !fields.has(collection)) {
+      fields.set(collection, await fieldsOf(ctx, collection));
+    }
+    full.push({
+      title: head.title ?? page.path,
+      url: page.loc,
+      ...(head.document === undefined
+        ? {}
+        : {
+            body: copyOfDocument(page, head.document, head.title, {
+              fields: fields.get(collection),
+            }),
+          }),
+    });
+  }
+  return llmsFullTxt({
+    ...fileHeadOf(origin, rules),
+    pages: full,
+    listUrl: new URL("/llms.txt", origin).href,
   });
 }
 
@@ -451,20 +533,8 @@ async function copyOf(
   const document = (await publicDocuments([page])).get(readingKey(page));
   if (document === undefined) return null;
   const head = await publicHead(ctx, page, document, readRules);
-  // The page's own title, as the page shows it, and the field it is in;
-  // else its head's, worked out from what the public may read.
-  const titleField = TITLE_FIELDS.find(
-    name => textOf(document[name]) !== undefined
-  );
-  const title =
-    titleField === undefined ? head.title : textOf(document[titleField]);
-  const fields = await fieldsOf(ctx, page.holder.collection);
-  return plainCopyOf({
-    ...(title === undefined ? {} : { title }),
-    ...(titleField === undefined ? {} : { titleField }),
-    document,
-    ...(fields === undefined ? {} : { fields }),
-    base: page.loc,
+  return copyOfDocument(page, document, head.title, {
+    fields: await fieldsOf(ctx, page.holder.collection),
     about: {
       ...(head.title === undefined ? {} : { title: head.title }),
       ...(head.description === undefined
@@ -475,6 +545,36 @@ async function copyOf(
         ? {}
         : { lastUpdated: page.lastModified }),
     },
+  });
+}
+
+/**
+ * A page's plain-text copy from its published document: headed by the
+ * page's own title, as the page shows it (and the field it is in, said
+ * once), else `headTitle`, worked out from what the public may read; with
+ * front matter where `about` is given.
+ */
+function copyOfDocument(
+  page: ListedPage,
+  document: Record<string, unknown>,
+  headTitle: string | undefined,
+  {
+    fields,
+    about,
+  }: { fields?: readonly CopyField[] | undefined; about?: CopyAbout }
+): string {
+  const titleField = TITLE_FIELDS.find(
+    name => textOf(document[name]) !== undefined
+  );
+  const title =
+    titleField === undefined ? headTitle : textOf(document[titleField]);
+  return plainCopyOf({
+    ...(title === undefined ? {} : { title }),
+    ...(titleField === undefined ? {} : { titleField }),
+    document,
+    ...(fields === undefined ? {} : { fields }),
+    base: page.loc,
+    ...(about === undefined ? {} : { about }),
   });
 }
 

@@ -567,6 +567,19 @@ export function CrawlersTab({
         on={draft.llmsTxt}
         set={llmsTxt => change(current => ({ ...current, llmsTxt }))}
       />
+      <TextRow
+        label="What AI tools should know"
+        description="Shown under your site's name in llms.txt. Plain sentences and lists; no headings."
+        value={draft.llmsIntro}
+        multiline
+        onChange={llmsIntro => change(current => ({ ...current, llmsIntro }))}
+      />
+      <SwitchRow
+        label="llms-full.txt"
+        description={`Every listed page's words in one file at ${host}/llms-full.txt, for AI tools that read a whole site at once. Served only with llms.txt on. Off by default; on a large site it is cut at 5 MB.`}
+        on={draft.llmsFullTxt}
+        set={llmsFullTxt => change(current => ({ ...current, llmsFullTxt }))}
+      />
       <SwitchRow
         label="Plain-text copies"
         description="Adds a text version of each page, the same words people see, for AI tools. Off by default."
