@@ -76,6 +76,16 @@ const PAGES_INSPECTED = 10;
 /** How many pages and searches the report lists. */
 const REPORT_ROWS = 10;
 
+/**
+ * How long a report is answered again before Google is read afresh: six
+ * hours. Search Console's counts settle over about two days, so a fresher
+ * read says next to nothing new, while each read costs about fourteen calls
+ * to Google, ten of them page inspections counted against the URL Inspection
+ * quota of 2,000 a day for each property, and kept a person waiting on every
+ * visit to the Connections tab.
+ */
+const REPORT_KEPT_MS = 6 * 60 * 60 * 1000;
+
 /** What the connection reads with. */
 export interface SearchConsoleSetup {
   /** The Google sign-in the site names, or none where it names none. */
@@ -311,6 +321,8 @@ async function finish(
     );
     const email = emailOf(tokens.id_token);
     await writeConnections(ctx, {
+      // A new connection, perhaps another account's: never an older report.
+      searchConsoleReport: null,
       searchConsole: {
         refreshToken: tokens.refresh_token,
         ...(email === undefined ? {} : { email }),
@@ -337,12 +349,27 @@ async function finish(
 const dayBefore = (days: number): string =>
   new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
+/**
+ * The report kept from an earlier read, while it is for this property and
+ * younger than six hours; none otherwise.
+ */
+function freshReport(
+  kept: ConnectionSettings["searchConsoleReport"],
+  property: string
+): SearchConsoleReportBody | undefined {
+  if (kept === undefined || kept.property !== property) return undefined;
+  const age = Date.now() - Date.parse(kept.report.readAt);
+  // A time ahead of the clock is not trusted to be fresh.
+  return age >= 0 && age < REPORT_KEPT_MS ? kept.report : undefined;
+}
+
 /** What Search Console says about the site over the last 28 days. */
 async function report(
   ctx: PluginRouteContext,
   setup: SearchConsoleSetup
 ): Promise<SearchConsoleReportBody> {
-  const stored = (await readConnections(ctx)).searchConsole;
+  const connections = await readConnections(ctx);
+  const stored = connections.searchConsole;
   if (stored?.property === undefined) {
     throw NextlyError.notFound({
       message: "Search Console is not connected to the site's property.",
@@ -350,47 +377,53 @@ async function report(
     });
   }
   const { property } = stored;
+  const kept = freshReport(connections.searchConsoleReport, property);
+  if (kept !== undefined) return kept;
   const fetch = fetchOf(ctx);
   // Search Console's counts settle over about two days.
   const range = { from: dayBefore(30), to: dayBefore(3) };
   try {
+    const readAt = new Date().toISOString();
     const access = await renewAccess(
       fetch,
       clientOf(setup),
       stored.refreshToken
     );
-    const pages = await countBy(fetch, access, property, {
-      ...range,
-      dimension: "page",
-      limit: 250,
-    });
-    const queries = await countBy(fetch, access, property, {
-      ...range,
-      dimension: "query",
-      limit: REPORT_ROWS,
-    });
+    // Asked together: each waits on Google, and none needs another's answer.
+    const [pages, queries, clicks] = await Promise.all([
+      countBy(fetch, access, property, {
+        ...range,
+        dimension: "page",
+        limit: 250,
+      }),
+      countBy(fetch, access, property, {
+        ...range,
+        dimension: "query",
+        limit: REPORT_ROWS,
+      }),
+      // The property's own total: the pages are only the most visited.
+      totalClicks(fetch, access, property, range),
+    ]);
     const inspected = pages.slice(0, PAGES_INSPECTED);
-    const otherAddress: SearchConsoleReportBody["otherAddress"] = [];
-    for (const row of inspected) {
-      const { declared, chosen } = await canonicalsOf(
-        fetch,
-        access,
-        property,
-        row.key
-      );
-      if (chosen !== undefined && chosen !== (declared ?? row.key)) {
-        otherAddress.push({
-          page: row.key,
-          chosen,
-          ...(declared === undefined ? {} : { declared }),
-        });
-      }
-    }
-    await writeConnections(ctx, { searchConsoleFailed: null });
-    return {
+    // At most ten inspections, all at once, their answers in the pages' order.
+    const canonicals = await Promise.all(
+      inspected.map(row => canonicalsOf(fetch, access, property, row.key))
+    );
+    const otherAddress = inspected.flatMap((row, at) => {
+      const { declared, chosen } = canonicals[at] ?? {};
+      return chosen !== undefined && chosen !== (declared ?? row.key)
+        ? [
+            {
+              page: row.key,
+              chosen,
+              ...(declared === undefined ? {} : { declared }),
+            },
+          ]
+        : [];
+    });
+    const body: SearchConsoleReportBody = {
       ...range,
-      // The property's own total: the pages above are only the most visited.
-      clicks: await totalClicks(fetch, access, property, range),
+      clicks,
       pages: pages.slice(0, REPORT_ROWS).map(row => ({
         page: row.key,
         clicks: row.clicks,
@@ -403,7 +436,18 @@ async function report(
       })),
       otherAddress,
       checked: inspected.length,
+      readAt,
     };
+    // Kept only for the connection it was read through: one disconnected or
+    // made again while Google was being read keeps no report of the old one.
+    const now = (await readConnections(ctx)).searchConsole;
+    const same =
+      now?.property === property && now.refreshToken === stored.refreshToken;
+    await writeConnections(ctx, {
+      searchConsoleFailed: null,
+      ...(same ? { searchConsoleReport: { property, report: body } } : {}),
+    });
+    return body;
   } catch (error) {
     const message = failureMessage(error);
     ctx.logger.warn("Search Console could not be read", {
@@ -424,6 +468,7 @@ async function disconnect(ctx: PluginRouteContext): Promise<void> {
     searchConsole: null,
     searchConsolePending: null,
     searchConsoleFailed: null,
+    searchConsoleReport: null,
   });
   if (stored === undefined || ctx.fetch === undefined) return;
   try {
