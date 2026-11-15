@@ -16,10 +16,12 @@ import { dirname, resolve } from "node:path";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { PluginDefinition } from "../plugin-context";
 
+import { ADMIN_ROOT_MODULE } from "./admin-root-exports";
 import {
   buildImportMapArtifacts,
   configImportSpecifier,
 } from "./component-import-map";
+import { packageInstalled } from "./installed-package";
 import { unbackedContributions, unbackedPaths } from "./unbacked-contributions";
 
 /** Where the files were written, and which of them changed. */
@@ -76,7 +78,10 @@ export async function planComponentMapFiles(
       configImport,
       siteDashboard,
       siteCollections,
-      unbacked
+      unbacked,
+      // Read from the app's root, as its own imports resolve: the map imports and calls the
+      // admin only where the app can resolve it.
+      packageInstalled(ADMIN_ROOT_MODULE, cwd)
     ).map(async artifact => {
       const file = resolve(cwd, artifact.path);
       return {
