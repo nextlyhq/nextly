@@ -14,15 +14,14 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { packageInstalled } from "./installed-package";
 
-const SOURCE = fileURLToPath(
-  new URL("./installed-package.ts", import.meta.url)
-);
+// A file URL, not a path: on Windows the ESM loader reads `D:\...` as a URL
+// with the scheme `d:` and refuses it.
+const SOURCE = new URL("./installed-package.ts", import.meta.url).href;
 
 const made: string[] = [];
 afterEach(() => {
