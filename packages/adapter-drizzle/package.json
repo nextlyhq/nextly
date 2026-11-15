@@ -38,6 +38,11 @@
       "import": "./dist/schema-name.mjs",
       "require": "./dist/schema-name.cjs"
     },
+    "./serverless": {
+      "types": "./dist/serverless.d.ts",
+      "import": "./dist/serverless.mjs",
+      "require": "./dist/serverless.cjs"
+    },
     "./text-match": {
       "types": "./dist/text-match.d.ts",
       "import": "./dist/text-match.mjs",
