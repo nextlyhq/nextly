@@ -1279,3 +1279,159 @@ describe("planFieldGroupReconcile", () => {
     });
   });
 });
+
+/**
+ * A group with no name only lays fields out, and the fields inside it are stored on the field
+ * group's row. The planner matches each with its column there, keeps the definition in its own
+ * shape, and names the column a table made before such fields were stored is still to receive.
+ */
+describe("planFieldGroupReconcile — fields inside a group with no name", () => {
+  /** A group with no name holding `fields`. */
+  const laidOut = (fields: unknown[]): ReconcilableField =>
+    ({
+      type: "group",
+      label: "Layout",
+      fields,
+    }) as unknown as ReconcilableField;
+
+  /** The stored definition: a field beside the group, and two levels of groups with no name. */
+  const stored = (): ReconcilableField[] => [
+    { name: "title", type: "text" },
+    laidOut([
+      { name: "note", type: "text" },
+      laidOut([{ name: "count", type: "number", required: true }]),
+    ]),
+  ];
+
+  it("matches each field inside the group with its column and keeps the definition's shape", () => {
+    const fields = stored();
+    const result = plan({
+      storedFields: fields,
+      liveMain: liveTableFor(fields),
+    });
+
+    expect(result.unchanged).toBe(true);
+    expect(result.removed).toEqual([]);
+    expect(result.adopted).toEqual([]);
+    expect(result.awaitingColumns).toEqual([]);
+    expect(result.fields).toEqual(fields);
+  });
+
+  it("names a column the table does not hold yet, keeping its field, and the rest unchanged", () => {
+    const fields = stored();
+    // The table as an earlier version made it: a column for the field beside the group alone.
+    const result = plan({
+      storedFields: fields,
+      liveMain: liveTableFor([{ name: "title", type: "text" }]),
+    });
+
+    expect(result.awaitingColumns).toEqual([
+      { fieldName: "note", columnName: "note" },
+      { fieldName: "count", columnName: "count" },
+    ]);
+    expect(result.removed).toEqual([]);
+    expect(result.adopted).toEqual([]);
+    expect(result.blockers).toEqual([]);
+    expect(result.unchanged).toBe(true);
+    expect(result.fields).toEqual(fields);
+  });
+
+  it("refuses a column awaited inside the group beside one no field describes", () => {
+    // `note` may have been renamed to `memo`, or never made: the schema cannot say which, so the
+    // repair refuses rather than adopt `memo` under a guessed type beside a field left waiting.
+    const fields = stored();
+    const result = plan({
+      storedFields: fields,
+      liveMain: liveTableFor([
+        { name: "title", type: "text" },
+        { name: "memo", type: "text" },
+        { name: "count", type: "number", required: true },
+      ]),
+    });
+
+    expect(result.blockers).toEqual([
+      expect.objectContaining({
+        kind: "ambiguous-rename",
+        fieldName: "note",
+        columnName: "memo",
+      }),
+    ]);
+  });
+
+  it("repairs a field inside the group in its place", () => {
+    const fields = stored();
+    // The live `count` column takes nulls, so the field it stores is no longer required.
+    const live = liveTableFor(fields);
+    const count = live.columns.find(column => column.name === "count")!;
+    count.nullable = true;
+
+    const result = plan({ storedFields: fields, liveMain: live });
+
+    expect(result.repaired).toEqual([
+      expect.objectContaining({ fieldName: "count", attribute: "required" }),
+    ]);
+    const inner = (result.fields[1] as unknown as { fields: unknown[] })
+      .fields[1] as { fields: ReconcilableField[] };
+    expect(inner.fields[0]).toMatchObject({ name: "count", required: false });
+    // The stored definition itself is left as it was.
+    expect(
+      (
+        (fields[1] as unknown as { fields: unknown[] }).fields[1] as {
+          fields: ReconcilableField[];
+        }
+      ).fields[0]
+    ).toMatchObject({ required: true });
+  });
+
+  it("adopts an unknown live column beside the group, not inside it", () => {
+    const fields = stored();
+    const live = liveTableFor([...fields, { name: "extra", type: "text" }]);
+
+    const result = plan({ storedFields: fields, liveMain: live });
+
+    expect(result.adopted.map(entry => entry.columnName)).toEqual(["extra"]);
+    expect(result.fields.slice(0, 2)).toEqual(fields);
+    expect(result.fields[2]).toMatchObject({ name: "extra" });
+  });
+
+  it("keeps a many-to-many relationship, whose values a field group keeps on its row", () => {
+    // A collection keeps such links in a junction table; a field group has none, and keeps the
+    // list in a column of its own row, inside a group with no name as beside it.
+    const tags = {
+      name: "tags",
+      type: "relationship",
+      options: { target: "tags", relationType: "manyToMany" },
+    } as unknown as ReconcilableField;
+    const besideTags = {
+      ...tags,
+      name: "labels",
+    } as unknown as ReconcilableField;
+    const fields = [besideTags, laidOut([tags])];
+    const result = plan({
+      storedFields: fields,
+      liveMain: liveTableFor(fields),
+    });
+
+    expect(result.removed).toEqual([]);
+    expect(result.adopted).toEqual([]);
+    expect(result.awaitingColumns).toEqual([]);
+    expect(result.unchanged).toBe(true);
+    expect(result.fields).toEqual(fields);
+  });
+
+  it("expects a text inside the group on the main table of a translated field group", () => {
+    // Which fields are translated is read from the declared list, so the text inside the group
+    // stays on the row however the field group is translated, and its place needs no repair.
+    const fields = stored();
+    const result = plan({
+      storedFields: fields,
+      liveMain: liveTableFor(fields, { localized: true }),
+      liveCompanion: companionWith([{ name: "title" }]),
+      storedLocalized: true,
+    });
+
+    expect(result.repaired).toEqual([]);
+    expect(result.blockers).toEqual([]);
+    expect(result.unchanged).toBe(true);
+  });
+});

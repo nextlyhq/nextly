@@ -151,6 +151,9 @@ const DATABASE_TRACING_INCLUDES = [
   "./node_modules/@nextlyhq/adapter-sqlite/**/*",
   "./node_modules/@nextlyhq/adapter-drizzle/**/*",
   "./node_modules/drizzle-orm/**/*",
+  // The PostgreSQL and MySQL adapters' optional peer, imported at connect on
+  // Vercel to attach their pool; matches nothing in an app without it.
+  "./node_modules/@vercel/functions/**/*",
 ];
 
 /**

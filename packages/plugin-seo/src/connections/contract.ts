@@ -103,6 +103,8 @@ export interface SearchConsoleReportBody {
   otherAddress: SearchConsoleCanonicalRow[];
   /** How many pages were checked for another address. */
   checked: number;
+  /** When Google was read for this report, as an ISO time. */
+  readAt: string;
 }
 
 /**

@@ -23,13 +23,15 @@ import {
 
 /**
  * How a page stands, as its Status says: SEO off where its type's SEO is
- * switched off; else the most serious problem the problem list holds for it;
- * else, for a page built in code whose route doesn't call the plugin, not
- * connected; else hidden from search, or good.
+ * switched off; unconfirmed for a page built in code the build's route list
+ * couldn't confirm; else the most serious problem the problem list holds
+ * for it; else, for a page built in code whose route doesn't call the
+ * plugin, not connected; else hidden from search, or good.
  */
 export type PageStatus =
   | ProblemSeverity
   | "not-connected"
+  | "unconfirmed"
   | "hidden"
   | "seo-off"
   | "good"
@@ -41,6 +43,7 @@ export const STATUS_TEXT: Readonly<Record<PageStatus, string>> = {
   warning: "Warning",
   notice: "Notice",
   "not-connected": "Not connected",
+  unconfirmed: "Unconfirmed",
   hidden: "Hidden",
   "seo-off": "SEO off",
   good: "Good",
@@ -52,6 +55,7 @@ export const STATUS_ORDER: readonly PageStatus[] = [
   "good",
   ...SEVERITY_ORDER,
   "not-connected",
+  "unconfirmed",
   "hidden",
   "seo-off",
 ];
@@ -77,6 +81,8 @@ export interface ProblemsByPage {
   pages: ReadonlyMap<string, readonly Problem[]>;
   /** The keys of the pages the list checked for this reader. */
   checked?: ReadonlySet<string>;
+  /** How many pages link to each checked page and it links to, by its key. */
+  links?: ReadonlyMap<string, NonNullable<CheckedPage["links"]>>;
 }
 
 /**
@@ -95,14 +101,37 @@ export function problemsByPage(
     const key = pageKey(type, id, locale);
     pages.set(key, [...(pages.get(key) ?? []), problem]);
   }
-  return checked === undefined
-    ? { pages }
-    : {
-        pages,
-        checked: new Set(
-          checked.map(page => pageKey(page.type, page.id, page.locale))
-        ),
-      };
+  if (checked === undefined) return { pages };
+  const links = new Map<string, NonNullable<CheckedPage["links"]>>();
+  for (const page of checked) {
+    if (page.links !== undefined) {
+      links.set(pageKey(page.type, page.id, page.locale), page.links);
+    }
+  }
+  return {
+    pages,
+    checked: new Set(
+      checked.map(page => pageKey(page.type, page.id, page.locale))
+    ),
+    links,
+  };
+}
+
+/**
+ * How many other pages link to `item` and it links to, as the list writes
+ * it: "3 in · 5 out", or a dash where the list counted none for it, such as
+ * a page built in code, whose links live in its code.
+ */
+export function linksText(
+  item: SiteAddress,
+  byPage: ProblemsByPage | undefined
+): string {
+  const { entry } = item;
+  const counts =
+    entry === undefined ? undefined : byPage?.links?.get(entryKey(entry));
+  return counts === undefined
+    ? "—"
+    : `${counts.inbound} in · ${counts.outbound} out`;
 }
 
 /** The key the problem list names an entry's page by. */
@@ -131,6 +160,7 @@ export function statusOf(
 ): PageStatus {
   // Known without the problem list, which never checks such a page.
   if (item.standing === "seo-off") return "seo-off";
+  if (item.standing === "unconfirmed") return "unconfirmed";
   if (byPage === undefined) return "unknown";
   // A page the list didn't check for this reader, such as one their read
   // rule leaves out or one published since, has no problem listed and no

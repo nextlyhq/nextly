@@ -862,7 +862,7 @@ describe.each(getConfiguredTestDialects())(
     it("answers someone who may read the Single alone, with its page, and refuses someone who may read neither", async () => {
       await t.nextly.updateSingle({
         slug: "home",
-        data: { title: "t".repeat(70), _overwrite: true },
+        data: { title: "W".repeat(40), _overwrite: true },
       });
       const homeReader = await holding(t, ["read-home"]);
       const pagesOf = async (cookie: string) => {

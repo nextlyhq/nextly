@@ -17,9 +17,15 @@
  *
  * @module tests/loading-frame.spec
  */
-import { expect, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
 import { ADMIN } from "./support/admin";
+import { LOCK } from "./support/locks";
+import {
+  leaveReleasesAsTheRunnerWould,
+  type RunnerOutcome,
+} from "./support/release-states";
+import { cancel, post, release, schedule } from "./support/releases-api";
 import { mainColumnBox } from "./support/shell-geometry";
 import {
   fileAccount,
@@ -28,6 +34,41 @@ import {
   ownSeat,
   test,
 } from "./support/test";
+
+// The screens below are loaded with the data that makes them draw the most
+// parts that arrive late: the posts collection's one template, which gives
+// its list the Page Builder's Design column, and releases that need attention.
+// Both are shared, so this file holds their locks while it makes and removes
+// its own.
+test.describe.configure({ lock: [LOCK.postsTemplate, LOCK.releases] });
+
+/**
+ * A seat of the file's account for the data below, made once for the file:
+ * a dozen releases and a template are more writes than one test's account
+ * may make in a minute beside the loads it measures.
+ */
+const DATA_SEAT = 41;
+let removeFileData: Array<() => Promise<void>> = [];
+let dataApi: APIRequestContext | null = null;
+
+test.beforeAll(async ({ playwright, baseURL }, testInfo) => {
+  test.setTimeout(120_000);
+  dataApi = await playwright.request.newContext({
+    baseURL,
+    storageState: await fileAccount(baseURL ?? "", testInfo, DATA_SEAT),
+  });
+  removeFileData = [
+    await postsTemplate(dataApi),
+    await ownReleases(dataApi, testInfo.workerIndex),
+  ];
+});
+
+test.afterAll(async () => {
+  test.setTimeout(120_000);
+  for (const remove of removeFileData.splice(0)) await remove();
+  await dataApi?.dispose();
+  dataApi = null;
+});
 
 /** The admin's record that this browser has signed in here before. */
 const SIGNED_IN_HERE_KEY = "nextly:admin:signed-in-here";
@@ -579,9 +620,10 @@ async function expectStillLoad(
     theme?: "light" | "dark";
     /**
      * The parts held still, by their shift sources' names, where not every
-     * part can be: all of them when absent.
+     * part can be: all of them when absent. Decided from the settled screen
+     * when given as a function, for parts named by where they were drawn.
      */
-    holding?: RegExp;
+    holding?: RegExp | ((page: Page) => Promise<RegExp>);
     /**
      * Whether the outline's named parts are held to the screen's. Not where a
      * plugin draws a block above them, which the outline cannot know of
@@ -626,10 +668,11 @@ async function expectStillLoad(
     description: `${mode} ${path}: ${total.toFixed(4)}`,
   });
   // Nothing moves: not a part of the screen, not the frame around it.
+  const holds = typeof holding === "function" ? await holding(page) : holding;
   const held =
-    holding === undefined
+    holds === undefined
       ? shifts
-      : shifts.filter(shift => shift.sources.some(src => holding.test(src)));
+      : shifts.filter(shift => shift.sources.some(src => holds.test(src)));
   expect(held, JSON.stringify(shifts)).toEqual([]);
 
   if (!parts) return;
@@ -686,6 +729,114 @@ async function ownList(
   return `/collections/${slug}?where=${where}`;
 }
 
+/** Where the Page Builder's template actions are run. */
+const TEMPLATE_ACTIONS =
+  "/admin/api/plugins/@nextlyhq/plugin-page-builder/templates/actions";
+
+/** The CSRF token and origin a cookie-signed write to a plugin route needs. */
+async function pluginWriteHeaders(
+  api: APIRequestContext
+): Promise<Record<string, string>> {
+  const csrf = await api.get("/admin/api/auth/csrf");
+  const { token } = (await csrf.json()) as { token: string };
+  return { "x-csrf-token": token, origin: new URL(csrf.url()).origin };
+}
+
+/**
+ * Makes sure the posts collection has its one template, so its list draws the
+ * Page Builder's Design column, which the plugin decides by a read of its
+ * own after the list has asked for its columns. Answers the removal of the
+ * template when this file made it, and nothing to remove when another spec's
+ * was already there.
+ */
+async function postsTemplate(
+  api: APIRequestContext
+): Promise<() => Promise<void>> {
+  const created = await api.post(TEMPLATE_ACTIONS, {
+    data: { action: { kind: "create-template", collection: "posts" } },
+    headers: await pluginWriteHeaders(api),
+  });
+  const found = await api.get(
+    // Drafts too: a template is made as a draft, and a list read answers
+    // published entries alone unless asked for all.
+    "/admin/api/collections/templates/entries?where[collection][equals]=posts&status=all&limit=1"
+  );
+  expect(found.ok(), await found.text()).toBe(true);
+  const { items } = (await found.json()) as { items: { id: string }[] };
+  // The control: whichever spec made it, the posts collection has one.
+  expect(
+    items,
+    `the posts collection has no template: ${created.status()} ${await created.text()}`
+  ).toHaveLength(1);
+  if (!created.ok()) return async () => {};
+  const id = items[0]?.id ?? "";
+  return async () => {
+    const removed = await api.post(TEMPLATE_ACTIONS, {
+      data: { action: { kind: "delete-template", id } },
+      headers: await pluginWriteHeaders(api),
+    });
+    expect(removed.ok(), await removed.text()).toBe(true);
+  };
+}
+
+/**
+ * Releases of the file's own: a dozen scheduled, so a tab's count has two
+ * digits, and one each stopped and overdue, so the Releases page draws its
+ * attention strip and the dashboard's Needs attention names them. Answers
+ * their removal: each is cancelled, which takes it out of every count but
+ * Done's and off the strip and the cards.
+ */
+async function ownReleases(
+  api: APIRequestContext,
+  workerIndex: number
+): Promise<() => Promise<void>> {
+  const page = { request: api };
+  const stamp = `${Date.now().toString(36)}-${workerIndex}`;
+  const postId = await post(page, `frame-${stamp}`);
+  const made: string[] = [];
+  const DAY = 24 * 60 * 60 * 1000;
+  for (let index = 0; index < 12; index += 1) {
+    const id = await release(page, `Frame upcoming ${index} ${stamp}`, postId);
+    await schedule(page, id, new Date(Date.now() + (index + 2) * DAY), "UTC");
+    made.push(id);
+  }
+  const needing: { id: string; outcome: RunnerOutcome }[] = [];
+  for (const outcome of ["overdue", "stopped"] as const) {
+    const id = await release(page, `Frame ${outcome} ${stamp}`, postId);
+    await schedule(page, id, new Date(Date.now() + 40 * DAY), "UTC");
+    needing.push({ id, outcome });
+    made.push(id);
+  }
+  await leaveReleasesAsTheRunnerWould(page, needing);
+  return async () => {
+    for (const id of made) await cancel(page, id);
+  };
+}
+
+/**
+ * The dashboard's first two rows as this screen drew them, by their cells'
+ * test ids: on a new site the setup card and Needs attention, then Continue
+ * and the content table; with releases, Upcoming releases takes its place in
+ * the second row. Whose cards they are is the dashboard's to decide, so they
+ * are read from the settled screen, by where each cell starts.
+ */
+async function firstDashboardRows(page: Page): Promise<RegExp> {
+  const cells = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('[data-testid^="widget-cell-"]')).map(
+      cell => ({
+        id: cell.getAttribute("data-testid") ?? "",
+        top: Math.round(cell.getBoundingClientRect().top),
+      })
+    )
+  );
+  const tops = [...new Set(cells.map(cell => cell.top))].sort((a, b) => a - b);
+  const first = cells.filter(cell => tops.slice(0, 2).includes(cell.top));
+  // The control: the rows were drawn, two cards or more in them.
+  expect(first.length, JSON.stringify(cells)).toBeGreaterThanOrEqual(2);
+  const ids = first.map(cell => cell.id.replace(/[/.]/g, "\\$&"));
+  return new RegExp(`(${ids.join("|")})\\)`);
+}
+
 /** A form of the test's own, which no other test holds open. */
 async function ownForm(page: Page, made: string[]): Promise<string> {
   const stamp = `${Date.now().toString(36)}-${test.info().repeatEachIndex}-${test.info().workerIndex}`;
@@ -723,13 +874,6 @@ async function visitOnce(page: Page, path: string): Promise<void> {
   await page.goto("about:blank");
 }
 
-/**
- * The new site's dashboard's first two rows: the setup card and Needs
- * attention, then Continue where you left off and the content table.
- */
-const FIRST_DASHBOARD_ROWS =
-  /widget-cell-core\/(setup|needs-attention|continue|content-table)\)/;
-
 test.describe("each screen's outline, held to the screen it stands for", () => {
   /** Entries the tests made, deleted after each, so no list counts them. */
   const made: string[] = [];
@@ -750,9 +894,11 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
 
       for (const mode of ["held", "unheld"] as const) {
         // The posts list has a plugin's showcase under its table, which a
-        // table that grows as its rows land would push down, and a plugin's
-        // block above it; the tags list has neither, so its outline's rows
-        // are held to the list's own.
+        // table that grows as its rows land would push down, a plugin's
+        // block above it, and, with its template, the Page Builder's Design
+        // column, which the plugin decides once its own read answers; the
+        // tags list has none of them, so its outline's rows are held to the
+        // list's own.
         for (const slug of ["posts", "tags"] as const) {
           test(`moves no part of a list of five ${slug}, ${mode}`, async ({
             page,
@@ -762,6 +908,12 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
             await expectStillLoad(page, path, mode, {
               parts: slug === "tags",
             });
+            // The control: the posts list drew the column it waited for.
+            if (slug === "posts") {
+              await expect(
+                page.getByRole("columnheader", { name: "Design" })
+              ).toBeVisible();
+            }
           });
 
           test(`moves no part of a list of eleven ${slug} on a revisit, ${mode}`, async ({
@@ -785,11 +937,6 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
           await expectStillLoad(page, path, mode);
         });
 
-        test(`moves no part of the releases, ${mode}`, async ({ page }) => {
-          test.setTimeout(90_000);
-          await expectStillLoad(page, "/releases", mode);
-        });
-
         test(`moves no part of the users on a revisit, ${mode}`, async ({
           page,
         }) => {
@@ -801,11 +948,38 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
         });
       }
 
+      test.describe("the releases", () => {
+        // A further account per width: with releases in every tab, the page
+        // reads its list, each tab's count, the strip and the rows' checks,
+        // and polls them, past what the account above has left.
+        ownSeat(51 + index);
+
+        for (const mode of ["held", "unheld"] as const) {
+          test(`moves no part of the releases, ${mode}`, async ({ page }) => {
+            test.setTimeout(90_000);
+            // With the file's releases in every part the page draws late: the
+            // attention strip above the tabs, the tabs' counts and each row's
+            // readiness line.
+            await expectStillLoad(page, "/releases", mode);
+            // The control: the strip the page waited for is drawn.
+            await expect(
+              page.getByRole("region", {
+                name: /^\d+ releases? needs? attention$/,
+              })
+            ).toBeVisible();
+          });
+        }
+      });
+
       test.describe("the dashboard", () => {
         // A further account per width: the dashboard's reads are many, and
         // the screens above spend their own accounts' budgets.
         ownSeat(31 + index);
 
+        // With the file's releases, as a site that uses them has: Upcoming
+        // releases joins the second row, and Needs attention names the
+        // stopped and overdue ones under their rows, from a read of its own
+        // once the card has drawn.
         for (const mode of ["held", "unheld"] as const) {
           test(`moves none of the dashboard's first rows on a first visit, ${mode}`, async ({
             page,
@@ -814,9 +988,10 @@ test.describe("each screen's outline, held to the screen it stands for", () => {
             // A first visit: the setup card loads as its checklist, so its
             // row stands as tall as the row it becomes and the row under it
             // stays. A card's loading state elsewhere is a guess until the
-            // card has been drawn here once (the revisit below).
+            // card has been drawn here once (the revisit below), so a card
+            // in a later row may still move as one above it grows.
             await expectStillLoad(page, "", mode, {
-              holding: FIRST_DASHBOARD_ROWS,
+              holding: firstDashboardRows,
             });
           });
 

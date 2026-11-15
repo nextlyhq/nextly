@@ -77,8 +77,8 @@ import { judgeFieldGroupCyclesAtStart } from "../domains/field-groups/field-grou
 import type { FieldGroupMetadataService } from "../domains/field-groups/services/field-group-metadata-service";
 import {
   resolveFieldGroupRegistryName,
-  resolveKnownTypeColumns,
-  resolveTypeColumns,
+  resolveKnownTableColumns,
+  resolveTableColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
 import { stopGrantsExpiryRetry } from "../domains/flush-content-change";
 import type {
@@ -2640,13 +2640,19 @@ async function materializeBuilderComponents(
         loaded: args.builderEntities.components,
         persist: (slug, fields) =>
           reg.updateComponent(slug, { fields: fields }),
-        makeRuntime: async (tableName, fields, _status, localized) =>
-          compSchema.generateRuntimeSchema(tableName, fields, {
+        makeRuntime: async (tableName, fields, _status, localized) => {
+          // The discriminator and the columns the table holds, from one catalog read: a field
+          // inside a group with no name whose column the table lacks yet is left out
+          // (`RuntimeSchemaOptions.heldColumns`).
+          const held = (await resolveTableColumns(adapter, [tableName])).get(
+            tableName
+          );
+          return compSchema.generateRuntimeSchema(tableName, fields, {
             localized,
-            typeColumn:
-              (await resolveTypeColumns(adapter, [tableName])).get(tableName) ??
-              STORAGE_FORMAT.columns.type,
-          }),
+            typeColumn: held?.typeColumn ?? STORAGE_FORMAT.columns.type,
+            heldColumns: held?.columns,
+          });
+        },
       })
   );
 }
@@ -3896,7 +3902,10 @@ export async function initializeSchemaRegistry(
     // catch — which returns `undefined` and skips config-table registration
     // entirely, discarding a boot that was otherwise fine over one metadata
     // probe. A table it could not speak for is absent from the map.
-    const fieldGroupTypeColumns = await resolveKnownTypeColumns(
+    // With each table's columns, read by the same catalog listing, so a field inside a group with
+    // no name whose column the table lacks yet is left out of its runtime table
+    // (`RuntimeSchemaOptions.heldColumns`).
+    const fieldGroupTableColumns = await resolveKnownTableColumns(
       adapter,
       loadedFieldGroups.map(entry => entry.tableName)
     );
@@ -3906,7 +3915,8 @@ export async function initializeSchemaRegistry(
       localized,
       builderOwned,
     } of loadedFieldGroups) {
-      const typeColumn = fieldGroupTypeColumns.get(tableName);
+      const held = fieldGroupTableColumns.get(tableName);
+      const typeColumn = held?.typeColumn;
       if (typeColumn === undefined) {
         // 🔴 Left unregistered rather than registered on a guess.
         //
@@ -3935,7 +3945,7 @@ export async function initializeSchemaRegistry(
       const runtimeTable = compSchemaService.generateRuntimeSchema(
         tableName,
         fields,
-        { localized: perLanguage, typeColumn }
+        { localized: perLanguage, typeColumn, heldColumns: held?.columns }
       );
       registry.registerDynamicSchema(tableName, runtimeTable);
       if (perLanguage) {
@@ -4945,16 +4955,18 @@ async function syncCodeFirstComponents(
           // Hard-coding the creator's spelling here therefore does not describe
           // a table this code just made; it describes a table that may have
           // been migrated long ago.
-          const syncTypeColumns = await resolveTypeColumns(adapter, [
-            tableName,
-          ]);
+          // With the columns the table holds, read by the same listing: a field inside a group
+          // with no name whose column it lacks yet is left out (`heldColumns`).
+          const held = (await resolveTableColumns(adapter, [tableName])).get(
+            tableName
+          );
           const compRuntimeTable = compSchemaService.generateRuntimeSchema(
             tableName,
             compConfig.fields,
             {
               localized: compLocalized,
-              typeColumn:
-                syncTypeColumns.get(tableName) ?? STORAGE_FORMAT.columns.type,
+              typeColumn: held?.typeColumn ?? STORAGE_FORMAT.columns.type,
+              heldColumns: held?.columns,
             }
           );
           const resolver = (

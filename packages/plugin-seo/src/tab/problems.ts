@@ -15,10 +15,11 @@ import { textChecks, type TextCheck } from "../problems/text-checks";
 import type { SeoAnswer } from "../resolver/order";
 
 export {
-  characters,
-  DESCRIPTION_LIMIT,
-  TITLE_LIMIT,
-} from "../problems/text-checks";
+  cutToFit,
+  fitSummary,
+  textFit,
+  type SearchText,
+} from "../problems/text-width";
 
 /** One problem with a page's SEO, and the value it belongs to. */
 export interface SeoProblem {

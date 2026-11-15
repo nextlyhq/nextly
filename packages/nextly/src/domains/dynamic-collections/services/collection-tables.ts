@@ -14,6 +14,8 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { fieldsStoredOnRow } from "../../schema/services/field-column-descriptor";
+
 /**
  * The registry's table name for each collection slug.
  *
@@ -65,7 +67,10 @@ export async function collectionTablesBySlug(
   options: { builder?: boolean } = {}
 ): Promise<CollectionTables | undefined> {
   const builder = options.builder === true;
-  if (!fields.some(field => namesOneTarget(field, builder))) return undefined;
+  // A relationship inside a group with no name is a column of the row with a key like any other
+  // (`fieldsStoredOnRow`), so its target is asked for too.
+  if (!fieldsStoredOnRow(fields).some(field => namesOneTarget(field, builder)))
+    return undefined;
   const rows = await reader.select<{ slug: string; tableName: string }>(
     "dynamic_collections",
     { columns: ["slug", "tableName"] }

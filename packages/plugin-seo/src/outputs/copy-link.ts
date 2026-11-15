@@ -18,7 +18,6 @@ import type {
   PluginContext,
 } from "@nextlyhq/plugin-sdk";
 
-import { codePagesSlug } from "../code-pages/collection";
 import { overAnswer } from "../resolver/provider";
 
 import { servedCopyAddress, type AiOutputsConfig } from "./ai-outputs";
@@ -55,9 +54,10 @@ function listedAddress(
 
 /**
  * `resolver` with the link to the page's plain-text copy added to the head
- * of each listed page, where copies are switched on. A page built in code
- * has no copy of its own, so it links none. The switch is read inside the
- * cached answer, which the settings' cache tags already expire.
+ * of each listed page, where copies are switched on, a page built in code
+ * among them, whose copy is made from the page as it renders. The switch is
+ * read inside the cached answer, which the settings' cache tags already
+ * expire.
  */
 export function withCopyLink(
   ctx: PluginContext,
@@ -65,10 +65,6 @@ export function withCopyLink(
   config: AiOutputsConfig
 ): PageMetadataResolver {
   return overAnswer(resolver, async (answer, input) => {
-    const { source } = input;
-    if (source.kind === "entry" && source.collection === codePagesSlug(ctx)) {
-      return answer;
-    }
     if (answer.canonical === undefined || answer.robots?.index === false) {
       return answer;
     }

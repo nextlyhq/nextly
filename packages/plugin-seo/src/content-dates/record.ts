@@ -11,7 +11,7 @@ import type { AddressHolder, PluginContext } from "@nextlyhq/plugin-sdk";
 import { documentsIn, heldLanguages } from "../languages/versions";
 import { typeOf } from "../outputs/listing";
 
-import { contentFingerprint } from "./fingerprint";
+import { contentFingerprint, earlierContentFingerprints } from "./fingerprint";
 import { forgetContentDates, hasContentDate, recordContentDate } from "./store";
 
 /** A stored date read back, where it is one. */
@@ -65,6 +65,7 @@ async function recordVersion(
     holder,
     locale,
     fingerprint: contentFingerprint(document),
+    earlier: earlierContentFingerprints(document),
     changedAt: kept ? before.date : (savedAt ?? new Date()),
   });
 }
