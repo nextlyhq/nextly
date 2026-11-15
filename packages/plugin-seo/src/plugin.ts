@@ -54,7 +54,7 @@ import {
 } from "./code-pages/connections";
 import { PAGES_PAGE, PAGES_PAGE_HREF } from "./code-pages/contract";
 import { codePageRoutes } from "./code-pages/route";
-import { readCodeRoutes, type CodeRoute } from "./code-pages/routes";
+import { readCodeBuild, type CodeRoute } from "./code-pages/routes";
 import { codeAddressOf } from "./code-pages/store";
 import {
   indexNowKeyProxyHandler,
@@ -736,12 +736,13 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
   const redirectKeys = heldRedirectKeys();
   // The pages the site's routes render from their own code, read from the
   // build each time they are asked for, so a new deploy is read as it is.
-  const codeRoutes = () =>
-    readCodeRoutes(
+  const codeBuild = () =>
+    readCodeBuild(
       options.nextBuildDir === undefined
         ? {}
         : { buildDir: options.nextBuildDir }
     );
+  const codeRoutes = () => codeBuild().routes;
   // The site's configured origin, where the sitemap is served and a baseUrl
   // is set, for every output that names the site's addresses.
   const siteOrigin = configuredOrigin(
@@ -1133,7 +1134,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // entry's SEO.
     ...codePageRoutes({
       readRules,
-      routes: codeRoutes,
+      build: codeBuild,
       origin: () =>
         options.baseUrl === undefined
           ? undefined

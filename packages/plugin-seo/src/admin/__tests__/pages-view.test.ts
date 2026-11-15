@@ -175,6 +175,21 @@ describe("each page's status", () => {
     expect(STATUS_ORDER).toContain("seo-off");
   });
 
+  it("is unconfirmed for a page the build's route list couldn't confirm, before any problem list is read", () => {
+    const unconfirmed: SiteAddress = {
+      path: "/integrations/webflow",
+      name: "Webflow",
+      source: "dynamic",
+      from: "app/integrations/[name]/page.tsx",
+      standing: "unconfirmed",
+      sources: { title: "code" },
+    };
+    expect(statusOf(unconfirmed, undefined)).toBe("unconfirmed");
+    expect(statusOf(unconfirmed, problemsByPage([], []))).toBe("unconfirmed");
+    expect(STATUS_TEXT.unconfirmed).toBe("Unconfirmed");
+    expect(STATUS_ORDER).toContain("unconfirmed");
+  });
+
   it("names a Single by its type key", () => {
     const single = problemsByPage([problem("canonical", "single:home", "1")]);
     expect(statusOf(ITEMS[0] as SiteAddress, single)).toBe("error");

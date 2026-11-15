@@ -245,6 +245,58 @@ describe("the list", () => {
     expect(screen.getByText("5 pages")).toBeTruthy();
   });
 
+  it("says which build file the server couldn't read, and marks the pages it can't confirm", async () => {
+    const unconfirmed: SiteAddress = {
+      path: "/integrations/webflow",
+      name: "Webflow",
+      source: "dynamic",
+      from: "app/integrations/[name]/page.tsx",
+      standing: "unconfirmed",
+      title: "Webflow | Acme",
+      sources: { title: "code" },
+      seo: {
+        typed: { hidden: false },
+        automatic: { title: { value: "Webflow | Acme", from: "code" } },
+        siteName: "Acme",
+      },
+    };
+    vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) => ({
+      data:
+        args.path === "/problems"
+          ? PROBLEMS
+          : args.path === "/pages/build"
+            ? {
+                unreadable: {
+                  file: ".next/prerender-manifest.json",
+                  problem: "missing",
+                },
+              }
+            : { items: [...ITEMS, unconfirmed] },
+      pending: false,
+      error: null,
+      refetch: () => {},
+      fetching: false,
+    })) as unknown as typeof usePluginRoute);
+    render(<SeoPagesPage />);
+
+    const banner = screen.getByRole("alert");
+    expect(banner.textContent).toContain(".next/prerender-manifest.json");
+    expect(banner.textContent).toContain("is missing on this server");
+    expect(banner.textContent).toContain("Unconfirmed");
+    expect(rowOf("Webflow").getByText("Unconfirmed")).toBeTruthy();
+
+    await editSeo("Webflow");
+    const panel = screen.getByRole("dialog", {
+      name: "SEO for /integrations/webflow",
+    });
+    expect(within(panel).getByText(/isn't confirmed/)).toBeTruthy();
+  });
+
+  it("says nothing of the build where the server read it", () => {
+    render(<SeoPagesPage />);
+    expect(screen.queryByText(/prerender-manifest/)).toBeNull();
+  });
+
   it("says each status is unknown, and why, where the problem list can't be read", () => {
     vi.mocked(usePluginRoute).mockImplementation(((args: { path: string }) =>
       args.path === "/problems"
