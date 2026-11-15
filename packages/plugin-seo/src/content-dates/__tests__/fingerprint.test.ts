@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { contentFingerprint } from "../fingerprint";
+import { contentFingerprint, earlierContentFingerprints } from "../fingerprint";
 
 const PAGE = {
   id: "p1",
@@ -179,6 +179,40 @@ describe("a page's content fingerprint", () => {
     expect(contentFingerprint({ ...PAGE, ...change })).not.toBe(
       contentFingerprint(PAGE)
     );
+  });
+
+  it("recognises the fingerprint the previous release kept for a page with field groups", () => {
+    const page = {
+      id: "p1",
+      title: "Pricing",
+      status: "published",
+      createdAt: "2026-11-01T09:00:00.000Z",
+      updatedAt: "2026-11-02T09:00:00.000Z",
+      seo: { metaTitle: "Our prices" },
+      hero: {
+        id: "r1",
+        created_at: "2026-11-01T09:00:00.000Z",
+        updated_at: "2026-11-01T09:00:00.000Z",
+        heading: "Plans",
+      },
+      cards: [
+        {
+          id: "r2",
+          created_at: "2026-11-01T09:00:00.000Z",
+          updated_at: "2026-11-01T09:00:00.000Z",
+          label: "One",
+        },
+      ],
+    };
+    // What the previous release's `contentFingerprint` gave this page, run
+    // on its own code: fixed here, so a wrong reading of the earlier rule
+    // can't make up the fingerprint it then recognises.
+    const keptByPreviousRelease =
+      "7bc7359f83562a78c0b522dece68753cf8e5a3c299a44c4e8832fcd4decd071d";
+    expect(earlierContentFingerprints(page)).toEqual([keptByPreviousRelease]);
+    expect(contentFingerprint(page)).not.toBe(keptByPreviousRelease);
+    // A page with no field group was fingerprinted the same way then.
+    expect(earlierContentFingerprints(PAGE)).toEqual([]);
   });
 
   it("is SHA-256 hex, the same on every dialect", () => {
