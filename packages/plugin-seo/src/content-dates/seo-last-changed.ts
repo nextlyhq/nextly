@@ -28,9 +28,13 @@ import { singleKey } from "../problems/page-types";
 import { lastChangedOf } from "./last-changed";
 import { readContentDates } from "./store";
 
-/** An entry as the site's code read it: its id, and its own last save. */
+/**
+ * An entry as the site's code read it: its id, and its own last save. Any
+ * document Nextly hands back fits, typed or not.
+ */
 export interface SeoLastChangedEntry {
-  readonly id: string | number;
+  /** The entry's id. One that is no string or number has no content date. */
+  readonly id?: unknown;
   /**
    * The entry's own last save, as Nextly reads it: the date given where the
    * plugin keeps no content date for it.
@@ -73,15 +77,23 @@ function holderOf(options: SeoLastChangedOptions): string {
   return collection ?? singleKey(single ?? "");
 }
 
+/** `entry`'s id as its content dates are kept under, where it has one. */
+function idOf(entry: SeoLastChangedEntry): string | undefined {
+  const { id } = entry;
+  return typeof id === "string" || typeof id === "number"
+    ? String(id)
+    : undefined;
+}
+
 /**
- * The content dates kept for `entries`, by id: one read per hundred
+ * The content dates kept for `ids`: one read per hundred
  * entries. None where the SEO plugin is not running here, or the dates
  * could not be read, so each entry takes its own last save; a production
  * render fails instead where Nextly is unavailable, as the page's head does.
  */
 async function keptDates(
   holder: string,
-  entries: readonly SeoLastChangedEntry[],
+  ids: readonly string[],
   locale: string | undefined
 ): Promise<Map<string, string>> {
   let ctx: PluginContext | undefined;
@@ -91,12 +103,12 @@ async function keptDates(
     failRenderWhenUnavailable(error);
     return new Map();
   }
-  if (ctx === undefined || entries.length === 0) return new Map();
+  if (ctx === undefined || ids.length === 0) return new Map();
   try {
     return await readContentDates(
       ctx,
       holder,
-      entries.map(entry => String(entry.id)),
+      ids,
       locale ?? (await ctx.publicAddresses.defaultLanguage())
     );
   } catch (error) {
@@ -141,24 +153,27 @@ async function keptDates(
 export function seoLastChanged(
   options: SeoLastChangedOptions & { readonly entry: SeoLastChangedEntry }
 ): Promise<string | undefined>;
-export function seoLastChanged(
-  options: SeoLastChangedOptions & {
-    readonly entries: readonly SeoLastChangedEntry[];
-  }
-): Promise<Map<SeoLastChangedEntry["id"], string>>;
+export function seoLastChanged<Entry extends SeoLastChangedEntry>(
+  options: SeoLastChangedOptions & { readonly entries: readonly Entry[] }
+): Promise<Map<Entry["id"], string>>;
 export async function seoLastChanged(
   options: SeoLastChangedOptions & {
     readonly entry?: SeoLastChangedEntry;
     readonly entries?: readonly SeoLastChangedEntry[];
   }
-): Promise<string | undefined | Map<SeoLastChangedEntry["id"], string>> {
+): Promise<string | undefined | Map<unknown, string>> {
   const holder = holderOf(options);
   const { entry, entries } = options;
   const asked = entries ?? (entry === undefined ? [] : [entry]);
-  const kept = await keptDates(holder, asked, options.locale);
-  const dates = new Map<SeoLastChangedEntry["id"], string>();
+  const kept = await keptDates(
+    holder,
+    asked.map(each => idOf(each)).filter(id => id !== undefined),
+    options.locale
+  );
+  const dates = new Map<unknown, string>();
   for (const each of asked) {
-    const date = lastChangedOf(kept.get(String(each.id)), {
+    const id = idOf(each);
+    const date = lastChangedOf(id === undefined ? undefined : kept.get(id), {
       updatedAt: each.updatedAt,
     });
     if (date !== undefined) dates.set(each.id, date);

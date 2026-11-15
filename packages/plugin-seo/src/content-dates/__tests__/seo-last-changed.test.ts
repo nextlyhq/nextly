@@ -73,6 +73,24 @@ describe("seoLastChanged", () => {
     ]);
   });
 
+  it("takes documents as Nextly hands them back with no generated types, ids typed unknown", async () => {
+    // `nextly.find` without generated types reads `Record<string, unknown>`,
+    // and the call takes it as it is: the docs' sitemap sample, compiled by
+    // `check:doc-samples`, holds the types. Here, the map is keyed by the ids
+    // as given.
+    const untyped: Record<string, unknown>[] = [
+      { id: "u1", updatedAt: "2026-05-06T07:08:09.000Z" },
+      { updatedAt: "2026-06-07T08:09:10.000Z" },
+    ];
+    const dates = await seoLastChanged({
+      collection: "posts",
+      entries: untyped,
+    });
+    expect(dates.get(untyped[0]?.id)).toBe("2026-05-06T07:08:09.000Z");
+    // An entry with no id is still dated, by its own last save.
+    expect(dates.get(undefined)).toBe("2026-06-07T08:09:10.000Z");
+  });
+
   it("gives each entry its own last save in development where Nextly could not be started", async () => {
     nextly.startFails = unreachable();
     expect(await seoLastChanged({ single: "home", entry: post })).toBe(

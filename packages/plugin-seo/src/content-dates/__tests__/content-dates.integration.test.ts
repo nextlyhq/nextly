@@ -906,6 +906,14 @@ describe.each(getConfiguredTestDialects())(
 describe.each(getConfiguredTestDialects())(
   "seoLastChanged, a page's last change for site code (%s)",
   dialect => {
+    /**
+     * A stamp as ISO text to the millisecond, as Nextly read it: a `Date` on
+     * PostgreSQL, text elsewhere. `String()` of a `Date` drops its
+     * milliseconds.
+     */
+    const isoOf = (value: unknown) =>
+      (value instanceof Date ? value : new Date(String(value))).toISOString();
+
     /** The post with `id` as site code reads it. */
     async function read(t: TestNextly, id: string) {
       await contentDatesSettled();
@@ -995,7 +1003,7 @@ describe.each(getConfiguredTestDialects())(
       });
       const { items } = await t.nextly.find({ collection: POSTS });
 
-      let dates: Map<string | number, string> = new Map();
+      let dates = new Map<unknown, string>();
       const statements = await statementsOf(dialect, async () => {
         dates = await seoLastChanged({ collection: POSTS, entries: items });
       });
@@ -1004,9 +1012,7 @@ describe.each(getConfiguredTestDialects())(
       expect(dates.get(two.id)).toBe("2026-01-02T03:04:05.000Z");
       // No row: its own last save, as the sitemap dates it.
       expect(dates.get(three.id)).toBe(
-        new Date(
-          String(items.find(item => item.id === three.id)?.updatedAt)
-        ).toISOString()
+        isoOf(items.find(item => item.id === three.id)?.updatedAt)
       );
       // One read for the batch of content dates, whatever its size.
       expect(statements.filter(sql => /content_dates/i.test(sql))).toHaveLength(
@@ -1040,7 +1046,7 @@ describe.each(getConfiguredTestDialects())(
       // A language with no date kept: the entry's own last save.
       expect(
         await seoLastChanged({ collection: POSTS, entry, locale: "de" })
-      ).toBe(new Date(String(entry.updatedAt)).toISOString());
+      ).toBe(isoOf(entry.updatedAt));
     });
 
     it("gives an entry with no date kept its own last save, and none where it has neither", async () => {
@@ -1055,7 +1061,7 @@ describe.each(getConfiguredTestDialects())(
       const entry = await read(t, post.id);
 
       expect(await seoLastChanged({ collection: POSTS, entry })).toBe(
-        new Date(String(entry.updatedAt)).toISOString()
+        isoOf(entry.updatedAt)
       );
       expect(
         await seoLastChanged({ collection: POSTS, entry: { id: post.id } })
