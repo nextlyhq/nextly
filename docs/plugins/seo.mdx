@@ -619,7 +619,11 @@ problem list say so in plain words and no page is affected.
 
 Search Console shows the site's clicks from Google over the last 28 days, what people
 searched, and the pages where Google chose a different official address than the page
-names (of the most visited ten, checked with Google's URL inspection). Connecting it needs a
+names (of the most visited ten, checked with Google's URL inspection). A report is read from
+Google at most once every six hours and kept in the plugin's settings meanwhile, since Search
+Console's counts settle over about two days and each inspection counts against Google's daily
+quota; the Connections tab says when it was read. Connecting again or disconnecting forgets
+it. Connecting Search Console needs a
 Google sign-in for the site: create an OAuth client of the **Web application** kind in Google
 Cloud, add the redirect address below, and name it in the plugin's options, keeping the
 secret out of the code:
