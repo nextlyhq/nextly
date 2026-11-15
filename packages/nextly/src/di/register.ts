@@ -102,6 +102,7 @@ import { coreRateLimitStoreFor } from "../domains/limits/core-limit-store";
 import type { LimitStore } from "../domains/limits/limit-store";
 import { limitsInMemoryWarning } from "../domains/limits/limits-in-memory-warning";
 import { selectLimitStore } from "../domains/limits/select-limit-store";
+import { stopDeleteWindowTimers } from "../domains/media/delete-window-timers";
 import type { MetaService } from "../domains/meta";
 import type { NoticesService } from "../domains/notices/notices-service";
 import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
@@ -6095,6 +6096,9 @@ async function releaseServices(opts: {
   // released below, so they stop first; what they owe stays queued for the
   // next registration's jobs runs.
   stopGrantsExpiryRetry();
+  // A media delete's timer finishes through them too: it stops with them, and
+  // the job queued with the delete's marks finishes what it would have.
+  stopDeleteWindowTimers();
   // Before the adapter disconnects, so destroy can still use db.
   await destroyRegisteredPlugins();
   // Before the adapter disconnects, so a sweep under way finishes with it.
@@ -6159,6 +6163,7 @@ async function releaseServices(opts: {
 export function clearServices(): void {
   // Stopped first, for the reason `releaseServices` gives.
   stopGrantsExpiryRetry();
+  stopDeleteWindowTimers();
   // Plugins still running are torn down at the next registration, and their
   // `destroy` may still need the services they were started with: those move
   // aside for them rather than vanish, their contexts re-pointed at them for
