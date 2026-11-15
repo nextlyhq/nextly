@@ -1237,10 +1237,18 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
     // plugin does not run: pages saved meanwhile reach no record. Both
     // forget the catch-up's fingerprint, so the first start after the
     // install records them. A full uninstall drops the record instead.
+    //
+    // Each first waits for the catch-up under way: the command that runs the
+    // hook boots the app for it, which starts one, and tears that boot down
+    // once the hook returns. Left running, the catch-up would read services
+    // the teardown has taken away, store its fingerprint after the hook
+    // forgot it, or write to a record an uninstall is dropping.
     async onInstall(ctx) {
+      await lastCatchUp();
       await forgetCatchUpFingerprint(ctx);
     },
     async onUninstall(ctx, { keepData }) {
+      await lastCatchUp();
       if (keepData) await forgetCatchUpFingerprint(ctx);
     },
     async destroy() {
