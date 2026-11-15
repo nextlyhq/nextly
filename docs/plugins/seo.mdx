@@ -2109,6 +2109,17 @@ export default async function PricingPage() {
 }
 ```
 
+Where Nextly or the SEO plugin is not running, or the address's SEO can't be read,
+`seoMetadata` returns the route's own metadata and `seoStructuredData` returns nothing, so the
+page is still served. The exception is Nextly being unavailable (its start failed, or the
+database could not be reached, was busy or timed out) while the page is rendered for production:
+
+- a revalidation fails, and Next.js keeps serving the page's last good render, with its SEO;
+- a first request for a page with nothing cached answers with an error, and nothing is cached;
+- `next build` fails, rather than shipping pages built without their SEO.
+
+In `next dev` the route's own metadata is served then too, and the failure is logged.
+
 The screen marks **Not connected** each route that has not called `seoMetadata`. What is set
 for its address is kept, and reaches the page once the line is in. A route records that it is
 connected when it renders: while `next build` renders the site, or later for an address the

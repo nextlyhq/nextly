@@ -20,7 +20,11 @@
  *   gives search engines are kept;
  * - a page the answer gives no canonical keeps the route's own;
  * - a worker where nothing has started Nextly yet starts it before asking,
- *   rather than serving the route's own head.
+ *   rather than serving the route's own head;
+ * - in production, `next build` included, a Nextly that is unavailable (its
+ *   start failed, the database busy or unreachable) fails the render rather
+ *   than serving the page without its head, while a failure of the answer's
+ *   own still falls back; in development both fall back.
  */
 import type { Metadata } from "next";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,6 +38,7 @@ import {
   clearPluginServices,
   registerPluginService,
 } from "../../../plugins/services/plugin-services-registry";
+import { NextlyError } from "../../../errors/nextly-error";
 import { consoleLogger } from "../../../shared/types";
 import { metadataFromAnswer } from "../answer-metadata";
 import type {
@@ -65,19 +70,40 @@ vi.mock("../../cache/cached-find", () => ({
 
 // Nextly's start in this process, stood in for: what it does when asked (a
 // boot records the providers), how often it was asked, and whether it fails.
+// A start that fails is recorded as one, as `getCachedNextly` records it; a
+// read that finds nothing to start (`nothingToStart`) is not, as there.
 const start = vi.hoisted(() => ({
   boot: undefined as (() => void) | undefined,
   calls: 0,
   fails: false,
+  nothingToStart: false,
+  throws: undefined as unknown,
 }));
-vi.mock("../../../init", () => ({
-  getCachedNextly: async () => {
-    start.calls += 1;
-    if (start.fails) throw new Error("the database is unreachable");
-    start.boot?.();
-    return {};
-  },
-}));
+vi.mock("../../../init", async () => {
+  const { markStartFailure } = await import("../../../init/start-failure");
+  const { NextlyError: Refusal } = await import("../../../errors/nextly-error");
+  return {
+    getCachedNextly: async () => {
+      start.calls += 1;
+      if (start.nothingToStart) {
+        throw Refusal.configuration({
+          logMessage: "getCachedNextly() called before initialization.",
+        });
+      }
+      if (start.throws !== undefined) {
+        markStartFailure(start.throws);
+        throw start.throws;
+      }
+      if (start.fails) {
+        const failure = new Error("the database is unreachable");
+        markStartFailure(failure);
+        throw failure;
+      }
+      start.boot?.();
+      return {};
+    },
+  };
+});
 
 const { pageMetadataFor, pageStructuredDataFor } = await import(
   "../page-metadata"
@@ -119,11 +145,14 @@ beforeEach(() => {
   start.boot = undefined;
   start.calls = 0;
   start.fails = false;
+  start.nothingToStart = false;
+  start.throws = undefined;
 });
 
 afterEach(() => {
   recordCapabilityProviders([]);
   clearPluginServices();
+  vi.unstubAllEnvs();
 });
 
 describe("metadataFromAnswer", () => {
@@ -920,12 +949,143 @@ describe("a worker where nothing has started Nextly yet", () => {
     expect(start.calls).toBe(0);
   });
 
-  it("serves the route's own metadata where Nextly cannot be started", async () => {
+  it("serves the route's own metadata in development where Nextly cannot be started", async () => {
+    vi.stubEnv("NODE_ENV", "development");
     forgetCapabilityProviders();
     start.fails = true;
     const code: Metadata = { title: "Own" };
     expect(await pageMetadataFor({ ...page, code, tags: [] })).toBe(code);
     expect(start.calls).toBe(1);
+  });
+});
+
+describe("a production render where Nextly is unavailable", () => {
+  const code: Metadata = { title: "Own" };
+  const request = { ...page, code, tags: [] };
+
+  /** A provider whose every answer fails with `error`. */
+  const failingWith = (error: unknown): void =>
+    provide({
+      resolve: () => {
+        throw error;
+      },
+    });
+
+  beforeEach(() => {
+    vi.stubEnv("NODE_ENV", "production");
+  });
+
+  it("fails the head where Nextly cannot be started, as SERVICE_UNAVAILABLE carrying the start's error", async () => {
+    forgetCapabilityProviders();
+    start.fails = true;
+    const failed = await pageMetadataFor(request).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(NextlyError.isCode(failed, "SERVICE_UNAVAILABLE")).toBe(true);
+    expect((failed as Error).cause).toMatchObject({
+      message: "the database is unreachable",
+    });
+  });
+
+  it("fails the structured data where Nextly cannot be started", async () => {
+    forgetCapabilityProviders();
+    start.fails = true;
+    await expect(pageStructuredDataFor(request)).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+    });
+  });
+
+  it("fails while `next build` prerenders under another NODE_ENV", async () => {
+    // `next build` keeps a NODE_ENV the environment set, and sets NEXT_PHASE.
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("NEXT_PHASE", "phase-production-build");
+    forgetCapabilityProviders();
+    start.fails = true;
+    await expect(pageMetadataFor(request)).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+    });
+  });
+
+  it("fails the head and the structured data where the database is busy, with that error", async () => {
+    const busy = NextlyError.databaseBusy();
+    failingWith(busy);
+    await expect(pageMetadataFor(request)).rejects.toBe(busy);
+    await expect(pageStructuredDataFor(request)).rejects.toBe(busy);
+  });
+
+  it("fails where a read lost its database connection, however the service wrapped it", async () => {
+    // An adapter's connection error, as `@nextlyhq/adapter-drizzle` builds
+    // one, wrapped by a service as a generic database error.
+    const lost = Object.assign(new Error("Connection terminated"), {
+      name: "DatabaseError",
+      kind: "connection",
+    });
+    failingWith(
+      new NextlyError({
+        code: "DATABASE_ERROR",
+        publicMessage: "A temporary database error occurred.",
+        cause: lost,
+      })
+    );
+    await expect(pageMetadataFor(request)).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+    });
+  });
+
+  it("still serves the route's own metadata for an answer of the wrong shape", async () => {
+    provide({
+      resolve: () => ({ title: 42 }) as unknown as PageMetadataAnswer,
+    });
+    expect(await pageMetadataFor(request)).toEqual(code);
+  });
+
+  it("still serves the route's own metadata for a provider's own bug", async () => {
+    failingWith(new TypeError("cannot read properties of undefined"));
+    expect(await pageMetadataFor(request)).toEqual(code);
+    expect(await pageStructuredDataFor(request)).toBeUndefined();
+  });
+
+  it("passes a Next.js control-flow signal from the start through untouched", async () => {
+    // A start that reads a dynamic API while a page prerenders throws
+    // Next.js's own signal, which Next.js must receive as it was thrown.
+    const signal = Object.assign(new Error("Dynamic server usage: headers"), {
+      digest: "DYNAMIC_SERVER_USAGE",
+    });
+    forgetCapabilityProviders();
+    start.throws = signal;
+    await expect(pageMetadataFor(request)).rejects.toBe(signal);
+  });
+
+  it("still serves the route's own metadata where nothing can start Nextly, which no start failed", async () => {
+    forgetCapabilityProviders();
+    start.nothingToStart = true;
+    expect(await pageMetadataFor(request)).toBe(code);
+  });
+});
+
+describe("a development render where Nextly is unavailable", () => {
+  it("passes a Next.js control-flow signal from the start through untouched", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const signal = Object.assign(new Error("Dynamic server usage: headers"), {
+      digest: "DYNAMIC_SERVER_USAGE",
+    });
+    forgetCapabilityProviders();
+    start.throws = signal;
+    await expect(
+      pageMetadataFor({ ...page, code: { title: "Own" }, tags: [] })
+    ).rejects.toBe(signal);
+  });
+
+  it("serves the route's own metadata where the database is busy", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    provide({
+      resolve: () => {
+        throw NextlyError.databaseBusy();
+      },
+    });
+    const code: Metadata = { title: "Own" };
+    expect(await pageMetadataFor({ ...page, code, tags: [] })).toEqual(code);
   });
 });
 

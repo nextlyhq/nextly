@@ -203,6 +203,52 @@ export function isDatabaseBusy(error: unknown): boolean {
   return isBusyCode(safeCode(error));
 }
 
+/**
+ * The kinds a database that could not be reached, or did not answer in time,
+ * is given here: as opposed to one that answered with a refusal.
+ */
+const UNREACHED_KINDS: ReadonlySet<DbErrorKind> = new Set([
+  "busy",
+  "connection-lost",
+  "timeout",
+]);
+
+/** Whether a `DbError`'s kind is a database not reached or not answering in time. */
+export function isUnreachedDbErrorKind(kind: DbErrorKind): boolean {
+  return UNREACHED_KINDS.has(kind);
+}
+
+/**
+ * A refused connection: the host is up and nothing listens, as a database
+ * being restarted or moved answers. No dialect's mapping names it, since it
+ * is the network's code rather than the database's.
+ */
+const CONNECTION_REFUSED = "ECONNREFUSED";
+
+/**
+ * Whether a driver's own code says the database could not be reached or did
+ * not answer in time: busy, a lost or refused connection, a timeout.
+ *
+ * For an error that reaches its reader as the driver threw it, with no
+ * dialect at hand, such as a read through Drizzle directly. Read through each
+ * dialect's mapping above rather than a list of its own, so it never
+ * disagrees with what `toDbError` would call the same code; the dialects'
+ * codes do not overlap (PostgreSQL's five-character SQLSTATEs, MySQL's
+ * numbers and `ER_` names, SQLite's `SQLITE_` names), so reading all three
+ * cannot take one dialect's code for another's.
+ */
+export function isUnreachedDatabaseCode(code: string | undefined): boolean {
+  if (code === undefined) return false;
+  if (isBusyCode(code) || code.toUpperCase() === CONNECTION_REFUSED) {
+    return true;
+  }
+  return [
+    mapPostgresCodeToKind(code),
+    mapMySqlCodeToKind(code),
+    mapSqliteCodeToKind(code),
+  ].some(isUnreachedDbErrorKind);
+}
+
 export function isUniqueViolation(
   dialect: SupportedDialect,
   error: unknown

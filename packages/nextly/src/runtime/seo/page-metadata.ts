@@ -22,6 +22,7 @@ import { z } from "zod";
 
 import { getUnstableRethrow } from "../../actions/next-runtime";
 import { NextlyError } from "../../errors/nextly-error";
+import { failRenderWhenUnavailable } from "../../errors/unavailable";
 import {
   capabilityProvider,
   capabilityProviderIdentity,
@@ -489,8 +490,10 @@ let toldNotStarted = false;
  * read the page made was a cache hit, or `next build` is prerendering it where
  * `instrumentation.ts` does not run. Until a boot records the providers, a
  * provider cannot be told from none, so the start is made here, as the
- * site registered it, or awaited where one is under way. A start that cannot
- * be made leaves the route's own head served, and is said once per worker.
+ * site registered it, or awaited where one is under way. A start that fails
+ * fails the render in production (`failRenderWhenUnavailable`), so the page is
+ * never cached or built without its head; elsewhere, and where nothing can
+ * start Nextly at all, the route's own head is served, said once per worker.
  */
 async function startForProviders(path: string | undefined): Promise<void> {
   if (capabilityProvidersRecorded()) return;
@@ -499,6 +502,10 @@ async function startForProviders(path: string | undefined): Promise<void> {
     const { getCachedNextly } = await import("../../init");
     await getCachedNextly();
   } catch (error) {
+    // Next.js's own signals first, such as a start that read a dynamic API
+    // while the page prerenders: Next.js receives them as they were thrown.
+    getUnstableRethrow()(error);
+    failRenderWhenUnavailable(error);
     if (toldNotStarted) return;
     toldNotStarted = true;
     consoleLogger.warn(
@@ -749,8 +756,11 @@ async function pageAnswerFor(
  * or the route's own metadata unchanged when no provider is started.
  *
  * A provider that fails is logged and the route's own metadata is served: a
- * page loses its SEO answer for that render, never the page. Next.js's own
- * control-flow signals pass through untouched.
+ * page loses its SEO answer for that render, never the page. Where it failed
+ * because Nextly is unavailable, a production render fails instead
+ * (`failRenderWhenUnavailable`), so Next.js keeps the page's last good render
+ * and a build fails rather than shipping the page without its head. Next.js's
+ * own control-flow signals pass through untouched.
  */
 export async function pageMetadataFor(
   request: PageMetadataRequest
@@ -762,6 +772,7 @@ export async function pageMetadataFor(
     return overCode(code, metadataFromAnswer(answer));
   } catch (error) {
     getUnstableRethrow()(error);
+    failRenderWhenUnavailable(error);
     consoleLogger.error(
       "The page-metadata provider could not answer; serving the route's own metadata.",
       { path: request.path, error }
@@ -776,7 +787,8 @@ export async function pageMetadataFor(
  * end the element. Nothing when no provider is started or the answer has none.
  *
  * A provider that fails is logged and the page is rendered without it, as its
- * head is served without the answer.
+ * head is served without the answer, and a production render fails where
+ * Nextly is unavailable, as its head's does.
  *
  * @experimental Settles with the page-metadata contract.
  */
@@ -787,6 +799,7 @@ export async function pageStructuredDataFor(
     return structuredDataText((await pageAnswerFor(request))?.structuredData);
   } catch (error) {
     getUnstableRethrow()(error);
+    failRenderWhenUnavailable(error);
     consoleLogger.error(
       "The page-metadata provider could not answer; rendering the page without structured data.",
       { path: request.path, error }

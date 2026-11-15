@@ -141,6 +141,16 @@ export { nextly } from "./direct-api";
 // were removed in PR 12 (final unified-error-system cleanup).
 export { NextlyError } from "./errors";
 
+// Whether a failure means Nextly is unavailable, and the render policy that
+// follows from it: in production a page render fails rather than being
+// served without what Nextly gives it. On the root as well as
+// `nextly/runtime`, so `@nextlyhq/plugin-sdk` re-exports it without pulling
+// the runtime barrel into every plugin. `@experimental`.
+export {
+  failRenderWhenUnavailable,
+  isNextlyUnavailable,
+} from "./errors/unavailable";
+
 // The canonical mutation builder, published so a CONTRIBUTED route can answer
 // in the same envelope every first-party write answers in.
 //
