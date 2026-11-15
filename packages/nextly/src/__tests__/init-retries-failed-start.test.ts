@@ -35,6 +35,7 @@ vi.mock("../di/register", async importOriginal => {
 });
 
 const { defineConfig } = await import("../collections/config/define-config");
+const { isNextlyUnavailable } = await import("../errors/unavailable");
 const { getCachedNextly, getNextly, registerNextlyStart, shutdownNextly } =
   await import("../init");
 
@@ -91,6 +92,55 @@ describe("getCachedNextly() after a failed start", () => {
     await expect(getCachedNextly()).rejects.toMatchObject({
       code: "CONFIGURATION_ERROR",
     });
+  });
+});
+
+describe("what getCachedNextly() rejects with, as a render reads it", () => {
+  it("is a failed start, so Nextly reads as unavailable, whatever the start's error says", async () => {
+    // The registered start fails as a database down makes it: a plain error,
+    // which says nothing about availability by its shape.
+    registerNextlyStart(() => getNextly({ config: defineConfig({}) }));
+    failNext = true;
+    const failed = await getCachedNextly().then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(failed).toMatchObject({ message: "database down" });
+    expect(isNextlyUnavailable(failed)).toBe(true);
+  });
+
+  it("is a failed start where a retry of an earlier failed start fails again", async () => {
+    failNext = true;
+    await expect(getNextly({ config: defineConfig({}) })).rejects.toThrow(
+      "database down"
+    );
+    failNext = true;
+    const failed = await getCachedNextly().then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(isNextlyUnavailable(failed)).toBe(true);
+  });
+
+  it("is a failed start where the start rejected with a value that is not an error", async () => {
+    // A thrown string cannot be recorded, so it is made an error first.
+    registerNextlyStart(() => Promise.reject("database down"));
+    const failed = await getCachedNextly().then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(failed).toBeInstanceOf(Error);
+    expect(isNextlyUnavailable(failed)).toBe(true);
+  });
+
+  it("is not a failed start where nothing ever tried to start", async () => {
+    // The control: no start was made, so nothing is known about availability.
+    const refused = await getCachedNextly().then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(refused).toMatchObject({ code: "CONFIGURATION_ERROR" });
+    expect(isNextlyUnavailable(refused)).toBe(false);
   });
 });
 

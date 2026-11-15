@@ -39,6 +39,13 @@ export interface StructuredDataTypeRule {
   type?: StructuredDataTypeKey;
   /** For each type its pages may be described as, where each detail is. */
   details?: Partial<Record<StructuredDataTypeKey, DetailMapping>>;
+  /**
+   * Whether the questions and answers its pages show are an FAQ section of
+   * each page, described as a part of it whatever the page's own type. The
+   * questions are read as a Questions and answers page reads them, by the
+   * mapping under `details.faqPage` where there is one.
+   */
+  faqSection?: boolean;
 }
 
 /** A way to reach the brand, such as its support desk. */
@@ -144,8 +151,11 @@ export type ReadStructuredDataRules = (
 /** The rules as the plugin's options state them. */
 export interface StructuredDataOptions {
   /**
-   * The brand facts. The SEO settings' name, other names, logo and profiles
-   * win where they are saved; the rest are read from here.
+   * The brand facts. Each fact saved in the SEO settings (Organization) wins
+   * over the same fact here, one fact at a time: a list, such as the
+   * profiles or the contact points, is one fact. Every fact the settings
+   * leave empty, and the founders, which only these options give, are read
+   * from here.
    */
   brand?: StructuredDataBrand;
   /** Each content type's choice and mapping, until the SEO settings hold them. */
@@ -191,6 +201,9 @@ function checkRule(where: string, rule: unknown): void {
   if (!isRecord(rule)) refuse(`${where} must be an object.`);
   if (rule.type !== undefined && !isStructuredDataTypeKey(rule.type)) {
     refuse(`${where}.type ${JSON.stringify(rule.type)} is not a type offered.`);
+  }
+  if (rule.faqSection !== undefined && typeof rule.faqSection !== "boolean") {
+    refuse(`${where}.faqSection must be true or false.`);
   }
   if (rule.details === undefined) return;
   if (!isRecord(rule.details)) refuse(`${where}.details must be an object.`);

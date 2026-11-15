@@ -299,7 +299,13 @@ function ReadinessLine({
   readiness: ReleaseRowReadiness;
 }) {
   if (readiness.status === "pending") {
-    return <Skeleton className="h-2.5 w-24" aria-busy="true" />;
+    // Inside a line as tall as the readiness line it stands for (small text),
+    // so the row keeps its height when the checks answer.
+    return (
+      <span className="flex h-4 items-center">
+        <Skeleton className="h-2.5 w-24" aria-busy="true" />
+      </span>
+    );
   }
   const entry = readiness.status === "known" ? readiness.entry : undefined;
   if (entry === undefined) {

@@ -35,6 +35,11 @@
  */
 
 import { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import {
+  SERVERLESS_POOL_DEFAULTS,
+  isVercelFunction,
+  loadVercelPoolAttacher,
+} from "@nextlyhq/adapter-drizzle/serverless";
 // F17: connect-time DB version check shared across all adapters.
 import {
   createDatabaseError,
@@ -91,6 +96,7 @@ import type {
 } from "mysql2/promise";
 
 import { boundPoolWait, type QueueingPool } from "./pool-wait";
+import { vercelPoolView } from "./vercel-pool";
 
 /**
  * A date field's column as the schema generator declares it on MySQL:
@@ -294,6 +300,23 @@ const DEFAULT_POOL_CONFIG = {
 };
 
 /**
+ * `@vercel/functions`' pool attaching, imported only on Vercel, at connect.
+ *
+ * An optional peer: an app outside Vercel never installs it, so the import is
+ * dynamic and its failure is a warning (`loadVercelPoolAttacher`), never a
+ * module that fails to load. The adapter is a server external package
+ * (`withNextly`'s `serverExternalPackages`), so Node resolves this at run time;
+ * the comments keep a bundler that bundles the adapter anyway from requiring
+ * the package at build time. The `db-connections` subpath loads the attaching
+ * alone, not the package's other helpers.
+ */
+function loadVercelDbConnections(): Promise<unknown> {
+  return import(
+    /* webpackIgnore: true */ /* turbopackIgnore: true */ "@vercel/functions/db-connections"
+  );
+}
+
+/**
  * MySQL error codes mapping to DatabaseErrorKind.
  *
  * @see https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html
@@ -452,6 +475,13 @@ export class MySqlAdapter extends DrizzleAdapter {
       return;
     }
 
+    // On Vercel, what hands the pool built below to `attachDatabasePool`.
+    const attachPool = await loadVercelPoolAttacher({
+      load: loadVercelDbConnections,
+      dialect: "MySQL",
+      logger: this.config.logger,
+    });
+
     try {
       // Warned once, here, rather than on every session configuration the
       // standalone connections build: the configuration cannot change
@@ -459,6 +489,15 @@ export class MySqlAdapter extends DrizzleAdapter {
       this.warnOnDriverZoneDisagreement();
       const poolConfig = this.buildPoolConfig();
       const pool = mysql.createPool(poolConfig);
+      // Attached as soon as it exists, as Vercel's docs say, so the smoke
+      // test's own connection is one `@vercel/functions` waits on as well.
+      // Handed as the shape `attachDatabasePool` reads (`vercelPoolView`).
+      attachPool?.(
+        vercelPoolView(
+          pool.pool,
+          poolConfig.idleTimeout ?? DEFAULT_POOL_CONFIG.idleTimeoutMs
+        )
+      );
       // Pin the session time zone the moment each pooled connection opens.
       // Left unpinned, a session serves in whatever zone the server starts it
       // in — `SYSTEM` on the containers, anything on a self-hosted server —
@@ -1104,10 +1143,25 @@ export class MySqlAdapter extends DrizzleAdapter {
   private buildPoolConfig(): PoolOptions {
     const config: PoolOptions = this.buildConnectionConfig();
 
-    // Pool settings - mysql2 uses different property names
-    config.connectionLimit = this.config.pool?.max ?? DEFAULT_POOL_CONFIG.max;
+    // Pool settings - mysql2 uses different property names. Inside Vercel
+    // functions the defaults are the serverless ones, a small pool whose idle
+    // connections close quickly, since a suspended instance keeps whatever it
+    // holds open; each setting the config gives still wins on its own.
+    const serverless = isVercelFunction();
+    const defaults = serverless
+      ? SERVERLESS_POOL_DEFAULTS
+      : DEFAULT_POOL_CONFIG;
+    config.connectionLimit = this.config.pool?.max ?? defaults.max;
     config.idleTimeout =
-      this.config.pool?.idleTimeoutMs ?? DEFAULT_POOL_CONFIG.idleTimeoutMs;
+      this.config.pool?.idleTimeoutMs ?? defaults.idleTimeoutMs;
+    if (serverless) {
+      // mysql2 closes idle connections past `idleTimeout` only while `maxIdle`
+      // is below `connectionLimit` (its default is equal to it), and closes
+      // any idle connection beyond `maxIdle` within a second. One below the
+      // limit lets the idle timeout apply and keeps all but one connection
+      // for its full length.
+      config.maxIdle = Math.max(config.connectionLimit - 1, 0);
+    }
 
     // A request waits for a connection when the pool is full. The queue has
     // no length limit; each wait in it is bounded instead (`boundPoolWait`).

@@ -22,6 +22,7 @@ import { isRecord, textOf } from "../plain-values";
 import { imageOf } from "../resolver/page-levels";
 import type { StructuredDataTypeRule } from "../structured-data/rules";
 
+import { brandDetailsOf, type BrandDetails } from "./brand-details";
 import {
   AI_CRAWLER_CHOICES,
   largeImagePreviewsOn,
@@ -89,6 +90,13 @@ export interface SeoRules {
   indexNow?: boolean;
   /** Whether `/llms.txt` is served: only once switched on. */
   llmsTxt?: boolean;
+  /**
+   * Whether `/llms-full.txt`, every listed page's words in one file, is
+   * served: only once switched on, and only beside llms.txt.
+   */
+  llmsFullTxt?: boolean;
+  /** What the site tells AI tools in its own words, at the top of llms.txt. */
+  llmsIntro?: string;
   /** Whether each listed page has a plain-text copy: only once switched on. */
   plainTextCopies?: boolean;
   /**
@@ -114,8 +122,13 @@ export interface SocialProfile {
   url: string;
 }
 
-/** The one record of facts about the site's owner, for every output. */
-export interface BrandFacts {
+/**
+ * The one record of facts about the site's owner, for every output: its
+ * name, other names, logo and profiles, and the details kept with them
+ * (`brandDetails`): what it is, how to reach it, when it was founded and
+ * who owns it.
+ */
+export interface BrandFacts extends BrandDetails {
   name?: string;
   /** Other names people search for the brand by. */
   otherNames: string[];
@@ -228,6 +241,11 @@ async function rulesOf(
     ...withDefined("indexNow", document.indexNow === true ? true : undefined),
     ...withDefined("llmsTxt", document.llmsTxt === true ? true : undefined),
     ...withDefined(
+      "llmsFullTxt",
+      document.llmsFullTxt === true ? true : undefined
+    ),
+    ...withDefined("llmsIntro", trimmed(document.llmsIntro)),
+    ...withDefined(
       "plainTextCopies",
       document.plainTextCopies === true ? true : undefined
     ),
@@ -264,6 +282,8 @@ async function brandOf(
     .map(other => other.trim())
     .filter(other => other !== "");
   return {
+    // The details first: the facts named below are never among them.
+    ...brandDetailsOf(document.brandDetails),
     ...(name === undefined ? {} : { name }),
     otherNames,
     ...(logo === undefined ? {} : { logo }),

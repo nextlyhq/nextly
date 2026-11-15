@@ -13,9 +13,15 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { addressOfAppPath, codeRoutesOf, readCodeRoutes } from "../routes";
+import {
+  addressOfAppPath,
+  codeRoutesOf,
+  dynamicRouteServing,
+  readCodeBuild,
+  readCodeRoutes,
+} from "../routes";
 
 describe("the address a page route serves", () => {
   it("drops route groups and the page file", () => {
@@ -257,6 +263,159 @@ describe("reading the build", () => {
     const appDir = app();
 
     expect(readCodeRoutes({ appDir, buildDir: "missing" })).toEqual([]);
+    expect(readCodeBuild({ appDir, buildDir: "missing" }).unreadable).toBe(
+      undefined
+    );
+  });
+});
+
+describe("a build whose prerender manifest can't be read", () => {
+  let dir: string | undefined;
+
+  afterEach(() => {
+    if (dir !== undefined) rmSync(dir, { recursive: true, force: true });
+    dir = undefined;
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  /** A production build with its app paths and, where given, its prerender manifest. */
+  function built(prerender?: string): string {
+    dir = mkdtempSync(join(tmpdir(), "seo-code-build-"));
+    mkdirSync(join(dir, "build/server"), { recursive: true });
+    writeFileSync(
+      join(dir, "build/server/app-paths-manifest.json"),
+      JSON.stringify({
+        "/(site)/pricing/page": "app/(site)/pricing/page.js",
+        "/(site)/tools/[name]/page": "app/(site)/tools/[name]/page.js",
+        "/(site)/docs/[[...slug]]/page": "app/(site)/docs/[[...slug]]/page.js",
+      })
+    );
+    if (prerender !== undefined) {
+      writeFileSync(join(dir, "build/prerender-manifest.json"), prerender);
+    }
+    return dir;
+  }
+
+  const quiet = () => vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  it("says the file is missing where the build has only its app paths, still listing each route with no variable part", () => {
+    quiet();
+    const appDir = built();
+
+    const build = readCodeBuild({ appDir, buildDir: "build" });
+
+    expect(build.unreadable).toEqual({
+      file: join("build", "prerender-manifest.json"),
+      problem: "missing",
+    });
+    expect(build.routes.map(route => route.path)).toEqual(["/pricing"]);
+    // The routes with a variable part, which a stored page may be served by.
+    expect(build.dynamic).toEqual([
+      {
+        address: "/docs/[[...slug]]",
+        route: "app/(site)/docs/[[...slug]]/page",
+      },
+      { address: "/tools/[name]", route: "app/(site)/tools/[name]/page" },
+    ]);
+  });
+
+  it("says the file can't be read where it isn't a manifest", () => {
+    quiet();
+    const appDir = built("{ not json");
+
+    expect(readCodeBuild({ appDir, buildDir: "build" }).unreadable).toEqual({
+      file: join("build", "prerender-manifest.json"),
+      problem: "unreadable",
+    });
+  });
+
+  it("says the file lists no pages where a production build's manifest holds none", () => {
+    quiet();
+    const appDir = built(JSON.stringify({ version: 4, routes: {} }));
+
+    expect(
+      readCodeBuild({ appDir, buildDir: "build" }).unreadable?.problem
+    ).toBe("no-routes");
+  });
+
+  it("says nothing of a build it read whole", () => {
+    const appDir = built(
+      JSON.stringify({
+        version: 4,
+        routes: { "/tools/counter": { srcRoute: "/tools/[name]" } },
+      })
+    );
+
+    const build = readCodeBuild({ appDir, buildDir: "build" });
+
+    expect(build.unreadable).toBe(undefined);
+    expect(build.routes.map(route => route.path)).toEqual([
+      "/pricing",
+      "/tools/counter",
+    ]);
+  });
+
+  it("says nothing in development, where Next.js keeps an empty manifest, or while next build runs", () => {
+    const appDir = built(JSON.stringify({ version: 4, routes: {} }));
+    vi.stubEnv("NODE_ENV", "development");
+    expect(readCodeBuild({ appDir, buildDir: "build" }).unreadable).toBe(
+      undefined
+    );
+
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("NEXT_PHASE", "phase-production-build");
+    rmSync(join(appDir, "build/prerender-manifest.json"));
+    expect(readCodeBuild({ appDir, buildDir: "build" }).unreadable).toBe(
+      undefined
+    );
+  });
+
+  it("warns once, naming the file, however often the build is read", () => {
+    const warn = quiet();
+    const appDir = built();
+
+    readCodeBuild({ appDir, buildDir: "build" });
+    readCodeBuild({ appDir, buildDir: "build" });
+    readCodeRoutes({ appDir, buildDir: "build" });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain(
+      join(appDir, "build", "prerender-manifest.json")
+    );
+  });
+});
+
+describe("the route with a variable part that serves an address", () => {
+  const dynamic = [
+    { address: "/docs/[[...slug]]", route: "app/docs/[[...slug]]/page" },
+    { address: "/blog/[...rest]", route: "app/blog/[...rest]/page" },
+    { address: "/blog/[slug]", route: "app/blog/[slug]/page" },
+    { address: "/[lang]/about", route: "app/[lang]/about/page" },
+  ];
+
+  it("matches one segment, one or more, or none, the most specific route first", () => {
+    expect(dynamicRouteServing("/blog/hello", dynamic)?.route).toBe(
+      "app/blog/[slug]/page"
+    );
+    expect(dynamicRouteServing("/blog/2026/hello", dynamic)?.route).toBe(
+      "app/blog/[...rest]/page"
+    );
+    expect(dynamicRouteServing("/docs", dynamic)?.route).toBe(
+      "app/docs/[[...slug]]/page"
+    );
+    expect(dynamicRouteServing("/docs/a/b", dynamic)?.route).toBe(
+      "app/docs/[[...slug]]/page"
+    );
+    expect(dynamicRouteServing("/de/about", dynamic)?.route).toBe(
+      "app/[lang]/about/page"
+    );
+  });
+
+  it("matches none for an address no such route serves", () => {
+    expect(dynamicRouteServing("/blog", dynamic)).toBe(undefined);
+    expect(dynamicRouteServing("/retired", dynamic)).toBe(undefined);
+    expect(dynamicRouteServing("/de/team", dynamic)).toBe(undefined);
   });
 });
 

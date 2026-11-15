@@ -15,9 +15,15 @@ import { PageHeader } from "@nextlyhq/ui";
 import { useState, type JSX } from "react";
 
 import { CreateReleaseDialog } from "@admin/components/features/releases/CreateReleaseDialog";
-import { ReleaseAttentionStrip } from "@admin/components/features/releases/ReleaseAttentionStrip";
+import {
+  ReleaseAttentionStrip,
+  useAttentionStripKnown,
+} from "@admin/components/features/releases/ReleaseAttentionStrip";
 import { ReleaseCalendar } from "@admin/components/features/releases/ReleaseCalendar";
-import { ReleaseList } from "@admin/components/features/releases/ReleaseList";
+import {
+  ReleaseBodyOutline,
+  ReleaseList,
+} from "@admin/components/features/releases/ReleaseList";
 import { Plus } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -40,6 +46,12 @@ export default function ReleasesPage(): JSX.Element {
   // same releases, read for different questions, which is how every product
   // that ships this surface arranges it rather than as a separate feature.
   const [view, setView] = useState<"list" | "calendar">("list");
+  // Whether the attention strip is drawn is known only once its read answers.
+  // Until then what stands under it is held as one outline, and the strip,
+  // the tabs and the list are drawn together in its place: drawn at once and
+  // then pushed down by a strip arriving above them, every part would move.
+  // The list stays mounted meanwhile, hidden, so its own reads leave now.
+  const stripKnown = useAttentionStripKnown();
 
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
@@ -96,15 +108,18 @@ export default function ReleasesPage(): JSX.Element {
         {/* Above both views: a stopped or overdue release needs acting on
             whichever way the page is being read. "View all" leads to the
             list's Needs attention tab, so it turns the page to the list. */}
-        <ReleaseAttentionStrip onShowAll={() => setView("list")} />
+        {stripKnown ? null : <ReleaseBodyOutline />}
+        <div hidden={!stripKnown}>
+          <ReleaseAttentionStrip onShowAll={() => setView("list")} />
 
-        {view === "calendar" ? (
-          <ReleaseCalendar />
-        ) : (
-          <ReleaseList
-            onCreate={canAssemble ? () => setCreating(true) : undefined}
-          />
-        )}
+          {view === "calendar" ? (
+            <ReleaseCalendar />
+          ) : (
+            <ReleaseList
+              onCreate={canAssemble ? () => setCreating(true) : undefined}
+            />
+          )}
+        </div>
 
         {canAssemble ? (
           <CreateReleaseDialog

@@ -82,12 +82,19 @@ export interface ContentDate {
    * writes the same date.
    */
   changedAt: Date;
+  /**
+   * The fingerprints an earlier release kept for this same content
+   * (`earlierContentFingerprints`): a row holding one is given the current
+   * fingerprint and keeps its date.
+   */
+  earlier?: readonly string[];
 }
 
 /**
  * Keep `date` for its page: a new row where there is none, the fingerprint
- * and date where the row holds another fingerprint, and nothing where it
- * holds this one.
+ * and date where the row holds another fingerprint, the fingerprint alone
+ * where it holds one an earlier release kept for this content, and nothing
+ * where it holds this one.
  */
 export async function recordContentDate(
   ctx: PluginContext,
@@ -107,12 +114,30 @@ export async function recordContentDate(
           ne(columns.fingerprint, date.fingerprint)
         ) ?? eq(columns.pageKey, key)
       );
+  // Each step is one conditional update, so a save recorded at the same
+  // time can't be undone by it: a row brought up to date first then holds
+  // this fingerprint, and the move after it changes nothing.
+  const settle = async () => {
+    const heldEarlier =
+      date.earlier !== undefined && date.earlier.length > 0
+        ? and(
+            eq(columns.pageKey, key),
+            inArray(columns.fingerprint, [...date.earlier])
+          )
+        : undefined;
+    if (heldEarlier !== undefined) {
+      await ctx.db
+        .update(contentDates, { fingerprint: date.fingerprint })
+        .where(heldEarlier);
+    }
+    await moveIfChanged();
+  };
   const existing = await ctx.db
     .select(contentDates)
     .where(eq(columns.pageKey, key))
     .first();
   if (existing !== null) {
-    await moveIfChanged();
+    await settle();
     return;
   }
   try {
@@ -128,7 +153,7 @@ export async function recordContentDate(
     // Another save of the page made the row first: this one moves it only
     // where it found other content.
     if (!isUniqueViolation(ctx.dialect, error)) throw error;
-    await moveIfChanged();
+    await settle();
   }
 }
 

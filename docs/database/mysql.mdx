@@ -118,8 +118,8 @@ The adapter uses `mysql2`'s built-in pool. Defaults:
 
 | Option                     | Default | Description                                                             |
 | -------------------------- | ------- | ----------------------------------------------------------------------- |
-| `pool.max`                 | `10`    | Maps to `mysql2`'s `connectionLimit`. Maximum simultaneous connections. |
-| `pool.idleTimeoutMs`       | `30000` | Idle connection timeout (`mysql2` `idleTimeout`).                       |
+| `pool.max`                 | `10` (`3` on Vercel) | Maps to `mysql2`'s `connectionLimit`. Maximum simultaneous connections. |
+| `pool.idleTimeoutMs`       | `30000` (`5000` on Vercel) | Idle connection timeout (`mysql2` `idleTimeout`). `mysql2` closes idle connections only while its `maxIdle` is below `connectionLimit`, which the adapter sets on Vercel (below). |
 | `pool.connectionTimeoutMs` | `15000` | How long a request waits in the queue while every connection is in use. Past it the request fails as `DATABASE_BUSY` (503, `Retry-After: 5`); `0` leaves that wait unbounded. Also the time a new connection gets to open (`mysql2` `connectTimeout`): one that cannot open in time fails as a connection error, not as busy. |
 
 ```typescript
@@ -134,6 +134,12 @@ const adapter = createMySqlAdapter({
 ```
 
 The pool is configured with `waitForConnections: true`: a request that finds every connection in use waits in the queue for a free one, for at most `pool.connectionTimeoutMs`. The queue has no length limit (`queueLimit: 0`); each wait in it is bounded instead. A connection that frees up after its request gave up goes straight back to the pool.
+
+### On Vercel
+
+On Vercel (where `VERCEL` is set) the pool defaults to `max: 3` and `idleTimeoutMs: 5000`, and the adapter sets `mysql2`'s `maxIdle` to one below `connectionLimit`, which is what makes `mysql2` close connections idle past the timeout. A Vercel function instance is suspended between requests and keeps the connections it holds open while suspended, so a small pool that closes idle connections quickly keeps a small database within its connection limit. Each setting you give, in `pool` or as a `DB_POOL_*` env var, replaces only its own default.
+
+When [`@vercel/functions`](https://vercel.com/docs/functions/functions-api-reference/vercel-functions-package#attachdatabasepool) is installed in the app, the adapter also hands its pool to `attachDatabasePool`, which keeps an instance alive until its idle connections have closed. It is an optional peer dependency: without it the adapter logs one warning at connect. See [Database connections on Vercel](/docs/guides/deployment#database-connections-on-vercel).
 
 ## SSL / TLS
 

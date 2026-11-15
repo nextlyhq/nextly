@@ -10,9 +10,27 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import type { FieldConfig } from "@nextlyhq/plugin-sdk";
 
-// The lengths the SEO tab and the problem list warn past, a leaf.
-import { DESCRIPTION_LIMIT, TITLE_LIMIT } from "./problems/text-checks";
+// The width the SEO tab and the problem list warn past, a leaf.
+import {
+  charactersText,
+  textFit,
+  type SearchText,
+} from "./problems/text-width";
 import { IMAGE_PREVIEW_SIZES } from "./resolver/display";
+
+/**
+ * A field's rule refusing a value wider than Google shows of `kind`: the
+ * measure the SEO tab and the problem list warn by, so a value they call
+ * fine is never refused and one they flag never saves.
+ */
+function withinGoogleWidth(kind: SearchText) {
+  return (value: string | string[] | null | undefined): string | true => {
+    if (typeof value !== "string" || value === "") return true;
+    const fit = textFit(kind, value);
+    if (fit.fits) return true;
+    return `Google shows about ${fit.limit} px of a ${kind}, and this one is ${fit.pixels} px (${charactersText(fit)}). Shorten it, or put what matters first.`;
+  };
+}
 
 /**
  * The default fields placed INSIDE the `seo` group on each target collection
@@ -24,9 +42,10 @@ import { IMAGE_PREVIEW_SIZES } from "./resolver/display";
  * box is a deliberate edge over plugins that make you add them yourself.
  *
  * A title or description of any length is saved: search engines cut a long
- * one to fit the width they show rather than refusing it, so its length is a
+ * one to fit the width they show rather than refusing it, so its width is a
  * warning in the SEO tab and the problem list. `hardLengthLimits` refuses a
- * save past those lengths instead, for a site that wants them enforced.
+ * save wider than Google shows instead, for a site that wants it enforced,
+ * judged by the same measure as the warning.
  *
  * Override the whole set via `seoPlugin({ fields })` when a project needs a
  * different shape; overrides stay nested under `seo`.
@@ -39,12 +58,12 @@ export function defaultSeoFields(
     text({
       name: "metaTitle",
       label: "Meta Title",
-      ...(hard ? { maxLength: TITLE_LIMIT } : {}),
+      ...(hard ? { validate: withinGoogleWidth("title") } : {}),
     }),
     textarea({
       name: "metaDescription",
       label: "Meta Description",
-      ...(hard ? { maxLength: DESCRIPTION_LIMIT } : {}),
+      ...(hard ? { validate: withinGoogleWidth("description") } : {}),
     }),
     // The social card's own text, where a person wants it to differ from the
     // Google title and description; empty, the card uses those.

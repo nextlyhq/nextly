@@ -78,6 +78,7 @@ import {
   holdBootSeeding,
   seedPermissionsAndRolePresets,
 } from "./init/seed-permissions";
+import { markStartFailure } from "./init/start-failure";
 import {
   awaitStartInFlight,
   clearStart,
@@ -753,6 +754,41 @@ export function registerNextlyStart(start: () => Promise<Nextly>): void {
  * @public
  */
 export async function getCachedNextly(): Promise<Nextly> {
+  let instance: Nextly | undefined;
+  try {
+    instance = await startedOrStarting();
+  } catch (error) {
+    // Recorded, so a reader can tell later that Nextly could not be started
+    // (`errors/unavailable`), whatever the error's own shape says. A value
+    // that is not an object cannot be recorded, so it is made an error
+    // carrying it first.
+    if (typeof error === "object" && error !== null) {
+      markStartFailure(error);
+      throw error;
+    }
+    const failure = NextlyError.internal({ logContext: { rejection: error } });
+    markStartFailure(failure);
+    throw failure;
+  }
+  if (instance !== undefined) return instance;
+
+  // Nothing has started and nothing can be: no start was made, so this is
+  // not recorded as a start that failed.
+  throw NextlyError.configuration({
+    logMessage:
+      "getCachedNextly() called before initialization. Ensure " +
+      "`getNextly({ config })` (or `createRegister(config)` from " +
+      "instrumentation.ts) has run at least once before any internal " +
+      "handler executes. See https://nextlyhq.com/docs/getting-started.",
+  });
+}
+
+/**
+ * The started Nextly, waiting for a start in flight or making one where one
+ * can be made; undefined where nothing has started and nothing can start it.
+ * Rejects with the start's own error when a start fails.
+ */
+async function startedOrStarting(): Promise<Nextly | undefined> {
   // Before ANY return, including the cached one. Everything below keys off
   // `isServicesRegistered()`, which says nothing about whether this process's
   // boot migrations allowed it to serve. Awaiting rather than testing means a
@@ -820,13 +856,7 @@ export async function getCachedNextly(): Promise<Nextly> {
     return start();
   }
 
-  throw NextlyError.configuration({
-    logMessage:
-      "getCachedNextly() called before initialization. Ensure " +
-      "`getNextly({ config })` (or `createRegister(config)` from " +
-      "instrumentation.ts) has run at least once before any internal " +
-      "handler executes. See https://nextlyhq.com/docs/getting-started.",
-  });
+  return undefined;
 }
 
 /**

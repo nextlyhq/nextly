@@ -138,15 +138,22 @@ describe("the line under a box", () => {
     expect(boxLine(one, "description", {}, []).text).toBe("From its content");
   });
 
-  it("counts what is typed, says when it is longer than search shows, and that it changed", () => {
+  it("measures what is typed by its width on Google, says when Google cuts it, and that it changed", () => {
     const edits: PageEdits = { "/blog/one": { title: "Hello" } };
     expect(boxLine(one, "title", edits, []).text).toBe(
-      "5 characters · Good · changed"
+      "Fits · 46 of 600 px · 5 characters · changed"
     );
     const long = { "/blog/one": { title: "x".repeat(80) } };
     expect(boxLine(one, "title", long, [])).toEqual({
-      text: "80 characters · Longer than search shows · changed",
+      text: "Google cuts it · 800 of 600 px · 80 characters · changed",
       tone: "warning",
+    });
+    // As many characters of narrow letters fit: the width decides, not
+    // the count.
+    const narrow = { "/blog/one": { title: "i".repeat(80) } };
+    expect(boxLine(one, "title", narrow, [])).toEqual({
+      text: "Fits · 355 of 600 px · 80 characters · changed",
+      tone: "muted",
     });
   });
 

@@ -24,6 +24,12 @@ export const PAGES_PAGE_HREF: string = `/admin/plugins/${SEO_ADMIN_SLUG}/${PAGES
 /** Where the screen reads every public address the site knows of. */
 export const ADDRESSES_ROUTE_PATH = "/pages";
 
+/**
+ * Where the screen reads whether the running server could read the build's
+ * list of the addresses routes with a variable part declared.
+ */
+export const BUILD_ROUTE_PATH = "/pages/build";
+
 /** Where the screen saves the SEO of a page with no entry. */
 export const CODE_PAGE_SEO_ROUTE_PATH = "/pages/seo";
 
@@ -37,16 +43,35 @@ export type AddressSource = "entry" | "built" | "dynamic";
  * What search engines are told about an address: listed; hidden on its own;
  * hidden because its whole content type is; for a page built in code, not
  * connected, since its route does not call the plugin's metadata function
- * and so nothing set here reaches it; or, for an entry of a type whose SEO is
- * switched off, nothing from the plugin, its route serving only what its own
- * code sets.
+ * and so nothing set here reaches it; for one a route with a variable part
+ * recorded, unconfirmed, while the build's list of the addresses those
+ * routes declared can't be read (`UnreadableBuild`), so the sitemap leaves
+ * it out; or, for an entry of a type whose SEO is switched off, nothing from
+ * the plugin, its route serving only what its own code sets.
  */
 export type AddressStanding =
   | "listed"
   | "hidden"
   | "type-hidden"
   | "not-connected"
+  | "unconfirmed"
   | "seo-off";
+
+/**
+ * The build file that lists the addresses routes with a variable part
+ * declared, Next.js's prerender manifest, where the running server could not
+ * read it: missing, not a manifest, or listing no pages.
+ */
+export interface UnreadableBuild {
+  /** The file, from the app's directory where it is inside it. */
+  file: string;
+  problem: "missing" | "unreadable" | "no-routes";
+}
+
+/** What the build route answers: what the build couldn't say, where it couldn't. */
+export interface BuildStatusBody {
+  unreadable?: UnreadableBuild;
+}
 
 /**
  * An automatic value, and where it came from: the route's code, the site's

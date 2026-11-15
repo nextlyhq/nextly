@@ -52,6 +52,7 @@ import type {
 } from "../contract";
 import { flushIndexNow } from "../indexnow";
 import type { IndexNowNotice } from "../indexnow-send";
+import { readConnections, writeConnections } from "../store";
 
 /** What the stand-in IndexNow endpoint was sent, and how it answers. */
 const indexNow = vi.hoisted(() => ({
@@ -98,6 +99,7 @@ const CLIENT = { clientId: "acme-client.apps", clientSecret: "client-shh" };
 let current: TestNextly | undefined;
 
 afterEach(async () => {
+  vi.useRealTimers();
   refusing.saves = false;
   indexNow.release();
   await current?.destroy();
@@ -213,6 +215,12 @@ async function storedRows(t: TestNextly): Promise<string> {
 interface Google {
   asked: { url: string; method: string; body: string; auth: string | null }[];
   failing: Partial<Record<"token" | "sites" | "analytics" | "inspect", number>>;
+  /** Inspections answering now, and the most there ever were at once. */
+  inspecting?: { now: number; most: number };
+  /** Runs once, while the first inspection after it is set is answering. */
+  duringInspect?: () => Promise<void>;
+  /** How many sign-ins Google has granted, each its own renewing token. */
+  grants?: number;
 }
 
 /** An ID token as Google signs one; only its claims are read. */
@@ -237,11 +245,15 @@ const json = (value: unknown, status = 200) =>
 function tokenAnswer(google: Google, body: string): Response {
   const status = google.failing.token;
   if (status !== undefined) return json({ error: "invalid_grant" }, status);
+  if (new URLSearchParams(body).get("grant_type") === "authorization_code") {
+    google.grants = (google.grants ?? 0) + 1;
+  }
   return new URLSearchParams(body).get("grant_type") === "authorization_code"
     ? json({
         access_token: "ya29.first-access",
         expires_in: 3599,
-        refresh_token: "1//refresh-shh",
+        // A new one for every sign-in approved, as Google gives.
+        refresh_token: `1//refresh-shh-${google.grants}`,
         scope:
           "https://www.googleapis.com/auth/webmasters.readonly openid https://www.googleapis.com/auth/userinfo.email",
         token_type: "Bearer",
@@ -317,6 +329,22 @@ function inspectAnswer(google: Google, body: string): Response {
   });
 }
 
+/**
+ * A page's inspection that takes a moment, as Google's do, so inspections
+ * asked one after another never overlap and ones asked together do.
+ */
+async function inspectSlowly(google: Google, body: string): Promise<Response> {
+  const inspecting = (google.inspecting ??= { now: 0, most: 0 });
+  inspecting.now += 1;
+  inspecting.most = Math.max(inspecting.most, inspecting.now);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const during = google.duringInspect;
+  google.duringInspect = undefined;
+  await during?.();
+  inspecting.now -= 1;
+  return inspectAnswer(google, body);
+}
+
 /** A fetch answering each of Google's documented addresses, and none else. */
 function fakeGoogle(google: Google) {
   return async (input: string | URL | Request, init?: RequestInit) => {
@@ -353,7 +381,7 @@ function fakeGoogle(google: Google) {
       url ===
       "https://searchconsole.googleapis.com/v1/urlInspection/index:inspect"
     ) {
-      return inspectAnswer(google, body);
+      return inspectSlowly(google, body);
     }
     throw new Error(`the stand-in for Google was asked for ${url}`);
   };
@@ -444,6 +472,11 @@ async function signIn(
   );
   return { url, state, back };
 }
+
+/** The report route, as the Connections tab reads it. */
+const REPORT = "/connections/search-console/report";
+const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
 
 /** A reader of every page, for the problem list. */
 const everything: Reader = {
@@ -785,6 +818,169 @@ describe.each(getConfiguredTestDialects())(
           reads.every(each => each.auth === "Bearer ya29.renewed-access")
         ).toBe(true);
         expect(report.text).not.toContain("refresh-shh");
+      });
+
+      it("checks the most visited pages with Google at the same time, in their order", async () => {
+        const { t, seo } = await boot(dialect);
+        await settings(t, {});
+        const google: Google = { asked: [], failing: {} };
+        await signIn(seo, google);
+
+        const report = await call(seo, google, "GET", REPORT);
+        expect(report.status).toBe(200);
+        // Both of the most visited pages were being inspected at once.
+        expect(google.inspecting?.most).toBe(2);
+        const inspected = google.asked
+          .filter(each => each.url.endsWith("index:inspect"))
+          .map(
+            each =>
+              (JSON.parse(each.body) as { inspectionUrl: string }).inspectionUrl
+          );
+        expect(inspected).toEqual([`${SITE}/pricing`, `${SITE}/about`]);
+        expect((report.json as SearchConsoleReportBody).otherAddress).toEqual([
+          {
+            page: `${SITE}/about`,
+            declared: `${SITE}/about`,
+            chosen: `${SITE}/company`,
+          },
+        ]);
+      });
+
+      it("reads Google once, answers that report for six hours, then reads it again", async () => {
+        const start = Date.parse("2026-11-15T08:00:00.000Z");
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(start);
+        const { t, seo } = await boot(dialect);
+        await settings(t, {});
+        const google: Google = { asked: [], failing: {} };
+        await signIn(seo, google);
+
+        const before = google.asked.length;
+        const first = await call(seo, google, "GET", REPORT);
+        expect(first.status).toBe(200);
+        expect(google.asked.length).toBeGreaterThan(before);
+
+        // Within the six hours: the same report, and Google is not asked.
+        vi.setSystemTime(start + 6 * HOUR - MINUTE);
+        const kept = google.asked.length;
+        const again = await call(seo, google, "GET", REPORT);
+        expect(again.status).toBe(200);
+        expect(google.asked.length).toBe(kept);
+        expect(again.json).toEqual(first.json);
+
+        // After them: Google is read again.
+        vi.setSystemTime(start + 6 * HOUR + MINUTE);
+        const later = await call(seo, google, "GET", REPORT);
+        expect(later.status).toBe(200);
+        expect(google.asked.length).toBeGreaterThan(kept);
+        // Each report says when it was read.
+        expect((first.json as SearchConsoleReportBody).readAt).toBe(
+          new Date(start).toISOString()
+        );
+        expect((later.json as SearchConsoleReportBody).readAt).toBe(
+          new Date(start + 6 * HOUR + MINUTE).toISOString()
+        );
+      });
+
+      it("never answers a kept report after connecting again, for another property, or once disconnected", async () => {
+        const { t, seo } = await boot(dialect);
+        await settings(t, {});
+        const google: Google = { asked: [], failing: {} };
+        await signIn(seo, google);
+        expect((await call(seo, google, "GET", REPORT)).status).toBe(200);
+
+        // Connecting again, perhaps as someone else: Google is read afresh.
+        await signIn(seo, google);
+        let before = google.asked.length;
+        expect((await call(seo, google, "GET", REPORT)).status).toBe(200);
+        expect(google.asked.length).toBeGreaterThan(before);
+
+        // The connection naming another property: that property is read.
+        const connected = (await readConnections(seo)).searchConsole;
+        if (connected === undefined) throw new Error("not connected");
+        await writeConnections(seo, {
+          searchConsole: { ...connected, property: "sc-domain:acme.example" },
+        });
+        before = google.asked.length;
+        expect((await call(seo, google, "GET", REPORT)).status).toBe(200);
+        const asked = google.asked.slice(before).map(each => each.url);
+        expect(asked).toContain(
+          `https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent("sc-domain:acme.example")}/searchAnalytics/query`
+        );
+
+        // Disconnecting forgets the report with the connection.
+        expect(await storedRows(t)).toContain("acme rockets");
+        await call(
+          seo,
+          google,
+          "POST",
+          "/connections/search-console/disconnect"
+        );
+        expect(await storedRows(t)).not.toContain("acme rockets");
+      });
+
+      it("keeps no report read through a connection made again while Google was being read", async () => {
+        const { t, seo } = await boot(dialect);
+        await settings(t, {});
+        const google: Google = { asked: [], failing: {} };
+        await signIn(seo, google);
+
+        // Someone connects again while the report is still reading Google.
+        google.duringInspect = async () => {
+          await call(
+            seo,
+            google,
+            "POST",
+            "/connections/search-console/disconnect"
+          );
+          await signIn(seo, google);
+        };
+        expect((await call(seo, google, "GET", REPORT)).status).toBe(200);
+        expect(
+          (await readConnections(seo)).searchConsoleReport
+        ).toBeUndefined();
+        expect(await storedRows(t)).not.toContain("acme rockets");
+      });
+
+      it("answers a kept report only to the connection that read it", async () => {
+        const { t, seo } = await boot(dialect);
+        await settings(t, {});
+        const google: Google = { asked: [], failing: {} };
+        await signIn(seo, google);
+        expect((await call(seo, google, "GET", REPORT)).status).toBe(200);
+
+        // A report kept for this property, but read through another
+        // connection: a reconnect that landed while it was being saved.
+        const kept = (await readConnections(seo)).searchConsoleReport;
+        if (kept === undefined) throw new Error("no report kept");
+        await writeConnections(seo, {
+          searchConsoleReport: { ...kept, connection: "an-earlier-connection" },
+        });
+        const before = google.asked.length;
+        expect((await call(seo, google, "GET", REPORT)).status).toBe(200);
+        expect(google.asked.length).toBeGreaterThan(before);
+        // The kept report never holds the token it was read through.
+        expect(await storedRows(t)).not.toContain("refresh-shh");
+      });
+
+      it("says Google's failure plainly once the six hours are over, never the old report", async () => {
+        const start = Date.parse("2026-11-15T08:00:00.000Z");
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(start);
+        const { t, seo } = await boot(dialect);
+        await settings(t, {});
+        const google: Google = { asked: [], failing: {} };
+        await signIn(seo, google);
+        expect((await call(seo, google, "GET", REPORT)).status).toBe(200);
+
+        vi.setSystemTime(start + 7 * HOUR);
+        google.failing = { token: 401 };
+        const refused = await call(seo, google, "GET", REPORT);
+        expect(refused.status).toBe(503);
+        expect(refused.text).toContain("no longer accepts this connection");
+        expect((await tab(seo)).body.searchConsole.failed?.message).toContain(
+          "no longer accepts"
+        );
       });
 
       it.each([

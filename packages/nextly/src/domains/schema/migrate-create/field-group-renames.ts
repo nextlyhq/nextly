@@ -20,6 +20,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import { addressableFields } from "../../../shared/addressable-fields";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import {
   fieldGroupRenamePairs,
@@ -66,14 +67,16 @@ export interface FieldGroupRenamePlan {
 
 /**
  * The fields a recorded declaration holds, each with its name. A record is the declaration as
- * written, so anything else in the list (an entry without a name) is not a field this can pair.
+ * written, so anything else in the list (an entry without a name) is not a field this can pair,
+ * save a group with no name, which is read through: the field groups inside it keep their rows
+ * where it sits (`fieldGroupRenamePairs`).
  */
 function declaredFields(
   settings: RecordedEntitySettings | undefined
 ): RenamedFieldShape[] {
   const list = settings?.settings.fields;
   if (!Array.isArray(list)) return [];
-  return list.flatMap(field =>
+  return addressableFields(list).flatMap(field =>
     field !== null &&
     typeof field === "object" &&
     !Array.isArray(field) &&

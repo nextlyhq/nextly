@@ -41,6 +41,13 @@ import type {
   StructuredDataTypeRule,
 } from "../structured-data/rules";
 
+import {
+  BRAND_TEXT_FACTS,
+  brandDetailsDraftOf,
+  storedBrandDetails,
+  type BrandDetailsDraft,
+} from "./brand-draft";
+
 /** One of the brand's official accounts, as the form holds it. */
 export interface ProfileDraft {
   network: string;
@@ -86,6 +93,11 @@ export interface SettingsDraft {
   brandOtherNames: string;
   logo: string | null;
   socialProfiles: ProfileDraft[];
+  /**
+   * The brand's other facts: what it is, how to reach it, when it was
+   * founded and who owns it.
+   */
+  brandDetails: BrandDetailsDraft;
   patterns: Record<string, { title?: string; description?: string }>;
   setupStep: number;
   setupDismissed: boolean;
@@ -102,6 +114,10 @@ export interface SettingsDraft {
   indexNow: boolean;
   /** Whether `/llms.txt` is served. */
   llmsTxt: boolean;
+  /** Whether `/llms-full.txt` is served beside it. */
+  llmsFullTxt: boolean;
+  /** What the site tells AI tools in its own words, at the top of llms.txt. */
+  llmsIntro: string;
   /** Whether each listed page has a plain-text copy. */
   plainTextCopies: boolean;
   /** The site's own robots.txt lines. */
@@ -271,6 +287,7 @@ export function draftOf(
     brandOtherNames: text(stored.brandOtherNames),
     logo: mediaId(stored.logo),
     socialProfiles: profilesOf(stored.socialProfiles),
+    brandDetails: brandDetailsDraftOf(stored.brandDetails),
     patterns: patternsOf(stored.patterns),
     setupStep: typeof stored.setupStep === "number" ? stored.setupStep : 0,
     setupDismissed: stored.setupDismissed === true,
@@ -296,6 +313,8 @@ export function draftOf(
     // Off unless stored as switched on.
     indexNow: stored.indexNow === true,
     llmsTxt: stored.llmsTxt === true,
+    llmsFullTxt: stored.llmsFullTxt === true,
+    llmsIntro: text(stored.llmsIntro),
     plainTextCopies: stored.plainTextCopies === true,
     robotsRules: robotsRulesDraftOf(stored.robotsRules),
     verificationCodes: verificationDraftOf(stored.verificationCodes),
@@ -408,8 +427,12 @@ function sorted(value: unknown): unknown {
 const sameRule = (a: StructuredDataTypeRule, b: StructuredDataTypeRule) =>
   JSON.stringify(sorted(a)) === JSON.stringify(sorted(b));
 
+// A rule declaring only an FAQ section is a choice the site made, so it is
+// not empty.
 const isEmptyRule = (rule: StructuredDataTypeRule): boolean =>
-  rule.type === undefined && Object.keys(rule.details ?? {}).length === 0;
+  rule.type === undefined &&
+  rule.faqSection === undefined &&
+  Object.keys(rule.details ?? {}).length === 0;
 
 /**
  * The rules the site saves: those that differ from the plugin's, so a type
@@ -439,6 +462,25 @@ export function withStructuredType(
 ): SettingsDraft {
   const { type: _previous, ...rest } = draft.structuredData[key] ?? {};
   return withRule(draft, key, type === undefined ? rest : { ...rest, type });
+}
+
+/** Whether the type `key` declares its pages' questions an FAQ section. */
+export function faqSectionOf(draft: SettingsDraft, key: string): boolean {
+  return draft.structuredData[key]?.faqSection === true;
+}
+
+/**
+ * `draft` with the type `key`'s pages' questions declared an FAQ section of
+ * each page, or not: off is no declaration at all rather than `false`, so a
+ * type left alone and one switched back read the same.
+ */
+export function withFaqSection(
+  draft: SettingsDraft,
+  key: string,
+  on: boolean
+): SettingsDraft {
+  const { faqSection: _previous, ...rest } = draft.structuredData[key] ?? {};
+  return withRule(draft, key, on ? { ...rest, faqSection: true } : rest);
 }
 
 /** The fields the type `key` reads each detail of `type` from. */
@@ -549,6 +591,7 @@ function storedForm(
     structuredData: savedRules(draft.structuredData, defaults),
     robotsRules: storedRobotsRules(draft.robotsRules),
     verificationCodes: storedVerification(draft.verificationCodes),
+    brandDetails: storedBrandDetails(draft.brandDetails),
     productionAddresses: draft.productionAddresses
       .map(address => address.trim())
       .filter(address => address !== ""),
@@ -619,7 +662,36 @@ export function rebasedDraft(
       before.verificationCodes,
       after.verificationCodes
     ),
+    brandDetails: rebasedBrandDetails(
+      draft.brandDetails,
+      before.brandDetails,
+      after.brandDetails
+    ),
   };
+}
+
+/**
+ * The brand details moved fact by fact, and the contact points item by
+ * item, so an edit to the email keeps another person's edit to the parent
+ * organization.
+ */
+function rebasedBrandDetails(
+  draft: BrandDetailsDraft,
+  before: BrandDetailsDraft,
+  after: BrandDetailsDraft
+): BrandDetailsDraft {
+  const next: BrandDetailsDraft = {
+    ...after,
+    contactPoints: rebasedSet(
+      draft.contactPoints,
+      before.contactPoints,
+      after.contactPoints
+    ),
+  };
+  for (const fact of BRAND_TEXT_FACTS) {
+    if (draft[fact] !== before[fact]) next[fact] = draft[fact];
+  }
+  return next;
 }
 
 /**
@@ -653,6 +725,7 @@ const MOVED_BY_PART: ReadonlySet<keyof SettingsDraft> = new Set([
   "productionAddresses",
   "socialProfiles",
   "verificationCodes",
+  "brandDetails",
 ]);
 
 /** The draft's own values, other than the per-type ones, edited since `before`. */

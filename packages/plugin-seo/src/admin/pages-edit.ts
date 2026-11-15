@@ -24,7 +24,7 @@ import type {
   SiteAddress,
 } from "../code-pages/contract";
 import type { Problem } from "../problems/contract";
-import { characters, DESCRIPTION_LIMIT, TITLE_LIMIT } from "../tab/problems";
+import { fitSummary, textFit } from "../tab/problems";
 
 import { entryTypeKey, sourceText } from "./pages-view";
 
@@ -229,12 +229,12 @@ export function boxLine(
   ) {
     return { text: "Same as another page · give it its own", tone: "warning" };
   }
-  // Counted as the SEO tab and the problem list count it, in characters.
-  const length = characters(value);
-  const over = length > (field === "title" ? TITLE_LIMIT : DESCRIPTION_LIMIT);
+  // Measured as the SEO tab and the problem list measure it: by its width
+  // on Google, with its characters as a hint.
+  const fit = textFit(field, value);
   return {
-    text: `${length} characters · ${over ? "Longer than search shows" : "Good"}${changed ? " · changed" : ""}`,
-    tone: over ? "warning" : "muted",
+    text: `${fitSummary(fit)}${changed ? " · changed" : ""}`,
+    tone: fit.fits ? "muted" : "warning",
   };
 }
 

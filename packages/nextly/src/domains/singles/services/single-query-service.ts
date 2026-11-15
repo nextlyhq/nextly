@@ -167,6 +167,7 @@ import {
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
 import {
+  fieldsStoredOnRow,
   getColumnDescriptor,
   isTextStorageKind,
 } from "../../schema/services/field-column-descriptor";
@@ -972,17 +973,16 @@ export class SingleQueryService extends BaseService {
     // The snapshot stores JSON-backed fields serialized and relations as ids,
     // exactly as the live row does, so the same stages restore both.
     let overlaid = this.deserializeJsonFields(shaped, singleMeta.fields);
-    overlaid = await this.readUploadFields(
-      overlaid,
-      singleMeta.fields,
-      options
-    );
+    // The references the row holds, those inside a group with no name among them, as the live
+    // assembly reads them (`fieldsStoredOnRow`), so a draft and the live document match.
+    const rowFields = fieldsStoredOnRow(singleMeta.fields);
+    overlaid = await this.readUploadFields(overlaid, rowFields, options);
     // The SAME context the live document's relationships were read under,
     // so a related row is judged identically whether it arrived through the
     // live row or through the draft that replaces it.
     overlaid = await this.expandRelationshipFields(
       overlaid,
-      singleMeta.fields,
+      rowFields,
       options.depth,
       this.relatedRowAccess(
         options,
@@ -1065,7 +1065,10 @@ export class SingleQueryService extends BaseService {
     }
 
     doc = this.deserializeJsonFields(doc, singleMeta.fields);
-    doc = await this.readUploadFields(doc, singleMeta.fields, options);
+    // The references the row holds, those inside a group with no name among them: their columns
+    // are on this row (`fieldsStoredOnRow`), so they are expanded as one beside the group is.
+    const rowFields = fieldsStoredOnRow(singleMeta.fields);
+    doc = await this.readUploadFields(doc, rowFields, options);
     // The language this read resolved to, shared by both expansions below so a
     // related row and a related row inside a component are judged alike.
     const readChain = resolveLocaleChain(
@@ -1076,7 +1079,7 @@ export class SingleQueryService extends BaseService {
     const readLocale = readChain?.[0];
     doc = await this.expandRelationshipFields(
       doc,
-      singleMeta.fields,
+      rowFields,
       options.depth,
       this.relatedRowAccess(options, enforceRelatedFieldAccess, readChain),
       // The read path threads a caller, so the target collection's field rules
@@ -2011,9 +2014,13 @@ export class SingleQueryService extends BaseService {
     const codeFirstFields = this.singleRegistryService.getCodeFirstFields(
       singleMeta.slug
     );
+    // Both lists are read at the row's level (`fieldsStoredOnRow`): a field inside a group with no
+    // name is a column of this row, with a default like one beside the group, and a required one
+    // is NOT NULL, so leaving it out of this insert failed the first read.
+    const rowFields = fieldsStoredOnRow(singleMeta.fields);
     const codeFirstFieldByName = codeFirstFields
       ? new Map(
-          codeFirstFields
+          fieldsStoredOnRow(codeFirstFields)
             .filter(field => "name" in field && field.name)
             .map(field => [(field as { name: string }).name, field])
         )
@@ -2240,7 +2247,7 @@ export class SingleQueryService extends BaseService {
           : after;
     };
 
-    for (const field of singleMeta.fields) {
+    for (const field of rowFields) {
       if (!hasFieldName(field)) continue;
       // Prefer the live code-first field for the declared default: the
       // serialized `field` has lost any `defaultValue` function/structured value.
@@ -2258,7 +2265,7 @@ export class SingleQueryService extends BaseService {
     // `coerceDateFieldsToDate`, and this direct-insert path must do the same or
     // SQLite stores the string in an integer column and reads back an invalid
     // date. Idempotent: an existing `Date` passes through untouched.
-    coerceDateFieldsToDate(defaults, singleMeta.fields);
+    coerceDateFieldsToDate(defaults, rowFields);
 
     // A field can be translatable/required yet emit NO storage column — a
     // component or other layout-only ("skip") field type. Its default has nowhere
@@ -2268,7 +2275,7 @@ export class SingleQueryService extends BaseService {
     // (id/title/slug/timestamps/status) are not user fields, so they are never in
     // this set and always route to the main insert below.
     const noColumnFieldNames = new Set<string>();
-    for (const field of singleMeta.fields) {
+    for (const field of rowFields) {
       if (!("name" in field) || !field.name) continue;
       // Reserved identity keys are backed by the system text column even when a
       // same-named field emits none, so their seed must never be dropped here.

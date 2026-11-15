@@ -40,14 +40,22 @@ import type { ReadRules } from "../resolver/provider";
 import { TITLE_FIELDS } from "../settings/patterns";
 
 import { listedPageAt, listPages, type ListedPage } from "./listing";
-import { llmsTxt, type LlmsEntry } from "./llms-txt";
+import {
+  llmsFullTxt,
+  llmsTxt,
+  type LlmsEntry,
+  type LlmsFullPage,
+} from "./llms-txt";
 import {
   copyAddressOf,
   copyPathsOf,
   pagesOfCopy,
   plainCopyOf,
+  withFrontMatter,
+  type CopyAbout,
   type CopyField,
 } from "./plain-copy";
+import { renderedCopyAt, RENDERING_HEADER } from "./rendered-fetch";
 import { siteOriginFor } from "./site-origin";
 
 /** What the AI outputs read: the site's rules, and what the sitemap lists. */
@@ -107,11 +115,12 @@ async function sectionsOf(
 async function linkedCopies(
   ctx: PluginContext,
   pages: readonly ListedPage[],
-  rules: SiteRules
+  rules: SiteRules,
+  config: AiOutputsConfig
 ): Promise<(at: number) => string | undefined> {
   if (rules.plainTextCopies !== true) return () => undefined;
   const copies = pages.map(page => copyAddressOf(page.loc));
-  const taken = await copiesTaken(ctx, copies);
+  const taken = await copiesTaken(ctx, copies, config);
   const copySet = new Set(copies);
   const literal = new Set(
     pages.map(page => `${page.loc}.md`).filter(copy => copySet.has(copy))
@@ -127,37 +136,89 @@ async function linkedCopies(
   };
 }
 
+/** A listed page's head as the public may read it, and its published document. */
+interface ListedHead {
+  title?: string;
+  description?: string;
+  readable: boolean;
+  /** The published document, as the public reads it, where it may. */
+  document?: Record<string, unknown>;
+}
+
+/**
+ * Whether a page may be rendered to make its copy: only where the site
+ * names its own addresses (a production address, or the configured
+ * origin), so a listed address is one the site chose, never the host a
+ * request named, and no request can send the site to fetch another host.
+ * Serving a copy, llms.txt and a page's head all ask this, so none links a
+ * rendered copy that is not served.
+ */
+async function rendersPages(
+  ctx: PluginContext,
+  config: AiOutputsConfig
+): Promise<boolean> {
+  return (await siteOriginFor(undefined, ctx, config)) !== undefined;
+}
+
 /**
  * Each listed page's title and description as the public may read them,
  * and whether the public may read it at all, by its place in `pages`. A page
- * built in code has no entry: its head is the SEO set for its address, which
- * every visitor's page already carries.
+ * built in code has no document: its head is the SEO set for its address,
+ * which every visitor's page already carries, and its copy is made from the
+ * page as it renders, so the public may read it wherever the site's pages
+ * may be rendered.
  */
 async function listedHeads(
   ctx: PluginContext,
   pages: readonly ListedPage[],
   config: AiOutputsConfig,
   readRules: ReadRules
-): Promise<
-  (at: number) => { title?: string; description?: string; readable: boolean }
-> {
+): Promise<(at: number) => ListedHead> {
   const codeSlug = codePagesSlug(ctx);
   const readable = await publicDocuments(
     pages.filter(page => page.holder.collection !== codeSlug)
   );
   const heads = await publicHeads(ctx, pages, readable, readRules);
   const codeHeads = await codeHeadsOf(ctx, config, readRules);
+  const renders = await rendersPages(ctx, config);
   return at => {
     const page = pages[at];
     if (page === undefined) return { readable: false };
     if (page.holder.collection === codeSlug) {
-      return { ...codeHeads.get(page.path), readable: false };
+      // Its copy is made from the page as it renders, where it may be.
+      return { ...codeHeads.get(page.path), readable: renders };
     }
+    const document = readable.get(readingKey(page));
     return {
       ...heads.get(at),
-      readable: readable.has(readingKey(page)),
+      readable: document !== undefined,
+      ...(document === undefined ? {} : { document }),
     };
   };
+}
+
+/**
+ * The pages both llms files list, as the sitemap lists them, with the site's
+ * rules read once per language for the whole file, as the listing reads
+ * them, not once a page.
+ */
+async function llmsPagesOf(
+  ctx: PluginContext,
+  origin: string,
+  config: AiOutputsConfig
+): Promise<{ pages: readonly ListedPage[]; readRules: ReadRules }> {
+  const readRules = onceEach(config.readRules);
+  const { pages } = await listPages(ctx, {
+    origin,
+    readRules,
+    ...(config.codeRoutes === undefined
+      ? {}
+      : { codeRoutes: config.codeRoutes }),
+    ...(config.collections === undefined
+      ? {}
+      : { collections: config.collections }),
+  });
+  return { pages, readRules };
 }
 
 /**
@@ -174,21 +235,9 @@ export async function llmsTxtOf(
   rules: SiteRules
 ): Promise<string | null> {
   if (rules.llmsTxt !== true) return null;
-  // The site's rules read once per language for the whole file, as the
-  // listing reads them, not once a page.
-  const readRules = onceEach(config.readRules);
-  const { pages } = await listPages(ctx, {
-    origin,
-    readRules,
-    ...(config.codeRoutes === undefined
-      ? {}
-      : { codeRoutes: config.codeRoutes }),
-    ...(config.collections === undefined
-      ? {}
-      : { collections: config.collections }),
-  });
+  const { pages, readRules } = await llmsPagesOf(ctx, origin, config);
   const sections = await sectionsOf(ctx, pages);
-  const linked = await linkedCopies(ctx, pages, rules);
+  const linked = await linkedCopies(ctx, pages, rules, config);
   const headOf = await listedHeads(ctx, pages, config, readRules);
   const entries: LlmsEntry[] = pages.map((page, at) => {
     const head = headOf(at);
@@ -202,12 +251,91 @@ export async function llmsTxtOf(
     };
   });
   return llmsTxt({
+    ...fileHeadOf(origin, rules),
+    ...(rules.llmsFullTxt === true
+      ? { fullTxt: new URL("/llms-full.txt", origin).href }
+      : {}),
+    entries,
+  });
+}
+
+/** What both llms files begin with: the site's name, summary and own words. */
+function fileHeadOf(
+  origin: string,
+  rules: SiteRules
+): { name: string; description?: string; intro?: string } {
+  return {
     name: rules.siteName ?? new URL(origin).host,
     ...(rules.description === undefined
       ? {}
       : { description: rules.description }),
-    entries,
+    ...(rules.llmsIntro === undefined ? {} : { intro: rules.llmsIntro }),
+  };
+}
+
+/**
+ * The llms-full.txt of the site at `origin`, or null unless both it and
+ * llms.txt are switched on: llms.txt's head, then every page llms.txt lists,
+ * in its order, with the words its plain-text copy holds. A page the public
+ * may not read, or one built in code, is named by its address alone. Each
+ * type's fields and every page's document are read once for the file, and a
+ * page's words are built only as the file takes the page, so none past
+ * where the file stops short is ever built. `maxBytes` is the file's size,
+ * 5 MB unless given; only a test gives a smaller one.
+ */
+export async function llmsFullTxtOf(
+  ctx: PluginContext,
+  origin: string,
+  config: AiOutputsConfig,
+  rules: SiteRules,
+  maxBytes?: number
+): Promise<string | null> {
+  if (rules.llmsTxt !== true || rules.llmsFullTxt !== true) return null;
+  const { pages, readRules } = await llmsPagesOf(ctx, origin, config);
+  const headOf = await listedHeads(ctx, pages, config, readRules);
+  // The fields of each type with a page the public may read, one read a
+  // type, taken before the file is written so the pages can be built as
+  // the file takes them, with nothing left to wait for.
+  const fields = new Map<string, readonly CopyField[] | undefined>();
+  for (const [at, page] of pages.entries()) {
+    const { collection } = page.holder;
+    if (headOf(at).document !== undefined && !fields.has(collection)) {
+      fields.set(collection, await fieldsOf(ctx, collection));
+    }
+  }
+  return llmsFullTxt({
+    ...fileHeadOf(origin, rules),
+    pages: fullPagesOf(pages, headOf, fields),
+    listUrl: new URL("/llms.txt", origin).href,
+    ...(maxBytes === undefined ? {} : { maxBytes }),
   });
+}
+
+/**
+ * The pages of llms-full.txt, in the listing's order, each built only when
+ * the file asks for it: the file stops asking once a page will not fit, so
+ * the words of the pages after it are never built or kept, however large
+ * the site.
+ */
+function* fullPagesOf(
+  pages: readonly ListedPage[],
+  headOf: (at: number) => ListedHead,
+  fields: ReadonlyMap<string, readonly CopyField[] | undefined>
+): Generator<LlmsFullPage> {
+  for (const [at, page] of pages.entries()) {
+    const head = headOf(at);
+    yield {
+      title: head.title ?? page.path,
+      url: page.loc,
+      ...(head.document === undefined
+        ? {}
+        : {
+            body: copyOfDocument(page, head.document, head.title, {
+              fields: fields.get(page.holder.collection),
+            }),
+          }),
+    };
+  }
 }
 
 /** The fields a page's type declares, where the site can say. */
@@ -416,14 +544,14 @@ async function publicHead(
 
 /**
  * The language and kept path of each page of `candidates`, paths on `url`'s
- * host, in their order. A path is kept without its trailing slash, as the
- * record keys it.
+ * host, in their order, with the path as the site serves it. A path is kept
+ * without its trailing slash, as the record keys it.
  */
 async function pageAddressesAsked(
   url: URL,
   candidates: readonly string[]
-): Promise<{ locale: string; path: string }[]> {
-  const asked: { locale: string; path: string }[] = [];
+): Promise<{ locale: string; path: string; served: string }[]> {
+  const asked: { locale: string; path: string; served: string }[] = [];
   for (const candidate of candidates) {
     const pageUrl = new URL(url.href);
     pageUrl.pathname = candidate;
@@ -434,68 +562,147 @@ async function pageAddressesAsked(
     asked.push({
       locale,
       path: path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path,
+      // As the site serves it, its language prefix kept.
+      served: bare(candidate),
     });
   }
   return asked;
 }
 
+/** What a copy's front matter says of `page`, from its head. */
+function aboutOf(
+  page: ListedPage,
+  head: { title?: string; description?: string }
+): CopyAbout {
+  return {
+    ...(head.title === undefined ? {} : { title: head.title }),
+    ...(head.description === undefined
+      ? {}
+      : { description: head.description }),
+    url: page.loc,
+    ...(page.lastModified === undefined
+      ? {}
+      : { lastUpdated: page.lastModified }),
+  };
+}
+
 /**
- * A listed page's plain-text copy, from its published document: its front
- * matter from the head the public may read and the sitemap's last change.
+ * The copy of `page` made from the page as it is rendered, asked for at its
+ * own listed address; its front matter from `head`, else the rendered
+ * page's own head. None where the page does not render.
+ */
+async function renderedCopyFor(
+  ctx: PluginContext,
+  page: ListedPage,
+  head: { title?: string; description?: string }
+): Promise<string | null> {
+  const rendered = await renderedCopyAt(ctx, page.loc, page.loc);
+  if (rendered === null) return null;
+  const title = head.title ?? rendered.title;
+  const description = head.description ?? rendered.description;
+  return withFrontMatter(
+    aboutOf(page, {
+      ...(title === undefined ? {} : { title }),
+      ...(description === undefined ? {} : { description }),
+    }),
+    rendered.body
+  );
+}
+
+/** Whether a copy says anything beyond its heading. */
+const holdsWords = (copy: string): boolean =>
+  copy.replace(/^# [^\n]*\n*/, "").trim() !== "";
+
+/**
+ * A listed page's plain-text copy. A page built in code is copied from the
+ * page as it renders, since it has no stored words; so is a page whose
+ * stored fields hold none beyond its title, such as a Page Builder layout,
+ * whose words only the rendered page shows. Every other page is copied from
+ * its published document, read as the public reads it. The front matter is
+ * the head the public may read, and the sitemap's last change.
+ *
+ * A page is rendered only where `render` says it may be
+ * ({@link rendersPages}).
  */
 async function copyOf(
   ctx: PluginContext,
   page: ListedPage,
-  readRules: ReadRules
+  config: AiOutputsConfig,
+  render: boolean
 ): Promise<string | null> {
+  const { readRules } = config;
+  if (page.holder.collection === codePagesSlug(ctx)) {
+    if (!render) return null;
+    const heads = await codeHeadsOf(ctx, config, readRules);
+    return renderedCopyFor(ctx, page, heads.get(page.path) ?? {});
+  }
   const document = (await publicDocuments([page])).get(readingKey(page));
   if (document === undefined) return null;
   const head = await publicHead(ctx, page, document, readRules);
-  // The page's own title, as the page shows it, and the field it is in;
-  // else its head's, worked out from what the public may read.
+  // The stored copy without front matter, so a page whose stored fields
+  // hold no words can be copied from its rendered page instead.
+  const stored = copyOfDocument(page, document, head.title, {
+    fields: await fieldsOf(ctx, page.holder.collection),
+  });
+  if (render && !holdsWords(stored)) {
+    const rendered = await renderedCopyFor(ctx, page, head);
+    if (rendered !== null) return rendered;
+  }
+  return withFrontMatter(aboutOf(page, head), stored);
+}
+
+/**
+ * A page's plain-text copy from its published document: headed by the
+ * page's own title, as the page shows it (and the field it is in, said
+ * once), else `headTitle`, worked out from what the public may read;
+ * without front matter, which each caller adds where it wants one.
+ */
+function copyOfDocument(
+  page: ListedPage,
+  document: Record<string, unknown>,
+  headTitle: string | undefined,
+  { fields }: { fields?: readonly CopyField[] | undefined }
+): string {
   const titleField = TITLE_FIELDS.find(
     name => textOf(document[name]) !== undefined
   );
   const title =
-    titleField === undefined ? head.title : textOf(document[titleField]);
-  const fields = await fieldsOf(ctx, page.holder.collection);
+    titleField === undefined ? headTitle : textOf(document[titleField]);
   return plainCopyOf({
     ...(title === undefined ? {} : { title }),
     ...(titleField === undefined ? {} : { titleField }),
     document,
     ...(fields === undefined ? {} : { fields }),
     base: page.loc,
-    about: {
-      ...(head.title === undefined ? {} : { title: head.title }),
-      ...(head.description === undefined
-        ? {}
-        : { description: head.description }),
-      url: page.loc,
-      ...(page.lastModified === undefined
-        ? {}
-        : { lastUpdated: page.lastModified }),
-    },
   });
 }
 
 /**
  * Which of `copies`, copy addresses, a page of the site holds itself, such
  * as a page whose address is `/guide.md`: that page is served there, so no
- * copy is, and none is linked. One read of the record per language.
+ * copy is, and none is linked. A page built in code holds the path its
+ * route serves, which the record does not hold, so the site's routes are
+ * read too. One read of the record per language.
  */
 async function copiesTaken(
   ctx: PluginContext,
-  copies: readonly string[]
+  copies: readonly string[],
+  config: Pick<AiOutputsConfig, "codeRoutes">
 ): Promise<Set<string>> {
+  const taken = new Set<string>();
+  const built = new Set(config.codeRoutes?.().map(route => route.path) ?? []);
   const byLanguage = new Map<string, { copy: string; path: string }[]>();
   for (const copy of copies) {
+    if (built.has(new URL(copy).pathname)) {
+      taken.add(copy);
+      continue;
+    }
     const address = await addressOfRequest(new URL(copy));
     if (address === undefined) continue;
     const list = byLanguage.get(address.locale) ?? [];
     list.push({ copy, path: address.path });
     byLanguage.set(address.locale, list);
   }
-  const taken = new Set<string>();
   for (const [language, asked] of byLanguage) {
     const paths = asked.map(each => each.path);
     await withAddressHolders(ctx, language, paths, async () => {
@@ -550,13 +757,21 @@ async function pageAsked(
   const site = (await siteOriginFor(url.origin, ctx, config)) ?? url.origin;
   for (const address of await pageAddressesAsked(url, candidates)) {
     const own = originOf(await servedAt("/", address.locale));
-    const page = await listedPageAt(ctx, address.path, address.locale, {
-      origin: own === url.origin ? url.origin : site,
-      readRules: config.readRules,
-      ...(config.collections === undefined
-        ? {}
-        : { collections: config.collections }),
-    });
+    const { path, locale, served } = address;
+    const page = await listedPageAt(
+      ctx,
+      { path, language: locale, served },
+      {
+        origin: own === url.origin ? url.origin : site,
+        readRules: config.readRules,
+        ...(config.codeRoutes === undefined
+          ? {}
+          : { codeRoutes: config.codeRoutes }),
+        ...(config.collections === undefined
+          ? {}
+          : { collections: config.collections }),
+      }
+    );
     if (page !== null && asksFor(page, url, atPage)) return page;
   }
   return null;
@@ -574,7 +789,7 @@ async function copyServedAt(
   loc: string,
   config: AiOutputsConfig
 ): Promise<ListedPage | null> {
-  if ((await copiesTaken(ctx, [url.href])).size > 0) return null;
+  if ((await copiesTaken(ctx, [url.href], config)).size > 0) return null;
   const page = await pageAsked(
     ctx,
     url,
@@ -602,6 +817,9 @@ export async function servedCopyAddress(
     const url = new URL(path, loc);
     const page = await copyServedAt(ctx, url, loc, config);
     if (page === null) continue;
+    if (page.holder.collection === codePagesSlug(ctx)) {
+      return (await rendersPages(ctx, config)) ? url.href : undefined;
+    }
     return (await publicDocuments([page])).has(readingKey(page))
       ? url.href
       : undefined;
@@ -624,11 +842,13 @@ async function plainCopyAt(
   const rules = await config.readRules(ctx, undefined);
   if (rules.plainTextCopies !== true) return null;
   // A page of the site's at the copy's address is served there instead.
-  if (!atPage && (await copiesTaken(ctx, [url.href])).size > 0) return null;
+  if (!atPage && (await copiesTaken(ctx, [url.href], config)).size > 0) {
+    return null;
+  }
   const candidates = atPage ? [url.pathname] : pagesOfCopy(url.pathname);
   const page = await pageAsked(ctx, url, config, candidates, atPage);
   if (page === null) return null;
-  const body = await copyOf(ctx, page, config.readRules);
+  const body = await copyOf(ctx, page, config, await rendersPages(ctx, config));
   return body === null ? null : { body, page, llmsTxt: rules.llmsTxt === true };
 }
 
@@ -707,6 +927,24 @@ function copyHeaders(copy: FoundCopy, atPage: boolean): Record<string, string> {
 }
 
 /**
+ * The copy `request` asks for: its address, and whether it is asked for at
+ * the page's own address (by `Accept`) rather than at a `.md` address; none
+ * where it asks for no copy.
+ */
+function copyAskedFor(
+  request: Request
+): { url: URL; atPage: boolean } | undefined {
+  if (request.method !== "GET" && request.method !== "HEAD") return undefined;
+  // A page asked for to make a copy from is the page, never a copy.
+  if (request.headers.has(RENDERING_HEADER)) return undefined;
+  const url = new URL(request.url);
+  if (url.pathname.endsWith(".md")) return { url, atPage: false };
+  return prefersMarkdown(request.headers.get("accept"))
+    ? { url, atPage: true }
+    : undefined;
+}
+
+/**
  * The Proxy handler that answers a request for a page's plain-text copy:
  * a GET or HEAD of an address ending in `.md`, or of a page's own address
  * whose `Accept` header asks for Markdown over HTML. Every other request
@@ -719,12 +957,9 @@ export function plainCopyProxyHandler(
   return {
     name: "plain-text-copies",
     async handle(request, ctx) {
-      if (request.method !== "GET" && request.method !== "HEAD") return;
-      const url = new URL(request.url);
-      const atPage =
-        !url.pathname.endsWith(".md") &&
-        prefersMarkdown(request.headers.get("accept"));
-      if (!url.pathname.endsWith(".md") && !atPage) return;
+      const asked = copyAskedFor(request);
+      if (asked === undefined) return;
+      const { url, atPage } = asked;
       // While the address record catches up, a page may not hold its address
       // yet: the request passes to the site as if no copy were served, and a
       // catch-up that failed is tried again.

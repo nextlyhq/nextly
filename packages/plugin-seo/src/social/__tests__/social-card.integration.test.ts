@@ -77,7 +77,10 @@ afterEach(async () => {
   }
 });
 
-async function boot(dialect: TestDialect) {
+async function boot(
+  dialect: TestDialect,
+  { xAccount }: { xAccount?: string } = {}
+) {
   current = await createTestNextly({
     dialect,
     seedPublic: true,
@@ -85,7 +88,11 @@ async function boot(dialect: TestDialect) {
       seoPlugin({
         collections: ["posts"],
         baseUrl: "https://example.com",
-        socialCard: { siteName: "Acme", language: "en-GB" },
+        socialCard: {
+          siteName: "Acme",
+          language: "en-GB",
+          ...(xAccount === undefined ? {} : { xAccount }),
+        },
       }),
     ],
     collections: [
@@ -267,6 +274,29 @@ describe.each(getConfiguredTestDialects())("social cards (%s)", dialect => {
       card: "summary_large_image",
       images: [{ url: image.url, alt: image.alt }],
     });
+  });
+
+  it("names the site's X account on every card where the plugin's options give one", async () => {
+    const t = await boot(dialect, { xAccount: "https://x.com/example" });
+    await t.nextly.create({
+      collection: "posts",
+      data: { title: "Harbour", slug: "harbour", status: "published" },
+    });
+    expect((await headOf(t, "harbour")).twitter).toMatchObject({
+      site: "@example",
+    });
+  });
+
+  it("names no X account where the plugin's options give none", async () => {
+    const t = await boot(dialect);
+    await t.nextly.create({
+      collection: "posts",
+      data: { title: "Harbour", slug: "harbour", status: "published" },
+    });
+    const head = await headOf(t, "harbour");
+    // The card is there, with no account on it.
+    expect(head.twitter).toMatchObject({ title: { absolute: "Harbour" } });
+    expect(head.twitter).not.toHaveProperty("site");
   });
 
   it("makes a 1200 × 630 JPEG under 600 KB from an undersized picture, leaving the picture as it was", async () => {

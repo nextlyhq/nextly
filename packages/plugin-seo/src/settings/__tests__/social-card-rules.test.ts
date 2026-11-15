@@ -11,11 +11,11 @@ describe("the social card's rules, from the SEO settings", () => {
           siteName: "Old",
           language: "en-GB",
         },
-        { origin: "https://rext.ai", siteName: "Rext AI" }
+        { origin: "https://www.example.com", siteName: "Acme" }
       )
     ).toEqual({
-      origin: "https://rext.ai",
-      siteName: "Rext AI",
+      origin: "https://www.example.com",
+      siteName: "Acme",
       language: "en-GB",
     });
   });
@@ -27,6 +27,15 @@ describe("the social card's rules, from the SEO settings", () => {
       language: "en",
     };
     expect(socialCardRulesOf(base, {})).toEqual(base);
+  });
+
+  it("keeps the X account the plugin's options name, which the settings do not hold", () => {
+    expect(
+      socialCardRulesOf(
+        { language: "en", xAccount: "@example" },
+        { siteName: "Acme" }
+      )
+    ).toEqual({ siteName: "Acme", language: "en", xAccount: "@example" });
   });
 
   it("names no site where neither the settings nor the options do", () => {
