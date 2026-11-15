@@ -246,6 +246,16 @@ interface ViewState {
    * cleared its registry rows at once).
    */
   mine: Map<string, number>;
+  /**
+   * The earlier times this process's records wrote, per tag, once a later
+   * record moved `mine` on, each with when it stops counting, on this
+   * process's clock. A lookup made between two records of a tag answers the
+   * first and is reused for its TTL; judged by `mine` alone, that answer would
+   * read as another instance's, and its grace would refuse every entry this
+   * process filled after both writes. A field of its own rather than a change
+   * to `mine`, which other copies of this module read and write as it is.
+   */
+  mineSuperseded: Map<string, SupersededRecord[]>;
   /** The last record attempt's number: attempts are numbered as they start. */
   recordSeq: number;
   /**
@@ -285,10 +295,20 @@ interface ViewState {
   warned: boolean;
 }
 
+/** A time one of this process's records wrote, since superseded in `mine`. */
+interface SupersededRecord {
+  /** The time the record wrote, on the database's clock, graced. */
+  at: number;
+  /** When no lookup that may hold it is still reused, on this process's clock. */
+  until: number;
+}
+
 const globalForView = globalThis as unknown as {
-  // A copy of this module from before `mine` was kept may have made it.
-  __nextly_tag_expiry_view?: Omit<ViewState, "mine"> & {
+  // A copy of this module from before `mine` or `mineSuperseded` was kept may
+  // have made it.
+  __nextly_tag_expiry_view?: Omit<ViewState, "mine" | "mineSuperseded"> & {
     mine?: ViewState["mine"];
+    mineSuperseded?: ViewState["mineSuperseded"];
   };
 };
 
@@ -298,6 +318,7 @@ function state(): ViewState {
     asking: new Map(),
     own: new Map(),
     mine: new Map(),
+    mineSuperseded: new Map(),
     recordSeq: 0,
     refusals: new Map(),
     landedSeq: new Map(),
@@ -311,11 +332,59 @@ function state(): ViewState {
   // has no `mine`: given one here, the first record would otherwise throw.
   return Object.assign(view, {
     mine: view.mine ?? new Map(),
+    mineSuperseded:
+      view.mineSuperseded ?? new Map<string, SupersededRecord[]>(),
     recordSeq: view.recordSeq ?? 0,
     refusals: view.refusals ?? new Map<string, { seq: number; at: number }>(),
     landedSeq: view.landedSeq ?? new Map<string, number>(),
     calls: view.calls ?? noLedgerCalls(),
   });
+}
+
+/**
+ * How long a superseded own record still counts as this process's. A lookup
+ * that answered it began its read before the later record wrote the row, so
+ * it answered within {@link LEDGER_CALL_TIMEOUT_MS} of the later record
+ * landing, and is asked again {@link TAG_LOOKUP_TTL_MS} after its answer.
+ */
+const SUPERSEDED_RECORD_MS = LEDGER_CALL_TIMEOUT_MS + TAG_LOOKUP_TTL_MS;
+
+/**
+ * The most superseded own records kept per tag, however fast it is written.
+ * One dropped sooner, or still answered past {@link SUPERSEDED_RECORD_MS} (by
+ * a lookup whose refresh failed, or by a row a later record on a clock that
+ * stepped back could not move back), is judged as another instance's: that
+ * costs a rebuild within its grace, never a stale entry.
+ */
+const MAX_SUPERSEDED_RECORDS_PER_TAG = 8;
+
+/**
+ * Keeps `at`, the time an earlier record of `tag` by this process wrote, now
+ * a later record has moved `mine` on, dropping those past their time.
+ */
+function keepSupersededRecord(view: ViewState, tag: string, at: number): void {
+  const now = Date.now();
+  const kept = (view.mineSuperseded.get(tag) ?? []).filter(
+    record => record.until > now
+  );
+  kept.push({ at, until: now + SUPERSEDED_RECORD_MS });
+  view.mineSuperseded.set(tag, kept.slice(-MAX_SUPERSEDED_RECORDS_PER_TAG));
+}
+
+/**
+ * Whether `at`, a ledger time a lookup answered for `tag`, is one this
+ * process's own records wrote: the latest, or an earlier one a lookup may
+ * still hold. Matched exactly, as `mine` is: any other time, even one between
+ * two of this process's, is another instance's.
+ */
+function isOwnRecord(view: ViewState, tag: string, at: number): boolean {
+  if (view.mine.get(tag) === at) return true;
+  const now = Date.now();
+  return (
+    view.mineSuperseded
+      .get(tag)
+      ?.some(record => record.at === at && record.until > now) ?? false
+  );
 }
 
 /** Publishes the ledger the handlers read and record into; `null` withdraws it. */
@@ -421,6 +490,16 @@ function sweep(view: ViewState, now: number): void {
       view.mine.delete(tag);
       view.landedSeq.delete(tag);
     }
+  }
+  forgetSupersededRecords(view, now);
+}
+
+/** Drops superseded own records once no lookup that may hold one is reused. */
+function forgetSupersededRecords(view: ViewState, now: number): void {
+  for (const [tag, records] of view.mineSuperseded) {
+    const kept = records.filter(record => record.until > now);
+    if (kept.length === 0) view.mineSuperseded.delete(tag);
+    else view.mineSuperseded.set(tag, kept);
   }
 }
 
@@ -528,10 +607,12 @@ export async function refreshTagExpiries(
  * still judged by its reading rather than ignored, because another instance
  * may record the same tag in the same millisecond, and only the time says
  * which: an entry begun before that reading is refused, whoever recorded it.
+ * An earlier own record a lookup still holds is this process's too: an entry
+ * begun before a later write is refused by that write's expiry in `own`.
  */
 function recordedExpiry(view: ViewState, tag: string): number {
   const recorded = view.lookups.get(tag)?.expiredAt ?? 0;
-  return recorded > 0 && view.mine.get(tag) === recorded
+  return recorded > 0 && isOwnRecord(view, tag, recorded)
     ? recorded - TAG_EXPIRY_GRACE_MS
     : recorded;
 }
@@ -641,6 +722,12 @@ async function record(
       return ledger.record(tags).then(stored => {
         if (stored === false) return stored;
         for (const [tag, at] of stored) {
+          // The time it replaces stays this process's while a lookup may
+          // still hold it, whichever copy of this module recorded it.
+          const before = view.mine.get(tag);
+          if (before !== undefined && before !== at) {
+            keepSupersededRecord(view, tag, before);
+          }
           view.mine.set(tag, at);
           view.landedSeq.set(
             tag,
