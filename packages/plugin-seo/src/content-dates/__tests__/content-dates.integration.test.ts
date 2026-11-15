@@ -34,6 +34,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { lastCatchUp } from "../../address-record/catch-up";
 import { seoContext } from "../../address-record/__tests__/record-tables";
+import { forgetNotes, readNotes } from "../../address-record/store";
 import { siteActor } from "../../import/actor";
 import { documentsIn } from "../../languages/versions";
 import { typeOf } from "../../outputs/listing";
@@ -48,6 +49,11 @@ import { contentFingerprint, earlierContentFingerprints } from "../fingerprint";
 import { contentDatesSettled } from "../hooks";
 import { recordSaved, refreshContentDates } from "../record";
 import { pageDateKey, pruneContentDates } from "../store";
+import {
+  FINGERPRINT_READING_KEY,
+  lastFingerprintUpgrade,
+  upgradeKeptFingerprints,
+} from "../upgrade";
 
 const SITE = "https://acme.example";
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run.
@@ -69,6 +75,7 @@ let current: TestNextly | undefined;
 afterEach(async () => {
   // Recordings still running would read a database already closed.
   await contentDatesSettled();
+  await lastFingerprintUpgrade();
   await current?.destroy();
   current = undefined;
 });
@@ -835,8 +842,42 @@ describe.each(getConfiguredTestDialects())(
         contentFingerprint(await published())
       );
 
-      // A content change still moves it.
+      // Brought up to date at the first start after the upgrade, before an
+      // admin save sends the field groups back and rewrites their rows: the
+      // stamps the earlier fingerprint was taken from are gone after it.
       await keptByEarlierRelease();
+      await forgetNotes(ctx, [FINGERPRINT_READING_KEY]);
+      await upgradeKeptFingerprints(ctx);
+      expect((await rows(ctx))[0]?.fingerprint).toBe(
+        contentFingerprint(await published())
+      );
+      await nextSecond();
+      const read = (await t.nextly.findByID({
+        collection: POSTS,
+        id: post.id,
+      })) as Record<string, unknown>;
+      await t.nextly.update({
+        collection: POSTS,
+        id: post.id,
+        data: {
+          title: read.title,
+          slug: read.slug,
+          body: read.body,
+          oldSeo: read.oldSeo,
+          cards: read.cards,
+          seo: { metaTitle: "Hello, again" },
+          _overwrite: true,
+        },
+      });
+      expect(second(await lastmodOf(loc))).toBe(second(earlierDate));
+
+      // Once noted, a start reads the note and nothing else.
+      await keptByEarlierRelease();
+      const [noted] = await rows(ctx);
+      await upgradeKeptFingerprints(ctx);
+      expect((await rows(ctx))[0]?.fingerprint).toBe(noted?.fingerprint);
+
+      // A content change still moves it.
       await nextSecond();
       await t.nextly.update({
         collection: POSTS,
@@ -846,6 +887,16 @@ describe.each(getConfiguredTestDialects())(
       expect(Date.parse(String(await lastmodOf(loc)))).toBeGreaterThan(
         earlierDate.getTime()
       );
+    });
+
+    it("brings the kept fingerprints up to date when the plugin starts, and notes it", async () => {
+      await boot(dialect);
+      // Started by the plugin's start, after the boot.
+      await lastFingerprintUpgrade();
+      const { notes } = await readNotes(seoContext(), [
+        FINGERPRINT_READING_KEY,
+      ]);
+      expect(notes.get(FINGERPRINT_READING_KEY)).toBeTruthy();
     });
   }
 );
