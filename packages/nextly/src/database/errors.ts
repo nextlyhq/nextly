@@ -275,6 +275,18 @@ export function safeCode(error: unknown): string | undefined {
   return undefined;
 }
 
+/**
+ * PostgreSQL codes outside class 08 that mean the database was not reached,
+ * as a lost connection does: admin_shutdown (57P01); too_many_connections
+ * (53300), the server had no connection to give; idle_session_timeout
+ * (57P05), the server closed a connection held idle past its limit.
+ */
+const PG_CONNECTION_LOST: ReadonlySet<string> = new Set([
+  "57P01",
+  "53300",
+  "57P05",
+]);
+
 function mapPostgresCodeToKind(code?: string): DbErrorKind {
   if (!code) return "internal";
   const c = code.toUpperCase();
@@ -285,10 +297,20 @@ function mapPostgresCodeToKind(code?: string): DbErrorKind {
   if (c === "23503") return "fk-violation";
   if (c === "23502") return "not-null-violation";
   if (c === "42601") return "syntax";
-  if (c.startsWith("08") || c === "57P01") return "connection-lost"; // connection exceptions / admin shutdown
+  if (c.startsWith("08") || PG_CONNECTION_LOST.has(c)) return "connection-lost"; // connection exceptions, and the codes above
   if (c.startsWith("23")) return "constraint"; // integrity constraint violation (generic)
   return "internal";
 }
+
+/**
+ * MySQL's too-many-connections error, by number and by name: the server had
+ * no connection to give, so the database was not reached, as PostgreSQL's
+ * 53300 is read above.
+ */
+const MYSQL_TOO_MANY_CONNECTIONS: ReadonlySet<string> = new Set([
+  "1040",
+  "ER_CON_COUNT_ERROR",
+]);
 
 function mapMySqlCodeToKind(code?: string): DbErrorKind {
   if (!code) return "internal";
@@ -303,6 +325,7 @@ function mapMySqlCodeToKind(code?: string): DbErrorKind {
   if (c === "1451" || c === "ER_ROW_IS_REFERENCED_2") return "fk-violation";
   if (c === "ECONNRESET" || c.includes("PROTOCOL_CONNECTION_LOST"))
     return "connection-lost";
+  if (MYSQL_TOO_MANY_CONNECTIONS.has(c)) return "connection-lost";
   if (c === "ETIMEDOUT") return "timeout";
   return "internal";
 }

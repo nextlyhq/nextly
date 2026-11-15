@@ -53,6 +53,11 @@ describe("withNextly's file tracing includes", () => {
     );
   });
 
+  it("adds @vercel/functions, which the adapters import on Vercel when the app installs it", () => {
+    const includes = wrap({}).outputFileTracingIncludes as Includes;
+    expect(includes["/**"]).toContain("./node_modules/@vercel/functions/**/*");
+  });
+
   it("keeps the app's own top-level entries, for every route pattern", () => {
     const config = wrap({
       outputFileTracingIncludes: {
