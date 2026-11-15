@@ -169,6 +169,19 @@ function ConnectionNote({ item }: { item: SiteAddress }): JSX.Element {
       </Note>
     );
   }
+  if (item.standing === "unconfirmed") {
+    return (
+      <Note tone="warning">
+        <b className="font-semibold">
+          Whether {item.path} is still served isn&apos;t confirmed.
+        </b>{" "}
+        The server couldn&apos;t read the build&apos;s list of the pages{" "}
+        <Code>{item.from}</Code> declares, so this page is listed from what its
+        route recorded. What you set here still reaches it whenever the route
+        serves it; the sitemap leaves it out until the list can be read.
+      </Note>
+    );
+  }
   if (item.source === "dynamic") {
     return (
       <Note icon={<Info className="size-4" />}>

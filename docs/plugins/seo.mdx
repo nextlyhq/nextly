@@ -850,7 +850,9 @@ declares. Each row shows the title and description search is given for the page,
 comes from (its own value, the page's code, or the pattern it was made from), and its **Status**:
 the most serious problem the [problem list](#problems) holds for the page, else **Not connected**
 for a page built in code whose route doesn't call the plugin, **Hidden** for a page kept out of
-search, or **Good**. A page no check has reached for you says **Not checked** rather than **Good**:
+search, or **Good**. **Unconfirmed** marks a page a route with a variable part recorded while the
+server can't read the build's list of the addresses those routes declare
+([why](#pages-built-in-code)). A page no check has reached for you says **Not checked** rather than **Good**:
 no problem listed for it is no evidence of none. **Links** says how many other pages link to the
 page and how many it links to (`3 in · 5 out`), counting each page once, however many links it
 holds, from the links in each page's content in the same language; a dash for a page built in
@@ -1993,8 +1995,17 @@ screen and its saves ask `manage-seo`.
 The routes are read at run time from what `next build` wrote: `.next/server/app-paths-manifest.json`
 and `.next/prerender-manifest.json`. Next.js lists both among the files every server function
 needs (`.next/required-server-files.json`), so a Vercel deployment and a `standalone` build
-carry them with no setting. A deploy that copies only part of `.next` must keep both, or the
-screen lists no page built in code.
+carry them with no setting. A deploy that copies only part of `.next` must keep both: without
+the app paths manifest the screen lists no page built in code.
+
+Without a readable prerender manifest (missing, not JSON, or listing no pages on a production
+server), the addresses routes with a variable part declared can't be confirmed. The screen then
+shows a banner naming the file, and the server logs one warning saying so. Each route with no
+variable part is still listed. Each address such a route recorded when it last rendered, which
+`next build` does for every page it renders, is listed as **Unconfirmed** when a route of this
+build could serve it, and a recorded address no route could serve is left out. What is set for
+an unconfirmed page still reaches it whenever its route serves it. The sitemap, `llms.txt` and
+the plain-text copies list confirmed pages only, so they leave it out until the file can be read.
 
 What is set there reaches the page once its route adds one line, calling `seoMetadata` with
 its address:

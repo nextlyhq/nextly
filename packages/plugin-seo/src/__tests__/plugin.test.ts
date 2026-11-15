@@ -147,8 +147,9 @@ describe("seoPlugin", () => {
       // The problem list, read and checked again by a signed-in reader.
       ["GET", "/problems", undefined, undefined],
       ["POST", "/problems/check", undefined, undefined],
-      // The Pages screen's list, and its save.
+      // The Pages screen's list, what it is told of the build, and its save.
       ["GET", "/pages", undefined, undefined],
+      ["GET", "/pages/build", undefined, undefined],
       ["POST", "/pages/seo", undefined, undefined],
       // The bulk edit table, for a signed-in reader of each type.
       ["GET", "/bulk/types", undefined, undefined],
@@ -179,6 +180,7 @@ describe("seoPlugin", () => {
       return typeof found === "function" ? found(scope) : found;
     };
     expect(permissionOf("GET", "/pages")).toBe("manage-seo");
+    expect(permissionOf("GET", "/pages/build")).toBe("manage-seo");
     expect(permissionOf("POST", "/pages/seo")).toBe("manage-seo");
   });
 
@@ -252,6 +254,7 @@ describe("seoPlugin", () => {
       "/problems",
       "/problems/check",
       "/pages",
+      "/pages/build",
       "/pages/seo",
       "/bulk/types",
       "/bulk/rows",
@@ -300,6 +303,7 @@ describe("seoPlugin", () => {
       "/problems",
       "/problems/check",
       "/pages",
+      "/pages/build",
       "/pages/seo",
       "/bulk/types",
       "/bulk/rows",
