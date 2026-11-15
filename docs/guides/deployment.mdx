@@ -129,7 +129,7 @@ pnpm add @vercel/functions
 
 With it installed, the adapter hands its pool to [`attachDatabasePool`](https://vercel.com/docs/functions/functions-api-reference/vercel-functions-package#attachdatabasepool), which keeps an instance alive until its idle connections have closed, rather than suspending it with them open. Without it the adapter logs one warning when it connects and relies on the short idle timeout alone.
 
-To size the pool yourself, set `DB_POOL_MAX`, `DB_POOL_MIN` or `DB_POOL_IDLE_TIMEOUT`, or pass `pool` to the adapter. Each setting replaces only its own default, so `DB_POOL_MAX=10` gives a larger pool that still closes idle connections after 5 seconds. Setting all three (`DB_POOL_MAX=10`, `DB_POOL_MIN=0`, `DB_POOL_IDLE_TIMEOUT=30000` for PostgreSQL) returns to the defaults of a long-running server.
+To size the pool yourself, set `DB_POOL_MAX`, `DB_POOL_MIN` or `DB_POOL_IDLE_TIMEOUT`, or pass `pool` to the adapter. Each setting replaces only its own default, so `DB_POOL_MAX=10` gives a larger pool that still closes idle connections after 5 seconds. Setting all three (`DB_POOL_MAX=10`, `DB_POOL_MIN=0`, `DB_POOL_IDLE_TIMEOUT=30000`) returns to the defaults of a long-running server, on PostgreSQL and MySQL alike.
 
 To check the budget, multiply the pool's maximum by the function instances you expect at peak, and add the build: each Next.js build worker opens its own pool while it prerenders. Keep the total under your database's connection limit, with room for migrations and your own tools.
 

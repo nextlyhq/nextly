@@ -18,6 +18,7 @@
  *
  * @module vercel-pool
  */
+import { IDLE_SWEEP_INTERVAL_MS } from "./idle-sweep";
 
 /** The part of mysql2's callback pool the view forwards to. */
 export interface ReleasingPool {
@@ -31,23 +32,18 @@ export interface VercelPoolView {
 }
 
 /**
- * How often mysql2 looks for idle connections past their timeout. It closes
- * one up to this long after its timeout has passed, so the instance is kept
- * alive for that long as well.
- */
-const MYSQL2_IDLE_SWEEP_MS = 1000;
-
-/**
  * `pool` as `attachDatabasePool` reads a mysql2 pool, with the idle timeout it
- * was built with: the function instance then stays alive until mysql2 has
- * closed the connections a request left idle.
+ * was built with: the function instance then stays alive until the adapter's
+ * idle sweep has closed the connections a request left idle. The sweep closes
+ * one up to `IDLE_SWEEP_INTERVAL_MS` after its timeout has passed, so the
+ * instance is kept alive for that long as well.
  */
 export function vercelPoolView(
   pool: ReleasingPool,
   idleTimeoutMs: number
 ): VercelPoolView {
   return {
-    config: { idleTimeout: idleTimeoutMs + MYSQL2_IDLE_SWEEP_MS },
+    config: { idleTimeout: idleTimeoutMs + IDLE_SWEEP_INTERVAL_MS },
     on: (event, listener) => {
       pool.on(event, listener);
     },

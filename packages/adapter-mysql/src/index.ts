@@ -95,6 +95,7 @@ import type {
   ResultSetHeader,
 } from "mysql2/promise";
 
+import { sweepIdleConnections, type SweepablePool } from "./idle-sweep";
 import { boundPoolWait, type QueueingPool } from "./pool-wait";
 import { vercelPoolView } from "./vercel-pool";
 
@@ -288,10 +289,13 @@ export type {
 export const VERSION = "0.1.0";
 
 /**
- * Default pool configuration values.
+ * Default pool configuration values on a long-running server: the PostgreSQL
+ * adapter's for a standard server, so the same `pool` settings and
+ * `DB_POOL_*` variables mean the same pool on both. With `min` 0, every
+ * connection idle for 30 seconds is closed (`sweepIdleConnections`).
  */
 const DEFAULT_POOL_CONFIG = {
-  min: 2,
+  min: 0,
   max: 10,
   idleTimeoutMs: 30000,
   // How long a request waits for a connection, in the queue or opening one:
@@ -432,6 +436,9 @@ export class MySqlAdapter extends DrizzleAdapter {
    */
   private pool: Pool | null = null;
 
+  /** Stops closing the pool's idle connections; a no-op until a pool exists. */
+  private stopIdleSweep: () => void = () => {};
+
   /** The `withSession` calls running, each on a connection of its own, for `disconnect` to wait for. */
   private readonly sessions = new Set<Promise<unknown>>();
 
@@ -489,6 +496,12 @@ export class MySqlAdapter extends DrizzleAdapter {
       this.warnOnDriverZoneDisagreement();
       const poolConfig = this.buildPoolConfig();
       const pool = mysql.createPool(poolConfig);
+      // mysql2's own idle closing is off (`buildPoolConfig`); this closes
+      // connections idle past the timeout and keeps `min` of them.
+      this.stopIdleSweep = sweepIdleConnections(
+        pool.pool as unknown as SweepablePool,
+        this.idleSweepOptions(poolConfig)
+      );
       // Attached as soon as it exists, as Vercel's docs say, so the smoke
       // test's own connection is one `@vercel/functions` waits on as well.
       // Handed as the shape `attachDatabasePool` reads (`vercelPoolView`).
@@ -566,6 +579,7 @@ export class MySqlAdapter extends DrizzleAdapter {
       }
     } catch (error) {
       // Clean up on failure
+      this.stopIdleSweep();
       if (this.pool) {
         await this.pool.end().catch(() => {});
         this.pool = null;
@@ -590,6 +604,9 @@ export class MySqlAdapter extends DrizzleAdapter {
     // the closing pool.
     const pool = this.pool;
     this.pool = null;
+    // The pool's end closes every connection; the sweep must not close one
+    // under it.
+    this.stopIdleSweep();
     this.drizzleBare = undefined;
     this.drizzleByRelations = new WeakMap();
     if (!pool) {
@@ -1143,25 +1160,17 @@ export class MySqlAdapter extends DrizzleAdapter {
   private buildPoolConfig(): PoolOptions {
     const config: PoolOptions = this.buildConnectionConfig();
 
-    // Pool settings - mysql2 uses different property names. Inside Vercel
-    // functions the defaults are the serverless ones, a small pool whose idle
-    // connections close quickly, since a suspended instance keeps whatever it
-    // holds open; each setting the config gives still wins on its own.
-    const serverless = isVercelFunction();
-    const defaults = serverless
-      ? SERVERLESS_POOL_DEFAULTS
-      : DEFAULT_POOL_CONFIG;
+    // Pool settings - mysql2 uses different property names.
+    const defaults = this.poolDefaults();
     config.connectionLimit = this.config.pool?.max ?? defaults.max;
     config.idleTimeout =
       this.config.pool?.idleTimeoutMs ?? defaults.idleTimeoutMs;
-    if (serverless) {
-      // mysql2 closes idle connections past `idleTimeout` only while `maxIdle`
-      // is below `connectionLimit` (its default is equal to it), and closes
-      // any idle connection beyond `maxIdle` within a second. One below the
-      // limit lets the idle timeout apply and keeps all but one connection
-      // for its full length.
-      config.maxIdle = Math.max(config.connectionLimit - 1, 0);
-    }
+    // mysql2 never closes an idle connection by itself with `maxIdle` equal
+    // to the limit: below it, it closes every connection idle past
+    // `idleTimeout` and keeps no minimum. The adapter closes them instead,
+    // past `idleTimeout` and down to `min` (`sweepIdleConnections`), and
+    // `idleTimeout` stays set so the pool's config reads as it behaves.
+    config.maxIdle = config.connectionLimit;
 
     // A request waits for a connection when the pool is full. The queue has
     // no length limit; each wait in it is bounded instead (`boundPoolWait`).
@@ -1169,6 +1178,28 @@ export class MySqlAdapter extends DrizzleAdapter {
     config.queueLimit = 0;
 
     return config;
+  }
+
+  /**
+   * The pool defaults where this runs. Inside Vercel functions they are the
+   * serverless ones, a small pool whose idle connections close quickly, since
+   * a suspended instance keeps whatever it holds open; each setting the
+   * config gives still wins on its own.
+   */
+  private poolDefaults(): { min: number; max: number; idleTimeoutMs: number } {
+    return isVercelFunction() ? SERVERLESS_POOL_DEFAULTS : DEFAULT_POOL_CONFIG;
+  }
+
+  /** Which idle connections the pool built from `poolConfig` closes, and when. */
+  private idleSweepOptions(poolConfig: PoolOptions): {
+    min: number;
+    idleTimeoutMs: number;
+  } {
+    return {
+      min: this.config.pool?.min ?? this.poolDefaults().min,
+      idleTimeoutMs:
+        poolConfig.idleTimeout ?? DEFAULT_POOL_CONFIG.idleTimeoutMs,
+    };
   }
 
   /**
