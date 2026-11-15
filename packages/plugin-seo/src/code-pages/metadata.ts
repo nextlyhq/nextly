@@ -75,8 +75,11 @@ export interface SeoMetadataOptions {
   structuredDataHints?: PageStructuredDataHints;
 }
 
-/** The started plugin's context, starting Nextly first where nothing has. */
-async function seoContext(): Promise<PluginContext | undefined> {
+/**
+ * The started plugin's context, starting Nextly first where nothing has;
+ * none where Nextly runs without the SEO plugin.
+ */
+export async function startedSeoContext(): Promise<PluginContext | undefined> {
   const kept = keptSeoContext();
   if (kept !== undefined) return kept;
   // A start that fails throws, so the read is not kept as "no plugin": the
@@ -98,7 +101,7 @@ interface CodePageRead {
  * keep it.
  */
 async function readRow(address: string): Promise<CodePageRead | null> {
-  const ctx = await seoContext();
+  const ctx = await startedSeoContext();
   if (ctx === undefined) return null;
   const row = await readCodePage(ctx, address);
   return { collection: codePagesSlug(ctx), row: row ?? null };

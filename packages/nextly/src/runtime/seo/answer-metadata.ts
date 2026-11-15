@@ -106,7 +106,8 @@ function twitterImageOf(
 /**
  * The Twitter card, or undefined when the answer states none of it: a
  * large-image card whenever there is an image to show on it, with the
- * image's alt text where it has one, since that card reads its own.
+ * image's alt text where it has one, since that card reads its own, and the
+ * site's X account as `twitter:site`.
  */
 function twitterOf(answer: PageMetadataAnswer): Twitter | undefined {
   const image = answer.social?.image;
@@ -114,6 +115,7 @@ function twitterOf(answer: PageMetadataAnswer): Twitter | undefined {
     card: image === undefined ? undefined : "summary_large_image",
     ...cardTextOf(answer),
     images: image === undefined ? undefined : [twitterImageOf(image)],
+    site: answer.social?.xAccount,
   });
   return Object.keys(twitter).length > 0 ? twitter : undefined;
 }

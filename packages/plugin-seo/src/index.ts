@@ -16,6 +16,13 @@ export {
   type StaticParams,
 } from "./code-pages/static-params";
 export type { RouteMetadata, SeoMetadataOptions } from "./code-pages/metadata";
+// When a page's content last changed, for the site's own sitemap or
+// `article:modified_time`: the date the plugin's own outputs give it.
+export { seoLastChanged } from "./content-dates/seo-last-changed";
+export type {
+  SeoLastChangedEntry,
+  SeoLastChangedOptions,
+} from "./content-dates/seo-last-changed";
 export {
   buildSitemapUrls,
   serializeSitemap,

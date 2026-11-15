@@ -337,15 +337,15 @@ export interface SeoPluginOptions {
   structuredData?: StructuredDataOptions;
   /**
    * @experimental What every page's social card states beyond the page:
-   * the site's name, until one is saved in the SEO settings, and the
-   * language of a page the route read in no particular language, as a
-   * language tag.
+   * the site's name, until one is saved in the SEO settings, the language
+   * of a page the route read in no particular language, as a language tag,
+   * and the site's X account, as `twitter:site`.
    *
    * ```ts
    * seoPlugin({
    *   collections: ["posts"],
    *   baseUrl: "https://example.com",
-   *   socialCard: { siteName: "Example", language: "en-US" },
+   *   socialCard: { siteName: "Example", language: "en-US", xAccount: "@example" },
    * });
    * ```
    *
