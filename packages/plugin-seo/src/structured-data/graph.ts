@@ -24,7 +24,7 @@ import {
 import { addressHolders } from "../address-record/participant";
 import { codePagesSlug } from "../code-pages/collection";
 import { nameOfAddress, readCodePage } from "../code-pages/store";
-import { contentDateOf } from "../content-dates/last-changed";
+import { contentDateOf, lastChangedOf } from "../content-dates/last-changed";
 import { originOf } from "../origin";
 import { singleKey } from "../problems/page-types";
 import { TITLE_FIELDS } from "../settings/patterns";
@@ -572,10 +572,12 @@ function isSaveStamp(field: string): boolean {
 
 /**
  * The date a page is described as last changed: a field that says so (a
- * correction or review date, or the one the content type maps), else when
- * the page's content last changed, by the rule its sitemap entry is dated
- * by (`lastChangedOf`): its kept content date, else its own last save. So an
- * SEO-only save, which moves the row's save stamp, moves neither.
+ * correction or review date, or the one the content type maps) where it
+ * holds a date, else when the page's content last changed, by the rule its
+ * sitemap entry is dated by (`lastChangedOf`): its kept content date, else
+ * its own last save. So an SEO-only save, which moves the row's save stamp,
+ * moves neither, and a correction date left empty, as it is on every page
+ * never corrected, says nothing rather than leaving the date out.
  */
 async function modifiedOf(
   facts: PageFacts,
@@ -585,8 +587,11 @@ async function modifiedOf(
     read.field === undefined
       ? read.value === undefined
       : isSaveStamp(read.field);
-  if (!stamp) return dateOf(read.value);
-  return dateOf((await facts.contentDate()) ?? read.value);
+  const stated = stamp ? undefined : dateOf(read.value);
+  if (stated !== undefined) return stated;
+  // Derived from the sitemap's own rule, so the two never give a page
+  // different dates.
+  return lastChangedOf(await facts.contentDate(), facts.document);
 }
 
 /** The page's own dates: when it was published, and last changed. */

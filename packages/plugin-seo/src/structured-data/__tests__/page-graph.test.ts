@@ -581,6 +581,29 @@ describe("a page's dates", () => {
       dateModified: "2026-11-12T00:00:00.000Z",
     });
   });
+
+  it("fall through an empty mapped field to the page's last change, its own last save where no content date is kept", async () => {
+    const { nodes } = await buildStructuredData(
+      context(),
+      entryInput("posts", { ...POST, correctedAt: undefined, correctedOn: "" }),
+      answerAt("/blog/jasper-vs-rext-ai", "Jasper vs Rext AI"),
+      rules({
+        types: {
+          posts: {
+            type: "blogPosting",
+            details: { blogPosting: { dateModified: "correctedOn" } },
+          },
+        },
+      })
+    );
+
+    for (const node of [
+      nodeOf(nodes, "WebPage"),
+      nodeOf(nodes, "BlogPosting"),
+    ]) {
+      expect(node).toMatchObject({ dateModified: "2026-11-12T00:00:00.000Z" });
+    }
+  });
 });
 
 describe("a blog post", () => {

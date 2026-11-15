@@ -68,6 +68,7 @@ import {
 } from "./connections/search-console-send";
 import { CONNECTION_SECRETS, connectionSettings } from "./connections/store";
 import { watchContentDates } from "./content-dates/hooks";
+import { startFingerprintUpgrade } from "./content-dates/upgrade";
 import { defaultSeoFields } from "./fields";
 import { importRoutes } from "./import/route";
 import { withLanguageLinks } from "./languages/head";
@@ -1279,6 +1280,11 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
       // record up to date with content saved while the plugin was absent or
       // addresses a deploy moved.
       void startCatchUp(ctx);
+      // Started, not awaited, for the same reason: the content fingerprints
+      // an earlier release kept, brought up to date while the field group
+      // rows they were taken from are as they were, so a save that rewrites
+      // them does not move a page's date. One read once that is done.
+      void startFingerprintUpgrade(ctx);
       // The not-found log an earlier version kept in a collection, moved to
       // the plugin's table; one count once there is nothing left to move.
       // Bounded as the catch-up's are: it runs unawaited, and a function
@@ -1303,6 +1309,7 @@ export function seoPlugin(options: SeoPluginOptions): PluginDefinition {
         async () => {
           await lastCatchUp();
           await startCatchUp(ctx);
+          await startFingerprintUpgrade(ctx);
           await ctx.db.withTransactionBounds(CATCH_UP_TRANSACTION_BOUNDS, () =>
             moveLoggedRows(ctx)
           );

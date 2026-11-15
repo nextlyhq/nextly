@@ -425,7 +425,7 @@ exports[`whole graphs of a site's pages > keeps the shape of the home page 1`] =
   {
     "@id": "https://nextlyhq.com/#webpage",
     "@type": "WebPage",
-    "dateModified": "2026-11-11",
+    "dateModified": "2026-11-11T00:00:00.000Z",
     "description": "Nextly is an open-source CMS and Visual Page Builder for Next.js.",
     "inLanguage": "en",
     "isPartOf": {
@@ -510,7 +510,7 @@ exports[`whole graphs of a site's pages > keeps the shape of the home page with 
   {
     "@id": "https://nextlyhq.com/#webpage",
     "@type": "WebPage",
-    "dateModified": "2026-11-11",
+    "dateModified": "2026-11-11T00:00:00.000Z",
     "description": "Nextly is an open-source CMS and Visual Page Builder for Next.js.",
     "hasPart": {
       "@id": "https://nextlyhq.com/#faq",

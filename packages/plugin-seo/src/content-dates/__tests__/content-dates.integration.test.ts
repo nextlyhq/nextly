@@ -6,6 +6,10 @@
  * sitemap writes nothing. A deleted page's dates go, the full check prunes
  * any a page no longer holds, and a recording repeated, or two at once,
  * leave one row with one date.
+ *
+ * A described post's `dateModified` is the same date: the field its type
+ * maps for it where that holds a date, else its content date, so neither an
+ * SEO-only save nor an import of old SEO values moves it.
  */
 process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
@@ -20,6 +24,7 @@ import {
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
 import { defineCollection, defineSingle, text } from "nextly";
+import { date, defineFieldGroup, fieldGroup } from "nextly/config";
 import {
   createDynamicHandlers,
   createPublicContentRoute,
@@ -29,33 +34,60 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { lastCatchUp } from "../../address-record/catch-up";
 import { seoContext } from "../../address-record/__tests__/record-tables";
+import { forgetNotes, readNotes } from "../../address-record/store";
+import { siteActor } from "../../import/actor";
+import { documentsIn } from "../../languages/versions";
+import { typeOf } from "../../outputs/listing";
+import { applyImport, planImport, type ImportEngine } from "../../import/plan";
 import { seoPlugin } from "../../plugin";
 import { contentDates } from "../../schema/tables";
+import { readSeoRules } from "../../settings/rules";
+import { structuredDataFromSettings } from "../../settings/structured-data-rules";
+import { noSocialCardRules } from "../../social/card";
+import { rulesFromOptions } from "../../structured-data/rules";
+import { contentFingerprint, earlierContentFingerprints } from "../fingerprint";
 import { contentDatesSettled } from "../hooks";
 import { recordSaved, refreshContentDates } from "../record";
 import { pageDateKey, pruneContentDates } from "../store";
+import {
+  FINGERPRINT_READING_KEY,
+  lastFingerprintUpgrade,
+  upgradeKeptFingerprints,
+} from "../upgrade";
 
 const SITE = "https://acme.example";
 // Prefixed for this file: on PostgreSQL and MySQL the tables outlive a run.
 const PAGES = "seocd_pages";
 const POSTS = "seocd_posts";
+/** The old SEO group a post held before the plugin, as a site's import reads it. */
+const OLD_SEO = defineFieldGroup({
+  slug: "seocd_old_seo",
+  fields: [text({ name: "seoTitle" })],
+});
+/** A post's cards, a repeatable field group: content kept in rows of its own. */
+const CARD = defineFieldGroup({
+  slug: "seocd_card",
+  fields: [text({ name: "label" })],
+});
 
 let current: TestNextly | undefined;
 
 afterEach(async () => {
   // Recordings still running would read a database already closed.
   await contentDatesSettled();
+  await lastFingerprintUpgrade();
   await current?.destroy();
   current = undefined;
 });
 
 /**
  * The site with the plugin, naming its types, or, with `everyType`, naming
- * none, so SEO is on every type it defines.
+ * none, so SEO is on every type it defines. With `correctedOn`, posts are
+ * described as last changed on that field, as a site maps a correction date.
  */
 async function boot(
   dialect: TestDialect,
-  { everyType = false, described = false } = {}
+  { everyType = false, described = false, correctedOn = false } = {}
 ) {
   current = await createTestNextly({
     dialect,
@@ -74,13 +106,25 @@ async function boot(
                 ? {
                     structuredData: {
                       brand: { name: "Acme" },
-                      types: { [POSTS]: { type: "blogPosting" as const } },
+                      types: {
+                        [POSTS]: {
+                          type: "blogPosting" as const,
+                          ...(correctedOn
+                            ? {
+                                details: {
+                                  blogPosting: { dateModified: "correctedOn" },
+                                },
+                              }
+                            : {}),
+                        },
+                      },
                     },
                   }
                 : {}),
             }
       ),
     ],
+    ...(described ? { fieldGroups: [OLD_SEO, CARD] } : {}),
     collections: [
       defineCollection({
         slug: PAGES,
@@ -99,6 +143,19 @@ async function boot(
           text({ name: "title" }),
           text({ name: "slug" }),
           text({ name: "body" }),
+          // A correction date, filled in only when a post is corrected, and
+          // the old SEO group an import reads.
+          ...(described
+            ? [
+                date({ name: "correctedOn" }),
+                fieldGroup({ name: "oldSeo", component: OLD_SEO.slug }),
+                fieldGroup({
+                  name: "cards",
+                  component: CARD.slug,
+                  repeatable: true,
+                }),
+              ]
+            : []),
         ],
         publicAddress: "/blog/{slug}",
       }),
@@ -167,6 +224,30 @@ async function rows(ctx: PluginContext): Promise<Record<string, unknown>[]> {
 async function clearDates(ctx: PluginContext): Promise<void> {
   const columns = ctx.db.table(contentDates);
   await ctx.db.delete(contentDates).where(ne(columns.pageKey, ""));
+}
+
+/** The import as the site, as a command run on the server makes it. */
+function siteImport(ctx: PluginContext): ImportEngine {
+  return {
+    ctx,
+    actor: siteActor(ctx),
+    setup: {
+      targets: [POSTS],
+      readRules: readSeoRules,
+      checks: {
+        targets: [POSTS],
+        singles: [],
+        readers: {
+          readRules: readSeoRules,
+          readStructuredDataRules: structuredDataFromSettings(
+            rulesFromOptions(undefined, undefined)
+          ),
+          readSocialCardRules: noSocialCardRules,
+        },
+      },
+      pagePermissions: false,
+    },
+  };
 }
 
 /** Timestamps may be kept to the second: a later save is a later second. */
@@ -521,6 +602,301 @@ describe.each(getConfiguredTestDialects())(
         Date.parse(String(first))
       );
       expect(instant(await dateModifiedOf(t, "hello"))).toBe(instant(moved));
+    });
+
+    it("describes a post as changed at its content date where the field its type maps for the date is empty", async () => {
+      const { t } = await boot(dialect, { described: true, correctedOn: true });
+      const post = await create(t, POSTS, {
+        title: "Hello",
+        slug: "hello",
+        body: "First words.",
+        status: "published",
+      });
+      const loc = `${SITE}/blog/hello`;
+      const first = await lastmodOf(loc);
+      expect(instant(await dateModifiedOf(t, "hello"))).toBe(instant(first));
+
+      // An SEO-only save moves the row's own save stamp, which an empty
+      // correction date must not hand the description.
+      await nextSecond();
+      await t.nextly.update({
+        collection: POSTS,
+        id: post.id,
+        data: { seo: { metaTitle: "Hello, world" }, _overwrite: true },
+      });
+      expect(await lastmodOf(loc)).toBe(first);
+      expect(instant(await dateModifiedOf(t, "hello"))).toBe(instant(first));
+
+      // A content change moves both, to the same date.
+      await nextSecond();
+      await t.nextly.update({
+        collection: POSTS,
+        id: post.id,
+        data: { body: "Rewritten.", _overwrite: true },
+      });
+      const moved = await lastmodOf(loc);
+      expect(Date.parse(String(moved))).toBeGreaterThan(
+        Date.parse(String(first))
+      );
+      expect(instant(await dateModifiedOf(t, "hello"))).toBe(instant(moved));
+    });
+
+    it("describes a post as changed on the date its mapped field holds, over its content date", async () => {
+      const { t } = await boot(dialect, { described: true, correctedOn: true });
+      const correctedOn = "2026-01-05T00:00:00.000Z";
+      await create(t, POSTS, {
+        title: "Hello",
+        slug: "hello",
+        body: "First words.",
+        correctedOn,
+        status: "published",
+      });
+      const first = await lastmodOf(`${SITE}/blog/hello`);
+      expect(instant(first)).not.toBe(instant(correctedOn));
+      expect(instant(await dateModifiedOf(t, "hello"))).toBe(
+        instant(correctedOn)
+      );
+    });
+
+    it("leaves the sitemap date and dateModified where an import of old SEO values left the content as it was", async () => {
+      const { t, ctx } = await boot(dialect, { described: true });
+      const post = await create(t, POSTS, {
+        title: "Hello",
+        slug: "hello",
+        body: "First words.",
+        oldSeo: { seoTitle: "Hello from the old site" },
+        status: "published",
+      });
+      const loc = `${SITE}/blog/hello`;
+      const first = await lastmodOf(loc);
+      expect(instant(await dateModifiedOf(t, "hello"))).toBe(instant(first));
+
+      await nextSecond();
+      const engine = siteImport(ctx);
+      const plan = await planImport(engine, {
+        source: { kind: "group", field: "oldSeo" },
+        types: [POSTS],
+        mapping: { seoTitle: "title" },
+      });
+      await applyImport(plan);
+      // The import saved the post: its value is in, and its save stamp moved.
+      const saved = (await t.nextly.findByID({
+        collection: POSTS,
+        id: post.id,
+      })) as { seo?: { metaTitle?: unknown }; updatedAt?: unknown } | null;
+      expect(saved?.seo?.metaTitle).toBe("Hello from the old site");
+      expect(instant(saved?.updatedAt)).toBeGreaterThan(
+        instant(post.updatedAt)
+      );
+
+      expect(await lastmodOf(loc)).toBe(first);
+      expect(instant(await dateModifiedOf(t, "hello"))).toBe(instant(first));
+      // The full check's catch-up finds the content it keeps, and keeps it.
+      await refreshContentDates(ctx, [
+        { holder: { collection: POSTS, id: post.id }, language: "en" },
+      ]);
+      expect(await lastmodOf(loc)).toBe(first);
+      expect(instant(await dateModifiedOf(t, "hello"))).toBe(instant(first));
+    });
+
+    it("leaves the date where an SEO-only save sends its field groups back, their rows rewritten", async () => {
+      const { t, ctx } = await boot(dialect, { described: true });
+      const post = await create(t, POSTS, {
+        title: "Hello",
+        slug: "hello",
+        body: "First words.",
+        oldSeo: { seoTitle: "Hello from the old site" },
+        cards: [{ label: "One" }, { label: "Two" }],
+        status: "published",
+      });
+      const loc = `${SITE}/blog/hello`;
+      const first = await lastmodOf(loc);
+      const [kept] = await rows(ctx);
+      const read = async () =>
+        (await t.nextly.findByID({ collection: POSTS, id: post.id })) as {
+          title?: unknown;
+          slug?: unknown;
+          body?: unknown;
+          oldSeo?: unknown;
+          cards?: { id?: unknown }[];
+        };
+
+      // As the admin saves a page: every field as it was read, each field
+      // group row with its id, and only the SEO changed. The rows are
+      // updated in place, which moves their own stamps.
+      await nextSecond();
+      const before = await read();
+      await t.nextly.update({
+        collection: POSTS,
+        id: post.id,
+        data: {
+          title: before.title,
+          slug: before.slug,
+          body: before.body,
+          oldSeo: before.oldSeo,
+          cards: before.cards,
+          seo: { metaTitle: "Hello, world" },
+          _overwrite: true,
+        },
+      });
+      expect(await lastmodOf(loc)).toBe(first);
+      expect((await rows(ctx))[0]?.fingerprint).toBe(kept?.fingerprint);
+
+      // As an API client saves it: the cards' values alone, without their
+      // ids, so each is stored again under a new one.
+      await nextSecond();
+      await t.nextly.update({
+        collection: POSTS,
+        id: post.id,
+        data: {
+          cards: [{ label: "One" }, { label: "Two" }],
+          seo: { metaTitle: "Hello, again" },
+          _overwrite: true,
+        },
+      });
+      const renewed = (await read()).cards?.map(card => card.id);
+      expect(renewed).toHaveLength(2);
+      for (const id of renewed ?? []) {
+        expect(before.cards?.map(card => card.id)).not.toContain(id);
+      }
+      expect(await lastmodOf(loc)).toBe(first);
+      expect((await rows(ctx))[0]?.fingerprint).toBe(kept?.fingerprint);
+
+      // The full check's catch-up reads the page again, and keeps the date.
+      await refreshContentDates(ctx, [
+        { holder: { collection: POSTS, id: post.id }, language: "en" },
+      ]);
+      expect(await lastmodOf(loc)).toBe(first);
+
+      // A card's own text is content: changing it moves the date.
+      await nextSecond();
+      await t.nextly.update({
+        collection: POSTS,
+        id: post.id,
+        data: {
+          cards: [{ label: "One" }, { label: "Two, rewritten" }],
+          _overwrite: true,
+        },
+      });
+      expect(Date.parse(String(await lastmodOf(loc)))).toBeGreaterThan(
+        Date.parse(String(first))
+      );
+    });
+
+    it("keeps the date of a row an earlier release fingerprinted, bringing its fingerprint up to date", async () => {
+      const { t, ctx } = await boot(dialect, { described: true });
+      const post = await create(t, POSTS, {
+        title: "Hello",
+        slug: "hello",
+        body: "First words.",
+        oldSeo: { seoTitle: "Hello from the old site" },
+        cards: [{ label: "One" }],
+        status: "published",
+      });
+      await contentDatesSettled();
+      const holder = { collection: POSTS, id: post.id };
+      const published = async () => {
+        const type = await typeOf(ctx, holder);
+        if (type === undefined) throw new Error("posts are not a type");
+        const found = (await documentsIn(ctx, type, [post.id], "en")).get(
+          post.id
+        );
+        if (found === undefined) throw new Error("the post is not published");
+        return found;
+      };
+      const columns = ctx.db.table(contentDates);
+      const earlierDate = new Date("2026-01-01T00:00:00.000Z");
+      /** The row as an earlier release kept it for the content now shown. */
+      const keptByEarlierRelease = async () => {
+        const [earlier] = earlierContentFingerprints(await published());
+        // The page's field groups make the two readings differ, which is
+        // what this case is about.
+        expect(earlier).toBeDefined();
+        await ctx.db
+          .update(contentDates, {
+            fingerprint: String(earlier),
+            changedAt: earlierDate,
+          })
+          .where(ne(columns.holderId, ""));
+      };
+      const loc = `${SITE}/blog/hello`;
+
+      // Caught up at the full check.
+      await keptByEarlierRelease();
+      await refreshContentDates(ctx, [{ holder, language: "en" }]);
+      expect(second(await lastmodOf(loc))).toBe(second(earlierDate));
+      expect((await rows(ctx))[0]?.fingerprint).toBe(
+        contentFingerprint(await published())
+      );
+
+      // Recorded after a save that changed only the page's SEO.
+      await keptByEarlierRelease();
+      await nextSecond();
+      await t.nextly.update({
+        collection: POSTS,
+        id: post.id,
+        data: { seo: { metaTitle: "Hello, world" }, _overwrite: true },
+      });
+      expect(second(await lastmodOf(loc))).toBe(second(earlierDate));
+      expect((await rows(ctx))[0]?.fingerprint).toBe(
+        contentFingerprint(await published())
+      );
+
+      // Brought up to date at the first start after the upgrade, before an
+      // admin save sends the field groups back and rewrites their rows: the
+      // stamps the earlier fingerprint was taken from are gone after it.
+      await keptByEarlierRelease();
+      await forgetNotes(ctx, [FINGERPRINT_READING_KEY]);
+      await upgradeKeptFingerprints(ctx);
+      expect((await rows(ctx))[0]?.fingerprint).toBe(
+        contentFingerprint(await published())
+      );
+      await nextSecond();
+      const read = (await t.nextly.findByID({
+        collection: POSTS,
+        id: post.id,
+      })) as Record<string, unknown>;
+      await t.nextly.update({
+        collection: POSTS,
+        id: post.id,
+        data: {
+          title: read.title,
+          slug: read.slug,
+          body: read.body,
+          oldSeo: read.oldSeo,
+          cards: read.cards,
+          seo: { metaTitle: "Hello, again" },
+          _overwrite: true,
+        },
+      });
+      expect(second(await lastmodOf(loc))).toBe(second(earlierDate));
+
+      // Once noted, a start reads the note and nothing else.
+      await keptByEarlierRelease();
+      const [noted] = await rows(ctx);
+      await upgradeKeptFingerprints(ctx);
+      expect((await rows(ctx))[0]?.fingerprint).toBe(noted?.fingerprint);
+
+      // A content change still moves it.
+      await nextSecond();
+      await t.nextly.update({
+        collection: POSTS,
+        id: post.id,
+        data: { body: "Rewritten.", _overwrite: true },
+      });
+      expect(Date.parse(String(await lastmodOf(loc)))).toBeGreaterThan(
+        earlierDate.getTime()
+      );
+    });
+
+    it("brings the kept fingerprints up to date when the plugin starts, and notes it", async () => {
+      await boot(dialect);
+      // Started by the plugin's start, after the boot.
+      await lastFingerprintUpgrade();
+      const { notes } = await readNotes(seoContext(), [
+        FINGERPRINT_READING_KEY,
+      ]);
+      expect(notes.get(FINGERPRINT_READING_KEY)).toBeTruthy();
     });
   }
 );
