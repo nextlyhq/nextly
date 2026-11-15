@@ -524,6 +524,18 @@ describe("the Design column's place", () => {
     ]);
   });
 
+  it("sits after the first shown column, past a hidden one before it", () => {
+    // The entry list keeps its ID column first and hidden unless shown.
+    expect(
+      designAfterStatus([
+        { name: "id", hidden: true },
+        { name: "title" },
+        { name: "slug" },
+        design,
+      ]).map(column => column.name)
+    ).toEqual(["id", "title", "__pageBuilderOwnDesign", "slug"]);
+  });
+
   it("stays the only column of a list that has no other", () => {
     expect(designAfterStatus([design])).toEqual([design]);
   });

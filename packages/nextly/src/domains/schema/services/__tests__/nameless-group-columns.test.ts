@@ -11,7 +11,7 @@
  * desired table would then plan dropping columns that hold values. So the columns are compared,
  * not only the absence of a throw.
  */
-import { getTableColumns, type Table } from "drizzle-orm";
+import { getColumns, type Table } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
@@ -105,7 +105,7 @@ describe.each(DIALECTS)(
         builtBy: "collection",
       });
       expect(
-        own(Object.values(getTableColumns(table as Table)).map(c => c.name))
+        own(Object.values(getColumns(table as Table)).map(c => c.name))
       ).toEqual(USER_COLUMNS);
     });
 

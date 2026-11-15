@@ -1,5 +1,25 @@
 # playground
 
+## 0.1.2-alpha.22
+
+### Patch Changes
+
+- Updated dependencies [[`abec063`](https://github.com/nextlyhq/nextly/commit/abec0634aaf51ddf5415c41fc06336f9fbbcaeb9), [`0e22fd2`](https://github.com/nextlyhq/nextly/commit/0e22fd2201db908dae120253704726737ec2ee51), [`ac0b7fd`](https://github.com/nextlyhq/nextly/commit/ac0b7fd4c8d1eba8acb2d5a0e9fdab8e7ee16ff1), [`9add3c2`](https://github.com/nextlyhq/nextly/commit/9add3c2537b23ca44d33ba3d4560b18e31224b3b), [`26e751f`](https://github.com/nextlyhq/nextly/commit/26e751f6f1560afeaafccbaf5f7922e146a2036d), [`7934af0`](https://github.com/nextlyhq/nextly/commit/7934af0e91060f0033d31b5a7296ea218dec7a87), [`3961290`](https://github.com/nextlyhq/nextly/commit/396129093f7b6e1bea3cb9956083a06f8821f33a), [`aea91fa`](https://github.com/nextlyhq/nextly/commit/aea91fae0a9b822fa9c6bc8cecd47be6022336f6), [`0f06edd`](https://github.com/nextlyhq/nextly/commit/0f06edd743cb1874d866f3cc6cb2d413a000e053), [`73a524b`](https://github.com/nextlyhq/nextly/commit/73a524b68de73c0894498ead5d30a83307e7ef29), [`1e74c1e`](https://github.com/nextlyhq/nextly/commit/1e74c1e5a31c8aaf941f410b452d4074b31000d1), [`d24b003`](https://github.com/nextlyhq/nextly/commit/d24b0037803bea8a5e1fc2641c6c18e272f242c8), [`4048b19`](https://github.com/nextlyhq/nextly/commit/4048b19f35235db87132aabc2d454c36dbda5409), [`37fecdf`](https://github.com/nextlyhq/nextly/commit/37fecdf9ad2f62f9a76a58be981f90783072dee8), [`9301f12`](https://github.com/nextlyhq/nextly/commit/9301f12b4f3ab43843b025005127147f407121fc), [`8c3abf9`](https://github.com/nextlyhq/nextly/commit/8c3abf96c799b69673a73b90469a037164bddf01), [`07d8172`](https://github.com/nextlyhq/nextly/commit/07d817209b7088b356836c26c08e67c7c13f1c13), [`69282f8`](https://github.com/nextlyhq/nextly/commit/69282f8653a823c8b4a8c2aa44eb87fa88ccc170), [`d1f42cd`](https://github.com/nextlyhq/nextly/commit/d1f42cd73a3ecf687345e32b786bebe94e7591cd), [`b967a5f`](https://github.com/nextlyhq/nextly/commit/b967a5f2b29fe67399503d0014b79153d46061d5)]:
+  - @nextlyhq/adapter-drizzle@0.0.2-alpha.78
+  - @nextlyhq/adapter-mysql@0.0.2-alpha.78
+  - @nextlyhq/adapter-postgres@0.0.2-alpha.78
+  - @nextlyhq/adapter-sqlite@0.0.2-alpha.78
+  - @nextlyhq/admin@0.0.2-alpha.78
+  - @nextlyhq/blocks-engine@0.0.2-alpha.78
+  - @nextlyhq/blocks-react@0.0.2-alpha.78
+  - @nextlyhq/builder@0.0.2-alpha.78
+  - @nextlyhq/plugin-form-builder@0.0.2-alpha.78
+  - @nextlyhq/plugin-page-builder@0.0.2-alpha.78
+  - @nextlyhq/plugin-sdk@0.0.2-alpha.78
+  - @nextlyhq/plugin-seo@0.0.2-alpha.78
+  - @nextlyhq/ui@0.0.2-alpha.78
+  - nextly@0.0.2-alpha.78
+
 ## 0.1.2-alpha.21
 
 ### Patch Changes
