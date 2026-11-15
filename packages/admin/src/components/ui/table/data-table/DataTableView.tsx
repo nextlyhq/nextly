@@ -593,12 +593,16 @@ export function DataTableView<Row extends object>({
     visibleColumns.find(c => c.name === primaryColumn)?.name ??
     visibleColumns[0]?.name;
 
-  // Card-view primary/secondary split (skip synthetic select/actions columns).
+  // Card-view primary/secondary split: the card is headed by the primary
+  // column where a phone shows it, so a column put before it (a plugin's,
+  // say) never takes the card's title; else by the first shown column that
+  // is not a synthetic select/actions one.
   const cardPrimary = useMemo(
     () =>
+      mobileColumns.find(c => c.name === primaryColumn) ??
       mobileColumns.find(c => c.name !== "select" && c.name !== "actions") ??
       mobileColumns[0],
-    [mobileColumns]
+    [mobileColumns, primaryColumn]
   );
   const cardSecondary = useMemo(
     () => mobileColumns.filter(c => c.name !== cardPrimary?.name),
