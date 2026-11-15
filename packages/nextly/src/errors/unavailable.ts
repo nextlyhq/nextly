@@ -63,17 +63,19 @@ const UNAVAILABLE_ADAPTER_KINDS: ReadonlySet<string> = new Set([
 function levelIsUnavailable(level: unknown): boolean {
   if (isStartFailure(level)) return true;
   if (NextlyError.is(level)) return UNAVAILABLE_CODES.has(level.code);
-  if (isDbError(level)) return isUnreachedDbErrorKind(level.kind);
+  if (isDbError(level) && isUnreachedDbErrorKind(level.kind)) return true;
   if (
     level instanceof Error &&
     level.name === "DatabaseError" &&
     "kind" in level &&
-    typeof level.kind === "string"
+    typeof level.kind === "string" &&
+    UNAVAILABLE_ADAPTER_KINDS.has(level.kind)
   ) {
-    return UNAVAILABLE_ADAPTER_KINDS.has(level.kind);
+    return true;
   }
-  // A driver's own error, which a read through Drizzle directly hands its
-  // caller unconverted, often under Drizzle's query error: read by its code.
+  // Otherwise by the driver's code: a driver's own error, which a read through
+  // Drizzle directly hands its caller unconverted, or an adapter's or core's
+  // error of another kind that kept the code it could not classify.
   return isUnreachedDatabaseCode(safeCode(level));
 }
 

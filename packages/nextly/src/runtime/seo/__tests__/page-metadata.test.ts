@@ -77,6 +77,7 @@ const start = vi.hoisted(() => ({
   calls: 0,
   fails: false,
   nothingToStart: false,
+  throws: undefined as unknown,
 }));
 vi.mock("../../../init", async () => {
   const { markStartFailure } = await import("../../../init/start-failure");
@@ -88,6 +89,10 @@ vi.mock("../../../init", async () => {
         throw Refusal.configuration({
           logMessage: "getCachedNextly() called before initialization.",
         });
+      }
+      if (start.throws !== undefined) {
+        markStartFailure(start.throws);
+        throw start.throws;
       }
       if (start.fails) {
         const failure = new Error("the database is unreachable");
@@ -141,6 +146,7 @@ beforeEach(() => {
   start.calls = 0;
   start.fails = false;
   start.nothingToStart = false;
+  start.throws = undefined;
 });
 
 afterEach(() => {
@@ -1040,6 +1046,17 @@ describe("a production render where Nextly is unavailable", () => {
     expect(await pageStructuredDataFor(request)).toBeUndefined();
   });
 
+  it("passes a Next.js control-flow signal from the start through untouched", async () => {
+    // A start that reads a dynamic API while a page prerenders throws
+    // Next.js's own signal, which Next.js must receive as it was thrown.
+    const signal = Object.assign(new Error("Dynamic server usage: headers"), {
+      digest: "DYNAMIC_SERVER_USAGE",
+    });
+    forgetCapabilityProviders();
+    start.throws = signal;
+    await expect(pageMetadataFor(request)).rejects.toBe(signal);
+  });
+
   it("still serves the route's own metadata where nothing can start Nextly, which no start failed", async () => {
     forgetCapabilityProviders();
     start.nothingToStart = true;
@@ -1048,6 +1065,18 @@ describe("a production render where Nextly is unavailable", () => {
 });
 
 describe("a development render where Nextly is unavailable", () => {
+  it("passes a Next.js control-flow signal from the start through untouched", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    const signal = Object.assign(new Error("Dynamic server usage: headers"), {
+      digest: "DYNAMIC_SERVER_USAGE",
+    });
+    forgetCapabilityProviders();
+    start.throws = signal;
+    await expect(
+      pageMetadataFor({ ...page, code: { title: "Own" }, tags: [] })
+    ).rejects.toBe(signal);
+  });
+
   it("serves the route's own metadata where the database is busy", async () => {
     vi.stubEnv("NODE_ENV", "development");
     provide({

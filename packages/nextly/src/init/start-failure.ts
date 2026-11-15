@@ -32,10 +32,15 @@ function startFailures(): WeakSet<object> {
 
 /**
  * Record `error` as one Nextly's start rejected with. A thrown value that is
- * not an object cannot be recorded, and is then read as any other failure.
+ * not an object cannot be recorded (`getCachedNextly` makes one an error
+ * first). An error carrying a `digest` is Next.js's own, such as the signal a
+ * dynamic API throws while a page prerenders: it says nothing about Nextly,
+ * and is never recorded, so it reaches Next.js as it was thrown.
  */
 export function markStartFailure(error: unknown): void {
-  if (typeof error === "object" && error !== null) startFailures().add(error);
+  if (typeof error !== "object" || error === null) return;
+  if ("digest" in error && typeof error.digest === "string") return;
+  startFailures().add(error);
 }
 
 /** Whether `error` is one Nextly's start rejected with. */

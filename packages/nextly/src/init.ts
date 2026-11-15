@@ -759,9 +759,16 @@ export async function getCachedNextly(): Promise<Nextly> {
     instance = await startedOrStarting();
   } catch (error) {
     // Recorded, so a reader can tell later that Nextly could not be started
-    // (`errors/unavailable`), whatever the error's own shape says.
-    markStartFailure(error);
-    throw error;
+    // (`errors/unavailable`), whatever the error's own shape says. A value
+    // that is not an object cannot be recorded, so it is made an error
+    // carrying it first.
+    if (typeof error === "object" && error !== null) {
+      markStartFailure(error);
+      throw error;
+    }
+    const failure = NextlyError.internal({ logContext: { rejection: error } });
+    markStartFailure(failure);
+    throw failure;
   }
   if (instance !== undefined) return instance;
 

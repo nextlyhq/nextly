@@ -502,6 +502,9 @@ async function startForProviders(path: string | undefined): Promise<void> {
     const { getCachedNextly } = await import("../../init");
     await getCachedNextly();
   } catch (error) {
+    // Next.js's own signals first, such as a start that read a dynamic API
+    // while the page prerenders: Next.js receives them as they were thrown.
+    getUnstableRethrow()(error);
     failRenderWhenUnavailable(error);
     if (toldNotStarted) return;
     toldNotStarted = true;

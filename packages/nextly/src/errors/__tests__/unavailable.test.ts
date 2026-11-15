@@ -54,6 +54,14 @@ describe("isNextlyUnavailable", () => {
     expect(isNextlyUnavailable(failure)).toBe(true);
   });
 
+  it("is false for a Next.js control-flow signal a start threw, which is never recorded as a failed start", () => {
+    const signal = Object.assign(new Error("Dynamic server usage: headers"), {
+      digest: "DYNAMIC_SERVER_USAGE",
+    });
+    markStartFailure(signal);
+    expect(isNextlyUnavailable(signal)).toBe(false);
+  });
+
   it.each([
     ["DATABASE_BUSY", NextlyError.databaseBusy()],
     ["SERVICE_UNAVAILABLE", NextlyError.serviceUnavailable()],
@@ -169,6 +177,20 @@ describe("isNextlyUnavailable", () => {
     ["nothing", undefined],
   ])("is false for %s", (_name, error) => {
     expect(isNextlyUnavailable(error)).toBe(false);
+  });
+
+  it("is true for an adapter's error of another kind whose driver code says the connection was lost", () => {
+    // The adapters keep the driver's code on an error they could not
+    // classify, and a service may rebuild it without its cause.
+    const reset = createDatabaseError({
+      kind: "unknown",
+      message: "read ECONNRESET",
+      code: "ECONNRESET",
+    });
+    expect(isNextlyUnavailable(reset)).toBe(true);
+    expect(isNextlyUnavailable(NextlyError.internal({ cause: reset }))).toBe(
+      true
+    );
   });
 
   it("ends on a cause chain that loops", () => {

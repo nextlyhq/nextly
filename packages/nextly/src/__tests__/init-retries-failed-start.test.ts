@@ -122,6 +122,17 @@ describe("what getCachedNextly() rejects with, as a render reads it", () => {
     expect(isNextlyUnavailable(failed)).toBe(true);
   });
 
+  it("is a failed start where the start rejected with a value that is not an error", async () => {
+    // A thrown string cannot be recorded, so it is made an error first.
+    registerNextlyStart(() => Promise.reject("database down"));
+    const failed = await getCachedNextly().then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(failed).toBeInstanceOf(Error);
+    expect(isNextlyUnavailable(failed)).toBe(true);
+  });
+
   it("is not a failed start where nothing ever tried to start", async () => {
     // The control: no start was made, so nothing is known about availability.
     const refused = await getCachedNextly().then(
