@@ -231,6 +231,16 @@ describe("metadataFromAnswer", () => {
   it("leaves out everything the answer does not state", () => {
     expect(metadataFromAnswer({})).toEqual({});
   });
+
+  it("names the site's X account on the card, as twitter:site", () => {
+    const metadata = metadataFromAnswer({
+      title: "T",
+      social: { xAccount: "@example" },
+    });
+    expect(metadata.twitter).toEqual({ title: "T", site: "@example" });
+    // Open Graph has no such tag, so the account is the X card's alone.
+    expect(metadata.openGraph).toEqual({ title: "T" });
+  });
 });
 
 describe("pageMetadataFor with no provider", () => {
@@ -351,6 +361,24 @@ describe("pageMetadataFor with a provider", () => {
     expect(metadata.openGraph).toMatchObject({
       type: "article",
       title: { absolute: "Answered card" },
+    });
+  });
+
+  it("serves the site's X account the answer names, past the route's own card", async () => {
+    provide({
+      resolve: () => ({
+        title: "Answered",
+        social: { xAccount: "@example" },
+      }),
+    });
+    const metadata = await pageMetadataFor({
+      ...page,
+      code: { twitter: { creator: "@writer" } },
+      tags: [],
+    });
+    expect(metadata.twitter).toMatchObject({
+      site: "@example",
+      creator: "@writer",
     });
   });
 

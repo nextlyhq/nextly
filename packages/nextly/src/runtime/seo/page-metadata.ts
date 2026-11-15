@@ -622,6 +622,7 @@ const pageMetadataAnswerSchema = z.object({
       siteName: z.string().optional(),
       locale: z.string().optional(),
       type: z.enum(["website", "article"]).optional(),
+      xAccount: z.string().optional(),
     })
     .optional(),
   languages: z.record(z.string(), z.string()).optional(),

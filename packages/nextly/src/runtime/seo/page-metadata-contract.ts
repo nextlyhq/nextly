@@ -199,6 +199,11 @@ export interface PageMetadataAnswer {
     /** The page's language as the social card states it, e.g. `en_US`. */
     locale?: string;
     type?: "website" | "article";
+    /**
+     * The X (Twitter) account of the site, as `@handle`, such as `@example`:
+     * the card's `twitter:site`. Open Graph has no such tag.
+     */
+    xAccount?: string;
   };
   /** The page's address in each language, keyed by language code. */
   languages?: Record<string, string>;

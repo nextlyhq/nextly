@@ -365,7 +365,7 @@ in `optionalDependsOn`.
 | `aiCrawlers`      | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                                                  |
 | `hiddenTypes`     | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some                                    |
 | `structuredData`  | `{ brand, types, defaultAuthor, breadcrumbs }`                   | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields                         |
-| `socialCard`      | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                                        |
+| `socialCard`      | `{ siteName, language, xAccount }`                               | none               | The site's name, language and X account on every page's [social card](#social-cards)                             |
 | `pagePermissions` | `boolean`                                                        | `false`            | Gives a page's SEO a [permission of its own](#who-may-change-seo), per content type                              |
 | `nextBuildDir`    | `string`                                                         | `".next"`          | Where `next build` writes, if `next.config` sets `distDir`: read for [pages built in code](#pages-built-in-code) |
 | `gonePage`        | `string`                                                         | none               | Experimental. The site's own page shown with a [Gone (410)](#redirects) answer, such as `"/gone"`                |
@@ -596,6 +596,68 @@ Other code can read what the sitemap lists, and the pages left out because anoth
 holds their address, through the plugin's `listedPages` service. Its `list(origin)` answers
 `{ pages, problems }`. Each page and each problem names its `language`, and a page published
 in more than one language carries its language links as `alternates`.
+
+### Dating your own sitemap and pages
+
+For a sitemap of your own, or a page's `og:article:modified_time`, use `seoLastChanged`
+(experimental) rather than an entry's `updatedAt`. Every save moves `updatedAt`, an SEO-only one
+included, so a date read from it tells search engines a page changed when only its SEO did.
+`seoLastChanged` gives the same date as this plugin's [`<lastmod>`](#what-the-sitemap-lists) and
+structured data's `dateModified`: when the page's published content last changed, or, for a page
+with no date kept yet, its own `updatedAt`.
+
+Hand it the entries you have read, each with its `id` and `updatedAt`, and the collection they are
+from, or a Single's slug as `single`. Give `entries` for many at once: the answer is a map from
+each entry's id to its date, read in one query per hundred entries, not one per entry. Give `entry`
+for one, and the answer is its date. Either way a date is ISO text, and an entry with neither a
+kept date nor an `updatedAt` has none. `locale` reads the dates of the pages in that language,
+where the site serves several; without it they are the site's default language's.
+
+```ts title="app/sitemap.ts"
+import type { MetadataRoute } from "next";
+import { getNextly } from "nextly";
+import { seoLastChanged } from "@nextlyhq/plugin-seo";
+
+import config from "../nextly.config";
+
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+  const nextly = await getNextly({ config });
+  const { items: posts } = await nextly.find({
+    collection: "posts",
+    limit: 500,
+  });
+  const dates = await seoLastChanged({ collection: "posts", entries: posts });
+  return posts.map(post => ({
+    url: `https://example.com/blog/${String(post.slug)}`,
+    lastModified: dates.get(post.id),
+  }));
+}
+```
+
+```ts
+import { getNextly } from "nextly";
+import { seoLastChanged } from "@nextlyhq/plugin-seo";
+
+import config from "../nextly.config";
+
+const nextly = await getNextly({ config });
+const home = await nextly.findSingle({ slug: "home" });
+export const homeChanged = await seoLastChanged({
+  single: "home",
+  entry: home,
+});
+
+// A post's head: `openGraph: { type: "article", modifiedTime }`.
+const post = await nextly.findByID({ collection: "posts", id: "post-id" });
+export const modifiedTime =
+  post === null
+    ? undefined
+    : await seoLastChanged({ collection: "posts", entry: post });
+```
+
+Where the SEO plugin isn't running, each entry is dated by its own `updatedAt`. Where Nextly is
+unavailable while a page renders for production, `next build` included, it throws, as the page's
+head does, so a build never ships dates read without it.
 
 ### Before the sitemap reached the root
 
@@ -1159,13 +1221,20 @@ built from the page's head. The plugin states everything the card reads:
   the site's default language (English on a site that declares no languages), written as Open
   Graph writes it, always with a territory (`en-US` becomes `en_US`). A bare language is given the
   territory it is most often written for: `en` is `en_US`, `de` is `de_DE`, `pt` is `pt_BR`. Set
-  `socialCard.language` (such as `en-GB`) where that is not the site's.
+  `socialCard.language` (such as `en-GB`) where that is not the site's;
+- the site's **X account**, as `<meta name="twitter:site" content="@example">` on every page, where
+  `socialCard.xAccount` names one (experimental). Give its handle, with or without the `@`
+  (`"@example"` or `"example"`), or its profile address (`"https://x.com/example"`, or a
+  `twitter.com` one); the card always states it as `@example`. Anything else, such as a post's
+  address or another network's profile, stops the plugin at start with an error that says so. An
+  empty value, as an unset environment variable reads, states none. It is set in code only: the
+  SEO settings don't hold it. The account of a post's author (`twitter:creator`) is not stated.
 
 ```ts
 seoPlugin({
   collections: ["posts"],
   baseUrl: "https://example.com",
-  socialCard: { siteName: "Acme", language: "en-US" },
+  socialCard: { siteName: "Acme", language: "en-US", xAccount: "@example" },
 });
 ```
 

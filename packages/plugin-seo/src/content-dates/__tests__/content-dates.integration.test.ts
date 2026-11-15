@@ -16,7 +16,7 @@ process.env.NEXTLY_SECRET =
   "test-secret-must-be-at-least-32-characters-long!!";
 
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
-import { ne } from "@nextlyhq/plugin-sdk/db";
+import { eq, ne } from "@nextlyhq/plugin-sdk/db";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -32,10 +32,12 @@ import {
 } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { statementsOf } from "../../__tests__/count-statements";
 import { lastCatchUp } from "../../address-record/catch-up";
 import { seoContext } from "../../address-record/__tests__/record-tables";
 import { forgetNotes, readNotes } from "../../address-record/store";
 import { siteActor } from "../../import/actor";
+import { seoLastChanged } from "../../index";
 import { documentsIn } from "../../languages/versions";
 import { typeOf } from "../../outputs/listing";
 import { applyImport, planImport, type ImportEngine } from "../../import/plan";
@@ -48,7 +50,7 @@ import { rulesFromOptions } from "../../structured-data/rules";
 import { contentFingerprint, earlierContentFingerprints } from "../fingerprint";
 import { contentDatesSettled } from "../hooks";
 import { recordSaved, refreshContentDates } from "../record";
-import { pageDateKey, pruneContentDates } from "../store";
+import { pageDateKey, pruneContentDates, recordContentDate } from "../store";
 import {
   FINGERPRINT_READING_KEY,
   lastFingerprintUpgrade,
@@ -897,6 +899,202 @@ describe.each(getConfiguredTestDialects())(
         FINGERPRINT_READING_KEY,
       ]);
       expect(notes.get(FINGERPRINT_READING_KEY)).toBeTruthy();
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "seoLastChanged, a page's last change for site code (%s)",
+  dialect => {
+    /** The post with `id` as site code reads it. */
+    async function read(t: TestNextly, id: string) {
+      await contentDatesSettled();
+      const { items } = await t.nextly.find({ collection: POSTS });
+      const found = items.find(item => String(item.id) === id);
+      if (found === undefined) throw new Error(`${id} is not found`);
+      return found as { id: string; updatedAt?: unknown };
+    }
+
+    it("dates an entry by its content, so an SEO-only save leaves it and a content change moves it", async () => {
+      const { t } = await boot(dialect);
+      const post = await create(t, POSTS, {
+        title: "Hello",
+        slug: "hello",
+        body: "First words.",
+        status: "published",
+      });
+      const first = await seoLastChanged({
+        collection: POSTS,
+        entry: await read(t, post.id),
+      });
+      expect(second(first)).toBe(second(post.updatedAt));
+      // The sitemap's own date for the page, the same answer.
+      expect(first).toBe(await lastmodOf(`${SITE}/blog/hello`));
+
+      await nextSecond();
+      await t.nextly.update({
+        collection: POSTS,
+        id: post.id,
+        data: { seo: { metaTitle: "Hello, world" }, _overwrite: true },
+      });
+      const afterSeo = await read(t, post.id);
+      // The row's own date moved; the content date did not.
+      expect(instant(afterSeo.updatedAt)).toBeGreaterThan(instant(first));
+      expect(await seoLastChanged({ collection: POSTS, entry: afterSeo })).toBe(
+        first
+      );
+
+      await nextSecond();
+      await t.nextly.update({
+        collection: POSTS,
+        id: post.id,
+        data: { body: "Rewritten.", _overwrite: true },
+      });
+      const moved = await seoLastChanged({
+        collection: POSTS,
+        entry: await read(t, post.id),
+      });
+      expect(instant(moved)).toBeGreaterThan(instant(first));
+      expect(moved).toBe(await lastmodOf(`${SITE}/blog/hello`));
+    });
+
+    it("dates a batch of entries in one read, each by its own content date or else its own last save", async () => {
+      const { t, ctx } = await boot(dialect);
+      const posts = [];
+      for (const slug of ["one", "two", "three"]) {
+        posts.push(
+          await create(t, POSTS, {
+            title: slug,
+            slug,
+            body: `About ${slug}.`,
+            status: "published",
+          })
+        );
+      }
+      await contentDatesSettled();
+      // The second's content changed on a known date, and the third is as a
+      // page saved before content dates were kept: no row.
+      const columns = ctx.db.table(contentDates);
+      const [one, two, three] = posts;
+      if (one === undefined || two === undefined || three === undefined) {
+        throw new Error("three posts were not created");
+      }
+      await ctx.db
+        .delete(contentDates)
+        .where(
+          eq(
+            columns.pageKey,
+            pageDateKey({ collection: POSTS, id: three.id }, "en")
+          )
+        );
+      await recordContentDate(ctx, {
+        holder: { collection: POSTS, id: two.id },
+        locale: "en",
+        fingerprint: "f".repeat(64),
+        changedAt: new Date("2026-01-02T03:04:05.000Z"),
+      });
+      const { items } = await t.nextly.find({ collection: POSTS });
+
+      let dates: Map<string | number, string> = new Map();
+      const statements = await statementsOf(dialect, async () => {
+        dates = await seoLastChanged({ collection: POSTS, entries: items });
+      });
+
+      expect(second(dates.get(one.id))).toBe(second(one.updatedAt));
+      expect(dates.get(two.id)).toBe("2026-01-02T03:04:05.000Z");
+      // No row: its own last save, as the sitemap dates it.
+      expect(dates.get(three.id)).toBe(
+        new Date(
+          String(items.find(item => item.id === three.id)?.updatedAt)
+        ).toISOString()
+      );
+      // One read for the batch of content dates, whatever its size.
+      expect(statements.filter(sql => /content_dates/i.test(sql))).toHaveLength(
+        1
+      );
+    });
+
+    it("reads the date kept in the language asked for, else the site's default language", async () => {
+      const { t, ctx } = await boot(dialect);
+      const post = await create(t, POSTS, {
+        title: "Hello",
+        slug: "hello",
+        status: "published",
+      });
+      await contentDatesSettled();
+      await recordContentDate(ctx, {
+        holder: { collection: POSTS, id: post.id },
+        locale: "fr",
+        fingerprint: "f".repeat(64),
+        changedAt: new Date("2026-03-04T05:06:07.000Z"),
+      });
+      const entry = await read(t, post.id);
+
+      expect(
+        await seoLastChanged({ collection: POSTS, entry, locale: "fr" })
+      ).toBe("2026-03-04T05:06:07.000Z");
+      // The site's default language, English on a site naming none.
+      expect(second(await seoLastChanged({ collection: POSTS, entry }))).toBe(
+        second(post.updatedAt)
+      );
+      // A language with no date kept: the entry's own last save.
+      expect(
+        await seoLastChanged({ collection: POSTS, entry, locale: "de" })
+      ).toBe(new Date(String(entry.updatedAt)).toISOString());
+    });
+
+    it("gives an entry with no date kept its own last save, and none where it has neither", async () => {
+      const { t, ctx } = await boot(dialect);
+      const post = await create(t, POSTS, {
+        title: "Hello",
+        slug: "hello",
+        status: "published",
+      });
+      await contentDatesSettled();
+      await clearDates(ctx);
+      const entry = await read(t, post.id);
+
+      expect(await seoLastChanged({ collection: POSTS, entry })).toBe(
+        new Date(String(entry.updatedAt)).toISOString()
+      );
+      expect(
+        await seoLastChanged({ collection: POSTS, entry: { id: post.id } })
+      ).toBeUndefined();
+      expect(await rows(ctx)).toEqual([]);
+    });
+
+    it("dates a Single by its content, as the sitemap does", async () => {
+      const { t } = await boot(dialect);
+      await t.nextly.updateSingle({
+        slug: "seocd_home",
+        data: { title: "Acme", _overwrite: true },
+      });
+      await contentDatesSettled();
+      const home = (await t.nextly.findSingle({ slug: "seocd_home" })) as {
+        id: string;
+        updatedAt?: unknown;
+      };
+      const first = await seoLastChanged({ single: "seocd_home", entry: home });
+      expect(first).toBe(await lastmodOf(`${SITE}/`));
+
+      await nextSecond();
+      await t.nextly.updateSingle({
+        slug: "seocd_home",
+        data: {
+          title: "Acme",
+          seo: { metaTitle: "Acme, home" },
+          _overwrite: true,
+        },
+      });
+      await contentDatesSettled();
+      const saved = (await t.nextly.findSingle({ slug: "seocd_home" })) as {
+        id: string;
+        updatedAt?: unknown;
+      };
+      expect(instant(saved.updatedAt)).toBeGreaterThan(instant(first));
+      expect(await seoLastChanged({ single: "seocd_home", entry: saved })).toBe(
+        first
+      );
     });
   }
 );
