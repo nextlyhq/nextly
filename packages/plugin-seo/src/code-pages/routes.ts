@@ -12,13 +12,14 @@
  * @module code-pages/routes
  */
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { FRAMEWORK_CRAWL_EXCLUSIONS } from "@nextlyhq/plugin-sdk";
 
 import { isRecord } from "../plain-values";
 
 import { isNextBuild } from "./building";
+import type { UnreadableBuild } from "./contract";
 import { declaredAddresses } from "./static-params";
 
 /** A page a route renders from its own code. */
@@ -234,22 +235,32 @@ let lastRead:
   | { file: string; changedAt: number; prerendered: Prerendered[] }
   | undefined;
 
+/** What reading the prerender manifest found. */
+type PrerenderRead =
+  | { prerendered: Prerendered[] }
+  | { prerendered: Prerendered[]; problem: UnreadableBuild["problem"] };
+
 /**
  * Every address the build prerendered, with the route that rendered it.
  * Until `next build` writes its prerender manifest, which it does once every
  * page is rendered, those the build declared through `seoStaticParams`; the
- * manifest wins once it exists.
+ * manifest wins once it exists. Where the manifest is missing or is not one,
+ * none, and the problem.
  */
-function prerenderedIn(dir: string): Prerendered[] {
+function prerenderedIn(dir: string): PrerenderRead {
   const file = join(dir, "prerender-manifest.json");
-  if (!existsSync(file)) return isNextBuild() ? declaredAddresses(dir) : [];
+  if (!existsSync(file)) {
+    return isNextBuild()
+      ? { prerendered: declaredAddresses(dir) }
+      : { prerendered: [], problem: "missing" };
+  }
   const changedAt = statSync(file).mtimeMs;
   if (lastRead?.file === file && lastRead.changedAt === changedAt) {
-    return lastRead.prerendered;
+    return { prerendered: lastRead.prerendered };
   }
   const manifest = readJson(file);
   const routes = isRecord(manifest) ? manifest.routes : undefined;
-  if (!isRecord(routes)) return [];
+  if (!isRecord(routes)) return { prerendered: [], problem: "unreadable" };
   const prerendered = Object.entries(routes).map(([path, route]) => ({
     path,
     srcRoute:
@@ -258,8 +269,9 @@ function prerenderedIn(dir: string): Prerendered[] {
         : null,
     ...(statusOf(dir, path, route) === 404 ? { notFound: true } : {}),
   }));
+  if (prerendered.length === 0) return { prerendered, problem: "no-routes" };
   lastRead = { file, changedAt, prerendered };
-  return prerendered;
+  return { prerendered };
 }
 
 /** The extensions a page file may have. */
@@ -288,11 +300,162 @@ function sourceFileOf(appDir: string, appPath: string): string {
   return `app${appPath}`;
 }
 
-/** The pages the running app's routes render from their own code. */
-export function readCodeRoutes(options: CodeRoutesOptions = {}): CodeRoute[] {
+/** A route with a variable part, by the address Next.js names it by. */
+export interface DynamicRoute {
+  /** As Next.js names it, route groups left out: `/integrations/[name]`. */
+  address: string;
+  /** Its file in the app, as `CodeRoute.route` names it. */
+  route: string;
+}
+
+/**
+ * What the running app's build says of its pages: those its routes render
+ * from their own code, its routes with a variable part, and, where the
+ * prerender manifest that lists the addresses those routes declared could
+ * not be read, which file and why. Its routes are then only those with no
+ * variable part: an address one with a variable part serves is not
+ * confirmed by anything the build wrote.
+ */
+export interface CodeBuild {
+  routes: CodeRoute[];
+  dynamic: DynamicRoute[];
+  unreadable?: UnreadableBuild;
+}
+
+/**
+ * Whether a prerender manifest that could not be read is a problem: on a
+ * production build being served, not while `next build` runs, which writes
+ * it last, nor in development, whose manifest lists no pages.
+ */
+function expectsPrerenderManifest(): boolean {
+  return process.env.NODE_ENV !== "development" && !isNextBuild();
+}
+
+/** The files already warned about, so a warning is given once each. */
+const warned = new Set<string>();
+
+/**
+ * Warn, once for each file and problem in this process, that the build's
+ * prerender manifest could not be read: the list of pages is then short, and
+ * nothing else would say so.
+ */
+function warnUnreadable(file: string, problem: UnreadableBuild["problem"]) {
+  const key = `${problem}\u0000${file}`;
+  if (warned.has(key)) return;
+  warned.add(key);
+  const what =
+    problem === "missing"
+      ? "is missing"
+      : problem === "unreadable"
+        ? "could not be read"
+        : "lists no pages";
+  console.warn(
+    `[nextly-seo] ${file} ${what}, so the addresses routes with a variable part declared through generateStaticParams are not confirmed: SEO > Pages lists the ones they recorded as unconfirmed, and the sitemap, llms.txt and plain-text copies leave them out. Deploy the whole .next build directory with the server.`
+  );
+}
+
+/** `file` as a person finds it: from the app's directory where it is inside. */
+function shownPath(appDir: string, file: string): string {
+  const inside = relative(appDir, file);
+  return inside.startsWith("..") || isAbsolute(inside) ? file : inside;
+}
+
+/** What the running app's build says of its pages (`CodeBuild`). */
+export function readCodeBuild(options: CodeRoutesOptions = {}): CodeBuild {
   const appDir = options.appDir ?? process.cwd();
   const dir = manifestDir(resolve(appDir, options.buildDir ?? ".next"));
-  return codeRoutesOf(appPathsIn(dir), prerenderedIn(dir), appPath =>
-    sourceFileOf(appDir, appPath)
+  const appPaths = appPathsIn(dir);
+  const read = prerenderedIn(dir);
+  const fileOf = (appPath: string) => sourceFileOf(appDir, appPath);
+  const dynamic: DynamicRoute[] = [];
+  for (const appPath of appPaths) {
+    const address = addressOfAppPath(appPath);
+    if (address !== undefined && isDynamic(address)) {
+      dynamic.push({ address, route: fileOf(appPath) });
+    }
+  }
+  dynamic.sort((left, right) =>
+    left.address < right.address ? -1 : left.address > right.address ? 1 : 0
   );
+  const build: CodeBuild = {
+    routes: codeRoutesOf(appPaths, read.prerendered, fileOf),
+    dynamic,
+  };
+  // Only a build there is: with no app paths there is nothing to confirm.
+  if ("problem" in read && appPaths.length > 0 && expectsPrerenderManifest()) {
+    const file = join(dir, "prerender-manifest.json");
+    warnUnreadable(file, read.problem);
+    build.unreadable = { file: shownPath(appDir, file), problem: read.problem };
+  }
+  return build;
+}
+
+/** The pages the running app's routes render from their own code. */
+export function readCodeRoutes(options: CodeRoutesOptions = {}): CodeRoute[] {
+  return readCodeBuild(options).routes;
+}
+
+/** How a route's segment matches: as written, one segment, one or more, or any. */
+type SegmentKind = "fixed" | "one" | "rest" | "any";
+
+/** How `segment`, one part of an address Next.js names a route by, matches. */
+function kindOf(segment: string): SegmentKind {
+  if (/^\[\[\.\.\.[^\]]+\]\]$/.test(segment)) return "any";
+  if (/^\[\.\.\.[^\]]+\]$/.test(segment)) return "rest";
+  if (/^\[[^\]]+\]$/.test(segment)) return "one";
+  return "fixed";
+}
+
+/** Whether the route `pattern`, split into segments, serves `parts`. */
+function serves(pattern: readonly string[], parts: readonly string[]): boolean {
+  const [first, ...rest] = pattern;
+  if (first === undefined) return parts.length === 0;
+  const kind = kindOf(first);
+  // A catch-all is a route's last segment.
+  if (kind === "rest") return parts.length > 0;
+  if (kind === "any") return true;
+  const [part, ...others] = parts;
+  if (part === undefined) return false;
+  return (kind === "one" || part === first) && serves(rest, others);
+}
+
+/**
+ * How specific a route is, lowest first, as Next.js picks between routes
+ * that could serve one address: fixed segments before a variable one,
+ * before a catch-all, before an optional catch-all.
+ */
+function specificity(pattern: readonly string[]): number[] {
+  const order: SegmentKind[] = ["fixed", "one", "rest", "any"];
+  return pattern.map(segment => order.indexOf(kindOf(segment)));
+}
+
+/** Whether `left` is more specific than `right` (`specificity`). */
+function moreSpecific(left: readonly number[], right: readonly number[]) {
+  for (let at = 0; at < Math.max(left.length, right.length); at++) {
+    const a = left[at] ?? -1;
+    const b = right[at] ?? -1;
+    if (a !== b) return a < b;
+  }
+  return false;
+}
+
+/**
+ * The route with a variable part in `dynamic` that would serve `path`, the
+ * most specific where several would; none where none would.
+ */
+export function dynamicRouteServing(
+  path: string,
+  dynamic: readonly DynamicRoute[]
+): DynamicRoute | undefined {
+  const parts = path.split("/").filter(part => part !== "");
+  let found: { route: DynamicRoute; rank: number[] } | undefined;
+  for (const route of dynamic) {
+    const pattern = route.address.split("/").filter(part => part !== "");
+    if (!serves(pattern, parts)) continue;
+    const rank = specificity(pattern);
+    if (found === undefined || moreSpecific(rank, found.rank)) {
+      found = { route, rank };
+    }
+  }
+  return found?.route;
 }

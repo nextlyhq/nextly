@@ -42,7 +42,8 @@ import type {
   TableSpec,
 } from "../../schema/pipeline/diff/types";
 import {
-  getColumnDescriptor,
+  fieldsStoredOnRow,
+  getComponentRowColumnDescriptor,
   toSnakeCase,
   type ColumnOrigin,
   type SupportedDialect,
@@ -77,6 +78,20 @@ export interface ReconcilableField {
 
 /** A stored field whose column is gone from both tables. */
 export interface ReconcileRemoval {
+  fieldName: string;
+  columnName: string;
+}
+
+/**
+ * A stored field inside a group with no name whose column the main table does not have yet.
+ *
+ * Such a field is stored on the field group's row, as one beside the group is. Field groups made
+ * before that was so have no column for it, and nothing about that is drift: the definition is
+ * right, and the table is one migration behind it. So the field is kept, and this names the
+ * column the next save or `nextly migrate` adds, rather than removing the field the way a field
+ * whose column vanished is removed.
+ */
+export interface ReconcileAwaitingColumn {
   fieldName: string;
   columnName: string;
 }
@@ -147,6 +162,8 @@ export interface ReconcilePlan<F extends ReconcilableField> {
   removed: ReconcileRemoval[];
   repaired: ReconcileRepair[];
   adopted: ReconcileAdoption[];
+  /** Fields kept whose columns the next migration adds; see `ReconcileAwaitingColumn`. */
+  awaitingColumns: ReconcileAwaitingColumn[];
   /** Non-empty means the caller must REFUSE rather than write. */
   blockers: ReconcileBlocker[];
   /** True when nothing needed changing, so a caller can skip the write entirely. */
@@ -614,6 +631,41 @@ function guessFieldType(liveType: string): string {
 }
 
 /**
+ * One level of the stored definition as the plan leaves it: each field the walk judged replaced by
+ * its outcome, or left out when it has none (it was removed), and each group with no name kept in
+ * its place, holding its own level rebuilt the same way. An entry the walk does not reach, one with
+ * no name and nothing inside it, is kept as it was.
+ */
+function rebuiltLevel<F extends ReconcilableField>(
+  level: readonly F[],
+  outcomes: ReadonlyMap<F, F>,
+  /** The groups already rebuilt above, so one that holds itself is not followed for ever. */
+  entered: WeakSet<object> = new WeakSet()
+): F[] {
+  const out: F[] = [];
+  for (const field of level) {
+    const outcome = outcomes.get(field);
+    if (outcome !== undefined) {
+      out.push(outcome);
+      continue;
+    }
+    const inner = (field as { fields?: unknown }).fields;
+    const named = typeof field.name === "string" && field.name.length > 0;
+    if (named) continue;
+    if (!Array.isArray(inner) || entered.has(field)) {
+      out.push(field);
+      continue;
+    }
+    entered.add(field);
+    out.push({
+      ...field,
+      fields: rebuiltLevel(inner as F[], outcomes, entered),
+    });
+  }
+  return out;
+}
+
+/**
  * Plan the repair of a field group's stored definition against its live tables.
  *
  * Every question is answered by the code that already owns it — the desired-state builder for
@@ -647,7 +699,20 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
   const removed: ReconcileRemoval[] = [];
   const repaired: ReconcileRepair[] = [];
   const adopted: ReconcileAdoption[] = [];
+  const awaitingColumns: ReconcileAwaitingColumn[] = [];
+  /** The adopted fields, appended after the stored ones. */
   const fields: F[] = [];
+  /**
+   * What each stored field becomes, by the field as stored: itself, its repaired copy, or nothing
+   * when it is removed. The stored fields are judged one by one through `fieldsStoredOnRow`, so a
+   * field inside a group with no name is matched with its column on this row as one beside the
+   * group is, and the definition is then rebuilt in its own shape from this (`rebuiltLevel`), each
+   * group with no name keeping its place and holding what its fields became.
+   */
+  const outcomes = new Map<F, F>();
+  const onRow = fieldsStoredOnRow(storedFields);
+  /** The fields inside a group with no name, which a group's own level does not list. */
+  const laidOut = new Set(onRow.filter(field => !storedFields.includes(field)));
 
   // What the generator says this table always has. Derived once and used for BOTH questions it
   // answers — which live columns are system columns rather than adoptable user ones, and which
@@ -699,8 +764,10 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
    */
   const displacedRemovals = new Set<string>();
 
-  for (const field of storedFields) {
-    const descriptor = getColumnDescriptor(
+  for (const field of onRow) {
+    // The column a field group's row gives the field, as its creator and desired table give it: a
+    // many-to-many relationship keeps its list there, where a collection keeps a junction table.
+    const descriptor = getComponentRowColumnDescriptor(
       field as unknown as FieldDefinition,
       dialect,
       "fieldGroup"
@@ -709,7 +776,7 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
     // is the only correct answer: removing it would delete an authored field on the evidence of a
     // column that was never supposed to exist.
     if (!descriptor || descriptor.kind === "skip") {
-      fields.push(field);
+      outcomes.set(field, field);
       columnlessByColumnName.set(toSnakeCase(field.name), field);
       continue;
     }
@@ -720,7 +787,11 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
     // and then re-adopt its column from the other table as a minimal guess, discarding the logical
     // type, options and admin config the operator authored. Finding it where it actually IS keeps
     // all of that and corrects the placement flag instead.
-    const expectedInCompanion = localized && isFieldLocalized(field, true);
+    // A field inside a group with no name is never translated: which fields are is read from the
+    // declared list, as the companion table and the instance write read it, so its column is on the
+    // main table whatever the field's own flag says.
+    const expectedInCompanion =
+      localized && !laidOut.has(field) && isFieldLocalized(field, true);
     const onMain = mainColumns.get(descriptor.name);
     const onCompanion = companionColumns.get(descriptor.name);
 
@@ -736,11 +807,22 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
       });
       claimedMain.add(descriptor.name);
       claimedCompanion.add(descriptor.name);
-      fields.push(field);
+      outcomes.set(field, field);
       continue;
     }
 
     const live = onMain ?? onCompanion;
+
+    if (!live && laidOut.has(field)) {
+      // A field inside a group with no name, on a table made before such fields were stored: kept,
+      // and its column named as the one the next migration adds (`ReconcileAwaitingColumn`).
+      awaitingColumns.push({
+        fieldName: field.name,
+        columnName: descriptor.name,
+      });
+      outcomes.set(field, field);
+      continue;
+    }
 
     if (!live) {
       // 🔴 REPORTED by identity and removed, never silently dropped. The summary is the only thing
@@ -956,7 +1038,7 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
       }
     }
 
-    fields.push(repairedField);
+    outcomes.set(field, repairedField);
   }
 
   // Whatever is left in the live tables is a column no stored field described.
@@ -1006,8 +1088,8 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
     // and the adoption below stands in for whatever the column now is.
     const displaced = columnlessByColumnName.get(column.name);
     if (displaced) {
-      const at = fields.indexOf(displaced);
-      if (at !== -1) fields.splice(at, 1);
+      // Wherever it sits in the definition: the rebuild below leaves out a field with no outcome.
+      outcomes.delete(displaced);
       removed.push({ fieldName: displaced.name, columnName: column.name });
       // Paired with THIS adoption by construction — the field and the column share a name, so
       // nothing about the correspondence is guessed. Recorded so the rename check below does not
@@ -1097,11 +1179,16 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
   const unexplainedRemovals = removed.filter(
     entry => !displacedRemovals.has(entry.fieldName)
   );
-  if (unexplainedRemovals.length > 0 && adopted.length > 0) {
-    const gone = unexplainedRemovals.map(entry => `"${entry.fieldName}"`);
+  // A field inside a group with no name that awaits its column is as much a candidate: the table
+  // may have been made before such fields were stored, or the column may have been renamed to the
+  // unclaimed one, and the schema cannot tell which. Kept or awaited silently, the renamed column
+  // would be adopted under a guessed type beside a field waiting for an empty replacement.
+  const unexplained = [...unexplainedRemovals, ...awaitingColumns];
+  if (unexplained.length > 0 && adopted.length > 0) {
+    const gone = unexplained.map(entry => `"${entry.fieldName}"`);
     const appeared = adopted.map(entry => `"${entry.columnName}"`);
     blockers.push({
-      fieldName: unexplainedRemovals[0]?.fieldName ?? "",
+      fieldName: unexplained[0]?.fieldName ?? "",
       columnName: adopted[0]?.columnName ?? "",
       kind: "ambiguous-rename",
       detail: `${gone.join(", ")} lost ${gone.length === 1 ? "its column" : "their columns"} while ${appeared.join(", ")} ${appeared.length === 1 ? "is" : "are"} described by no field, which is equally a rename and a drop-plus-add; rename the field in the definition to keep its configuration, or delete it to accept the column as new.`,
@@ -1109,11 +1196,12 @@ export function planFieldGroupReconcile<F extends ReconcilableField>(
   }
 
   return {
-    fields,
+    fields: [...rebuiltLevel(storedFields, outcomes), ...fields],
     localized,
     removed,
     repaired,
     adopted,
+    awaitingColumns,
     blockers,
     unchanged:
       removed.length === 0 &&

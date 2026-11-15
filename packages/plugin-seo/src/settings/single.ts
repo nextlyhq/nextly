@@ -27,6 +27,7 @@ import {
 
 import { holdsManageSeo } from "../permissions";
 
+import { brandDetailsProblem } from "./brand-details";
 import { SEO_PLUGIN_NAME, SEO_SETTINGS_SLUG, SETUP_STEPS } from "./contract";
 import { SEPARATORS } from "./patterns";
 import { productionAddressesProblem } from "./production-addresses";
@@ -122,6 +123,14 @@ export function seoSettingsSingle(): SingleConfig {
         label: "Social profiles",
         validate: refusing(socialProfilesProblem),
       }),
+      // The brand's other facts structured data names: what it is, how to
+      // reach it, when it was founded and who owns it. One value, so a fact
+      // added later changes no column.
+      json({
+        name: "brandDetails",
+        label: "Brand details",
+        validate: refusing(brandDetailsProblem),
+      }),
       json({
         name: "patterns",
         label: "Title patterns",
@@ -164,6 +173,12 @@ export function seoSettingsSingle(): SingleConfig {
       // The optional connections and outputs, each off until switched on.
       checkbox({ name: "indexNow", label: "IndexNow" }),
       checkbox({ name: "llmsTxt", label: "llms.txt" }),
+      // Every listed page's words in one file, beside llms.txt; off until
+      // switched on.
+      checkbox({ name: "llmsFullTxt", label: "llms-full.txt" }),
+      // What the site tells AI tools in its own words, after llms.txt's
+      // summary.
+      textarea({ name: "llmsIntro", label: "What AI tools should know" }),
       checkbox({
         name: "plainTextCopies",
         label: "Plain-text copies of pages",

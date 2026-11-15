@@ -46,11 +46,12 @@ import {
   type StructuredDataTypeKey,
 } from "../structured-data/catalog";
 import type { DetailSource } from "../structured-data/rules";
-import { characters, TITLE_LIMIT } from "../tab/problems";
+import { fitSummary, textFit } from "../tab/problems";
 
 import { AdminLink } from "./section";
 import {
   FROM_THE_PAGE,
+  faqSectionOf,
   holdsField,
   isHidden,
   isSeoOn,
@@ -61,6 +62,7 @@ import {
   previewOf,
   structuredTypeOf,
   withDetailField,
+  withFaqSection,
   withHidden,
   withSeoOn,
   withStructuredType,
@@ -153,7 +155,7 @@ function PatternEditor({
     ...type.fields.map(field => field.token),
     SITE_NAME_TOKEN,
   ];
-  const length = characters(preview.title);
+  const fit = textFit("title", preview.title);
   return (
     <div className="grid gap-2">
       <div className="flex items-baseline justify-between gap-2">
@@ -203,12 +205,11 @@ function PatternEditor({
         className="text-xs text-muted-foreground"
       >
         Example: <b className="font-medium text-foreground">{preview.title}</b>{" "}
+        {/* Measured as the SEO tab and the problem list measure a title. */}
         <span
-          className={
-            length > TITLE_LIMIT ? "font-semibold text-warning-text" : undefined
-          }
+          className={fit.fits ? undefined : "font-semibold text-warning-text"}
         >
-          {length} / {TITLE_LIMIT}
+          {fitSummary(fit)}
         </span>
       </p>
       {preview.gaveWay ? (
@@ -660,6 +661,43 @@ function TypeSettings({
         mapping={mapping}
         setMapping={setMapping}
       />
+      <FaqSectionRow type={type} draft={draft} change={change} />
+    </div>
+  );
+}
+
+/**
+ * Whether the questions a type's pages show are an FAQ section of each page,
+ * described as a part of it whatever the page's own type. Not offered where
+ * the type's pages are Questions and answers, whose questions are already
+ * what each page is about.
+ */
+function FaqSectionRow({
+  type,
+  draft,
+  change,
+}: TabProps & { type: SeoContentType }): JSX.Element | null {
+  const id = useId();
+  if (structuredTypeOf(draft, type.key) === "faqPage") return null;
+  return (
+    <div className="flex items-start gap-3">
+      <Switch
+        id={id}
+        checked={faqSectionOf(draft, type.key)}
+        aria-label={`FAQ section for ${type.label}`}
+        onCheckedChange={checked =>
+          change(current => withFaqSection(current, type.key, checked))
+        }
+      />
+      <label htmlFor={id} className="grid gap-0.5">
+        <span className="text-sm font-medium text-foreground">
+          Questions on its pages are an FAQ section
+        </span>
+        <span className="text-xs text-muted-foreground">
+          Where a page shows questions and answers, they are described as a part
+          of it, whatever its type. A page showing none gets nothing.
+        </span>
+      </label>
     </div>
   );
 }

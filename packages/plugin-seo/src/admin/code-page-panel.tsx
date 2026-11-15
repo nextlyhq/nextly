@@ -41,7 +41,6 @@ import {
 } from "../code-pages/contract";
 import type { SeoAnswer, Sourced } from "../resolver/order";
 import { SEO_PLUGIN_NAME } from "../settings/contract";
-import { characters, DESCRIPTION_LIMIT, TITLE_LIMIT } from "../tab/problems";
 
 import { AdvancedFrame } from "./advanced";
 import { developerNote, valueSource } from "./pages-view";
@@ -167,6 +166,19 @@ function ConnectionNote({ item }: { item: SiteAddress }): JSX.Element {
             Copy a note for a developer
           </RowButton>
         </div>
+      </Note>
+    );
+  }
+  if (item.standing === "unconfirmed") {
+    return (
+      <Note tone="warning">
+        <b className="font-semibold">
+          Whether {item.path} is still served isn&apos;t confirmed.
+        </b>{" "}
+        The server couldn&apos;t read the build&apos;s list of the pages{" "}
+        <Code>{item.from}</Code> declares, so this page is listed from what its
+        route recorded. What you set here still reaches it whenever the route
+        serves it; the sitemap leaves it out until the list can be read.
       </Note>
     );
   }
@@ -512,8 +524,7 @@ export function CodePagePanel({
               help="The blue link people click in Google's results."
               value={draft.title}
               placeholder={automatic.title}
-              count={characters(answer.title?.value ?? "")}
-              limit={TITLE_LIMIT}
+              measure={{ kind: "title", text: answer.title?.value ?? "" }}
               maxLength={LONGEST_SEO_TEXT}
               writable={writable}
               inputRef={titleField}
@@ -534,8 +545,10 @@ export function CodePagePanel({
               help="The grey text under the link."
               value={draft.description}
               placeholder={automatic.description}
-              count={characters(answer.description?.value ?? "")}
-              limit={DESCRIPTION_LIMIT}
+              measure={{
+                kind: "description",
+                text: answer.description?.value ?? "",
+              }}
               maxLength={LONGEST_SEO_TEXT}
               writable={writable}
               onChange={description =>

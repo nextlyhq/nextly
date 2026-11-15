@@ -105,3 +105,40 @@ describe("getProviderDefaults", () => {
     expect(defaults.retryAttempts).toBe(3);
   });
 });
+
+describe("getProviderDefaults inside serverless functions", () => {
+  it("gives every provider the serverless pool: 3 connections, none kept, 5 s idle", () => {
+    for (const provider of ["standard", "neon", "supabase"] as const) {
+      const defaults = getProviderDefaults(provider, { serverless: true });
+      expect(defaults).toMatchObject({
+        poolMax: 3,
+        poolMin: 0,
+        idleTimeoutMs: 5000,
+      });
+    }
+  });
+
+  it("keeps each provider's other settings", () => {
+    for (const provider of ["standard", "neon", "supabase"] as const) {
+      const own = getProviderDefaults(provider);
+      const serverless = getProviderDefaults(provider, { serverless: true });
+      expect(serverless).toEqual({
+        ...own,
+        poolMax: 3,
+        poolMin: 0,
+        idleTimeoutMs: 5000,
+      });
+    }
+  });
+
+  it("leaves a long-running server's pool as the provider sets it", () => {
+    expect(getProviderDefaults("standard", { serverless: false })).toEqual(
+      getProviderDefaults("standard")
+    );
+    expect(getProviderDefaults("standard")).toMatchObject({
+      poolMax: 10,
+      poolMin: 0,
+      idleTimeoutMs: 30000,
+    });
+  });
+});

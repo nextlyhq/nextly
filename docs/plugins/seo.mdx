@@ -149,8 +149,8 @@ bulk insert can omit it too, because that path does not apply nested defaults. S
 
 | Field                | Type     | Notes                                                                                                                                                                    |
 | -------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `metaTitle`          | text     | Any length. Past about 60 characters Google cuts it to fit, so the SEO tab and the problem list warn, and the title is saved and served as typed                         |
-| `metaDescription`    | textarea | Any length. Past about 160 characters the same warning applies                                                                                                           |
+| `metaTitle`          | text     | Any length. Wider than about 600 px Google cuts it to fit, so the SEO tab and the problem list warn, and the title is saved and served as typed                          |
+| `metaDescription`    | textarea | Any length. Wider than about 920 px, two lines, the same warning applies                                                                                                 |
 | `socialTitle`        | text     | The title a shared link's card uses, where it should differ from `metaTitle`                                                                                             |
 | `socialDescription`  | textarea | The description a shared link's card uses, where it should differ from `metaDescription`                                                                                 |
 | `ogImage`            | upload   | Relates to `media`. The social preview image                                                                                                                             |
@@ -189,17 +189,42 @@ description: it shows as much as fits the width of the results and cuts the rest
 ([title links](https://developers.google.com/search/docs/appearance/title-link),
 [snippets](https://developers.google.com/search/docs/appearance/snippet)). So the default fields
 save any length, and the SEO tab ("The title is longer than Google shows.") and the problem list
-(`68 characters, Google shows about 60`) say when it is past what Google usually shows. A site that wants the lengths
-enforced passes `hardLengthLimits: true`, and a save of a title over 60 characters or a
-description over 160 is then refused:
+(`646 of 600 px · 50 characters`) say when it is wider than Google shows. A site that wants the
+width enforced passes `hardLengthLimits: true`, and a save of a title or description wider than
+Google shows is then refused, judged by the same measure as the warning:
 
 ```ts
 seoPlugin({ collections: ["posts"], hardLengthLimits: true });
 ```
 
-`hardLengthLimits` applies to the default fields; a site passing its own `fields` sets
-`maxLength` on them itself. Turning it on or off changes the two fields' settings, which, like any
-field change, reaches a deployed database through `nextly migrate:create` and `nextly migrate`.
+`hardLengthLimits` applies to the default fields; a site passing its own `fields` sets its own
+`validate` or `maxLength` on them. It is a rule checked on each save, not a setting of the stored
+fields, so turning it on or off needs no migration. A site that turned it on before it measured
+widths had a 60 and 160 character cap on the two fields; that cap is gone, which, like any field
+change, reaches a deployed database through `nextly migrate:create` and `nextly migrate`.
+
+### How wide a title or description is
+
+Google cuts a title or description by the width it takes on the screen, not by its number of
+characters, so the plugin measures the width. Google writes a result's title in Arial at 20 px and
+the text under it in Arial at 14 px, and on a desktop screen shows about 600 px of a title and
+about 920 px, two lines, of a description; a phone shows a title on up to two lines, so the
+desktop width is the one that cuts first. Google publishes none of these figures: they are what
+measuring its results page gives, and what the common SEO tools measure against.
+
+The width is worked out from Arial's own character widths, the same on the server and in the
+admin, so a title measures the same everywhere. Narrow letters fit more: "Little tips: fill it
+in, lift it, tilt it, till it is still. jilt" is 65 characters and 369 px, and fits. Wide capitals
+fit fewer: "WOMEN'S WORKWEAR MADE WELL: MEMBER OFFERS AND NEWS" is 50 characters and 646 px, and
+is cut. An emoji or a Chinese, Japanese or Korean character counts as one full em, and a letter of
+another script as an average Latin letter. Kerning is left out, a few pixels at most.
+
+Every place that judges a title or description uses this one measure: the bar under the SEO tab's
+title and description ("Fits · 369 of 600 px · 65 characters", or "Google cuts it · …"), the search
+preview, which cuts the text where Google would, the line under each box in
+[Edit mode](#editing-in-bulk-and-import), the default description and title patterns in Settings,
+the problem list's "Title longer than Google shows", and `hardLengthLimits`. The number of
+characters is shown beside the width as a hint.
 
 ### Custom fields
 
@@ -266,11 +291,14 @@ is drawn only where the `seo` group has both `canonical` and `canonicalElsewhere
 an address on another site is used only once marked confirmed.
 
 The count beside the tab's label is the number of problems the page's answer shows: a
-title longer than Google shows, a description that is too long, a title or a
+title wider than Google shows, a description that is too wide, a title or a
 description that no level supplies, and each detail the page's structured data type
 lacks. The title and description are checked by the same rule the
-[problem list](#problems) uses, lengths counted in characters, so the tab and the list
-always agree; a page hidden from search has no title or description problem in either.
+[problem list](#problems) uses, by [how wide they draw](#how-wide-a-title-or-description-is),
+so the tab and the list always agree; a page hidden from search has no title or description
+problem in either. Under each of the two fields a bar shows how wide the value in use draws
+(typed, or automatic while nothing is typed) against what Google shows, with a mark where Google
+cuts.
 
 The tab's values come from the same answer the page's head is built from, worked out by
 the plugin's `POST /resolve` route for the document as it is typed. The route answers
@@ -337,7 +365,7 @@ in `optionalDependsOn`.
 | `aiCrawlers`      | `"all"`, `"search"` or `"block"`                                 | `"all"`            | What robots.txt asks AI crawlers, until the SEO settings choose                                                  |
 | `hiddenTypes`     | `string[]`                                                       | none               | Content types hidden from search as a whole, until the SEO settings name some                                    |
 | `structuredData`  | `{ brand, types, defaultAuthor, breadcrumbs }`                   | none               | Brand facts, and each content type's [structured data](#structured-data) type and fields                         |
-| `socialCard`      | `{ siteName, language }`                                         | none               | The site's name and language on every page's [social card](#social-cards)                                        |
+| `socialCard`      | `{ siteName, language, xAccount }`                               | none               | The site's name, language and X account on every page's [social card](#social-cards)                             |
 | `pagePermissions` | `boolean`                                                        | `false`            | Gives a page's SEO a [permission of its own](#who-may-change-seo), per content type                              |
 | `nextBuildDir`    | `string`                                                         | `".next"`          | Where `next build` writes, if `next.config` sets `distDir`: read for [pages built in code](#pages-built-in-code) |
 | `gonePage`        | `string`                                                         | none               | Experimental. The site's own page shown with a [Gone (410)](#redirects) answer, such as `"/gone"`                |
@@ -412,12 +440,17 @@ Each entry carries:
 - on a page published in more than one language, an `<xhtml:link rel="alternate">` for
   each of its languages, itself included, and `x-default`, the same links as its head;
 - `<lastmod>`, when the published page's content last changed: any of its fields but its
-  `seo` group and Nextly's own bookkeeping (its id, its dates, its status). A change to the
-  page's SEO alone, a save that changes nothing, and a working draft all leave it as it was,
-  so search engines can trust it. A page last saved before this was kept, as every page is
-  on the first upgrade, shows its last save until its next one; reading the sitemap writes
-  nothing. A [page built in code](#pages-built-in-code) carries one only where its route
-  states it;
+  `seo` group and Nextly's own bookkeeping (its id, its dates, its status, and the ids and
+  dates of the rows its field groups are kept in). A change to the page's SEO alone, a save
+  that changes nothing, even one that sends its field groups back and so rewrites their
+  rows, and a working draft all leave it as it was, so search engines can trust it. A page
+  saved before the plugin kept this, as every page is on the first upgrade, starts from its
+  last save, which the next [full check](#when-the-list-is-checked), or a first save that
+  changes only its SEO, keeps for it; from then on only a content change moves it. The
+  plugin can't tell what an earlier save changed, so a page whose last save before the
+  upgrade changed only its SEO keeps that save's date, as does a date an earlier release
+  moved on one. Reading the sitemap writes nothing. A
+  [page built in code](#pages-built-in-code) carries one only where its route states it;
 - the page's main images as `<image:image>`: its share image, or the cover image its
   content offers, as the page's head uses it, and the image its
   [structured data](#structured-data) reads where the content type maps one, such as a
@@ -564,6 +597,68 @@ holds their address, through the plugin's `listedPages` service. Its `list(origi
 `{ pages, problems }`. Each page and each problem names its `language`, and a page published
 in more than one language carries its language links as `alternates`.
 
+### Dating your own sitemap and pages
+
+For a sitemap of your own, or a page's `og:article:modified_time`, use `seoLastChanged`
+(experimental) rather than an entry's `updatedAt`. Every save moves `updatedAt`, an SEO-only one
+included, so a date read from it tells search engines a page changed when only its SEO did.
+`seoLastChanged` gives the same date as this plugin's [`<lastmod>`](#what-the-sitemap-lists) and
+structured data's `dateModified`: when the page's published content last changed, or, for a page
+with no date kept yet, its own `updatedAt`.
+
+Hand it the entries you have read, each with its `id` and `updatedAt`, and the collection they are
+from, or a Single's slug as `single`. Give `entries` for many at once: the answer is a map from
+each entry's id to its date, read in one query per hundred entries, not one per entry. Give `entry`
+for one, and the answer is its date. Either way a date is ISO text, and an entry with neither a
+kept date nor an `updatedAt` has none. `locale` reads the dates of the pages in that language,
+where the site serves several; without it they are the site's default language's.
+
+```ts title="app/sitemap.ts"
+import type { MetadataRoute } from "next";
+import { getNextly } from "nextly";
+import { seoLastChanged } from "@nextlyhq/plugin-seo";
+
+import config from "../nextly.config";
+
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
+  const nextly = await getNextly({ config });
+  const { items: posts } = await nextly.find({
+    collection: "posts",
+    limit: 500,
+  });
+  const dates = await seoLastChanged({ collection: "posts", entries: posts });
+  return posts.map(post => ({
+    url: `https://example.com/blog/${String(post.slug)}`,
+    lastModified: dates.get(post.id),
+  }));
+}
+```
+
+```ts
+import { getNextly } from "nextly";
+import { seoLastChanged } from "@nextlyhq/plugin-seo";
+
+import config from "../nextly.config";
+
+const nextly = await getNextly({ config });
+const home = await nextly.findSingle({ slug: "home" });
+export const homeChanged = await seoLastChanged({
+  single: "home",
+  entry: home,
+});
+
+// A post's head: `openGraph: { type: "article", modifiedTime }`.
+const post = await nextly.findByID({ collection: "posts", id: "post-id" });
+export const modifiedTime =
+  post === null
+    ? undefined
+    : await seoLastChanged({ collection: "posts", entry: post });
+```
+
+Where the SEO plugin isn't running, each entry is dated by its own `updatedAt`. Where Nextly is
+unavailable while a page renders for production, `next build` included, it throws, as the page's
+head does, so a build never ships dates read without it.
+
 ### Before the sitemap reached the root
 
 The sitemap is still served at its earlier address,
@@ -591,7 +686,11 @@ problem list say so in plain words and no page is affected.
 
 Search Console shows the site's clicks from Google over the last 28 days, what people
 searched, and the pages where Google chose a different official address than the page
-names (of the most visited ten, checked with Google's URL inspection). Connecting it needs a
+names (of the most visited ten, checked with Google's URL inspection). A report is read from
+Google at most once every six hours and kept in the plugin's settings meanwhile, since Search
+Console's counts settle over about two days and each inspection counts against Google's daily
+quota; the Connections tab says when it was read. Connecting again or disconnecting forgets
+it. Connecting Search Console needs a
 Google sign-in for the site: create an OAuth client of the **Web application** kind in Google
 Cloud, add the redirect address below, and name it in the plugin's options, keeping the
 secret out of the code:
@@ -687,6 +786,16 @@ Settings > Search engines and AI**. Few tools read them today, so neither is on 
   the same rules, so a draft, a hidden page or a page whose canonical points elsewhere is
   never in it. Until it is switched on, `/llms.txt` is not found. Like the sitemap, it
   answers `503` while the address record catches up at start.
+  **What AI tools should know**, on the same tab, is the site's own words placed under the
+  summary, as the proposal allows: plain sentences and lists, a line beginning with `#`
+  escaped so it never becomes a heading.
+- **`/llms-full.txt`**, its own switch, served only beside llms.txt and off by default:
+  llms.txt's head, then every page llms.txt lists, in its order, each as its title, its
+  address (`Source:`) and the words of its plain-text copy. A page the public may not read
+  is named by its address alone. It stops before a page that would take it past 5 MB and
+  ends by pointing to llms.txt for the rest. llms.txt links it while it is on. It is not
+  part of the llms.txt proposal; some tools ask for it (ChatGPT's fetcher most, by one
+  vendor's logs), others read llms.txt and each page's copy instead.
 - **Plain-text copies** add a text version of each page the sitemap lists, at the page's
   address with `.md` added: `/blog/hello.md` for `/blog/hello`, and `/index.md` for the
   home page (and for any address ending in a slash; `/index.html.md` answers too). The copy
@@ -734,8 +843,20 @@ answered by the site's [Proxy](/docs/plugins/proxy), so the site needs its `prox
 that leaves out every address with a dot in its last part leaves the copies to the site. A
 site that ships its own `public/llms.txt` or `app/llms.txt/route.ts` keeps serving it.
 
-A copy is made from the page as it is stored, the fields the site renders, not from the
-rendered page: the words of a Page Builder layout are not in it.
+A copy is made from the page as it is stored, the fields the site renders, wherever those
+hold its words. A page with no stored words of its own is copied from the page as it renders
+instead: a page built in the site's code (one that calls `seoMetadata`), and a page whose
+fields hold nothing beyond its title, such as a Page Builder layout. The plugin asks the site
+for that page as a visitor with no session does, at the page's own address on the site's
+production address (or `baseUrl`), never at a host a request names, so it does so only once
+the site names one; it reads its `<main>` (or its body, without the header and footer every page shares) and writes
+its headings, paragraphs, lists, links, quotes, code, tables and described images as
+Markdown; scripts, styles, navigation, forms, dialogs and anything hidden are left out, and an
+image with no alt text is decoration, said nothing of. Such a copy is kept for five minutes.
+Its front matter is the page's head. Where the page does not answer with HTML in ten seconds,
+a page built in code has no copy, and the request is the site's to answer; a page whose fields
+hold only its title keeps the copy made from them. With copies on, llms.txt links these pages'
+copies too, and their head links them.
 
 ## Languages
 
@@ -796,8 +917,13 @@ declares. Each row shows the title and description search is given for the page,
 comes from (its own value, the page's code, or the pattern it was made from), and its **Status**:
 the most serious problem the [problem list](#problems) holds for the page, else **Not connected**
 for a page built in code whose route doesn't call the plugin, **Hidden** for a page kept out of
-search, or **Good**. A page no check has reached for you says **Not checked** rather than **Good**:
-no problem listed for it is no evidence of none. Search by address or name, and narrow the list by
+search, or **Good**. **Unconfirmed** marks a page a route with a variable part recorded while the
+server can't read the build's list of the addresses those routes declare
+([why](#pages-built-in-code)). A page no check has reached for you says **Not checked** rather than **Good**:
+no problem listed for it is no evidence of none. **Links** says how many other pages link to the
+page and how many it links to (`3 in · 5 out`), counting each page once, however many links it
+holds, from the links in each page's content in the same language; a dash for a page built in
+code, whose links are in its code, and for a page no check has read the links of yet. Search by address or name, and narrow the list by
 **Type** (each collection, the Singles, or the pages built in code) and by **Status**. It names only
 the entries you may read, as the collection's own list does, each language as its list in that
 language does: of a type whose read rule admits only some entries, those it admits, and none of a
@@ -858,14 +984,14 @@ address of its own (`?tab=general`, `types`, `images`, `brand`, `crawlers`, `con
 link lands on it, and **Save changes** under any tab saves every tab's changes; **Cancel** lets go of
 them:
 
-| Tab                   | What it holds                                                                                                                                                                                                                                                                                         |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| General               | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, and the default description                                                                                                                                 |
-| Content types         | Each content type with SEO (set in code), whether it has a public address yet, its title pattern, whether the whole type is hidden from search, and what its pages are described as in structured data, with the field each detail is read from                                                       |
-| Share images          | The default share image, for a page with none of its own                                                                                                                                                                                                                                              |
-| Organization          | The kind of site, the organization's name and other names, its logo, and its social profiles                                                                                                                                                                                                          |
-| Search engines and AI | Whether pages ask for [large image previews](#how-results-show-a-page), on by default; what AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none; and [llms.txt and plain-text copies](#llmstxt-and-plain-text-copies), each off until switched on |
-| Connections           | Optional services, each off until switched on: [Search Console and IndexNow](#search-console-and-indexnow)                                                                                                                                                                                            |
+| Tab                   | What it holds                                                                                                                                                                                                                                                                                                                                       |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| General               | The site's name, its production address (one per domain where a language has its own), the separator between a title and the site's name, and the default description                                                                                                                                                                               |
+| Content types         | Each content type with SEO (set in code), whether it has a public address yet, its title pattern, whether the whole type is hidden from search, and what its pages are described as in structured data, with the field each detail is read from                                                                                                     |
+| Share images          | The default share image, for a page with none of its own                                                                                                                                                                                                                                                                                            |
+| Organization          | The kind of site; the organization's name, other names, logo and social profiles; its description, email, telephone, contact points and founding date; and its parent organization. A fact the site's code gives is shown in its field, marked as set in the code, until one is saved here                                                          |
+| Search engines and AI | Whether pages ask for [large image previews](#how-results-show-a-page), on by default; what AI tools are asked to do with the site's pages: allowed (the default), search but not training, or none; and [llms.txt, llms-full.txt and plain-text copies](#llmstxt-and-plain-text-copies), each off until switched on, and what AI tools should know |
+| Connections           | Optional services, each off until switched on: [Search Console and IndexNow](#search-console-and-indexnow)                                                                                                                                                                                                                                          |
 
 The production addresses saved on General are the ones the page's canonical, the sitemap,
 robots.txt and the staging guard all read; `NEXTLY_PRODUCTION_ADDRESSES`, where it is set, wins over
@@ -957,7 +1083,8 @@ to finish, so awaiting one in a plugin's `init` or `onReady` would wait on itsel
 
 `readSeoRules` answers the site's name, default description and share image, production addresses,
 the default pattern and each type's own patterns. `readBrandFacts` answers the brand's names, logo,
-social profiles and kind of site. Each reads the settings once; a read cached by your own code
+social profiles, kind of site and the details saved with them (description, email, telephone,
+contact points, founding date and parent organisation). Each reads the settings once; a read cached by your own code
 should carry `seoSettingsCacheTags()`, which every save expires.
 
 ## Turning the fields into tags
@@ -1094,13 +1221,20 @@ built from the page's head. The plugin states everything the card reads:
   the site's default language (English on a site that declares no languages), written as Open
   Graph writes it, always with a territory (`en-US` becomes `en_US`). A bare language is given the
   territory it is most often written for: `en` is `en_US`, `de` is `de_DE`, `pt` is `pt_BR`. Set
-  `socialCard.language` (such as `en-GB`) where that is not the site's.
+  `socialCard.language` (such as `en-GB`) where that is not the site's;
+- the site's **X account**, as `<meta name="twitter:site" content="@example">` on every page, where
+  `socialCard.xAccount` names one (experimental). Give its handle, with or without the `@`
+  (`"@example"` or `"example"`), or its profile address (`"https://x.com/example"`, or a
+  `twitter.com` one); the card always states it as `@example`. Anything else, such as a post's
+  address or another network's profile, stops the plugin at start with an error that says so. An
+  empty value, as an unset environment variable reads, states none. It is set in code only: the
+  SEO settings don't hold it. The account of a post's author (`twitter:creator`) is not stated.
 
 ```ts
 seoPlugin({
   collections: ["posts"],
   baseUrl: "https://example.com",
-  socialCard: { siteName: "Acme", language: "en-US" },
+  socialCard: { siteName: "Acme", language: "en-US", xAccount: "@example" },
 });
 ```
 
@@ -1165,10 +1299,13 @@ A page is described as one linked graph, each node naming the others by `@id`:
   a page built in code goes by), so a post reads Home › Blog › the post. A part of the address that
   holds no page gets no step, since a trail leads only through pages a visitor can open;
 - the page's **subject**, as its type describes it (`<address>#<type>`), and, where the page lists
-  entries, the list. Questions and answers are described only on a page whose type is Questions
-  and answers, chosen for its content type, for the page or by its route: a page of any other
-  type gets no `FAQPage` markup, whatever questions it shows. The choosers list it as
-  "Questions and answers · no longer shown by Google".
+  entries, the list. Questions and answers are described as a page's subject on a page whose type
+  is Questions and answers, chosen for its content type, for the page or by its route. The choosers
+  list it as "Questions and answers · no longer shown by Google";
+- an **FAQ section** (`<address>#faq`), where one is declared for a page of any other type: the
+  questions it shows as an `FAQPage` that is part of the page, named by the page's `hasPart`. See
+  [An FAQ section on any page](#an-faq-section-on-any-page). A page nobody declared one for gets no
+  `FAQPage` markup, whatever questions it shows.
 
 The home page is the start of every trail, so it has none; it is named by its whole title, and
 what it describes, such as the site's app, by the brand's name. Every address is spelled as the
@@ -1224,9 +1361,12 @@ hidden from search is offered only the kinds of page: Web, About, Contact and Co
 
 Each detail is read from the field the content type maps to it, or else from the first field named
 like it (`author`, `publishedAt`, `price`, `startDate`, `tags`, `category` and so on). The date a
-page last changed is read from `dateModified`, `modifiedAt`, `correctedAt`, `revisedAt` or
-`lastReviewed` before the row's own `updatedAt`, which changes with every save; map
-`dateModified` (or `datePublished`) to read another field. Structured data states only what the route
+page last changed is read from a field named `dateModified`, `modifiedAt`, `correctedAt`,
+`revisedAt` or `lastReviewed`, or the field the content type maps to `dateModified`, where it
+holds a date. Where it is empty, as a correction date is on a page never corrected, it is the
+page's [`<lastmod>`](#the-sitemap-and-robotstxt) date, when its content last changed, rather than
+the row's own `updatedAt`, which every save moves, an SEO-only one included. Map `dateModified`
+(or `datePublished`) to read another field. Structured data states only what the route
 read for the page, so a relationship names someone only where the route read the entry it holds:
 give a route that shows its author `depth: 1`. The route's own access rules, language and cache
 tags then govern the author as they govern the page, so an unpublished or private author is never
@@ -1284,10 +1424,16 @@ given), and `breadcrumbs.names` names the step at an address over the title of t
 of these options is checked when the plugin is created, so a mistyped email or date fails at start.
 
 The [SEO settings](#the-seo-settings) take over from these options fact by fact: their first
-production address is the origin, their brand name (else the site's name), other names, logo and
-social profiles describe the organisation, their default description is the brand's description
-where `brand.description` is not given, and a content type's choice kept in the settings wins over
-the one given here. Whatever the settings leave empty, the options still answer.
+production address is the origin, and each brand fact saved on **Organization** (name, other
+names, logo, social profiles, description, email, telephone, contact points, founding date, and
+each fact of the parent organisation) wins over the same fact here, one at a time, so moving a fact
+from the code to the admin changes nothing else. A list (other names, profiles, contact points) is
+one fact, taken whole from the settings once they hold one. The founders, a contact point's
+languages and the parent organisation's profiles are given only here. The brand is named by its
+own name, from the settings or these options, before the site's name, and described by the site's
+default description only where neither gives a description. A content type's choice kept in the
+settings wins over the one given here. Whatever the settings leave empty, the options still answer,
+and the Organization tab shows each such value in its field, marked as set in the site's code.
 
 ### What a route tells structured data
 
@@ -1321,9 +1467,10 @@ export const route = createPublicContentRoute({
 `items` lists the entries a page shows, in order, each `{ name, url }`: the page is then a
 Collection page with an `ItemList` as its main subject, unless somebody chose another type.
 `questions` lists the questions it answers, each `{ question, answer }`: on a Questions and answers
-page they are its main subject. On a page of any other type they are not described: no `FAQPage`
-is added beside it, since Google no longer shows these results and markup nobody chose for a page
-is markup made up for it. Questions can also come from a field: a list named `faq`, `faqs` or `questions`, each
+page they are its main subject. On a page of any other type they are described only where an
+[FAQ section](#an-faq-section-on-any-page) is declared for it (`faqSection: true`, or for its
+content type); otherwise no `FAQPage` is added, since markup nobody chose for a page is markup made
+up for it. Questions can also come from a field: a list named `faq`, `faqs` or `questions`, each
 item with its `question` and its `answer` (plain or rich text). Give only what the page shows:
 Google asks that structured data describe content a visitor can see, and the plugin never makes a
 question, a list or a rating up.
@@ -1362,6 +1509,34 @@ Single, and [`seoStructuredData`](#pages-built-in-code) for a page built in code
 Page Builder routes (`createBlocksPage`, `createSinglePage`, `createContentPage` and their public
 forms) place it themselves, before the page's blocks, so a page built in the Page Builder needs
 nothing more.
+
+#### An FAQ section on any page
+
+A pricing page, a home page or a feature page often ends with a few questions and answers. The page
+stays what it is (a web page, an About page, an app), and its questions can still be described for
+search engines and AI tools: declare an FAQ section, and the plugin adds an `FAQPage` node for the
+questions (`<address>#faq`) that is part of the page (`isPartOf`), and the page names it as a part
+of itself (`hasPart`).
+
+Declare it in one of two places:
+
+- **By the route**, for one page or a page built in code: `faqSection: true` in
+  `structuredDataHints`, beside the `questions` it shows, as in the route above:
+  `structuredDataHints: async entry => ({ questions: await questionsShownOn(String(entry.slug)), faqSection: true })`.
+  A page built in code passes the same in
+  `seoStructuredData`'s options:
+  `seoStructuredData("/pricing", { structuredDataHints: { questions, faqSection: true } })`.
+
+- **For a content type**, for every page of it: in **SEO › Settings › Content types**, open the type
+  and switch on **Questions on its pages are an FAQ section**; or in code,
+  `structuredData: { types: { pages: { faqSection: true } } }`.
+
+The questions are read as a Questions and answers page reads them: the route's `questions` where it
+gives any, else the field the type maps for Questions and answers, else a field named `faq`, `faqs`
+or `questions`. A page that declares a section but shows no questions gets none, and nothing points
+at it. A Questions and answers page needs no section: its questions are already its subject, so a
+declaration there adds nothing. Google no longer shows FAQ rich results, so the section is for other
+search engines and AI tools that read the page's structured data.
 
 ## Redirects
 
@@ -1598,11 +1773,18 @@ it is published in and at its address there, as its head would be served, for:
 - no title or description from any level (a field left empty is never reported where a pattern,
   the page's content or the site's defaults supply a value);
 - a title or description another page has too;
-- a title over 60 characters, or a description over 160, named with its length as a warning (the
-  value is saved and served as it is);
+- a title wider than about 600 px, or a description wider than about 920 px, named with its width
+  and characters as a warning (the value is saved and served as it is; see
+  [How wide a title or description is](#how-wide-a-title-or-description-is));
 - a canonical typed for the page that names another address, unless the page is marked as having
   first appeared on another site, which makes that address the one meant;
 - a link in its content to an address of a content type that no page holds;
+- a listed page no other page links to (**Page no other page links to**, a notice): search engines
+  and visitors find pages by following links, so it is found only through the sitemap. Its home page
+  and a page kept out of search are never named. Only the links in pages' content are read, the
+  same links the broken-link check reads, so a page linked only from the site's menu or footer,
+  which its code draws, is named too: link to it from a related page's content, or leave it if the
+  menu is how people reach it;
 - no share image, one networks crop or shrink, or one in a format some networks don't show
   (SVG, AVIF or WebP);
 - an image in its content (rich text, a media field or a Page Builder image block) with no alt
@@ -1651,8 +1833,13 @@ read can't ask for `manage-seo`, so those are on the list itself.
 ### When the list is checked
 
 - **A page is checked again when it is saved**, after the save, so a check never slows or undoes
-  it. A save that changes a page's address, title or description, and a deletion, mark the last
-  full check as out of date, since another page's result may have changed.
+  it. A save that changes a page's address, title, description or the pages it links to, and a
+  deletion, mark the last full check as out of date, since another page's result may have changed.
+  Each page's check keeps the pages its links reach; the link counts and the pages no page links to
+  are worked out from those when the list is read, so the site is never read twice for them. A page
+  last checked before its links were kept is left out of the counts until its next check. The links
+  are a new field of the plugin's own list of checks: a site that applies its schema with migrations
+  runs `nextly migrate:create` and then `nextly migrate` after upgrading.
 - **The whole site is checked when the list opens** and its last full check is over 24 hours old,
   and whenever someone chooses **Check again**. The list says when it was last checked. No scheduler
   is needed, so this works the same on a self-hosted server.
@@ -1734,9 +1921,9 @@ With no production address set, the screen asks for one and fetches nothing.
 
 [Pages in Edit mode](#pages) edits the titles and descriptions of many pages at once. A box left
 empty shows, in grey, what the page uses automatically: what its route last set in code, else the
-type's title pattern or its own content; typing in it sets the page's own. Each box counts its
-characters against what Google shows: about 60 for a title, 160 for a description. Each Single SEO
-is added to is a type of its own, with its one page.
+type's title pattern or its own content; typing in it sets the page's own. Each box measures its
+width against what Google shows, about 600 px for a title and 920 px for a description, with the
+characters as a hint. Each Single SEO is added to is a type of its own, with its one page.
 
 A content type's changes are saved in one step, or, where any is refused, none of them. Where a
 page was saved by someone else after it was read, its type's step saves nothing, and the screen
@@ -1885,8 +2072,17 @@ screen and its saves ask `manage-seo`.
 The routes are read at run time from what `next build` wrote: `.next/server/app-paths-manifest.json`
 and `.next/prerender-manifest.json`. Next.js lists both among the files every server function
 needs (`.next/required-server-files.json`), so a Vercel deployment and a `standalone` build
-carry them with no setting. A deploy that copies only part of `.next` must keep both, or the
-screen lists no page built in code.
+carry them with no setting. A deploy that copies only part of `.next` must keep both: without
+the app paths manifest the screen lists no page built in code.
+
+Without a readable prerender manifest (missing, not JSON, or listing no pages on a production
+server), the addresses routes with a variable part declared can't be confirmed. The screen then
+shows a banner naming the file, and the server logs one warning saying so. Each route with no
+variable part is still listed. Each address such a route recorded when it last rendered, which
+`next build` does for every page it renders, is listed as **Unconfirmed** when a route of this
+build could serve it, and a recorded address no route could serve is left out. What is set for
+an unconfirmed page still reaches it whenever its route serves it. The sitemap, `llms.txt` and
+the plain-text copies list confirmed pages only, so they leave it out until the file can be read.
 
 What is set there reaches the page once its route adds one line, calling `seoMetadata` with
 its address:
@@ -1981,6 +2177,17 @@ export default async function PricingPage() {
   );
 }
 ```
+
+Where Nextly or the SEO plugin is not running, or the address's SEO can't be read,
+`seoMetadata` returns the route's own metadata and `seoStructuredData` returns nothing, so the
+page is still served. The exception is Nextly being unavailable (its start failed, or the
+database could not be reached, was busy or timed out) while the page is rendered for production:
+
+- a revalidation fails, and Next.js keeps serving the page's last good render, with its SEO;
+- a first request for a page with nothing cached answers with an error, and nothing is cached;
+- `next build` fails, rather than shipping pages built without their SEO.
+
+In `next dev` the route's own metadata is served then too, and the failure is logged.
 
 The screen marks **Not connected** each route that has not called `seoMetadata`. What is set
 for its address is kept, and reaches the page once the line is in. A route records that it is

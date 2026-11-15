@@ -118,6 +118,7 @@ describe("seoPlugin", () => {
       ["GET", "/robots.txt", "root", true],
       // Registered always; it answers once switched on in the settings.
       ["GET", "/llms.txt", "root", true],
+      ["GET", "/llms-full.txt", "root", true],
       ["GET", "/sitemap.xml", undefined, true],
       ["POST", "/share-image", undefined, undefined],
       // The settings screen's reads, for a signed-in reader of the settings.
@@ -146,8 +147,9 @@ describe("seoPlugin", () => {
       // The problem list, read and checked again by a signed-in reader.
       ["GET", "/problems", undefined, undefined],
       ["POST", "/problems/check", undefined, undefined],
-      // The Pages screen's list, and its save.
+      // The Pages screen's list, what it is told of the build, and its save.
       ["GET", "/pages", undefined, undefined],
+      ["GET", "/pages/build", undefined, undefined],
       ["POST", "/pages/seo", undefined, undefined],
       // The bulk edit table, for a signed-in reader of each type.
       ["GET", "/bulk/types", undefined, undefined],
@@ -178,6 +180,7 @@ describe("seoPlugin", () => {
       return typeof found === "function" ? found(scope) : found;
     };
     expect(permissionOf("GET", "/pages")).toBe("manage-seo");
+    expect(permissionOf("GET", "/pages/build")).toBe("manage-seo");
     expect(permissionOf("POST", "/pages/seo")).toBe("manage-seo");
   });
 
@@ -231,6 +234,7 @@ describe("seoPlugin", () => {
       "/connections/search-console/report",
       "/robots.txt",
       "/llms.txt",
+      "/llms-full.txt",
       "/share-image",
       "/settings/content-types",
       "/settings/robots-rules-check",
@@ -250,6 +254,7 @@ describe("seoPlugin", () => {
       "/problems",
       "/problems/check",
       "/pages",
+      "/pages/build",
       "/pages/seo",
       "/bulk/types",
       "/bulk/rows",
@@ -278,6 +283,7 @@ describe("seoPlugin", () => {
       "/connections/search-console/report",
       // Switched on and off in the settings, not by these options.
       "/llms.txt",
+      "/llms-full.txt",
       "/share-image",
       "/settings/content-types",
       "/settings/robots-rules-check",
@@ -297,6 +303,7 @@ describe("seoPlugin", () => {
       "/problems",
       "/problems/check",
       "/pages",
+      "/pages/build",
       "/pages/seo",
       "/bulk/types",
       "/bulk/rows",
@@ -382,8 +389,15 @@ describe("seoPlugin", () => {
 });
 
 describe("how long a title or description may be", () => {
-  /** The `maxLength` each of a group's fields is saved with. */
-  function limits(group: unknown) {
+  /** A field's own `validate`, where it has one. */
+  type Validate = (value: unknown, args: unknown) => string | true;
+
+  /**
+   * What each of a group's fields answers for `value`, by name: `true`, a
+   * refusal, or `"no rule"` where the field has no `validate` of its own.
+   * A `maxLength` is reported too, since a character cap is a rule as well.
+   */
+  function verdicts(group: unknown, value: string) {
     const fields: readonly unknown[] =
       typeof group === "object" &&
       group !== null &&
@@ -398,37 +412,56 @@ describe("how long a title or description may be", () => {
             typeof field === "object" && field !== null
         )
         .filter(field => "name" in field)
-        .map(field => [field.name, (field as { maxLength?: number }).maxLength])
+        .map(field => {
+          const own = field as { validate?: Validate; maxLength?: number };
+          if (own.maxLength !== undefined) {
+            return [field.name, `maxLength ${own.maxLength}`];
+          }
+          return [
+            field.name,
+            own.validate === undefined
+              ? "no rule"
+              : own.validate(value, { data: {}, req: {} }),
+          ];
+        })
     );
   }
 
-  it("saves a title or description of any length by default", () => {
+  it("saves a title or description of any width by default", () => {
     // Google cuts a long title by width rather than refusing it, so the
-    // length is a warning in the SEO tab and the problem list.
+    // width is a warning in the SEO tab and the problem list.
     const group = seoGroup(seoPlugin({ collections: ["pages"] }));
     for (const read of [
-      limits(group),
-      limits({ fields: defaultSeoFields() }),
+      verdicts(group, "W".repeat(80)),
+      verdicts({ fields: defaultSeoFields() }, "W".repeat(80)),
     ]) {
-      expect(read).toHaveProperty("metaTitle", undefined);
-      expect(read).toHaveProperty("metaDescription", undefined);
+      expect(read).toHaveProperty("metaTitle", "no rule");
+      expect(read).toHaveProperty("metaDescription", "no rule");
     }
   });
 
-  it("refuses a longer one where the site asks for hard limits", () => {
-    const group = seoGroup(
-      seoPlugin({ collections: ["pages"], hardLengthLimits: true })
-    );
-    expect(limits(group)).toMatchObject({
-      metaTitle: 60,
-      metaDescription: 160,
-    });
-    expect(
-      limits({ fields: defaultSeoFields({ hardLengthLimits: true }) })
-    ).toMatchObject({
-      metaTitle: 60,
-      metaDescription: 160,
-    });
+  it("refuses one wider than Google shows where the site asks for hard limits, by width not characters", () => {
+    for (const group of [
+      seoGroup(seoPlugin({ collections: ["pages"], hardLengthLimits: true })),
+      { fields: defaultSeoFields({ hardLengthLimits: true }) },
+    ]) {
+      // 40 wide capitals: short of 60 characters, 755 px as a title.
+      expect(verdicts(group, "W".repeat(40))).toMatchObject({
+        metaTitle:
+          "Google shows about 600 px of a title, and this one is 755 px (40 characters). Shorten it, or put what matters first.",
+        metaDescription: true,
+      });
+      // 80 narrow letters: past 60 characters, 355 px, so both fit.
+      expect(verdicts(group, "i".repeat(80))).toMatchObject({
+        metaTitle: true,
+        metaDescription: true,
+      });
+      // 70 wide capitals are 925 px as a description, past its 920.
+      expect(verdicts(group, "W".repeat(70))).toMatchObject({
+        metaDescription:
+          "Google shows about 920 px of a description, and this one is 925 px (70 characters). Shorten it, or put what matters first.",
+      });
+    }
   });
 });
 
@@ -719,6 +752,35 @@ describe("typesLeftOut", () => {
     expect(typesLeftOut([{ target: ["posts", "home"], fields: [] }])).toEqual(
       []
     );
+  });
+});
+
+describe("the brand facts the settings screen is handed", () => {
+  it("are plain JSON, whatever the options hold: no unset key, no shared list", () => {
+    const shared = ["https://x.com/example"];
+    const plugin = seoPlugin({
+      collections: ["pages"],
+      sitemap: false,
+      structuredData: {
+        brand: {
+          name: "Example",
+          email: undefined,
+          parentOrganization: { name: "Example Holdings", sameAs: shared },
+          founders: [{ name: "Sara Khan", sameAs: shared }],
+        },
+      },
+    });
+    const brand = plugin.contributes?.admin?.clientConfig?.brand as
+      | Record<string, unknown>
+      | undefined;
+    // What core's check of a client config accepts: the value survives a
+    // JSON round trip unchanged, with no key JSON would drop.
+    expect(JSON.parse(JSON.stringify(brand))).toEqual(brand);
+    expect(brand).not.toHaveProperty("email");
+    const parent = brand?.parentOrganization as { sameAs: unknown };
+    const [founder] = (brand?.founders ?? []) as { sameAs: unknown }[];
+    expect(parent.sameAs).toEqual(shared);
+    expect(parent.sameAs).not.toBe(founder?.sameAs);
   });
 });
 

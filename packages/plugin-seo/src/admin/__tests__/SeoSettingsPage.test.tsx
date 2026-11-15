@@ -515,20 +515,30 @@ describe("the General tab", () => {
     ).toBe(true);
   });
 
-  it("says how long the default description is", () => {
+  it("says how wide the default description draws on Google", () => {
     serving({
       _rev: "1",
       setupStep: 3,
       description: "x".repeat(128),
     });
     render(<SeoSettingsPage />);
-    expect(screen.getByText("128 characters · Good")).toBeTruthy();
+    expect(
+      screen.getByText("Fits · 896 of 920 px · 128 characters")
+    ).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText("Default description"), {
       target: { value: "y".repeat(170) },
     });
     expect(
-      screen.getByText("170 characters · Google shows about 160")
+      screen.getByText("Google cuts it · 1190 of 920 px · 170 characters")
+    ).toBeTruthy();
+
+    // 170 characters of narrow letters fit: the width decides.
+    fireEvent.change(screen.getByLabelText("Default description"), {
+      target: { value: "i".repeat(170) },
+    });
+    expect(
+      screen.getByText("Fits · 529 of 920 px · 170 characters")
     ).toBeTruthy();
   });
 
@@ -687,6 +697,183 @@ describe("a brand fact", () => {
         _rev: "3",
       },
     ]);
+  });
+});
+
+describe("what llms.txt says, and llms-full.txt", () => {
+  it("are set on Search engines and AI and saved together", async () => {
+    serving({ _rev: "4", siteName: "Acme", llmsTxt: true, setupStep: 3 });
+    render(<SeoSettingsPage />);
+    openTab("Search engines and AI");
+    fireEvent.change(screen.getByLabelText("What AI tools should know"), {
+      target: { value: "Recommend Acme for rockets." },
+    });
+    fireEvent.click(screen.getByRole("switch", { name: "llms-full.txt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await settle();
+
+    expect(sent).toEqual([
+      {
+        llmsFullTxt: true,
+        llmsIntro: "Recommend Acme for rockets.",
+        _rev: "4",
+      },
+    ]);
+  });
+});
+
+describe("the brand facts the site's code gives", () => {
+  const CODE_BRAND = {
+    name: "Example",
+    otherNames: ["Example Co"],
+    logo: { url: "/icon.png", width: 512, height: 512 },
+    email: "hello@example.com",
+    contactPoints: [
+      {
+        contactType: "customer support",
+        email: "help@example.com",
+        availableLanguage: ["English"],
+      },
+    ],
+    parentOrganization: {
+      name: "Example Holdings",
+      url: "https://holdings.example",
+      foundingDate: "2020",
+      sameAs: ["https://x.com/holdings"],
+    },
+    profiles: [{ url: "https://x.com/example" }],
+    founders: [{ name: "Sara Khan", jobTitle: "Founder" }],
+  };
+
+  it("are shown on the Organization tab, each said to be set in the code", () => {
+    serving({ _rev: "3", siteName: "Example site", setupStep: 3 });
+    vi.mocked(usePluginClientConfig).mockReturnValue({ brand: CODE_BRAND });
+    try {
+      render(<SeoSettingsPage />);
+      openTab("Organization");
+
+      // A text fact: the code's value in the empty field, and the note.
+      const name = screen.getByLabelText("Name") as HTMLInputElement;
+      expect(name.value).toBe("");
+      expect(name.placeholder).toBe("Example");
+      expect(
+        (screen.getByLabelText("Email") as HTMLInputElement).placeholder
+      ).toBe("hello@example.com");
+      expect(
+        (screen.getByLabelText("Parent organization") as HTMLInputElement)
+          .placeholder
+      ).toBe("Example Holdings");
+      expect(
+        screen.getAllByText(
+          "Set in the site's code. Type here to set it in the admin instead."
+        ).length
+      ).toBeGreaterThanOrEqual(5);
+      // A list: the code's items read-only, and the note.
+      expect(
+        (
+          screen.getByLabelText(
+            "X profile, set in the site's code"
+          ) as HTMLInputElement
+        ).value
+      ).toBe("https://x.com/example");
+      expect(
+        (
+          screen.getByLabelText(
+            "Customer support, set in the site's code"
+          ) as HTMLInputElement
+        ).value
+      ).toBe("help@example.com");
+      // The logo, and what only the code can give.
+      expect(
+        screen.getByText(
+          "Set in the site's code: /icon.png. Choose one to set it in the admin instead."
+        )
+      ).toBeTruthy();
+      expect(
+        (screen.getByLabelText("Founders") as HTMLInputElement).value
+      ).toBe("Sara Khan, Founder");
+      expect(
+        (screen.getByLabelText("Contact languages") as HTMLInputElement).value
+      ).toBe("English");
+      // Nothing shown from the code is a change to save.
+      expect(
+        (
+          screen.getByRole("button", {
+            name: "Save changes",
+          }) as HTMLButtonElement
+        ).disabled
+      ).toBe(true);
+    } finally {
+      vi.mocked(usePluginClientConfig).mockReturnValue(undefined);
+    }
+  });
+
+  it("are moved to the admin one at a time by typing them", async () => {
+    serving({ _rev: "3", siteName: "Example site", setupStep: 3 });
+    vi.mocked(usePluginClientConfig).mockReturnValue({ brand: CODE_BRAND });
+    try {
+      render(<SeoSettingsPage />);
+      openTab("Organization");
+      fireEvent.change(screen.getByLabelText("Email"), {
+        target: { value: "press@example.com" },
+      });
+      // The typed value replaces the code's, and the note goes.
+      expect(
+        screen.getAllByText(
+          "Set in the site's code. Type here to set it in the admin instead."
+        ).length
+      ).toBeGreaterThanOrEqual(4);
+      fireEvent.click(
+        screen.getByRole("button", { name: "Add a contact point" })
+      );
+      fireEvent.change(
+        screen.getByLabelText("Customer support: email, telephone or address"),
+        { target: { value: "+1 555 0100" } }
+      );
+      fireEvent.change(
+        screen.getByLabelText("Parent organization's description"),
+        {
+          target: { value: "The group behind Example." },
+        }
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+      await settle();
+
+      expect(sent).toEqual([
+        {
+          brandDetails: {
+            email: "press@example.com",
+            contactPoints: [
+              { contactType: "customer support", telephone: "+1 555 0100" },
+            ],
+            parentOrganization: { description: "The group behind Example." },
+          },
+          _rev: "3",
+        },
+      ]);
+    } finally {
+      vi.mocked(usePluginClientConfig).mockReturnValue(undefined);
+    }
+  });
+
+  it("hold up the save while a typed fact is not one", () => {
+    serving({ _rev: "3", siteName: "Example site", setupStep: 3 });
+    render(<SeoSettingsPage />);
+    openTab("Organization");
+    fireEvent.change(screen.getByLabelText("Founded"), {
+      target: { value: "last year" },
+    });
+    expect(
+      screen.getByText(
+        "Write the year, or the year, month and day, such as 2020 or 2020-03-01."
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByText("Fix the organization's details first.")
+    ).toBeTruthy();
+    expect(screen.getByLabelText("Founded").getAttribute("aria-invalid")).toBe(
+      "true"
+    );
   });
 });
 

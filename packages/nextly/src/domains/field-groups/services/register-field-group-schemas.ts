@@ -20,7 +20,7 @@ import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import type { Logger } from "../../../shared/types";
 import { storesPerLanguage } from "../../i18n/per-language-storage";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
-import { resolveTypeColumns } from "../storage/resolve-storage-names";
+import { resolveTableColumns } from "../storage/resolve-storage-names";
 
 import { FieldGroupRegistryService } from "./field-group-registry-service";
 import { FieldGroupSchemaService } from "./field-group-schema-service";
@@ -54,7 +54,9 @@ export async function registerComponentSchemas(
   // the database: the storage migration renames the registry LAST, so between a
   // table's rename and the registry's the two generations coexist, and a table
   // an author named itself is never renamed while its column always is.
-  const typeColumns = await resolveTypeColumns(
+  // With each table's columns, so a field inside a group with no name whose column the table
+  // lacks yet is left out of its runtime table (`RuntimeSchemaOptions.heldColumns`).
+  const tableColumns = await resolveTableColumns(
     adapter,
     components.map(component => component.tableName)
   );
@@ -63,13 +65,14 @@ export async function registerComponentSchemas(
     // Laid out as boot lays it out: per language when the site keeps every translatable value so.
     const localized = storesPerLanguage(component);
     const fields = component.fields ?? [];
+    const held = tableColumns.get(component.tableName);
 
     registry.registerDynamicSchema(
       component.tableName,
       schemaService.generateRuntimeSchema(component.tableName, fields, {
         localized,
-        typeColumn:
-          typeColumns.get(component.tableName) ?? STORAGE_FORMAT.columns.type,
+        typeColumn: held?.typeColumn ?? STORAGE_FORMAT.columns.type,
+        heldColumns: held?.columns,
       })
     );
 

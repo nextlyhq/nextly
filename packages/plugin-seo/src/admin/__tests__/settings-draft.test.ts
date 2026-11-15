@@ -5,10 +5,12 @@ import {
   attentionItems,
   changesOf,
   isHidden,
+  faqSectionOf,
   mappingOf,
   missingDetails,
   structuredTypeOf,
   withDetailField,
+  withFaqSection,
   withHidden,
   withStructuredType,
   draftOf,
@@ -75,6 +77,17 @@ describe("the form's values, from the stored settings", () => {
           url: "https://www.linkedin.com/company/rext-ai",
         },
       ],
+      brandDetails: {
+        description: "",
+        email: "",
+        telephone: "",
+        foundingDate: "",
+        contactPoints: [],
+        parentName: "",
+        parentUrl: "",
+        parentDescription: "",
+        parentFoundingDate: "",
+      },
       patterns: { posts: { title: "{Title} | {Site name}" } },
       setupStep: 1,
       setupDismissed: false,
@@ -83,6 +96,8 @@ describe("the form's values, from the stored settings", () => {
       structuredData: {},
       indexNow: false,
       llmsTxt: false,
+      llmsFullTxt: false,
+      llmsIntro: "",
       plainTextCopies: true,
       robotsRules: { text: "" },
       verificationCodes: {
@@ -110,6 +125,17 @@ describe("the form's values, from the stored settings", () => {
       brandOtherNames: "",
       logo: null,
       socialProfiles: [],
+      brandDetails: {
+        description: "",
+        email: "",
+        telephone: "",
+        foundingDate: "",
+        contactPoints: [],
+        parentName: "",
+        parentUrl: "",
+        parentDescription: "",
+        parentFoundingDate: "",
+      },
       patterns: {},
       setupStep: 0,
       setupDismissed: false,
@@ -118,6 +144,8 @@ describe("the form's values, from the stored settings", () => {
       structuredData: {},
       indexNow: false,
       llmsTxt: false,
+      llmsFullTxt: false,
+      llmsIntro: "",
       plainTextCopies: false,
       robotsRules: { text: "" },
       verificationCodes: {
@@ -414,6 +442,28 @@ describe("a content type's structured data", () => {
     expect(
       structuredTypeOf(withStructuredType(chosen, "posts", undefined), "posts")
     ).toBeUndefined();
+  });
+
+  it("declares the type's questions an FAQ section, saving it alone, and takes it back", () => {
+    const draft = draftOf(stored);
+    expect(faqSectionOf(draft, "posts")).toBe(false);
+
+    const declared = withFaqSection(draft, "posts", true);
+    expect(faqSectionOf(declared, "posts")).toBe(true);
+    // A rule holding only the section is a choice, so it is saved.
+    expect(changesOf(stored, declared)).toEqual({
+      structuredData: { posts: { faqSection: true } },
+      _rev: "4",
+    });
+
+    const both = withStructuredType(declared, "posts", "article");
+    expect(both.structuredData.posts).toEqual({
+      faqSection: true,
+      type: "article",
+    });
+    expect(withFaqSection(both, "posts", false).structuredData.posts).toEqual({
+      type: "article",
+    });
   });
 
   it("names the details no field holds yet, counting a field named like one as holding it", () => {

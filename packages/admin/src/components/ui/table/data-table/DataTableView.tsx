@@ -45,6 +45,7 @@ import {
   useContext,
   useId,
   useMemo,
+  useState,
   useSyncExternalStore,
   type Context,
   type JSX,
@@ -65,6 +66,7 @@ import {
   resolvePluginColumns,
   subscribeToDataTablePlugins,
   type DataTablePluginRegistrations,
+  type PluginColumnsPass,
 } from "./plugin-registry";
 import {
   FIXED_LAYOUT_TABLE,
@@ -208,6 +210,25 @@ const DEFAULT_GET_ROW_ID = (row: object): string => {
 export const HeldPluginRegistrations: Context<
   DataTablePluginRegistrations | undefined
 > = createContext<DataTablePluginRegistrations | undefined>(undefined);
+
+/**
+ * The ask of the plugins' column providers a parent of the view has already
+ * made for this list (`EntryTable`, which holds its rows while a provider is
+ * deciding), so the view draws the columns of that same ask rather than
+ * asking again. Internal, as `HeldPluginRegistrations` is.
+ */
+export const HeldPluginColumnsPass: Context<PluginColumnsPass | undefined> =
+  createContext<PluginColumnsPass | undefined>(undefined);
+
+/**
+ * This list's ask of its column providers: the one a parent holds, or one
+ * of its own, kept while the list is mounted. A list drawn anew asks anew.
+ */
+export function usePluginColumnsPass(): PluginColumnsPass {
+  const held = useContext(HeldPluginColumnsPass);
+  const [own] = useState<PluginColumnsPass>(() => ({}));
+  return held ?? own;
+}
 
 /** A subscription that is never told anything, for a snapshot held above. */
 function noSubscription(): () => void {
@@ -540,13 +561,14 @@ export function DataTableView<Row extends object>({
   // The plugins' registrations as they stand, read again when one changes, so
   // a column or action registered while this list is on screen joins it.
   const registered = useDataTablePluginRegistrations();
+  const pass = usePluginColumnsPass();
   // Merge plugin-contributed columns (and transforms) for this list, if any.
   const resolvedColumns = useMemo(
     () =>
       registryKey
-        ? resolvePluginColumns(registryKey, columns, registered)
+        ? resolvePluginColumns(registryKey, columns, registered, pass)
         : columns,
-    [registryKey, columns, registered]
+    [registryKey, columns, registered, pass]
   );
   const pluginRowActions = useMemo(
     () =>

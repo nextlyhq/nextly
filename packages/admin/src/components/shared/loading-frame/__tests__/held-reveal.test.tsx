@@ -8,8 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EDITOR_CLAIM_HOLD_MS,
   EDITOR_REVEAL_HOLD_MS,
+  LIST_COLUMNS_HOLD_MS,
   useEditorRevealHold,
   useHeldReveal,
+  useHoldForDecidingColumns,
 } from "../delayed-reveal";
 
 beforeEach(() => {
@@ -107,6 +109,56 @@ describe("an editor moved straight to another document", () => {
     act(() => {
       vi.advanceTimersByTime(EDITOR_CLAIM_HOLD_MS);
     });
+    expect(result.current).toBe(false);
+  });
+});
+
+// A list held for a plugin's column still being decided: timed from when its
+// rows arrive rather than from its first draw, since the rows normally take
+// longer than the hold; a hold timed from the first draw would have run out
+// by then and held nothing.
+describe("holding a list's rows for a column on its way", () => {
+  it("holds once the rows are in, from their arrival, for the hold at most", () => {
+    const { result, rerender } = renderHook(
+      ({ rowsIn, deciding }) =>
+        useHoldForDecidingColumns(rowsIn, deciding, "posts"),
+      { initialProps: { rowsIn: false, deciding: true } }
+    );
+    expect(result.current).toBe(false);
+    // The rows take longer than the hold itself.
+    act(() => {
+      vi.advanceTimersByTime(LIST_COLUMNS_HOLD_MS * 4);
+    });
+    rerender({ rowsIn: true, deciding: true });
+    expect(result.current).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(LIST_COLUMNS_HOLD_MS - 1);
+    });
+    expect(result.current).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(result.current).toBe(false);
+  });
+
+  it("shows the rows as soon as the column is decided", () => {
+    const { result, rerender } = renderHook(
+      ({ rowsIn, deciding }) =>
+        useHoldForDecidingColumns(rowsIn, deciding, "posts"),
+      { initialProps: { rowsIn: true, deciding: true } }
+    );
+    expect(result.current).toBe(true);
+    rerender({ rowsIn: true, deciding: false });
+    expect(result.current).toBe(false);
+    // And a later decision never takes the shown rows away.
+    rerender({ rowsIn: true, deciding: true });
+    expect(result.current).toBe(false);
+  });
+
+  it("holds nothing where no column is being decided", () => {
+    const { result } = renderHook(() =>
+      useHoldForDecidingColumns(true, false, "tags")
+    );
     expect(result.current).toBe(false);
   });
 });
