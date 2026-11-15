@@ -440,12 +440,17 @@ Each entry carries:
 - on a page published in more than one language, an `<xhtml:link rel="alternate">` for
   each of its languages, itself included, and `x-default`, the same links as its head;
 - `<lastmod>`, when the published page's content last changed: any of its fields but its
-  `seo` group and Nextly's own bookkeeping (its id, its dates, its status). A change to the
-  page's SEO alone, a save that changes nothing, and a working draft all leave it as it was,
-  so search engines can trust it. A page last saved before this was kept, as every page is
-  on the first upgrade, shows its last save until its next one; reading the sitemap writes
-  nothing. A [page built in code](#pages-built-in-code) carries one only where its route
-  states it;
+  `seo` group and Nextly's own bookkeeping (its id, its dates, its status, and the ids and
+  dates of the rows its field groups are kept in). A change to the page's SEO alone, a save
+  that changes nothing, even one that sends its field groups back and so rewrites their
+  rows, and a working draft all leave it as it was, so search engines can trust it. A page
+  saved before the plugin kept this, as every page is on the first upgrade, starts from its
+  last save, which the next [full check](#when-the-list-is-checked), or a first save that
+  changes only its SEO, keeps for it; from then on only a content change moves it. The
+  plugin can't tell what an earlier save changed, so a page whose last save before the
+  upgrade changed only its SEO keeps that save's date, as does a date an earlier release
+  moved on one. Reading the sitemap writes nothing. A
+  [page built in code](#pages-built-in-code) carries one only where its route states it;
 - the page's main images as `<image:image>`: its share image, or the cover image its
   content offers, as the page's head uses it, and the image its
   [structured data](#structured-data) reads where the content type maps one, such as a
@@ -1281,9 +1286,12 @@ hidden from search is offered only the kinds of page: Web, About, Contact and Co
 
 Each detail is read from the field the content type maps to it, or else from the first field named
 like it (`author`, `publishedAt`, `price`, `startDate`, `tags`, `category` and so on). The date a
-page last changed is read from `dateModified`, `modifiedAt`, `correctedAt`, `revisedAt` or
-`lastReviewed` before the row's own `updatedAt`, which changes with every save; map
-`dateModified` (or `datePublished`) to read another field. Structured data states only what the route
+page last changed is read from a field named `dateModified`, `modifiedAt`, `correctedAt`,
+`revisedAt` or `lastReviewed`, or the field the content type maps to `dateModified`, where it
+holds a date. Where it is empty, as a correction date is on a page never corrected, it is the
+page's [`<lastmod>`](#the-sitemap-and-robotstxt) date, when its content last changed, rather than
+the row's own `updatedAt`, which every save moves, an SEO-only one included. Map `dateModified`
+(or `datePublished`) to read another field. Structured data states only what the route
 read for the page, so a relationship names someone only where the route read the entry it holds:
 give a route that shows its author `depth: 1`. The route's own access rules, language and cache
 tags then govern the author as they govern the page, so an unpublished or private author is never

@@ -118,6 +118,53 @@ describe("a page's content fingerprint", () => {
     ).not.toBe(contentFingerprint({ ...PAGE, author }));
   });
 
+  it("ignores a field group row's own id and stamps, which a save that changes none of its values rewrites", () => {
+    // As the published read gives a field group's rows: each with the id and
+    // the column-named stamps it is stored under.
+    const row = {
+      id: "r1",
+      created_at: "2026-11-01T09:00:00.000Z",
+      updated_at: "2026-11-01T09:00:00.000Z",
+      heading: "Plans",
+    };
+    const page = { ...PAGE, hero: row, cards: [row, { ...row, id: "r2" }] };
+    // Updated in place: its stamp moves.
+    const touched = { ...row, updated_at: "2026-11-13T10:00:00.000Z" };
+    // Stored again under a new id, as a repeatable group's item sent without
+    // its id is.
+    const renewed = {
+      ...row,
+      id: "r9",
+      created_at: "2026-11-13T10:00:00.000Z",
+      updated_at: "2026-11-13T10:00:00.000Z",
+    };
+    expect(
+      contentFingerprint({
+        ...page,
+        hero: touched,
+        cards: [renewed, { ...renewed, id: "r10" }],
+      })
+    ).toBe(contentFingerprint(page));
+    // Its values are content.
+    expect(
+      contentFingerprint({ ...page, hero: { ...row, heading: "Prices" } })
+    ).not.toBe(contentFingerprint(page));
+  });
+
+  it("keeps an id that names what the content links to", () => {
+    const linked = (id: string) => ({
+      ...PAGE,
+      body: {
+        root: {
+          children: [{ type: "relationship", value: { id }, relationTo: "x" }],
+        },
+      },
+    });
+    expect(contentFingerprint(linked("d1"))).not.toBe(
+      contentFingerprint(linked("d2"))
+    );
+  });
+
   it.each([
     ["the title", { title: "Prices" }],
     ["the address", { slug: "prices" }],
