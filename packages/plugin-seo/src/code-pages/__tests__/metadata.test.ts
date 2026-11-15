@@ -80,6 +80,20 @@ describe("a production render where Nextly is unavailable", () => {
     await expect(seoMetadata("/pricing", { metadata: own })).rejects.toBe(busy);
   });
 
+  it("fails the head where a read after the start lost its connection, as the driver threw it", async () => {
+    // The address's SEO is read through Drizzle directly, so an outage after
+    // the start reaches here as PostgreSQL's own error under Drizzle's.
+    nextly.readFails = new Error("Failed query: select * from seo_code_pages", {
+      cause: Object.assign(new Error("Connection terminated unexpectedly"), {
+        code: "08006",
+        severity: "FATAL",
+      }),
+    });
+    await expect(
+      seoMetadata("/pricing", { metadata: own })
+    ).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+  });
+
   it("fails while `next build` prerenders under another NODE_ENV", async () => {
     vi.stubEnv("NODE_ENV", "test");
     vi.stubEnv("NEXT_PHASE", "phase-production-build");

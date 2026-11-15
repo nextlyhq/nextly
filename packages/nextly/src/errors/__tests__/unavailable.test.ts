@@ -94,6 +94,41 @@ describe("isNextlyUnavailable", () => {
       "a raw SQLite busy file",
       Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" }),
     ],
+    // A read that goes through Drizzle directly reaches its caller as the
+    // driver threw it, under Drizzle's own query error.
+    [
+      "a raw PostgreSQL connection failure under Drizzle's query error",
+      new Error("Failed query: select 1", {
+        cause: Object.assign(new Error("connection failure"), {
+          code: "08006",
+          severity: "FATAL",
+        }),
+      }),
+    ],
+    [
+      "a raw PostgreSQL shutdown",
+      Object.assign(new Error("terminating connection"), { code: "57P01" }),
+    ],
+    [
+      "a raw PostgreSQL statement timeout",
+      Object.assign(new Error("canceling statement"), { code: "57014" }),
+    ],
+    [
+      "a raw connection reset",
+      Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+    ],
+    [
+      "a raw refused connection",
+      Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5432"), {
+        code: "ECONNREFUSED",
+      }),
+    ],
+    [
+      "a raw MySQL lost connection",
+      Object.assign(new Error("Connection lost"), {
+        code: "PROTOCOL_CONNECTION_LOST",
+      }),
+    ],
   ])("is true for %s, thrown or wrapped by a service", (_name, error) => {
     expect(isNextlyUnavailable(error)).toBe(true);
     expect(isNextlyUnavailable(wrapped(error))).toBe(true);
@@ -114,6 +149,16 @@ describe("isNextlyUnavailable", () => {
         kind: "unique-violation",
         dialect: "sqlite",
       }),
+    ],
+    [
+      "a raw PostgreSQL unique violation under Drizzle's query error",
+      new Error("Failed query: insert", {
+        cause: Object.assign(new Error("duplicate key"), { code: "23505" }),
+      }),
+    ],
+    [
+      "a raw MySQL syntax error",
+      Object.assign(new Error("syntax"), { code: "ER_PARSE_ERROR" }),
     ],
     ["a plugin's bug", new TypeError("cannot read properties of undefined")],
     [

@@ -25,7 +25,12 @@
  *
  * @module errors/unavailable
  */
-import { isDatabaseBusy, isDbError } from "../database/errors";
+import {
+  isDbError,
+  isUnreachedDatabaseCode,
+  isUnreachedDbErrorKind,
+  safeCode,
+} from "../database/errors";
 import { firstAnswer } from "../database/missing-column";
 import { isStartFailure } from "../init/start-failure";
 import { isProductionRuntime } from "../shared/builder-refusal";
@@ -44,16 +49,6 @@ const UNAVAILABLE_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The kinds core's `DbError` gives a database that could not be reached or
- * did not answer in time, as opposed to one that answered with a refusal.
- */
-const UNAVAILABLE_DB_ERROR_KINDS: ReadonlySet<string> = new Set([
-  "busy",
-  "connection-lost",
-  "timeout",
-]);
-
-/**
  * The same, as the adapters' own `DatabaseError` names them
  * (`@nextlyhq/adapter-drizzle`). Read by shape, as `isDbError` reads core's:
  * importing the adapter here would put a database package in every bundle
@@ -68,7 +63,7 @@ const UNAVAILABLE_ADAPTER_KINDS: ReadonlySet<string> = new Set([
 function levelIsUnavailable(level: unknown): boolean {
   if (isStartFailure(level)) return true;
   if (NextlyError.is(level)) return UNAVAILABLE_CODES.has(level.code);
-  if (isDbError(level)) return UNAVAILABLE_DB_ERROR_KINDS.has(level.kind);
+  if (isDbError(level)) return isUnreachedDbErrorKind(level.kind);
   if (
     level instanceof Error &&
     level.name === "DatabaseError" &&
@@ -77,15 +72,17 @@ function levelIsUnavailable(level: unknown): boolean {
   ) {
     return UNAVAILABLE_ADAPTER_KINDS.has(level.kind);
   }
-  // A driver's raw error for a busy database, which arrives unconverted.
-  return isDatabaseBusy(level);
+  // A driver's own error, which a read through Drizzle directly hands its
+  // caller unconverted, often under Drizzle's query error: read by its code.
+  return isUnreachedDatabaseCode(safeCode(level));
 }
 
 /**
  * Whether `error` means Nextly is unavailable: its start failed, it answered
  * that the database is busy or a service unavailable, or the database could
- * not be reached or did not answer in time. The error and every cause it
- * carries are read, since a service usually wraps what the driver threw.
+ * not be reached or did not answer in time, whether an adapter, core or the
+ * driver itself (by its code) said so. The error and every cause it carries
+ * are read, since a service or Drizzle usually wraps what the driver threw.
  *
  * Anything else, a refusal, a bad answer, a bug, is not: it would fail the
  * same way on the next render.
