@@ -186,19 +186,26 @@ const STATUS_COLUMN_NAME = "status";
  * `columns` with the Design column moved to right after Status, so it is on
  * screen beside the lifecycle rather than after every field. A list with no
  * Status column (one whose lifecycle is drawn elsewhere, or a collection
- * without drafts) takes it right after its first column, the one naming each
- * entry, for the same reason: appended, it sits past every field, off screen
- * on a wide collection. A list without the Design column is returned as it
- * came.
+ * without drafts) takes it right after its first shown column, the one naming
+ * each entry, for the same reason: appended, it sits past every field, off
+ * screen on a wide collection. A hidden column before it, as the entry list's
+ * ID column is unless shown, does not count. A list without the Design column
+ * is returned as it came.
  */
-export function designAfterStatus<Column extends { name: string }>(
-  columns: Column[]
-): Column[] {
+export function designAfterStatus<
+  Column extends { name: string; hidden?: boolean },
+>(columns: Column[]): Column[] {
   const design = columns.find(column => column.name === DESIGN_COLUMN_NAME);
   if (design === undefined) return columns;
   const rest = columns.filter(column => column !== design);
   const status = rest.findIndex(column => column.name === STATUS_COLUMN_NAME);
-  const after = status === -1 ? Math.min(1, rest.length) : status + 1;
+  const firstShown = rest.findIndex(column => column.hidden !== true);
+  const after =
+    status !== -1
+      ? status + 1
+      : firstShown !== -1
+        ? firstShown + 1
+        : Math.min(1, rest.length);
   return [...rest.slice(0, after), design, ...rest.slice(after)];
 }
 
