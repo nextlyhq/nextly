@@ -61,8 +61,15 @@ const report = z.object({
   readAt: z.string(),
 });
 
-/** The last report read, and the property it was read for. */
-const keptReport = z.object({ property: z.string(), report });
+/**
+ * The last report read, the property it was read for, and the connection it
+ * was read through: a fingerprint of that connection's token, never the token.
+ */
+const keptReport = z.object({
+  property: z.string(),
+  connection: z.string(),
+  report,
+});
 
 /** The plugin's settings, as stored. */
 const schema = z.object({
@@ -113,7 +120,11 @@ export interface ConnectionSettings {
     expiresAt: string;
   };
   searchConsoleFailed?: ConnectionAttempt & { message: string };
-  searchConsoleReport?: { property: string; report: SearchConsoleReportBody };
+  searchConsoleReport?: {
+    property: string;
+    connection: string;
+    report: SearchConsoleReportBody;
+  };
   checklistHidden?: boolean;
   importedAt?: string;
 }

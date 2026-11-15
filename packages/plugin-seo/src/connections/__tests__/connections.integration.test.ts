@@ -942,6 +942,27 @@ describe.each(getConfiguredTestDialects())(
         expect(await storedRows(t)).not.toContain("acme rockets");
       });
 
+      it("answers a kept report only to the connection that read it", async () => {
+        const { t, seo } = await boot(dialect);
+        await settings(t, {});
+        const google: Google = { asked: [], failing: {} };
+        await signIn(seo, google);
+        expect((await call(seo, google, "GET", REPORT)).status).toBe(200);
+
+        // A report kept for this property, but read through another
+        // connection: a reconnect that landed while it was being saved.
+        const kept = (await readConnections(seo)).searchConsoleReport;
+        if (kept === undefined) throw new Error("no report kept");
+        await writeConnections(seo, {
+          searchConsoleReport: { ...kept, connection: "an-earlier-connection" },
+        });
+        const before = google.asked.length;
+        expect((await call(seo, google, "GET", REPORT)).status).toBe(200);
+        expect(google.asked.length).toBeGreaterThan(before);
+        // The kept report never holds the token it was read through.
+        expect(await storedRows(t)).not.toContain("refresh-shh");
+      });
+
       it("says Google's failure plainly once the six hours are over, never the old report", async () => {
         const start = Date.parse("2026-11-15T08:00:00.000Z");
         vi.useFakeTimers({ toFake: ["Date"] });

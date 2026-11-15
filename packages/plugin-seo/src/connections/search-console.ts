@@ -350,14 +350,34 @@ const dayBefore = (days: number): string =>
   new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
 /**
- * The report kept from an earlier read, while it is for this property and
- * younger than six hours; none otherwise.
+ * Which connection a report was read through, kept beside it in plain text:
+ * a fingerprint of the token that renews access, from which the token can't
+ * be worked out. A new connection gets a new token from Google.
+ */
+function connectionOf(refreshToken: string): string {
+  return createHash("sha256")
+    .update(`seo-search-console-report:${refreshToken}`)
+    .digest("hex")
+    .slice(0, 32);
+}
+
+/**
+ * The report kept from an earlier read, while it is for this connection and
+ * property and younger than six hours; none otherwise. The connection is
+ * checked here, on every read, because a report being saved as someone
+ * disconnects or connects again can land after that change cleared it.
  */
 function freshReport(
   kept: ConnectionSettings["searchConsoleReport"],
-  property: string
+  connected: { property: string; refreshToken: string }
 ): SearchConsoleReportBody | undefined {
-  if (kept === undefined || kept.property !== property) return undefined;
+  if (
+    kept === undefined ||
+    kept.property !== connected.property ||
+    kept.connection !== connectionOf(connected.refreshToken)
+  ) {
+    return undefined;
+  }
   const age = Date.now() - Date.parse(kept.report.readAt);
   // A time ahead of the clock is not trusted to be fresh.
   return age >= 0 && age < REPORT_KEPT_MS ? kept.report : undefined;
@@ -377,7 +397,10 @@ async function report(
     });
   }
   const { property } = stored;
-  const kept = freshReport(connections.searchConsoleReport, property);
+  const kept = freshReport(connections.searchConsoleReport, {
+    property,
+    refreshToken: stored.refreshToken,
+  });
   if (kept !== undefined) return kept;
   const fetch = fetchOf(ctx);
   // Search Console's counts settle over about two days.
@@ -440,12 +463,21 @@ async function report(
     };
     // Kept only for the connection it was read through: one disconnected or
     // made again while Google was being read keeps no report of the old one.
+    // Not atomic with the write, so the read above checks the connection too.
     const now = (await readConnections(ctx)).searchConsole;
     const same =
       now?.property === property && now.refreshToken === stored.refreshToken;
     await writeConnections(ctx, {
       searchConsoleFailed: null,
-      ...(same ? { searchConsoleReport: { property, report: body } } : {}),
+      ...(same
+        ? {
+            searchConsoleReport: {
+              property,
+              connection: connectionOf(stored.refreshToken),
+              report: body,
+            },
+          }
+        : {}),
     });
     return body;
   } catch (error) {
