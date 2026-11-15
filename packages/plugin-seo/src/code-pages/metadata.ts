@@ -22,6 +22,7 @@
  * @module code-pages/metadata
  */
 import {
+  failRenderWhenUnavailable,
   getCachedNextly,
   NextlyError,
   pluginCacheTag,
@@ -79,8 +80,8 @@ async function seoContext(): Promise<PluginContext | undefined> {
   const kept = keptSeoContext();
   if (kept !== undefined) return kept;
   // A start that fails throws, so the read is not kept as "no plugin": the
-  // route serves its own metadata this once and the next request starts
-  // Nextly again.
+  // render fails in production, or the route serves its own metadata this
+  // once elsewhere, and the next request starts Nextly again.
   await getCachedNextly();
   return keptSeoContext();
 }
@@ -131,7 +132,12 @@ async function codePageAsk(
   if (keptSeoContext() === undefined) {
     try {
       await getCachedNextly();
-    } catch {
+    } catch (error) {
+      // Nextly could not be started: in production the render fails, so the
+      // page is never cached or built without its SEO, and Next.js keeps
+      // serving its last good render. Elsewhere the route's own head is
+      // served this once.
+      failRenderWhenUnavailable(error);
       return null;
     }
   }
@@ -149,6 +155,10 @@ async function codePageAsk(
       tags,
     });
   } catch (error) {
+    // The database unreachable or busy fails the render in production, as a
+    // failed start does; a read that failed any other way is the page's own,
+    // and the route's head is served in its place.
+    failRenderWhenUnavailable(error);
     keptSeoContext()?.logger.error(
       "The SEO of a page built in code could not be read",
       { path: address, error }
@@ -192,7 +202,12 @@ async function codePageAsk(
  *
  * Where Nextly or the SEO plugin is not running, or the address's SEO cannot
  * be read, it is the route's own metadata unchanged, so the page is served
- * whatever happens to its SEO.
+ * whatever happens to its SEO. The one exception is Nextly being unavailable (its
+ * start failed, or the database could not be reached or was busy) while the
+ * page is rendered for production, `next build` included: the render then
+ * fails, so Next.js keeps serving the page's last good render and a build
+ * fails rather than shipping the page without its SEO. In development the
+ * route's own metadata is served then too.
  *
  * @throws NextlyError when `path` is not an address from the site's root.
  */
@@ -232,7 +247,8 @@ export async function seoMetadata(
  * ```
  *
  * Nothing where Nextly or the SEO plugin is not running, or the answer has
- * no structured data.
+ * no structured data. Where Nextly is unavailable, a production render fails,
+ * as {@link seoMetadata}'s does.
  *
  * @throws NextlyError when `path` is not an address from the site's root.
  */
