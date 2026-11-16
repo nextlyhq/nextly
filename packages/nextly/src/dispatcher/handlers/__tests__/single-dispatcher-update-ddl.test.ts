@@ -178,6 +178,14 @@ vi.mock("../../../domains/schema/pipeline/live-table-facts", () => ({
     holdingNull: new Set<string>(),
     absent: new Set<string>(),
   })),
+  // Columns with no comment, character set or collation of their own, received by a table that
+  // takes none either, so the translation-move precondition has nothing to refuse. What it does
+  // WITH the facts is pinned in `i18n/migration/move-keeps-definition.test.ts`.
+  readColumnExtras: vi.fn(async () => new Map()),
+  readReceivingDefaults: vi.fn(async () => ({
+    charset: null,
+    collation: null,
+  })),
 }));
 
 /**

@@ -26,6 +26,50 @@ const sibling: BuilderField = {
 };
 
 describe("ConditionsTab", () => {
+  it("says why a condition is broken, and offers to remove it", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    // It reads "summary", which is not beside it any more.
+    const gatedField: BuilderField = {
+      ...field,
+      admin: {
+        condition: { field: "summary", operator: "equals", value: "x" },
+      },
+    };
+    render(
+      <ConditionsTab
+        field={gatedField}
+        siblings={[sibling]}
+        conditions="sibling"
+        onChange={onChange}
+      />
+    );
+    expect(
+      screen.getByText(
+        "Title's condition reads summary, which is no longer beside it. Choose another field for it, or remove the condition."
+      )
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    const last = onChange.mock.lastCall?.[0] as BuilderField;
+    expect(last.admin?.condition).toBeUndefined();
+  });
+
+  it("says nothing of a condition that still reads its source", () => {
+    const gatedField: BuilderField = {
+      ...field,
+      admin: { condition: { field: "status", operator: "equals", value: "x" } },
+    };
+    render(
+      <ConditionsTab
+        field={gatedField}
+        siblings={[sibling]}
+        conditions="sibling"
+        onChange={vi.fn()}
+      />
+    );
+    expect(screen.queryByText(/no longer/)).toBeNull();
+  });
+
   it("offers to add a condition, with no condition editor until one is added", () => {
     render(
       <ConditionsTab

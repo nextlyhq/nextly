@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
+
+import { chromeStylesheetSource } from "./styles/chrome-stylesheet";
 
 /**
  * The empty section prompt's plate takes its colours from `--nx-builder-*`
@@ -18,11 +19,11 @@ import { describe, expect, it } from "vitest";
  *
  * @module empty-prompt-plate-tokens.test
  */
-// Joined as a path: under jsdom the global `URL` is the window's, which
-// `fileURLToPath` refuses.
-const CHROME = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), "styles/builder-chrome.css"),
-  "utf8"
+// The helper names each file by its URL as a string: under jsdom the global
+// `URL` is the window's, which `fileURLToPath` refuses, and given a string it
+// parses its own.
+const CHROME = chromeStylesheetSource(url =>
+  readFileSync(fileURLToPath(url), "utf8")
 ).replace(/\/\*[\s\S]*?\*\//g, "");
 
 interface Rule {

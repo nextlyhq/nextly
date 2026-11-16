@@ -979,6 +979,9 @@ function makeFakeRegistry(seed: {
 function makeFakeAdapter() {
   return {
     dialect: "postgresql" as const,
+    // The real adapter's dialect question, asked by the translation-move precondition a localized
+    // apply runs before it moves any column.
+    getCapabilities: () => ({ dialect: "postgresql" as const }),
     // The index names a change takes are looked up across the schema even for a table that does
     // not exist yet: nothing holds them here, in node-postgres's `{ rows }` shape.
     getDrizzle: vi.fn().mockReturnValue({
@@ -1440,6 +1443,8 @@ describe("dispatchCollections, localized persistence failure", () => {
     });
     const adapter = {
       dialect: "postgresql" as const,
+      // Asked by the translation-move precondition, as on the real adapter.
+      getCapabilities: () => ({ dialect: "postgresql" as const }),
       tableExists: vi.fn().mockResolvedValue(true),
       getDrizzle: vi.fn().mockReturnValue({
         all: vi.fn().mockResolvedValue([]),
