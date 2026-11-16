@@ -16,7 +16,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { z } from "zod";
 
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
-import { readAccessCaller, readableEntities } from "../auth/entity-read-access";
+import {
+  canReadEntity,
+  readAccessCaller,
+  readableEntities,
+} from "../auth/entity-read-access";
 import type { AuthContext } from "../auth/middleware";
 import { container } from "../di/container";
 import { resolveSingleDocumentId } from "../domains/singles/services/single-document-access";
@@ -201,13 +205,33 @@ async function documentOf(
   return { scopeKind: "single", scopeSlug: ref.single, entryId: id };
 }
 
-/** Throws not found unless the asker may read `document` in every part named. */
+/**
+ * Throws not found unless the asker may read `document` in every part named: first the collection
+ * or Single at all, as a read route authorizes before it runs, then the document itself. Not found
+ * rather than forbidden either way, so a caller who may not read it is not told it exists.
+ */
 async function assertReadable(
   asker: WorkflowAsker,
   document: ReviewDocument,
   parts: readonly (string | null)[] = []
 ): Promise<void> {
   if (asker === null) return;
+  const readsEntity = await canReadEntity(
+    document.scopeSlug,
+    readAccessCaller({
+      user: asker.user,
+      ...(asker.scope === undefined ? {} : { authenticatedScope: asker.scope }),
+    })
+  );
+  if (!readsEntity) {
+    throw NextlyError.notFound({
+      logContext: {
+        reason: "workflow-entity-not-readable",
+        scopeKind: document.scopeKind,
+        scopeSlug: document.scopeSlug,
+      },
+    });
+  }
   await assertVersionDocumentReadable(
     document.scopeKind,
     document.scopeSlug,
