@@ -1385,7 +1385,7 @@ function takesContainInset(value: string): boolean {
  * within the gutter. One flag per property, written in the same rule, so each
  * follows its own property through every tier, breakpoint and state: an
  * override back to `auto` brings the inset back, while a `max-width` that
- * still applies keeps it off. A CSS-wide keyword leaves its flag alone.
+ * still applies keeps it off. `inherit` leaves its flag to the cascade.
  *
  * Only the emitted rule carries it: the trace records the value as it was set.
  */
@@ -1416,15 +1416,26 @@ export const SIZED_FLAG_PROPERTIES: Readonly<Record<string, string>> = {
   "max-width": "--nx-sized-max-width",
 };
 
-/** Values of those properties that size nothing. */
-const UNSIZED = new Set(["auto", "none"]);
+/**
+ * Values of those properties that size nothing. Neither is inherited, so
+ * `initial`, `unset` and the reverts resolve to `auto` or `none` as well.
+ */
+const UNSIZED = new Set([
+  "auto",
+  "none",
+  "initial",
+  "unset",
+  "revert",
+  "revert-layer",
+]);
 
 /** The flag a declaration sets, if it is one that can size a block. */
 function sizeFlag(declaration: Declaration): Declaration[] {
   const flag = SIZED_FLAG_PROPERTIES[declaration.property];
   if (flag === undefined) return [];
   const value = declaration.value.trim().toLowerCase();
-  if (CSS_WIDE_KEYWORDS.has(value)) return [];
+  // `inherit` takes the parent's size, which no rule here can know.
+  if (value === "inherit") return [];
   return [{ property: flag, value: UNSIZED.has(value) ? "0" : "1" }];
 }
 

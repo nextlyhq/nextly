@@ -2457,7 +2457,14 @@ describe("inline padding and a contained container's inset", () => {
     expect(
       css(doc([node("n1", { base: { base: { maxWidth: "none" } } })]))
     ).toContain("--nx-sized-max-width: 0");
-    // A CSS-wide keyword leaves the flag to the cascade.
+    // Neither property is inherited, so `initial`, `unset` and the reverts
+    // remove a size as `auto` does. Only `inherit` takes a size it cannot
+    // know, so it leaves the flag to the cascade.
+    for (const keyword of ["initial", "unset", "revert", "revert-layer"]) {
+      expect(
+        css(doc([node("n1", { base: { base: { width: keyword } } })]))
+      ).toContain("--nx-sized-width: 0");
+    }
     expect(
       css(doc([node("n1", { base: { base: { width: "inherit" } } })]))
     ).not.toContain("--nx-sized-width");
