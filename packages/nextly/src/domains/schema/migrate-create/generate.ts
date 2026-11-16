@@ -161,7 +161,7 @@ import {
   formatTimestamp,
   slugify,
 } from "./format-file";
-import { refuseIndexedTextWidening } from "./indexed-text-widening";
+import { withIndexesLiftedForTextWidenings } from "./indexed-text-widening";
 import {
   fileStatements,
   judgedDeletions,
@@ -1063,9 +1063,11 @@ export async function generateMigration(
     dialect: args.dialect,
     decide: candidates => renameDecisions(candidates, args),
   });
-  // A MySQL column widened into TEXT under a whole-column index cannot be altered; refused before
-  // any file is written (`refuseIndexedTextWidening`).
-  refuseIndexedTextWidening({
+  // A MySQL column widened into TEXT under a whole-column index cannot be altered while the index
+  // stands, so the index is lifted around the change and made again by prefix; a unique index, or
+  // one the snapshot cannot rule out, is refused before any file is written
+  // (`withIndexesLiftedForTextWidenings`).
+  operations = withIndexesLiftedForTextWidenings({
     operations,
     previous: previousSnapshot,
     dialect: args.dialect,
