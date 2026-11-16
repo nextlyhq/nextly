@@ -12,7 +12,6 @@
 import type { JSX } from "react";
 
 import { useLeaveWithoutWarning } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
-
 import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
 import type { PendingAddress } from "@admin/services/addressCheckApi";
 import type { StoredHookConfig } from "@admin/types/collection";
