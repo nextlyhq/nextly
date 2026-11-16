@@ -8,12 +8,15 @@
  * measures the admin's own build, which cannot see what a plugin contributes:
  * the plugin reaches the admin through the app's generated component map, so
  * only the app's bundler decides where its code lands. This reads the
- * playground's build through that report's screens measure, for three screens:
+ * playground's build through that report's screens measure, for four screens:
  *
  * - the sign-in page and the dashboard: the page builder's code there is its
  *   registration alone, at most `REGISTRATION_BUDGET_KB` gzipped, and holds no
  *   module of the builder editor or the block engine's CSS parser; the editor
  *   stylesheet is not among the stylesheets every admin screen links;
+ * - the dashboard with the plugin's parts it draws without a click (the
+ *   Bindings to fix card, the header's delete tools): held to the same
+ *   budget, and no editor or CSS parser either;
  * - the builder, opened directly: the site's code section, the fonts panel
  *   and the icon set arrive when their panel or control opens, so none is in
  *   its set, and its chunks can fetch the editor stylesheet.
@@ -55,7 +58,8 @@ const ADMIN_PAGE_MODULE =
 
 /**
  * What the page builder may weigh, gzipped, on a screen that draws none of its
- * parts: the registration of its parts, its list column and its row actions.
+ * editor: the registration of its parts, its list column and its row actions,
+ * and the small parts a dashboard draws without a click.
  */
 export const REGISTRATION_BUDGET_KB = 30;
 
@@ -63,7 +67,9 @@ const ADMIN_PAGES = "packages/admin/src/";
 
 /**
  * The screens, each by the modules whose loaders run on the way to it: the
- * admin's route, then the plugin's part on that route.
+ * admin's route, then the plugin's parts on that route. An `editorFree`
+ * screen is held to `REGISTRATION_BUDGET_KB` with no module of the builder
+ * editor or the CSS parser.
  */
 export const SCREENS = [
   {
@@ -71,12 +77,25 @@ export const SCREENS = [
     opens: [
       new RegExp(`^${ADMIN_PAGES}components/features/auth-login/index\\.tsx$`),
     ],
-    registrationOnly: true,
+    editorFree: true,
   },
   {
     name: "dashboard",
     opens: [new RegExp(`^${ADMIN_PAGES}pages/dashboard/index\\.tsx$`)],
-    registrationOnly: true,
+    editorFree: true,
+  },
+  {
+    // The parts the dashboard draws as soon as it renders, each fetching its
+    // code then: the Bindings to fix card while there are bindings to fix,
+    // and the header's delete tools, on every page for a host's component
+    // store. The playground draws neither, but its build holds their loaders.
+    name: "dashboard, parts drawn",
+    opens: [
+      new RegExp(`^${ADMIN_PAGES}pages/dashboard/index\\.tsx$`),
+      /^packages\/plugin-page-builder\/src\/admin\/bindings-report\/BindingsToFixCard\.tsx$/,
+      /^packages\/plugin-page-builder\/src\/admin\/DeleteComponentAction\.tsx$/,
+    ],
+    editorFree: true,
   },
   {
     name: "builder",
@@ -163,6 +182,10 @@ export const KNOWN_MISSES = [
     starts: "dashboard: holds the CSS parser",
     why: "core's color-utils imports checkContrast from the block engine's root",
   },
+  {
+    starts: "dashboard, parts drawn: holds the CSS parser",
+    why: "core's color-utils imports checkContrast from the block engine's root",
+  },
 ];
 
 /**
@@ -246,7 +269,7 @@ export function breaches(measured, stylesheets) {
     ...measured.flatMap(screen => {
       const spec = SCREENS.find(s => s.name === screen.name) ?? {};
       return [
-        ...(spec.registrationOnly ? registrationBreaches(screen) : []),
+        ...(spec.editorFree ? editorFreeBreaches(screen) : []),
         ...onDemandBreaches(screen, spec.onDemand ?? []),
         ...(spec.fetchesEditorStylesheet
           ? stylesheetFetchBreaches(screen)
@@ -264,8 +287,8 @@ export function breaches(measured, stylesheets) {
   ];
 }
 
-/** A screen that draws none of the builder's parts: its registration alone. */
-function registrationBreaches(screen) {
+/** A screen that draws none of the builder's editor: within the budget. */
+function editorFreeBreaches(screen) {
   const found = [];
   const kb = screen.groups["page builder"].gzippedBytes / 1024;
   if (kb > REGISTRATION_BUDGET_KB) {
@@ -418,7 +441,7 @@ function main(argv) {
     return 1;
   }
   console.log(
-    `page-builder-bundle-report: ok, the sign-in page and the dashboard carry the page builder's registration alone (within ${REGISTRATION_BUDGET_KB} KB gzipped) and no editor stylesheet, and the builder fetches its site-code section, fonts panel and icon set when they open.`
+    `page-builder-bundle-report: ok, the sign-in page and the dashboard carry the page builder's registration alone, and the dashboard with its card and header tools drawn no editor either (within ${REGISTRATION_BUDGET_KB} KB gzipped), with no editor stylesheet, and the builder fetches its site-code section, fonts panel and icon set when they open.`
   );
   return 0;
 }

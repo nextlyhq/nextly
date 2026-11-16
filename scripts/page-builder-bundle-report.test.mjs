@@ -60,7 +60,10 @@ describe("breaches", () => {
           }),
           screen("dashboard"),
           screen("builder", {
-            "builder editor": { gzippedBytes: 1, sources: ["packages/builder/src/a.ts"] },
+            "builder editor": {
+              gzippedBytes: 1,
+              sources: ["packages/builder/src/a.ts"],
+            },
           }),
         ],
         [ADMIN_SHEET]
@@ -72,7 +75,11 @@ describe("breaches", () => {
     const over = (REGISTRATION_BUDGET_KB + 1) * 1024;
     expect(
       breaches(
-        [screen("dashboard", { "page builder": { gzippedBytes: over, sources: [] } })],
+        [
+          screen("dashboard", {
+            "page builder": { gzippedBytes: over, sources: [] },
+          }),
+        ],
         []
       )
     ).toEqual([
@@ -85,8 +92,14 @@ describe("breaches", () => {
       breaches(
         [
           screen("sign-in", {
-            "builder editor": { gzippedBytes: 1, sources: ["packages/builder/src/canvas.tsx"] },
-            "CSS parser": { gzippedBytes: 1, sources: ["node_modules/css-tree/lib/index.js"] },
+            "builder editor": {
+              gzippedBytes: 1,
+              sources: ["packages/builder/src/canvas.tsx"],
+            },
+            "CSS parser": {
+              gzippedBytes: 1,
+              sources: ["node_modules/css-tree/lib/index.js"],
+            },
           }),
         ],
         []
@@ -104,7 +117,9 @@ describe("breaches", () => {
           screen("builder", {
             "site-code section": {
               gzippedBytes: 1,
-              sources: ["packages/plugin-page-builder/src/admin/editor/site-code-settings.tsx"],
+              sources: [
+                "packages/plugin-page-builder/src/admin/editor/site-code-settings.tsx",
+              ],
             },
           }),
         ],
@@ -116,12 +131,7 @@ describe("breaches", () => {
   });
 
   it("names the editor stylesheet linked before any screen renders", () => {
-    expect(
-      breaches(
-        [],
-        [ADMIN_SHEET, EDITOR_SHEET]
-      )
-    ).toEqual([
+    expect(breaches([], [ADMIN_SHEET, EDITOR_SHEET])).toEqual([
       "every admin screen links the editor stylesheet (static/chunks/b.css) before it renders",
     ]);
   });
@@ -132,8 +142,52 @@ describe("breaches", () => {
     ]);
   });
 
-  it("judges the three screens it measures", () => {
-    expect(SCREENS.map(s => s.name)).toEqual(["sign-in", "dashboard", "builder"]);
+  it("judges the screens it measures", () => {
+    expect(SCREENS.map(s => s.name)).toEqual([
+      "sign-in",
+      "dashboard",
+      "dashboard, parts drawn",
+      "builder",
+    ]);
+  });
+
+  it("follows the dashboard to the plugin's parts it draws without a click", () => {
+    // The Bindings to fix card, drawn when there are bindings to fix, and the
+    // header's delete tools, drawn on every page for a host's component
+    // store: each fetches its code as soon as the dashboard draws it.
+    const opens = SCREENS.find(s => s.name === "dashboard, parts drawn").opens;
+    const followed = [
+      "packages/admin/src/pages/dashboard/index.tsx",
+      "packages/plugin-page-builder/src/admin/bindings-report/BindingsToFixCard.tsx",
+      "packages/plugin-page-builder/src/admin/DeleteComponentAction.tsx",
+    ];
+
+    expect(opens.map((opener, at) => opener.test(followed[at]))).toEqual([
+      true,
+      true,
+      true,
+    ]);
+  });
+
+  it("holds the dashboard with its parts drawn to the budgets of a screen with no editor", () => {
+    const over = (REGISTRATION_BUDGET_KB + 1) * 1024;
+    expect(
+      breaches(
+        [
+          screen("dashboard, parts drawn", {
+            "page builder": { gzippedBytes: over, sources: [] },
+            "builder editor": {
+              gzippedBytes: 1,
+              sources: ["packages/builder/src/canvas.tsx"],
+            },
+          }),
+        ],
+        []
+      )
+    ).toEqual([
+      `dashboard, parts drawn: the page builder's code is ${(REGISTRATION_BUDGET_KB + 1).toFixed(1)} KB gzipped, over its budget of ${REGISTRATION_BUDGET_KB} KB`,
+      "dashboard, parts drawn: holds the builder editor (1 modules, e.g. packages/builder/src/canvas.tsx)",
+    ]);
   });
 });
 
@@ -163,7 +217,10 @@ describe("fetchableStylesheets", () => {
   it("finds a stylesheet a loader in the chunks names, and only that one", () => {
     const output = {
       chunks: new Map([
-        ["a.js", { code: 'Promise.all(["static/chunks/b.css","static/chunks/c.js"])' }],
+        [
+          "a.js",
+          { code: 'Promise.all(["static/chunks/b.css","static/chunks/c.js"])' },
+        ],
       ]),
     };
 
@@ -178,7 +235,10 @@ describe("sourceLengths", () => {
     // Line 0: "AAAABBBB", a segment at column 0 for source 0 and one at
     // column 4 for source 1 (base64 VLQ: "AAAA" and "ICAA").
     const map = {
-      sources: ["turbopack:///[project]/packages/a.ts", "turbopack:///[project]/packages/b.ts"],
+      sources: [
+        "turbopack:///[project]/packages/a.ts",
+        "turbopack:///[project]/packages/b.ts",
+      ],
       mappings: "AAAA,ICAA",
     };
 

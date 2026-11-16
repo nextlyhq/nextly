@@ -18,7 +18,8 @@ name: Builder speed
 #
 # The same production build is then read for the page builder's code on each
 # admin screen (scripts/page-builder-bundle-report.mjs): on the sign-in page
-# and the dashboard, its registration alone, within its budget.
+# and the dashboard, its registration alone, within its budget, and no
+# editor on the dashboard with the parts it draws without a click.
 
 on:
   push:
