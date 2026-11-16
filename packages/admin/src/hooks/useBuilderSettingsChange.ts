@@ -12,7 +12,7 @@
  *
  * @module hooks/useBuilderSettingsChange
  */
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 
 import type { BuilderKind } from "@admin/components/features/schema-builder/builder-config";
 import type { BuilderSettingsValues } from "@admin/components/features/schema-builder/BuilderSettingsModal";
@@ -98,7 +98,16 @@ export function useBuilderSettingsChange({
       to: string,
       leaveWithoutWarning?: () => void
     ): Promise<boolean> => {
-      const refusal = await checkAddressAgain(kind, to, from);
+      let refusal: string | null;
+      try {
+        refusal = await checkAddressAgain(kind, to, from);
+      } catch {
+        // Unanswered, the move is not made on a guess.
+        toast.error(
+          "The new address could not be checked, so it was not moved. The other settings are kept."
+        );
+        return false;
+      }
       if (refusal !== null) {
         toast.error(refusal);
         return false;
@@ -120,8 +129,18 @@ export function useBuilderSettingsChange({
     [kind, moveAddress, editRoute]
   );
 
+  // A move under way: one at a time, and no other change meanwhile, so the
+  // move, finishing later, never writes over a change made after it.
+  const moving = useRef(false);
+
   const onSettingsChange = useCallback(
     (next: BuilderSettingsValues, leaveWithoutWarning?: () => void) => {
+      if (moving.current) {
+        toast.error(
+          "The address is still being moved. Change the settings again once it has."
+        );
+        return;
+      }
       if (!unsaved || next.slug === unsaved.address) {
         recordRest(settings, next);
         return;
@@ -135,12 +154,16 @@ export function useBuilderSettingsChange({
         recordRest(settings, keepingAddress);
         return;
       }
-      void moveTo(unsaved.address, next.slug, leaveWithoutWarning).then(
-        moved =>
+      moving.current = true;
+      void moveTo(unsaved.address, next.slug, leaveWithoutWarning)
+        .then(moved =>
           moved
             ? recordRest(settings && { ...settings, slug: next.slug }, next)
             : recordRest(settings, keepingAddress)
-      );
+        )
+        .finally(() => {
+          moving.current = false;
+        });
     },
     [unsaved, settings, busy, kind, moveTo, recordRest]
   );
