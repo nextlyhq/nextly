@@ -589,28 +589,23 @@ async function withMysqlTryBackstop<T>(
 }
 
 /**
- * Bounds a try in a transaction on PostgreSQL (`SET LOCAL lock_timeout`, half a second past the
- * try, as a backstop for the watch) and tells the try the transaction's session, so the watch can
- * follow it; on MySQL the session alone (its bounds are `withMysqlTryBackstop`'s). Nothing on
- * SQLite, whose busy timeout bounds the unit.
- */
-/**
  * A try that resumes past every statement on MySQL writes only the ledger: the try before ended in
  * its ledger write, after the unit's statements had all committed (a try resumes at the open
  * transaction's first statement, so none was left open). The transaction this try opened is
- * committed first, leaving the session in autocommit, as the last statement left the try that ran
- * it: each ledger write then commits on its own, and a stop between a rollback row and the
- * retirement of the applied row it names keeps the rollback.
+ * committed first, leaving the ledger write outside it, as the last statement left the try that
+ * ran it: each ledger write then commits on its own (`writeLedgerInTry`), and a stop between a
+ * rollback row and the retirement of the applied row it names keeps the rollback. Returns whether
+ * the ledger write is left outside the unit's transaction.
  */
 async function commitBeforeLedgerOnlyTry(
   tx: MigrationTransaction,
   dialect: SupportedDialect,
   from: number,
   total: number
-): Promise<void> {
-  if (dialect === "mysql" && from > 0 && from === total) {
-    await tx.execute("COMMIT");
-  }
+): Promise<boolean> {
+  if (dialect !== "mysql" || from === 0 || from !== total) return false;
+  await tx.execute("COMMIT");
+  return true;
 }
 
 /**
@@ -624,18 +619,21 @@ async function commitBeforeLedgerOnlyTry(
  * rollback row, which names the applied row it retires in its own insert, lands before that row is
  * retired, and a stop between the two still leaves the migration rolled back, as the DOWN's
  * statements, committed already, left it. Opened again here, the two would commit together at the
- * end, and a stop between them would lose the rollback row over a DOWN that ran.
+ * end, and a stop between them would lose the rollback row over a DOWN that ran. Returns whether
+ * the session is left outside the unit's transaction: only after its last statement.
  */
 async function reopenAfterMysqlImplicitCommit(
   tx: MigrationTransaction,
   dialect: SupportedDialect,
   bound: StatementTryBound | undefined,
   at: { statement: string; index: number; total: number }
-): Promise<void> {
-  if (dialect !== "mysql" || !commitsOnMysql(at.statement)) return;
+): Promise<boolean> {
+  if (dialect !== "mysql" || !commitsOnMysql(at.statement)) return false;
   bound?.onStatement?.(at.index + 1);
   await bound?.beforeStatement?.();
-  if (at.index < at.total - 1) await tx.execute("START TRANSACTION");
+  if (at.index === at.total - 1) return true;
+  await tx.execute("START TRANSACTION");
+  return false;
 }
 
 /**
@@ -643,6 +641,11 @@ async function reopenAfterMysqlImplicitCommit(
  * statement waited lands before it starts, never on it (MySQL's kill ends whatever runs when it
  * arrives). It is part of the try: watched on the same session, and on SQLite bounded by what is
  * left of it.
+ *
+ * Outside the unit's transaction (`outside`, MySQL only) each ledger write must commit on its own,
+ * and a server whose sessions start with autocommit off would open a transaction at the first of
+ * them instead, and commit the writes together after all. Autocommit is turned on for the write and
+ * the session's default given back after it, so the pooled connection is left as it was found.
  */
 async function writeLedgerInTry(
   tx: MigrationTransaction,
@@ -650,14 +653,30 @@ async function writeLedgerInTry(
   sqliteWaitLeft: (
     execute: (statement: string) => Promise<unknown>
   ) => Promise<void>,
-  write: () => Promise<void>
+  write: () => Promise<void>,
+  outside: boolean
 ): Promise<void> {
   await bound?.beforeStatement?.();
   await tx.restoreSession();
   await sqliteWaitLeft(statement => tx.execute(statement));
-  await write();
+  if (!outside) {
+    await write();
+    return;
+  }
+  await tx.execute("SET SESSION autocommit = 1");
+  try {
+    await write();
+  } finally {
+    await tx.execute("SET SESSION autocommit = DEFAULT");
+  }
 }
 
+/**
+ * Bounds a try in a transaction on PostgreSQL (`SET LOCAL lock_timeout`, half a second past the
+ * try, as a backstop for the watch) and tells the try the transaction's session, so the watch can
+ * follow it; on MySQL the session alone (its bounds are `withMysqlTryBackstop`'s). Nothing on
+ * SQLite, whose busy timeout bounds the unit.
+ */
 async function boundTransactionTry(
   tx: MigrationTransaction,
   dialect: SupportedDialect,
@@ -836,7 +855,13 @@ async function runUnitStatements(
       withMysqlTryBackstop(tx, dialect, bound, async () => {
         await boundTransactionTry(tx, dialect, bound);
         for (const setting of settingsBefore) await tx.execute(sent(setting));
-        await commitBeforeLedgerOnlyTry(tx, dialect, from, statements.length);
+        // Whether the ledger write is left outside the unit's transaction (MySQL only).
+        let outside = await commitBeforeLedgerOnlyTry(
+          tx,
+          dialect,
+          from,
+          statements.length
+        );
         for (const [offset, statement] of statements.slice(from).entries()) {
           const index = from + offset;
           // A run that lost the lock starts no further statement (`assertSchemaLockHeld`).
@@ -857,7 +882,7 @@ async function runUnitStatements(
             dialect,
             bound
           );
-          await reopenAfterMysqlImplicitCommit(tx, dialect, bound, {
+          outside = await reopenAfterMysqlImplicitCommit(tx, dialect, bound, {
             statement,
             index,
             total: statements.length,
@@ -868,8 +893,12 @@ async function runUnitStatements(
         // row): what the transaction read of them before is read again.
         clearRegistryRowCache();
         if (after !== undefined) {
-          await writeLedgerInTry(tx, bound, sqliteWaitLeft, () =>
-            after(tx.db, statements.length)
+          await writeLedgerInTry(
+            tx,
+            bound,
+            sqliteWaitLeft,
+            () => after(tx.db, statements.length),
+            outside
           );
         }
         // The watch stops before the commit hands the connection back to the pool.

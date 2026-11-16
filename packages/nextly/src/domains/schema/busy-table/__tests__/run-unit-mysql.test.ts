@@ -157,6 +157,36 @@ describe("runMigrationStatements on MySQL after a schema statement's implicit co
     expect(events).not.toContain("DROP TABLE one");
     expect(events.slice(0, events.indexOf("ledger"))).toContain("COMMIT");
   });
+
+  it.each([
+    ["after the unit's last statement", undefined],
+    ["where a try resumes past every statement", 2],
+  ] as const)(
+    "turns autocommit on for the ledger write %s, and gives the session its default back",
+    async (_case, from) => {
+      // On a server whose sessions start with autocommit off, the first ledger write would open
+      // a transaction of its own, and the writes would commit together after all.
+      const events = await sentAroundLedger(
+        ["DROP TABLE two", "DROP TABLE one"],
+        from
+      );
+      const ledger = events.indexOf("ledger");
+      expect(events.slice(0, ledger)).toContain("SET SESSION autocommit = 1");
+      expect(events.slice(ledger)).toContain(
+        "SET SESSION autocommit = DEFAULT"
+      );
+    }
+  );
+
+  it("leaves autocommit alone where the ledger write is in the unit's transaction", async () => {
+    // A row change last: the transaction reopened after the DROP is still open, and the ledger
+    // write commits with it.
+    const events = await sentAroundLedger([
+      "DROP TABLE two",
+      "UPDATE counters SET n = n + 1",
+    ]);
+    expect(events).not.toContain("SET SESSION autocommit = 1");
+  });
 });
 
 describe("runUnitInTries on MySQL in one transaction", () => {
