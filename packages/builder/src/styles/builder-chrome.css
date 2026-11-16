@@ -3,8 +3,8 @@
  * package publishes as `./styles.css`, kept as an index of partials by area.
  *
  * ORDER IS THE CASCADE. A later rule wins a tie of specificity, so the
- * partials are imported in the order their rules have always had, and moving
- * a rule between partials, or a partial in this list, can change what the
+ * partials are imported in the order of the rules they hold, and moving a
+ * rule between partials, or a partial in this list, can change what the
  * editor draws. The Tailwind CLI inlines each import where it stands, so the
  * compiled sheet is the same as one file holding them in this order.
  *
@@ -27,22 +27,26 @@
  * - variables: the Variables panel, its editor and import.
  * - field-rows: attribute rows, where a value came from, a style field's row.
  * - inserters: the "+" on an empty container and between blocks.
- * - shared-styles: class chips, shared styles, block looks, the zoom control.
+ * - shared-styles: class chips, the Layers key hint, the zoom control, shared
+ *   styles, block looks and the Fonts list rows.
  * - fonts: the Fonts panel, uploads, the catalogue and the font picker.
- * - spacing-box: the per-side box, spacing handles and lock repair.
+ * - spacing-box: the per-side box, spacing handles, lock repair, and the
+ *   rows of list and relation fields.
  * - link-picker: the link picker and its options.
- * - variants: variants, when a block shows, and the preview tags on the
- *   canvas.
+ * - variants: variants, the shared head of Show when, and the preview tags
+ *   on the canvas.
  * - inspector-controls: media, the focal point, columns, segments, and the
  *   expose and icon pickers.
- * - list-query: a collection list's query, filters, sort and source.
+ * - list-query: a collection list's query, filters, sort and source, and
+ *   Show when's conditions, built from those filters.
  * - preview: content a visitor cannot read, the preview strip and picker.
  * - read-panel: the read meter and the read panel.
  * - bindings: data bindings, the image fallback and the media library picker.
  *
  * Tests that read the stylesheet's rules read it through
  * `chrome-stylesheet.ts` beside this file, which follows these imports in
- * order, so a rule moved between partials stays in their view.
+ * order, so a rule moved between partials stays in their view. Its test
+ * holds every partial here to exactly one import.
  */
 @import "./base.css";
 

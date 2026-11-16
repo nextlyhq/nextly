@@ -36,7 +36,7 @@
 }
 
 /* Show when: a block's visibility conditions, built from the list's filters.
-   Its head shares the variants header's row, above. Whose fields the
+   Its head shares the variants header's row, in variants.css. Whose fields the
    conditions read: "This post", "Each post in the list". */
 .nx-show-when__source {
   display: inline-flex;

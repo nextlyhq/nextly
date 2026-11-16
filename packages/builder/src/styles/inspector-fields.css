@@ -892,7 +892,7 @@
  * leaves the grid in force — they describe a layout the field is not using —
  * and the checkbox is then sized to a 6.5rem label column with its words in the
  * column beside it. Declared on both classes so the layout does not depend on
- * which rule appears later in this file.
+ * which rule appears later in the stylesheet.
  */
 .nx-inspector__field.nx-inspector__field--inline {
   display: flex;

@@ -1,7 +1,7 @@
 /**
  * The "+" drawn over an empty container.
  *
- * BASE tokens rather than the `--nx-builder-*` set several sections above,
+ * BASE tokens rather than the `--nx-builder-*` set `base.css` declares,
  * matching the drop indicator: this control belongs to the canvas's own
  * palette, which is the page's rather than the chrome's, so the token it takes
  * its colour from should be the one every other canvas affordance uses.
