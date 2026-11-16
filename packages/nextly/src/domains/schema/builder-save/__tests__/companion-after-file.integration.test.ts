@@ -1,5 +1,5 @@
 /**
- * A translated Single's, field group's or collection's Builder save that moves no values runs its own migration
+ * A translated Single's or field group's Builder save that moves no values runs its own migration
  * file, which changes the companion `<table>_locales` too; the companion step that runs after it
  * then finds the companion already in step and plans nothing, so no statement runs twice. A
  * translated field renamed or removed keeps the push (`pushCarriesValues`), its companion judged
@@ -16,7 +16,6 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { dispatchCollections } from "../../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../../dispatcher/handlers/single-dispatcher";
 import {
@@ -25,7 +24,6 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
-import type { ServiceContainer } from "../../../../services";
 import type * as ReconcileCompanion from "../../../i18n/migration/reconcile-companion";
 
 /** Every companion plan made since the last reset. */
@@ -191,55 +189,6 @@ for (const dialect of getConfiguredTestDialects()) {
             `INSERT INTO ${q("comp_banner_locales")} (${["_parent", "_locale", "heading"].map(q).join(", ")}) VALUES ('banner-1', 'en', 'Hello'), ('banner-1', 'es', 'Hola')`
           );
           return "banner-1";
-        },
-      },
-      {
-        name: "a collection",
-        table: "dc_posts",
-        registry: "dynamic_collections",
-        slug: "posts",
-        create: () =>
-          dispatchCollections(
-            {} as ServiceContainer,
-            "createCollection",
-            {},
-            {
-              name: "posts",
-              label: "Post",
-              localized: true,
-              fields: TRANSLATED,
-            }
-          ),
-        save: async (fields, renameResolutions = []) =>
-          dispatchCollections(
-            {} as ServiceContainer,
-            "applySchemaChanges",
-            { collectionName: "posts" },
-            {
-              fields,
-              confirmed: true,
-              localized: true,
-              renameResolutions,
-              schemaVersion: await schemaVersionOf(
-                "dynamic_collections",
-                "posts"
-              ),
-            }
-          ),
-        // One entry, written in each language as the collection's own writes store it.
-        seed: async () => {
-          const created = (await t.nextly.create({
-            collection: "posts",
-            locale: "en",
-            data: { title: "Post", heading: "Hello", views: 7 },
-          } as never)) as { item: { id: string } };
-          await t.nextly.update({
-            collection: "posts",
-            id: created.item.id,
-            locale: "es",
-            data: { heading: "Hola", _overwrite: true },
-          } as never);
-          return created.item.id;
         },
       },
     ];

@@ -49,9 +49,6 @@ import type { BrowserRenameResolution } from "../../schema/pipeline/prompt-dispa
 import { writeRegistryRows } from "../../schema/schema-version";
 import {
   applyCollectionSchemaChange,
-  collectionChangeCarriesValues,
-  reconcileCollectionCompanionAfterFile,
-  type CollectionSchemaChange,
   refuseNewCollectionIndexNamesTaken,
 } from "../../schema/services/collection-schema-apply";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
@@ -564,15 +561,7 @@ export class CollectionMetadataService extends BaseService {
       };
     },
     update: UpdateSettings,
-    push: (() => Promise<void>) | undefined,
-    /**
-     * The update's own migration file in place of `push` in development, where `pushWhen`
-     * answers false; `afterFile` then brings the companion in step.
-     */
-    fileRoad: {
-      pushWhen: () => Promise<boolean>;
-      afterFile: () => Promise<void>;
-    }
+    push: (() => Promise<void>) | undefined
   ): Promise<MetadataServiceResult | undefined> {
     try {
       const definition = await loadUiSchema({
@@ -591,10 +580,6 @@ export class CollectionMetadataService extends BaseService {
         fields
       );
       const { writeCollectionSave } = await loadCollectionSave();
-      // Asked before anything is written, and only where the answer is used: an update with a
-      // change to apply, in development.
-      const runsFile =
-        push !== undefined && deps.applies && !(await fileRoad.pushWhen());
       await writeCollectionSave(
         deps,
         {
@@ -611,9 +596,8 @@ export class CollectionMetadataService extends BaseService {
           junctions: relations.junctions,
           keys: relations.keys,
         },
-        runsFile ? {} : { appliedBy: push ?? (() => Promise.resolve()) }
+        { appliedBy: push ?? (() => Promise.resolve()) }
       );
-      if (runsFile) await fileRoad.afterFile();
       return undefined;
     } catch (error: unknown) {
       return errorToMetadataResult(
@@ -1061,27 +1045,6 @@ export class CollectionMetadataService extends BaseService {
       // schema pipeline, with the archive it needs and what the push leaves
       // out of its diff (a renamed field group's association, the junction
       // tables), as it always has.
-      const wasLocalized =
-        (before as { localized?: boolean }).localized === true;
-      const wasStatus = (before as { status?: boolean }).status === true;
-      const beforeFields = (before.fields ?? []) as FieldDefinition[];
-      // The update's change, as its push applies it and its file road reads it.
-      const change: CollectionSchemaChange = {
-        slug: params.collectionName,
-        collection: { tableName: before.tableName, fields: beforeFields },
-        fields: updateArtifacts.metadataUpdates.fields ?? beforeFields,
-        wasLocalized,
-        isLocalized:
-          body.localized !== undefined ? body.localized === true : wasLocalized,
-        status: body.status !== undefined ? body.status === true : wasStatus,
-        wasStatus,
-        renameResolutions: [...updateArtifacts.pushAnswers.renameResolutions],
-        eventResolutions: [],
-        legacyResolutions: updateArtifacts.pushAnswers.legacyResolutions,
-        fills: updateArtifacts.pushAnswers.fills,
-        // The save detects its own renames; every other pair is a drop and an add.
-        dropAndAddUnansweredRenames: true,
-      };
       const pushUpdate = async (): Promise<void> => {
         // The file is what a database built from migrations replays; this database takes the
         // change through one apply of the schema pipeline, as the schema dialog's does, which
@@ -1097,7 +1060,28 @@ export class CollectionMetadataService extends BaseService {
             this.adapter.getCapabilities().dialect
           );
         }
-        await applyCollectionSchemaChange(change);
+        const wasLocalized =
+          (before as { localized?: boolean }).localized === true;
+        const wasStatus = (before as { status?: boolean }).status === true;
+        const beforeFields = (before.fields ?? []) as FieldDefinition[];
+        await applyCollectionSchemaChange({
+          slug: params.collectionName,
+          collection: { tableName: before.tableName, fields: beforeFields },
+          fields: updateArtifacts.metadataUpdates.fields ?? beforeFields,
+          wasLocalized,
+          isLocalized:
+            body.localized !== undefined
+              ? body.localized === true
+              : wasLocalized,
+          status: body.status !== undefined ? body.status === true : wasStatus,
+          wasStatus,
+          renameResolutions: updateArtifacts.pushAnswers.renameResolutions,
+          eventResolutions: [],
+          legacyResolutions: updateArtifacts.pushAnswers.legacyResolutions,
+          fills: updateArtifacts.pushAnswers.fills,
+          // The save detects its own renames; every other pair is a drop and an add.
+          dropAndAddUnansweredRenames: true,
+        });
         // What the push leaves out of its diff, once it has run: a renamed field group's
         // association and the junction tables, as the file carries them.
         if (updateArtifacts.besideStatements) {
@@ -1115,14 +1099,7 @@ export class CollectionMetadataService extends BaseService {
           before,
           updateArtifacts,
           body,
-          updateArtifacts.migrationSQL ? pushUpdate : undefined,
-          {
-            // The push where the update carries values across its change
-            // (`pushCarriesValues`, the rule every Builder save follows); its own file, run in
-            // tries as `nextly migrate` runs it, where it carries none.
-            pushWhen: () => collectionChangeCarriesValues(change),
-            afterFile: () => reconcileCollectionCompanionAfterFile(change),
-          }
+          updateArtifacts.migrationSQL ? pushUpdate : undefined
         );
         if (refused !== undefined) return refused;
       }

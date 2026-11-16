@@ -65,7 +65,6 @@ import {
   applyCollectionSchemaChange,
   collectionChangeCarriesValues,
   fieldsAsStored,
-  reconcileCollectionCompanionAfterFile,
   recordedFieldsOf,
   refuseUniqueOverRepeats,
 } from "../../domains/schema/services/collection-schema-apply";
@@ -1155,10 +1154,9 @@ const COLLECTIONS_METHODS: Record<
           const written = await saveThroughWriter({
             appliedBy: push,
             // Whether the push applies the change in development, the writer recording its
-            // migration once the push has run: a save that carries values across its change
-            // (`pushCarriesValues`, the rule a Single's and a field group's saves follow), which
-            // the push moves and judges. Any other save runs its own file, the companion brought
-            // in step after it.
+            // migration once the push has run: a translated collection's save, and a change the
+            // rule a Single's and a field group's saves follow keeps on the push
+            // (`collectionChangeCarriesValues`). Any other save runs its own file.
             pushWhen: () => collectionChangeCarriesValues(change),
             slug: p.collectionName,
             collection: writerRowOf(collection),
@@ -1173,11 +1171,6 @@ const COLLECTIONS_METHODS: Record<
                 : { acknowledgedConversions }),
             },
           });
-          // A translated collection's save that ran its own file: its companion brought in step
-          // after it, as the push's apply does after the push.
-          if (written !== undefined && written.applied && !written.viaPush) {
-            await reconcileCollectionCompanionAfterFile(change);
-          }
           const storedFields =
             written === undefined
               ? (fields as unknown as FieldDefinition[])
@@ -2019,9 +2012,7 @@ async function saveThroughWriter(
      */
     pushWhen?: () => Promise<boolean>;
   }
-): Promise<
-  { fields: FieldDefinition[]; applied: boolean; viaPush: boolean } | undefined
-> {
+): Promise<{ fields: FieldDefinition[]; applied: boolean } | undefined> {
   const prepared = await writerSaveOf(change);
   if (prepared === undefined) return undefined;
   const viaPush =
@@ -2040,7 +2031,7 @@ async function saveThroughWriter(
       ? { appliedBy: change.appliedBy }
       : {}
   );
-  return { fields: prepared.fields, applied: result.applied, viaPush };
+  return { fields: prepared.fields, applied: result.applied };
 }
 
 /**
