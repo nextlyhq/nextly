@@ -179,7 +179,15 @@ function safeDecode(value: string): string {
   try {
     return decodeURIComponent(value);
   } catch {
-    return value;
+    // A malformed escape (`%ZZ`) beside valid ones: decode each run of valid
+    // escapes on its own, so `secret%20word%ZZ` still reads `secret word%ZZ`.
+    return value.replace(/(?:%[0-9A-Fa-f]{2})+/g, run => {
+      try {
+        return decodeURIComponent(run);
+      } catch {
+        return run;
+      }
+    });
   }
 }
 

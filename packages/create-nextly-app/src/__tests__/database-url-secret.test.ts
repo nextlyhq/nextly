@@ -341,6 +341,15 @@ describe("scrubbing printed text", () => {
     expect(said).not.toMatch(/pa@ss|ss\?word|word@/);
   });
 
+  it("masks a query value whose valid escapes sit beside a malformed one", () => {
+    const url = "postgresql://db.example.com/app?sslpassword=secret%20word%ZZ";
+    const said = redactConnection(
+      "could not authenticate with sslpassword 'secret word%ZZ'",
+      url
+    );
+    expect(said).not.toContain("secret word");
+  });
+
   it("masks a query value in its form-decoded spelling, where + reads as a space", () => {
     const url = "postgresql://db.example.com/app?sslpassword=secret+word";
     const said = redactConnection(
