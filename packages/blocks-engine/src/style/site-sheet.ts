@@ -21,13 +21,13 @@ import type {
 } from "../document";
 import type { ValidationIssue } from "../validation";
 
+import { compilePageCss } from "./compile-page";
 import {
   CONTAIN_INSET_PROPERTY,
-  compilePageCss,
   OUT_OF_FLOW_PROPERTY,
   SIZED_FLAG_PROPERTIES,
   SIZED_ITEM_PROPERTY,
-} from "./compile-page";
+} from "./contain-inset";
 import type { MayFetchUrl } from "./css-value";
 import { compileStyleValues, tokenCustomProperty } from "./declarations";
 import type { NamedClass } from "./named-class";
@@ -196,7 +196,7 @@ function documentUsingEveryType(
  * The inset travels in `--nx-contain-inset`, which this rule sets on a
  * contained element and to `0px` on every other element of the page. The
  * engine writes every inline padding as at least that inset
- * (`withContainInset` in `compile-page`), so the value an author or a block
+ * (`withContainInset` in `contain-inset`), so the value an author or a block
  * default sets replaces the gutter and can widen the inset, but never undoes
  * the containment. The property is registered as not inherited, and the reset
  * says the same for a browser that ignores the registration, so a block inside

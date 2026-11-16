@@ -47,6 +47,7 @@ import { isConditionGated } from "../visibility";
 import { BREAKPOINT_AXES } from "./breakpoint-axes";
 import type { BreakpointAxis } from "./breakpoint-axes";
 import { childGapForms } from "./child-gap";
+import { childFlagRule, withContainInset } from "./contain-inset";
 import { escapeIdentifier } from "./css-value";
 import type { MayFetchUrl } from "./css-value";
 import { compileStyleValues, DEFAULT_TOKEN_PREFIX } from "./declarations";
@@ -1309,199 +1310,6 @@ interface EnvelopeContext {
   previewStates?: boolean;
 }
 
-/**
- * The custom property a contained container's inset travels in.
- *
- * A contained container is drawn full width, and its inline padding brings its
- * content in to the site's content width. The site sheet sets this property on
- * a contained element to how far that is from each edge, and to `0px` on every
- * other element of the page (see `emitContentWidth`). It is registered as not
- * inherited there too, so a block inside a contained one never takes the inset
- * of the container around it.
- */
-export const CONTAIN_INSET_PROPERTY = "--nx-contain-inset";
-
-/** The two padding sides a contained container's inset is applied to. */
-const INLINE_PADDING = new Set(["padding-inline-start", "padding-inline-end"]);
-
-/** `0`, `-0`, `+0`, `0.0`, `.0` and the like: a zero with no unit. */
-const UNITLESS_ZERO = /^[+-]?(?:0+(?:\.0*)?|\.0+)$/;
-
-/**
- * A padding value as an argument of `max()`.
- *
- * A bare `0` is a length where a property takes one, but inside `max()` it is
- * a number, and a number beside a length makes the declaration invalid: the
- * padding would fall to nothing and a contained container's content reach the
- * page edge. A unitless zero is the only number a padding accepts, so it is
- * the one value that needs a unit, in whichever spelling it was written.
- */
-function asMaxArgument(value: string): string {
-  return UNITLESS_ZERO.test(value.trim()) ? "0px" : value;
-}
-
-/**
- * The keywords every property takes, none of which a math function can.
- *
- * `max(inherit, ...)` is invalid, so wrapping one would break the keyword on
- * every block, contained or not. A keyword is an author's explicit word about
- * the cascade, so it is written as it is: on a contained block it sets the
- * padding the way it says, as it does anywhere else.
- */
-const CSS_WIDE_KEYWORDS = new Set([
-  "inherit",
-  "initial",
-  "unset",
-  "revert",
-  "revert-layer",
-]);
-
-/** Whether an inline padding value can stand as an argument of `max()`. */
-function takesContainInset(value: string): boolean {
-  return !CSS_WIDE_KEYWORDS.has(value.trim().toLowerCase());
-}
-
-/**
- * The declarations as written into a rule: an inline padding at least the
- * containment inset.
- *
- * Every tier's inline padding (a node's own value, a block-type default, a
- * named class) is written as `max(<value>, var(--nx-contain-inset, 0px))`. The
- * padding is the same everywhere the inset is `0px`, which is every element
- * that is not contained. On a contained one the value an author or a default
- * set replaces the site's gutter as the least space at each side, and can widen
- * the inset, but it cannot take the content past the content width. CSS has no
- * other way to combine two values of one property, so the combination is
- * written into each value that might replace the containment's own.
- *
- * **A block sized by its author is not inset.** The inset is worked out from
- * the width of the box the container is laid out in, since a padding's `100%`
- * means that box and CSS cannot name an element's own width there. A contained
- * block whose `width` or `max-width` is set is narrower than that box, so the
- * rule that sets either one also sets a flag for it, `1` when the value sizes
- * the block and `0` for `auto` or `none`, which size nothing. The site sheet
- * multiplies the inset by one less the larger flag, and its
- * `margin-inline: auto` centres a sized block, whose content then fills it
- * within the gutter. One flag per property, written in the same rule, so each
- * follows its own property through every tier, breakpoint and state: an
- * override back to `auto` brings the inset back, while a `max-width` that
- * still applies keeps it off. `inherit` leaves its flag to the cascade.
- *
- * Only the emitted rule carries it: the trace records the value as it was set.
- */
-function withContainInset(
-  declarations: readonly Declaration[],
-  onRoot: boolean
-): Declaration[] {
-  const padded = declarations.map(declaration =>
-    INLINE_PADDING.has(declaration.property) &&
-    takesContainInset(declaration.value)
-      ? {
-          ...declaration,
-          value: `max(${asMaxArgument(declaration.value)}, var(${CONTAIN_INSET_PROPERTY}, 0px))`,
-        }
-      : declaration
-  );
-  if (!onRoot) return padded;
-  const flags = [
-    ...declarations.flatMap(sizeFlag),
-    ...declarations.flatMap(flowFlag),
-  ];
-  return flags.length === 0 ? padded : [...padded, ...flags];
-}
-
-/**
- * The flag each property that can size a block sets, for the site sheet's
- * inset: `1` while the property sizes the block, `0` while it does not.
- */
-export const SIZED_FLAG_PROPERTIES: Readonly<Record<string, string>> = {
-  width: "--nx-sized-width",
-  "max-width": "--nx-sized-max-width",
-};
-
-/**
- * The flag a block's layout sets on its children: `1` while it lays them out
- * as flex or grid items, `0` otherwise.
- *
- * A padding's `100%` is the width of the box a block is laid out in, which for
- * a flex or grid item is the whole row, not the item's own share of it, so a
- * contained item would be inset from a box far wider than its own. The rule
- * that sets the parent's `display` also writes this on its children, at the
- * same breakpoint and state, and the site sheet treats a flagged contained
- * child as it does a sized block: centred, not inset. `initial`, `unset` and
- * the reverts give no row and clear it; `inherit` leaves it to the cascade.
- */
-export const SIZED_ITEM_PROPERTY = "--nx-sized-item";
-
-/**
- * The flag a block's own `position` sets: `1` while it is absolutely or fixed
- * positioned, `0` otherwise.
- *
- * A child taken out of the flow is not a flex or grid item, whatever its
- * parent's layout, so the site sheet reads the item flag only where this one
- * is 0. A flag of its own, set in the rule that sets the position, so each
- * follows its own property through the cascade and neither depends on which
- * of two blocks' rules comes later.
- */
-export const OUT_OF_FLOW_PROPERTY = "--nx-out-of-flow";
-
-/** The positions that take a block out of the flow. */
-const OUT_OF_FLOW = new Set(["absolute", "fixed"]);
-
-/** The flag a block's own `position` sets, if it sets one. */
-function flowFlag(declaration: Declaration): Declaration[] {
-  if (declaration.property !== "position") return [];
-  const value = declaration.value.trim().toLowerCase();
-  if (value === "inherit") return [];
-  return [
-    {
-      property: OUT_OF_FLOW_PROPERTY,
-      value: OUT_OF_FLOW.has(value) ? "1" : "0",
-    },
-  ];
-}
-
-/** The layouts whose children are flex or grid items. */
-const ROW_LAYOUTS = new Set(["flex", "inline-flex", "grid", "inline-grid"]);
-
-/** The flag a block's own `display` sets on its children, if it sets one. */
-function itemFlag(declarations: readonly Declaration[]): Declaration[] {
-  const display = declarations.findLast(d => d.property === "display");
-  if (display === undefined) return [];
-  const value = display.value.trim().toLowerCase();
-  // `inherit` takes the parent's layout, which no rule here can know.
-  if (value === "inherit") return [];
-  return [
-    {
-      property: SIZED_ITEM_PROPERTY,
-      value: ROW_LAYOUTS.has(value) ? "1" : "0",
-    },
-  ];
-}
-
-/**
- * Values of those properties that size nothing. Neither is inherited, so
- * `initial`, `unset` and the reverts resolve to `auto` or `none` as well.
- */
-const UNSIZED = new Set([
-  "auto",
-  "none",
-  "initial",
-  "unset",
-  "revert",
-  "revert-layer",
-]);
-
-/** The flag a declaration sets, if it is one that can size a block. */
-function sizeFlag(declaration: Declaration): Declaration[] {
-  const flag = SIZED_FLAG_PROPERTIES[declaration.property];
-  if (flag === undefined) return [];
-  const value = declaration.value.trim().toLowerCase();
-  // `inherit` takes the parent's size, which no rule here can know.
-  if (value === "inherit") return [];
-  return [{ property: flag, value: UNSIZED.has(value) ? "0" : "1" }];
-}
-
 /** Compile one styles envelope into rules under one selector. */
 function envelopeRules(
   styles: NodeStyles | undefined,
@@ -1640,23 +1448,14 @@ function envelopeRules(
             rule.descendant === ""
           ),
         });
-        // The flag for the block's children, in a rule of its own beside the
-        // one that sets its layout. Not traced: no one set it.
-        const itemFlags =
-          rule.descendant === "" && rule.selector === undefined
-            ? itemFlag(rule.declarations)
-            : [];
-        if (itemFlags.length > 0) {
-          const children = `${selector}${stateSelectors[state]} > *`;
-          rules.push({
-            ...(context.atRule === undefined ? {} : { atRule: context.atRule }),
-            selector:
-              weightlessAnchor === undefined
-                ? children
-                : `${weightlessAnchor} :where(${children})`,
-            declarations: itemFlags,
-          });
-        }
+        // The flag for the block's children; not traced, as no one set it.
+        const flags = childFlagRule(
+          rule,
+          `${selector}${stateSelectors[state]} > *`,
+          weightlessAnchor,
+          context.atRule
+        );
+        if (flags !== undefined) rules.push(flags);
         // Recorded here, from the same declarations that were just emitted, in the same loop.
         // Anywhere else it would be a second reading of the document, and a second reading can
         // disagree with the first — which is the one failure a provenance record must not have.

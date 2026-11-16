@@ -146,7 +146,7 @@ describe("a sheet stored before contained blocks were padded in", () => {
     expect(stored.css).not.toContain(PADDED_IN);
     const served = resolvePageStyles(DOC, stored, undefined, resolver);
     expect(served.css).toContain(PADDED_IN);
-    expect(served.sharedInputsId?.startsWith("v7:")).toBe(true);
+    expect(served.sharedInputsId?.startsWith("v8:")).toBe(true);
   });
 
   it("is recompiled where a compile context exists", () => {
@@ -161,5 +161,71 @@ describe("a sheet stored before contained blocks were padded in", () => {
     expect(resolvePageStyles(DOC, marked, undefined, resolver).css).toBe(
       marked.css
     );
+  });
+});
+
+/**
+ * A page stylesheet stored before a row's items were flagged.
+ *
+ * That compiler wrote no flag on a flex or grid block's children, so a
+ * contained item in a row was inset from the whole row's width. The stamp's
+ * encoding moved, so such a sheet is recompiled on its next read.
+ */
+describe("a sheet stored before a row's items were flagged", () => {
+  const DOC: BlockDocument = {
+    formatVersion: 1,
+    kind: "page",
+    nodes: [
+      {
+        id: "row",
+        type: "core/box",
+        version: 1,
+        props: { as: "div", contained: false },
+        styles: { base: { base: { display: "flex" } } },
+        slots: {
+          children: [
+            {
+              id: "item",
+              type: "core/box",
+              version: 1,
+              props: { as: "div", contained: true },
+            } as BlockNode,
+          ],
+        },
+      } as BlockNode,
+    ],
+  };
+  const resolver: BlockResolver = {
+    get: (name: string) =>
+      coreBlocks.find(block => block.name === name) as never,
+  };
+  const context = {
+    breakpoints: {
+      viewport: [{ id: "base", label: "Desktop" }],
+      container: [],
+    },
+  };
+  const FLAGGED = "--nx-sized-item: 1";
+
+  /** The sheet as the `v7` compiler stored it: no flag, a `v7` stamp. */
+  function storedByV7(): PageStyles {
+    const current = resolvePageStyles(DOC, undefined, context, resolver);
+    return {
+      ...current,
+      css: current.css
+        .split("\n")
+        .filter(line => !line.includes(FLAGGED))
+        .join("\n"),
+      sharedInputsId: current.sharedInputsId?.replace(/^v\d+:/, "v7:"),
+    } as PageStyles;
+  }
+
+  it("is recompiled with the flag, with or without a compile context", () => {
+    expect(storedByV7().css).not.toContain(FLAGGED);
+    for (const read of [undefined, context]) {
+      const served = resolvePageStyles(DOC, storedByV7(), read, resolver);
+      expect(served.css).toContain(FLAGGED);
+      expect(served.sharedInputsId?.startsWith("v8:")).toBe(true);
+    }
   });
 });
