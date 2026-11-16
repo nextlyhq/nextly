@@ -293,7 +293,7 @@ describe("builder pending changes", () => {
     expect(result.current.state.pending.canUndo).toBe(false);
   });
 
-  it("the count is the changes plus one for the settings", () => {
+  it("the count is the field changes plus each changed setting, every one listed", () => {
     const { result, field } = setup();
     act(() =>
       result.current.builder.handleFieldUpdate({
@@ -306,11 +306,16 @@ describe("builder pending changes", () => {
       result.current.state.setSettings({
         ...settingsOf(entity),
         singularName: "Article",
+        description: "Long reads",
       })
     );
-    // A rename and a change of settings on one field, and the entity's own.
+    // A rename and a change of settings on one field, and two of the entity's
+    // own settings, each a pending change.
     expect(result.current.state.pending.changes).toHaveLength(2);
-    expect(result.current.state.unsavedCount).toBe(3);
+    expect(
+      result.current.state.pending.settingChanges.map(change => change.label)
+    ).toEqual(["name", "description"]);
+    expect(result.current.state.unsavedCount).toBe(4);
   });
 });
 
