@@ -160,7 +160,7 @@ function openMenu(): void {
 }
 
 function openAdvanced(): void {
-  fireEvent.click(screen.getByText("Advanced", { selector: "summary" }));
+  fireEvent.mouseDown(screen.getByRole("tab", { name: "Advanced" }));
 }
 
 describe("a block inside a contentOnly area", () => {

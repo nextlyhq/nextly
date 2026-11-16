@@ -35,6 +35,7 @@ describe("the editor's words", () => {
     expect(inspectorTabLabels()).toEqual([
       EDITOR_WORDS.content,
       EDITOR_WORDS.style,
+      EDITOR_WORDS.advanced,
     ]);
   });
 });

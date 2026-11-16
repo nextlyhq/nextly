@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * "Show when": a block's visibility conditions, in the Content tab under
+ * "Show when": a block's visibility conditions, in the Advanced tab under
  * "Visible on". One AND group, edited as the list's filters are: one
  * sentence per condition, opening in place into its field, operator and
  * value. Only fields visitors can see are offered, since whether a block
@@ -793,7 +793,7 @@ function useConditionSource(
   };
 }
 
-/** The "Show when" group of a block's Content tab. */
+/** The "Show when" group of a block's Advanced tab. */
 export function ShowWhen({
   editor,
   nodeId,

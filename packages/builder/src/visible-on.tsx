@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * "Visible on" in the Content tab: which devices a block shows on, and a
+ * "Visible on" in the Advanced tab: which devices a block shows on, and a
  * press to show or hide it on any one of them.
  *
  * Each device shows its RESOLVED state, the one a visitor on that device
