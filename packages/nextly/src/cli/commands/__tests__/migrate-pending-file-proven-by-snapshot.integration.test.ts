@@ -96,7 +96,8 @@ describe.each(getConfiguredTestDialects())(
     let two: string;
 
     const query = (statement: string) => adapter.executeQuery(statement);
-    const repo = () => new SchemaEventsRepository(adapter.getDrizzle(), dialect);
+    const repo = () =>
+      new SchemaEventsRepository(adapter.getDrizzle(), dialect);
     const metaDir = () => join(migrationsDir, "meta");
 
     async function generate(name: string, withSummary: boolean, at: string) {
@@ -214,7 +215,8 @@ describe.each(getConfiguredTestDialects())(
         () => undefined,
         (thrown: unknown) => thrown
       );
-      if (!NextlyError.is(error)) throw error ?? new Error("expected a refusal");
+      if (!NextlyError.is(error))
+        throw error ?? new Error("expected a refusal");
       return error;
     }
 
@@ -227,7 +229,8 @@ describe.each(getConfiguredTestDialects())(
         fileExists: () => Promise.resolve(true),
         loadTargetSnapshot: () => targetOf(name),
         marksNoTransaction: () => Promise.resolve(false),
-        fileChecksum: async () => checksumOf(await readFile(sqlPath(name), "utf8")),
+        fileChecksum: async () =>
+          checksumOf(await readFile(sqlPath(name), "utf8")),
         introspectLive: () =>
           introspectLiveSnapshot(adapter.getDrizzle(), dialect, [TABLE]),
       });
@@ -271,7 +274,9 @@ describe.each(getConfiguredTestDialects())(
       expect(error.code).toBe("NEXTLY_MIGRATION_NOT_PROVEN");
       expect(migrateExitCode(error)).toBe(2);
       expect(error.publicMessage).toContain(`${two}.sql is pending`);
-      expect(error.publicMessage).toContain("it has changed since its snapshot was written");
+      expect(error.publicMessage).toContain(
+        "it has changed since its snapshot was written"
+      );
       expect(error.publicMessage).toContain(
         `UPDATE ${q(TABLE)} SET ${q("summary")} = (not shown by its snapshot)`
       );
@@ -313,7 +318,9 @@ describe.each(getConfiguredTestDialects())(
       expect(error.code).toBe("NEXTLY_MIGRATION_NOT_PROVEN");
       expect(error.publicMessage).not.toContain("it has changed");
       expect(error.publicMessage).toMatch(
-        new RegExp(`CREATE TRIGGER ${trigger}[^\\n]*\\(not shown by its snapshot\\)`)
+        new RegExp(
+          `CREATE TRIGGER ${trigger}[^\\n]*\\(not shown by its snapshot\\)`
+        )
       );
       expect(await ledger(two)).toEqual([]);
       const triggers =

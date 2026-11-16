@@ -46,8 +46,8 @@ import {
 import { literalOf } from "../pipeline/sql-templates/sqlite-swap";
 import { registryRowKeys } from "../ui-schema/registry-row-keys";
 
-import { labelOf } from "./statement-judgement";
 import { cursorOf, StatementCursor } from "./statement-cursor";
+import { labelOf } from "./statement-judgement";
 import { registryRowWrittenBy } from "./statement-targets";
 
 /** One statement of a pending file, as the refusal names it. */

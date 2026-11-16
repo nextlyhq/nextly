@@ -12,7 +12,10 @@ import type { SchemaEventRow } from "../events/schema-events-repository";
 import type { NextlySchemaSnapshot } from "../pipeline/diff/types";
 import { generateStatements } from "../pipeline/sql-templates";
 
-import { refuseUnlessProven, statementsShownBySnapshot } from "./snapshot-proof";
+import {
+  refuseUnlessProven,
+  statementsShownBySnapshot,
+} from "./snapshot-proof";
 
 const posts = (
   ...columns: string[]
@@ -51,7 +54,10 @@ async function refusal(args: {
 }): Promise<NextlyError | undefined> {
   try {
     await refuseUnlessProven({
-      file: { filename: "20261116_add_slug.sql", sha256: args.sha256 ?? CHECKSUM },
+      file: {
+        filename: "20261116_add_slug.sql",
+        sha256: args.sha256 ?? CHECKSUM,
+      },
       proof: {
         statements: statementsShownBySnapshot(
           args.statements,
@@ -130,7 +136,13 @@ describe("refuseUnlessProven", () => {
     it("refuses a file whose last attempt failed, on any dialect", async () => {
       const error = await refusal({
         statements: [ADD_SLUG],
-        rows: [{ status: "failed", startedAt: new Date(1), supersededEventIds: null }],
+        rows: [
+          {
+            status: "failed",
+            startedAt: new Date(1),
+            supersededEventIds: null,
+          },
+        ],
       });
       expect(error?.publicMessage).toContain("its last attempt failed");
     });
@@ -139,7 +151,11 @@ describe("refuseUnlessProven", () => {
       const error = await refusal({
         statements: [ADD_SLUG],
         rows: [
-          { status: "in_progress", startedAt: new Date(1), supersededEventIds: null },
+          {
+            status: "in_progress",
+            startedAt: new Date(1),
+            supersededEventIds: null,
+          },
         ],
       });
       expect(error?.publicMessage).toContain(
@@ -152,8 +168,16 @@ describe("refuseUnlessProven", () => {
         await refusal({
           statements: [ADD_SLUG],
           rows: [
-            { status: "failed", startedAt: new Date(1), supersededEventIds: null },
-            { status: "rolled_back", startedAt: new Date(2), supersededEventIds: null },
+            {
+              status: "failed",
+              startedAt: new Date(1),
+              supersededEventIds: null,
+            },
+            {
+              status: "rolled_back",
+              startedAt: new Date(2),
+              supersededEventIds: null,
+            },
           ],
         })
       ).toBeUndefined();
@@ -168,7 +192,10 @@ describe("statementsShownBySnapshot: what fails the first condition", () => {
     ["a DELETE", `DELETE FROM "dc_posts" WHERE "slug" IS NULL`],
     ["a TRUNCATE", `TRUNCATE "dc_posts"`],
     ["a SELECT", `SELECT count(*) FROM "dc_posts"`],
-    ["a table created from a query", `CREATE TABLE "dc_posts" AS SELECT * FROM "old"`],
+    [
+      "a table created from a query",
+      `CREATE TABLE "dc_posts" AS SELECT * FROM "old"`,
+    ],
     [
       "a trigger",
       `CREATE TRIGGER "slug_t" BEFORE INSERT ON "dc_posts" FOR EACH ROW EXECUTE FUNCTION f()`,
@@ -189,7 +216,10 @@ describe("statementsShownBySnapshot: what fails the first condition", () => {
     ["a call", `CALL p()`],
     ["row-level security", `ALTER TABLE "dc_posts" ENABLE ROW LEVEL SECURITY`],
     ["a table owner", `ALTER TABLE "dc_posts" OWNER TO admin`],
-    ["a column's statistics", `ALTER TABLE "dc_posts" ALTER COLUMN "slug" SET STATISTICS 100`],
+    [
+      "a column's statistics",
+      `ALTER TABLE "dc_posts" ALTER COLUMN "slug" SET STATISTICS 100`,
+    ],
     ["the search path", `SET search_path = other`],
     ["a statement it cannot read", `VACUUM "dc_posts"`],
   ])("%s", (_kind, statement) => {
@@ -197,7 +227,9 @@ describe("statementsShownBySnapshot: what fails the first condition", () => {
   });
 
   it("MySQL table options and SET GLOBAL", () => {
-    expect(shown("ALTER TABLE `dc_posts` ENGINE = MyISAM", "mysql")).toBe(false);
+    expect(shown("ALTER TABLE `dc_posts` ENGINE = MyISAM", "mysql")).toBe(
+      false
+    );
     expect(shown("SET GLOBAL foreign_key_checks = 0", "mysql")).toBe(false);
   });
 
@@ -229,8 +261,12 @@ describe("statementsShownBySnapshot: what passes the first condition", () => {
     ['ALTER TABLE "dc_posts" RENAME COLUMN "title" TO "heading"'],
     ['ALTER TABLE "dc_posts" ALTER COLUMN "slug" SET NOT NULL'],
     ['ALTER TABLE "dc_posts" ALTER COLUMN "slug" DROP DEFAULT'],
-    ['ALTER TABLE "dc_posts" ALTER COLUMN "slug" SET DATA TYPE varchar(255) USING "slug"::varchar(255)'],
-    ['ALTER TABLE "dc_posts" ADD CONSTRAINT "dc_posts_slug_check" CHECK ("slug" <> \'\')'],
+    [
+      'ALTER TABLE "dc_posts" ALTER COLUMN "slug" SET DATA TYPE varchar(255) USING "slug"::varchar(255)',
+    ],
+    [
+      'ALTER TABLE "dc_posts" ADD CONSTRAINT "dc_posts_slug_check" CHECK ("slug" <> \'\')',
+    ],
     ['ALTER TABLE "dc_posts" DROP CONSTRAINT "dc_posts_slug_check"'],
     ['ALTER TABLE "dc_posts" VALIDATE CONSTRAINT "dc_posts_slug_check"'],
     ["SET LOCAL lock_timeout = '5s'"],
