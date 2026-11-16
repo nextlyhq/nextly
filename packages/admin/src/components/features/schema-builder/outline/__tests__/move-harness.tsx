@@ -9,6 +9,7 @@ import type { JSX } from "react";
 import { useMemo, useState } from "react";
 import { vi } from "vitest";
 
+import type { BuilderFieldError } from "@admin/lib/builder/field-validators";
 import type { FieldInsertPosition } from "@admin/lib/builder/insert-field";
 import {
   judgeMove,
@@ -43,6 +44,7 @@ export function MoveHarness({
   context,
   fieldGroups = new Map(),
   blockCatalogs,
+  errors = new Map(),
   probe,
 }: {
   initial: BuilderField[];
@@ -51,6 +53,8 @@ export function MoveHarness({
   fieldGroups?: ReadonlyMap<string, LoadedFieldGroup>;
   /** The blocks each blocks field accepts, so its block and prop rows are drawn. */
   blockCatalogs?: ReadonlyMap<string, BlockCatalog>;
+  /** The fields' errors, as the page's validation reports them. */
+  errors?: ReadonlyMap<string, BuilderFieldError>;
   probe: MoveHarnessProbe;
 }): JSX.Element {
   const [fields, setFields] = useState(initial);
@@ -99,7 +103,7 @@ export function MoveHarness({
         kind="collection"
         nodes={nodes}
         systemFields={[]}
-        errors={new Map()}
+        errors={errors}
         foldKey="test:moves"
         selectedId={selectedId}
         readOnly={context.entityReadOnly}
