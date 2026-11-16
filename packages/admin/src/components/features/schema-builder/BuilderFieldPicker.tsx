@@ -44,6 +44,7 @@ import { BUILDER_FIELD_TYPES } from "@admin/lib/builder/offered-field-types";
 import { fieldsWithDeleted } from "@admin/lib/builder/outline/pending-rows";
 import {
   addUnsavedEntity,
+  type UnsavedEntity,
   unsavedFieldGroupFrom,
   useUnsavedEntitiesOf,
 } from "@admin/lib/builder/unsaved-entities";
@@ -81,6 +82,56 @@ function fieldGroupOptionsOf(
     label: entity.label,
     text: state === "unsaved" ? `${entity.text} · not saved yet` : entity.text,
   }));
+}
+
+/**
+ * "New field group": the new-entity dialog over the picker, its Create held in the store as an
+ * unsaved field group `host` owns and handed back to the picker as chosen; null when the dialog
+ * is closed. Each one opens a fresh dialog, never the values a cancelled one left.
+ */
+function useNewFieldGroupDialog(host: UnsavedEntity["ownedBy"]) {
+  const [making, setMaking] = useState<
+    ((made: FieldGroupOption | null) => void) | null
+  >(null);
+  const [operation, setOperation] = useState(0);
+  const onNew = useCallback(
+    () =>
+      new Promise<FieldGroupOption | null>(resolve => {
+        setOperation(count => count + 1);
+        setMaking(() => resolve);
+      }),
+    []
+  );
+  const finish = (made: FieldGroupOption | null) => {
+    making?.(made);
+    setMaking(null);
+  };
+  const onCreate = (values: BuilderSettingsValues) => {
+    const entity = unsavedFieldGroupFrom(values, host);
+    // The dialog's check counts an unsaved entity's address as used, so this is reached only if
+    // another unsaved field group took it meanwhile.
+    if (!addUnsavedEntity(entity)) {
+      toast.error(
+        "A field group not saved yet already uses this address. Choose another."
+      );
+      return;
+    }
+    const [option] = fieldGroupOptionsOf(
+      [{ label: entity.settings.singularName, slug: entity.address }],
+      "unsaved"
+    );
+    finish(option);
+  };
+  return {
+    onNew,
+    dialog: {
+      key: operation,
+      open: making !== null,
+      config: FIELD_GROUP_BUILDER_CONFIG,
+      onCancel: () => finish(null),
+      onCreate,
+    },
+  };
 }
 
 type Props = {
@@ -184,41 +235,7 @@ export function BuilderFieldPicker({
     ];
   }, [fieldGroupData, unsavedFieldGroups, config.kind, entitySlug, host]);
 
-  // "New field group": the new-entity dialog, its Create held in the store as an unsaved field
-  // group this host owns, and chosen in the picker. Resolved with null when the dialog is closed.
-  const [making, setMaking] = useState<
-    ((made: FieldGroupOption | null) => void) | null
-  >(null);
-  // Each "New field group" opens a fresh dialog, never the values a cancelled one left.
-  const [operation, setOperation] = useState(0);
-  const newFieldGroup = useCallback(
-    () =>
-      new Promise<FieldGroupOption | null>(resolve => {
-        setOperation(count => count + 1);
-        setMaking(() => resolve);
-      }),
-    []
-  );
-  const finishMaking = (made: FieldGroupOption | null) => {
-    making?.(made);
-    setMaking(null);
-  };
-  const createFieldGroup = (values: BuilderSettingsValues) => {
-    const entity = unsavedFieldGroupFrom(values, host);
-    // The dialog's check counts an unsaved entity's address as used, so this is reached only if
-    // another unsaved field group took it meanwhile.
-    if (!addUnsavedEntity(entity)) {
-      toast.error(
-        "A field group not saved yet already uses this address. Choose another."
-      );
-      return;
-    }
-    const [option] = fieldGroupOptionsOf(
-      [{ label: entity.settings.singularName, slug: entity.address }],
-      "unsaved"
-    );
-    finishMaking(option);
-  };
+  const newGroup = useNewFieldGroupDialog(host);
 
   const add = (choice: FieldPickerChoice, how: { addAnother: boolean }) => {
     const field: BuilderField = {
@@ -269,7 +286,7 @@ export function BuilderFieldPicker({
                 type: FIELD_GROUP_TYPE,
                 options: fieldGroupOptions,
                 loading: fieldGroupsLoading,
-                onNew: newFieldGroup,
+                onNew: newGroup.onNew,
               }
             : undefined,
         }}
@@ -277,13 +294,7 @@ export function BuilderFieldPicker({
         onAdd={add}
       />
       {/* Over the picker, which waits on the chooser until it is made or closed. */}
-      <NewEntityDialog
-        key={operation}
-        open={making !== null}
-        config={FIELD_GROUP_BUILDER_CONFIG}
-        onCancel={() => finishMaking(null)}
-        onCreate={createFieldGroup}
-      />
+      <NewEntityDialog {...newGroup.dialog} />
     </>
   );
 }

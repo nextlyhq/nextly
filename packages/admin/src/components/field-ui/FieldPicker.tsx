@@ -420,24 +420,16 @@ function TypeStep({
   );
 }
 
-function FieldGroupStep({
-  options,
-  loading,
-  onNew,
-  onBack,
-  onPick,
-}: {
-  options: readonly FieldGroupOption[];
-  loading: boolean;
-  onNew?: () => Promise<FieldGroupOption | null>;
-  onBack: () => void;
-  onPick: (option: FieldGroupOption) => void;
-}) {
-  const listId = useId();
-  const [query, setQuery] = useState("");
-  // While the host is making a group, a second click would ask it for a second one.
+/**
+ * Asks the host for a new field group and picks the one it makes. While it is being made, a second
+ * click would ask for a second one; one made after the chooser was left (Back, or another step)
+ * is not this chooser's to pick.
+ */
+function useMakeNewGroup(
+  onNew: (() => Promise<FieldGroupOption | null>) | undefined,
+  onPick: (option: FieldGroupOption) => void
+): { making: boolean; makeNew: () => Promise<void> } {
   const [making, setMaking] = useState(false);
-  // A group made after the chooser was left (Back, or another step) is not this chooser's to pick.
   const present = useRef(true);
   useEffect(() => {
     present.current = true;
@@ -455,6 +447,25 @@ function FieldGroupStep({
       if (present.current) setMaking(false);
     }
   };
+  return { making, makeNew };
+}
+
+function FieldGroupStep({
+  options,
+  loading,
+  onNew,
+  onBack,
+  onPick,
+}: {
+  options: readonly FieldGroupOption[];
+  loading: boolean;
+  onNew?: () => Promise<FieldGroupOption | null>;
+  onBack: () => void;
+  onPick: (option: FieldGroupOption) => void;
+}) {
+  const listId = useId();
+  const [query, setQuery] = useState("");
+  const { making, makeNew } = useMakeNewGroup(onNew, onPick);
   const q = query.trim().toLowerCase();
   const matches = options.filter(option =>
     option.text.toLowerCase().includes(q)
