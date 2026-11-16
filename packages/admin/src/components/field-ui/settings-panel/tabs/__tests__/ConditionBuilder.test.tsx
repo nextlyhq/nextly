@@ -150,7 +150,8 @@ describe("ConditionBuilder -- value editor", () => {
     await user.click(
       screen.getByRole("combobox", { name: /condition field/i })
     );
-    await user.click(await screen.findByRole("option", { name: "Active" }));
+    // A source is named by its label, then what tells it apart.
+    await user.click(await screen.findByRole("option", { name: /^Active / }));
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ field: "isActive", operator: "isTrue" })
     );
