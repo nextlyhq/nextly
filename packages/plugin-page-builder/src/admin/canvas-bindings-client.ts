@@ -296,6 +296,24 @@ function sourcesCheckAskOf(
   return { source: requestSourceOf(identity), singles: [], lists };
 }
 
+/**
+ * Keep what the canvas reads in step with saves made elsewhere, through the
+ * editor's change check, for the sources {@link sourcesCheckAskOf} names.
+ */
+function useWatchedSources(
+  request: CanvasBindingsRequest | undefined,
+  drawn: readonly BlockDocument[],
+  identity: DocumentIdentity | null,
+  namedQueries: NamedQueryLookup | undefined,
+  userId: string | null
+): void {
+  const asked = useMemo(
+    () => sourcesCheckAskOf(request, drawn, identity, namedQueries),
+    [request, drawn, identity, namedQueries]
+  );
+  useCanvasSourceCheck(asked, userId);
+}
+
 /** The entry an ask is made for, as the route takes it. */
 function requestSourceOf(
   identity: DocumentIdentity
@@ -489,11 +507,7 @@ export function useCanvasBindings(
   const key = request === undefined ? "" : JSON.stringify(request);
   // Saves made elsewhere to what this reads: asked once a minute at most
   // while the builder is in sight, so a kept answer never outlives its data.
-  const checked = useMemo(
-    () => sourcesCheckAskOf(request, drawn, identity, namedQueries),
-    [request, drawn, identity, namedQueries]
-  );
-  useCanvasSourceCheck(checked, userId);
+  useWatchedSources(request, drawn, identity, namedQueries, userId);
   const [answer, setAnswer] = useState<{
     readonly key: string;
     readonly userId: string;

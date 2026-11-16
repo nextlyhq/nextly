@@ -25,7 +25,10 @@
  *
  * @module admin/editor/canvas-source-check
  */
-import { writePluginRoute } from "@nextlyhq/plugin-sdk/admin";
+import {
+  useDocumentActions,
+  writePluginRoute,
+} from "@nextlyhq/plugin-sdk/admin";
 import { useEffect, useRef } from "react";
 
 import {
@@ -168,10 +171,12 @@ export function useCanvasSourceCheck(
 
 /**
  * Drop what the canvas kept as soon as this editor stores the document: the
- * page's own entry is among what it reads. `storedAt` is when it was last
- * stored in this session; a store with no change of its own still drops.
+ * page's own entry is among what it reads. Told by when the document was
+ * last stored in this session, so a store with no change of its own still
+ * drops, and nothing before the first store does.
  */
-export function useDropKeptReadsOnSave(storedAt: Date | null): void {
+export function useDropKeptReadsOnSave(): void {
+  const storedAt = useDocumentActions()?.storedAt ?? null;
   const seen = useRef(storedAt?.getTime() ?? null);
   useEffect(() => {
     const at = storedAt?.getTime() ?? null;

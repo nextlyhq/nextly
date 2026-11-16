@@ -11,7 +11,12 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@nextlyhq/plugin-sdk/admin", () => ({ writePluginRoute: vi.fn() }));
+/** When the document was last stored, as the editor's document actions say. */
+const stored = vi.hoisted(() => ({ at: null as Date | null }));
+vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
+  writePluginRoute: vi.fn(),
+  useDocumentActions: () => ({ storedAt: stored.at }),
+}));
 
 const { canvasSourcesChanged, onCanvasSourcesChanged } = await import(
   "../canvas-sources"
@@ -189,19 +194,19 @@ describe("the canvas's change check", () => {
 
 describe("a store made in this editor", () => {
   it("drops what the canvas kept at once, each time it stores, and nothing before the first", () => {
-    const { rerender } = renderHook(
-      ({ storedAt }: { storedAt: Date | null }) =>
-        useDropKeptReadsOnSave(storedAt),
-      { initialProps: { storedAt: null as Date | null } }
-    );
+    stored.at = null;
+    const { rerender } = renderHook(() => useDropKeptReadsOnSave());
     expect(dropped).toBe(0);
-    rerender({ storedAt: new Date(1_000) });
+    stored.at = new Date(1_000);
+    rerender();
     expect(dropped).toBe(1);
     // The same store, drawn again: nothing more.
-    rerender({ storedAt: new Date(1_000) });
+    stored.at = new Date(1_000);
+    rerender();
     expect(dropped).toBe(1);
     // Stored again, whatever changed or did not: dropped again.
-    rerender({ storedAt: new Date(2_000) });
+    stored.at = new Date(2_000);
+    rerender();
     expect(dropped).toBe(2);
   });
 });
