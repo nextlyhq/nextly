@@ -81,12 +81,6 @@ export const CORE_CONTENT_EVENT_KINDS = {
       .strict(),
   },
   deleted: { name: "deleted", label: "Deleted by {actor}", endsSubject: true },
-  /**
-   * Retention removing older versions. Retention is about to be kept per version part, which may
-   * change what this event records.
-   *
-   * @experimental
-   */
   versionsRemoved: {
     name: "versions-removed",
     label: "{count} older versions removed",

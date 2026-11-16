@@ -29,6 +29,6 @@
 "nextly": patch
 ---
 
-Content history is complete and stable. The Direct API's `nextly.versions` and `nextly.contentEvents`, the document and subject event reads, a comparison's `baseline`, marking a version seen, version pins, and restore's `fields` and saved field sources (`_restoredFrom`) are no longer experimental. The `versions-removed` event stays experimental while retention moves to version parts.
+Content history is complete and stable. The Direct API's `nextly.versions` and `nextly.contentEvents`, the document and subject event reads, a comparison's `baseline`, marking a version seen, version pins, and restore's `fields` and saved field sources (`_restoredFrom`) are no longer experimental.
 
 The history screens meet WCAG 2.2 AA: each changed field is a heading, moving between changes says where it landed ("Change 3 of 9: SEO › Meta title"), a restore and its undo are announced, and the history's rows and buttons meet contrast and target-size rules. The docs describe the event record, how long events are kept, and how shared fields appear in history.
