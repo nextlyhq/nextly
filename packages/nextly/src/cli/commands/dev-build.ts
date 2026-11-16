@@ -1450,8 +1450,6 @@ export async function ensureLocalizedCompanions(
             kind,
             entity.slug
           ),
-          // Attended here, as the guard above holds: the development sync, or `nextly migrate`.
-          convertZonedDates: true,
         },
         reportCompanionFailure(
           "update",
@@ -1461,10 +1459,6 @@ export async function ensureLocalizedCompanions(
         // failure: the run did not change it, and an install nobody touched must not start failing.
         message =>
           logger.warn(
-            `The translations table for "${entity.slug}" (${tableName}_locales): ${message}`
-          ),
-        message =>
-          logger.info(
             `The translations table for "${entity.slug}" (${tableName}_locales): ${message}`
           )
       );
@@ -1500,6 +1494,18 @@ export async function ensureLocalizedCompanions(
         cause: "companion-provisioning-failed",
         entities: failures,
       },
+    });
+  }
+  // Attended here, as the guard above holds (the development sync, or `nextly migrate`), and only
+  // once nothing above was refused: each translated date column an earlier release made with a
+  // time zone, of every entity the registry holds, Builder-made ones included.
+  if (phase === "afterApply") {
+    const { convertZonedDateCompanions } = await import(
+      "../../domains/i18n/runtime/zoned-date-companions"
+    );
+    await convertZonedDateCompanions(adapter as unknown as DrizzleAdapter, {
+      convert: true,
+      onNotice: message => logger.info(message),
     });
   }
 }

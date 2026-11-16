@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineConfig } from "../../../config";
 import { readRecordedEntities } from "../../../domains/i18n/migration/recorded-before";
-import { reconcileCompanionColumns } from "../../../domains/i18n/runtime/companion-io";
+import { warnIfCoreSchemaIsBehind } from "../../../init/first-run";
 import { clearCachedSnapshot } from "../../../init/schema-snapshot-cache";
 import { createLogger } from "../../utils/logger";
 import {
@@ -314,6 +314,7 @@ describe.runIf(PG).each(["Asia/Karachi", "America/Los_Angeles"])(
       });
     });
 
+    // Through the start's own check, the one a production server runs as it boots.
     it("leaves it on an unattended production start, saying once that nextly migrate converts it", async () => {
       await openIn(zone);
       await runSync(configOf(false));
@@ -322,29 +323,65 @@ describe.runIf(PG).each(["Asia/Karachi", "America/Los_Angeles"])(
       await madeTheOldWay();
       vi.stubEnv("NODE_ENV", "production");
       const warnings: string[] = [];
+      const logger = {
+        info: () => undefined,
+        warn: (message: string) => warnings.push(message),
+        error: (message: string) => warnings.push(message),
+      };
 
       for (let start = 0; start < 2; start++) {
-        await reconcileCompanionColumns(
+        await warnIfCoreSchemaIsBehind(
           target!.adapter as unknown as Parameters<
-            typeof reconcileCompanionColumns
+            typeof warnIfCoreSchemaIsBehind
           >[0],
-          {
-            builtBy: "codeFirst",
-            slug: SLUG,
-            tableName: MAIN,
-            fields: FIELDS,
-            dialect: "postgresql",
-          },
-          undefined,
-          message => warnings.push(message)
+          logger
         );
       }
 
       expect((await published(COMPANION, "_parent")).type).toBe(
         "timestamp with time zone"
       );
-      expect(warnings.filter(w => w.includes("nextly migrate"))).toHaveLength(
-        1
+      expect(
+        warnings.filter(
+          w =>
+            w.includes(`${COMPANION}.published`) && w.includes("nextly migrate")
+        )
+      ).toHaveLength(1);
+    });
+
+    // A run that refuses a translations column converts no date: the conversion follows only a
+    // translations pass that refused nothing.
+    it("converts nothing when nextly migrate's translations pass refuses", async () => {
+      await openIn(zone);
+      await runSync(configOf(false));
+      await insertMainRows();
+      await runSync(configOf(true));
+      await madeTheOldWay();
+      // A column of another kind, left in the translations table, under a field the run newly
+      // translates as text.
+      await query(`ALTER TABLE "${COMPANION}" ADD COLUMN code integer`);
+      const withCode = defineConfig({
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+        collections: [
+          defineCollection({
+            slug: SLUG,
+            localized: true,
+            fields: [
+              ...FIELDS,
+              { name: "code", type: "text", localized: true },
+            ] as never,
+          }),
+        ],
+      });
+
+      const refused = await runMigratePass(withCode).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(String(refused)).toMatch(/could not be brought into step/);
+      expect((await published(COMPANION, "_parent")).type).toBe(
+        "timestamp with time zone"
       );
     });
   }

@@ -1496,6 +1496,29 @@ async function ensureLocalizedCompanionsForReload(
     }
   }
 
+  // Each translated date column an earlier release made with a time zone, of every entity the
+  // registry holds, converted as the development sync converts it, once this pass refused
+  // nothing. Best-effort like the rest of the reload: a failure is told, and the next one retries.
+  if (preservationFailed.length === 0 && restoreFailed.length === 0) {
+    try {
+      const { convertZonedDateCompanions } = await import(
+        "../domains/i18n/runtime/zoned-date-companions"
+      );
+      await convertZonedDateCompanions(
+        adapter as unknown as Parameters<typeof convertZonedDateCompanions>[0],
+        {
+          convert: true,
+          onNotice: message => consoleLogger.info(`[nextly] ${message}`),
+        }
+      );
+    } catch (error) {
+      consoleLogger.warn(
+        `[nextly] Could not convert a translated date column: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
   return { preservationFailed, restoreFailed, schemaChanged };
 }
 

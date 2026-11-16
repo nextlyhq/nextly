@@ -13,6 +13,9 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { ensureLocalizedCompanions } from "../../../cli/commands/dev-build";
+import { createLogger } from "../../../cli/utils/logger";
+import { defineConfig } from "../../../config";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import {
   createTestNextly,
@@ -246,6 +249,50 @@ describe.runIf(CASES.length > 0).each(CASES)(
         });
       }
     });
+
+    // A collection made in the Schema Builder is in the registry, not the config, and `nextly
+    // migrate` converts its translations table too.
+    it.runIf(dialect === "postgresql")(
+      "converts a Builder collection's date column made with a time zone through nextly migrate",
+      async () => {
+        await bootIn();
+        await createPosts(true);
+        const id = await write(AT.late.iso);
+        // As an earlier release left it: the column with a time zone, the value read in the zone.
+        await query(
+          `ALTER TABLE "${COMPANION}" ALTER COLUMN published TYPE timestamp with time zone USING published AT TIME ZONE current_setting('TimeZone')`
+        );
+        expect(
+          (await readThroughSql(COMPANION, `_parent = '${id}'`)).type
+        ).toBe("timestamp with time zone");
+        vi.stubEnv("NODE_ENV", "production");
+
+        // `nextly migrate`'s translations pass, over a config that declares no collection.
+        await ensureLocalizedCompanions(
+          defineConfig({
+            localization: { locales: ["en", "es"], defaultLocale: "en" },
+          }),
+          current!.adapter as unknown as Parameters<
+            typeof ensureLocalizedCompanions
+          >[1],
+          {
+            logger: createLogger({ quiet: true }),
+            options: {},
+            cwd: process.cwd(),
+          } as unknown as Parameters<typeof ensureLocalizedCompanions>[2],
+          "afterApply",
+          { supervised: true }
+        );
+
+        expect(
+          await readThroughSql(
+            COMPANION,
+            `_parent = '${id}' AND _locale = 'en'`
+          )
+        ).toEqual({ type: companionType, wall: AT.late.wall });
+        expect(await readThroughNextly(id)).toBe(AT.late.iso);
+      }
+    );
 
     it("stores a date written in each language while translated as the UTC wall clock", async () => {
       await bootIn();
