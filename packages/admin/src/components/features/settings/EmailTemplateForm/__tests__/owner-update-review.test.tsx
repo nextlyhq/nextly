@@ -202,3 +202,29 @@ describe("reviewing an owner's update", () => {
     );
   });
 });
+
+describe("an owner's update offered whole", () => {
+  it("is named as the whole template and shows every field it replaces", async () => {
+    api.compareTemplate.mockResolvedValue({
+      ...comparison,
+      changes: [
+        {
+          id: "template",
+          field: "template",
+          conflict: false,
+          base: ["Subject: Welcome", "HTML:", "<p>Hi</p>"],
+          theirs: ["Subject: Welcome aboard", "HTML:", "<p>Hi</p>"],
+          mine: ["Subject: Welcome!", "HTML:", "<p>Hi</p>"],
+        },
+      ],
+    } satisfies EmailTemplateComparison);
+    mount();
+
+    await screen.findByText("Change 1 of 1 · Whole template");
+    expect(within(card(0)).getByText("Subject: Welcome aboard")).toBeDefined();
+    // Kept or taken whole: there are no lines to write by hand.
+    expect(
+      within(card(0)).queryByRole("button", { name: "Edit the result" })
+    ).toBeNull();
+  });
+});
