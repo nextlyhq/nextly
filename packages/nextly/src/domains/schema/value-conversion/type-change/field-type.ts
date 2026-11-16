@@ -23,6 +23,7 @@ import {
   type SupportedDialect,
 } from "../../services/field-column-descriptor";
 import { parseColumnType } from "../column-type";
+import { integerBits, MYSQL_TEXT_BYTES } from "../value-readings";
 
 /** The families the rules are stated for. */
 export type Family =
@@ -270,7 +271,7 @@ function textColumn(
     return { textBound: { unit: "characters", most: parsed.length } };
   }
   if (parsed.family === "text" && dialect === "mysql") {
-    return { textBound: { unit: "bytes", most: 65_535 } };
+    return { textBound: { unit: "bytes", most: MYSQL_TEXT_BYTES } };
   }
   return {};
 }
@@ -302,7 +303,7 @@ function numberFormat(
   }
   if (column?.kind === "double") return { kind: "double" };
   // PostgreSQL's and MySQL's integer is 32 bits; SQLite's is 64.
-  return { kind: "integer", bits: dialect === "sqlite" ? 64 : 32 };
+  return { kind: "integer", bits: integerBits(dialect) };
 }
 
 /** A relationship's targets and where its links are kept, as its definition says. */
@@ -347,7 +348,7 @@ function pluginType(
       return {
         ...base,
         family: "number",
-        number: { kind: "integer", bits: dialect === "sqlite" ? 64 : 32 },
+        number: { kind: "integer", bits: integerBits(dialect) },
       };
     case "boolean":
       return { ...base, family: "checkbox" };

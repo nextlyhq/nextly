@@ -25,7 +25,14 @@
 import { EMAIL_RE } from "../../../../shared/lib/entry-validation";
 import { readExactIsoInstant } from "../../../../shared/lib/iso-instant";
 import type { ConversionClass } from "../types";
-import { characterLength, readsAsPostgresJson } from "../value-readings";
+import {
+  byteLength,
+  characterLength,
+  decimalFit,
+  holdsNonFinite,
+  keptByInteger,
+  readsAsPostgresJson,
+} from "../value-readings";
 
 import { documentOfText, isEditorDocument } from "./document";
 import type {
@@ -39,9 +46,7 @@ import type {
 import {
   decimalWriting,
   type ExactDecimal,
-  fitsDecimal,
   fitsDouble,
-  fitsInteger,
   numberWriting,
   type ReadNumber,
   readNumber,
@@ -587,7 +592,7 @@ function nonFiniteInto(
   const refused =
     value === "NaN" ||
     format.kind === "integer" ||
-    !holdsNonFinite(format, dialect, value);
+    !holdsNonFinite(format.kind, dialect, value);
   return refused
     ? { outcome: "lost", reason: "non-finite" }
     : heldAs(fits, value);
@@ -625,12 +630,14 @@ function columnHolds(
   switch (format.kind) {
     case "integer":
       return wholeNumberHolds(value, number =>
-        fitsInteger(number, format.bits) ? "exactly" : "out of range"
+        keptByInteger(decimalWriting(number), format.bits)
+          ? "exactly"
+          : "out of range"
       );
     case "double":
       return doubleHolds(value);
     case "decimal":
-      return fitsDecimal(value, format.precision, format.scale);
+      return decimalFit(decimalWriting(value), format.precision, format.scale);
     case "json":
       // A JSON number is read back as a JavaScript number, and a whole-number list holds no fraction.
       return format.whole
@@ -650,25 +657,6 @@ function wholeNumberHolds(
 /** Whether a double, which reads a number back as a JavaScript number, holds it exactly. */
 function doubleHolds(value: ExactDecimal): "exactly" | "rounded" {
   return fitsDouble(value) ? "exactly" : "rounded";
-}
-
-/**
- * Which number columns hold a non-finite number, as measured on each database, written as a bound
- * parameter and read back (`non-finite-columns.integration.test.ts`): PostgreSQL's double holds all
- * three, its constrained `numeric` holds `NaN` and no infinity, and its integer none; every SQLite
- * number column, whatever its affinity, holds the infinities and keeps no `NaN`; MySQL's hold none.
- */
-export function holdsNonFinite(
-  format: NumberFormat,
-  dialect: FieldTypeOnDialect["dialect"],
-  value: "NaN" | "Infinity" | "-Infinity"
-): boolean {
-  // A list's numbers are JSON, which holds no non-finite number on any database.
-  if (format.kind === "json") return false;
-  if (dialect === "mysql") return false;
-  if (dialect === "sqlite") return value !== "NaN";
-  if (format.kind === "integer") return false;
-  return format.kind === "double" || value === "NaN";
 }
 
 /** Into Checkbox: `true`, `false`, `1` or `0`, in any letter case; a boolean kept. */
@@ -912,9 +900,7 @@ function holdsText(bound: TextBound | undefined, text: string): boolean {
   if (bound === undefined) return true;
   // Characters as a `varchar(N)` counts them, which the column judgement counts the same way.
   const size =
-    bound.unit === "characters"
-      ? characterLength(text)
-      : new TextEncoder().encode(text).length;
+    bound.unit === "characters" ? characterLength(text) : byteLength(text);
   return size <= bound.most;
 }
 
