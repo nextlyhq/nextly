@@ -6,8 +6,8 @@
  * instead, switches to side by side, and each choice is written to the
  * address. "Restore…" hands the second version to the editor, which holds the
  * third: its restore list puts the second version's summary back as an
- * unsaved edit, the save records where it came from, and readers still see
- * the third version.
+ * unsaved edit, and the save records where it came from. A note keeps no
+ * pending changes, so the save is the live note's.
  */
 import { expect, type Page } from "@playwright/test";
 
@@ -44,7 +44,7 @@ async function notePublishedThrice(
 }
 
 test.describe("the comparison page", () => {
-  test("opens a shared address, compares with the current draft, switches the view and restores", async ({
+  test("opens a shared address, compares with what is published, switches the view and restores", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -88,7 +88,10 @@ test.describe("the comparison page", () => {
         response.url().includes(`/entries/${id}`) &&
         response.request().method() === "PATCH"
     );
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page
+      .getByRole("banner")
+      .getByRole("button", { name: "Save changes", exact: true })
+      .click();
     expect((await saved).ok()).toBe(true);
 
     // The save records where the summary came from.
@@ -97,12 +100,15 @@ test.describe("the comparison page", () => {
       items: { fieldSources?: Record<string, number> }[];
     };
     expect(items[0]?.fieldSources).toMatchObject({ summary: second });
-    // Nothing was published: readers still see the third version.
+    // A note holds no draft: it embeds the localized SEO field group, and a
+    // document with a localized field group keeps no pending changes, so its
+    // leading action is "Save changes" and the write goes to the live note. It
+    // stays published, now holding the restored summary.
     const live = await page.request.get(`${ENTRIES}/${id}`);
     // A read answers with the document itself.
     expect(await live.json()).toMatchObject({
       status: "published",
-      summary: "published a third time",
+      summary: "published again",
     });
   });
 });
