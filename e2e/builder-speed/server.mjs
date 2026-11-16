@@ -126,7 +126,16 @@ export async function startServer(env) {
     await stop();
     throw error;
   }
-  return { pid: server.pid, stop };
+  /**
+   * Lets this process end while the server keeps running (`--keep`): the
+   * child and its output pipes no longer hold the event loop open.
+   */
+  const release = () => {
+    server.stdout.unref?.();
+    server.stderr.unref?.();
+    server.unref();
+  };
+  return { pid: server.pid, stop, release };
 }
 
 export function statementsBetween(log, from, to) {

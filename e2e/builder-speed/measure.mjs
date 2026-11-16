@@ -378,6 +378,7 @@ async function main() {
     }
   } finally {
     if (server && flag("keep")) {
+      server.release();
       console.log(
         `[builder-speed] the server stays up (process group ${String(server.pid)}); measure it again with --base-url ${BASE}, and stop it with: kill -- -${String(server.pid)}`
       );
