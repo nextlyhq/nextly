@@ -6,8 +6,8 @@
  *
  * @module components/features/schema-builder/builder-settings-modal/advanced-switches
  */
-import type { BuilderSettingsValues } from "../BuilderSettingsModal";
 import type { AdvancedField } from "../builder-config";
+import type { BuilderSettingsValues } from "../BuilderSettingsModal";
 
 /** The settings an on/off switch holds. */
 export type AdvancedSwitchKey = AdvancedField &
